@@ -18,6 +18,12 @@ MATRIX = {'ubuntu-latest,clang', 'ubuntu-latest,gcc', 'macos-latest,clang'}
 
 def test_ci_workflow_contracts():
     source = (ROOT / '.github/workflows/ci.yml').read_text(encoding='utf-8')
+    for event in ('push', 'pull_request'):
+        trigger = re.search(r'^  ' + event + r':\n    branches: \[([^\]]+)\]',
+                            source, re.MULTILINE)
+        assert trigger, event + ' branch filters must declare the integration path'
+        branches = {branch.strip().strip('"') for branch in trigger.group(1).split(',')}
+        assert {'main', 'develop'} <= branches, (event, branches)
     body = source.split('\njobs:\n', 1)[1]
     headings = list(re.finditer(r'^  ([a-z][a-z0-9-]*):\n', body, re.MULTILINE))
     jobs = {heading.group(1): body[heading.end():headings[index + 1].start()
