@@ -6,7 +6,7 @@ import subprocess
 import sys
 import tempfile
 
-from tooling.WasmModule import inspect_wasm, validate_wasi_command
+from common.WasmModule import inspect_wasm, validate_wasi_command
 
 
 ROOT = Path(__file__).resolve().parents[2]

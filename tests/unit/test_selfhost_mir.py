@@ -631,7 +631,7 @@ print("verified")
             # A prebuilt Compiler checks fallible code without invoking Seed's frontend.
             independent = Path(temporary).resolve() / "independent.wysna"
             independent.write_text('fn value() -> int ! str { Err("bad") }\nprint(value() else error { len(error) })\n')
-            with patch("main.ensure_selfhost_compiler_binary", return_value=self.compiler), patch.object(CompilerService, "check", side_effect=AssertionError("Seed fallback")):
+            with patch("compiler.Bootstrap.ensure_selfhost_compiler_binary", return_value=self.compiler), patch.object(CompilerService, "check", side_effect=AssertionError("Seed fallback")):
                 payload, _ = emit_mir(independent, "compiler")
                 import_module(payload)
 

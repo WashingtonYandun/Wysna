@@ -10,9 +10,9 @@ from compiler.BrowserLibraryToolchain import (
 )
 from error.Error import WysnaError
 from project.Manifest import Target
-from tooling.BrowserBindings import generate_browser_bindings
+from codegen.BrowserBindings import generate_browser_bindings
 from tooling.TargetValidation import validate_checked_target
-from tooling.WasmModule import inspect_wasm
+from common.WasmModule import inspect_wasm
 
 
 ROOT = Path(__file__).resolve().parents[2]

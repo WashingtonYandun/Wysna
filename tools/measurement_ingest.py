@@ -11,7 +11,7 @@ import sys
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 from common.Platform import cache_lock, compiler_command, executable_name
-from main import SELFHOST_BOOTSTRAP_INPUTS
+from compiler.Bootstrap import SELFHOST_BOOTSTRAP_INPUTS
 
 PILOT = ROOT / 'examples/ffi/sqlite'
 

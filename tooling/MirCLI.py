@@ -50,7 +50,8 @@ def emit_mir(path, implementation="seed"):
         return payload, tuple(checked.sources)
     if implementation != "compiler":
         raise _UsageError("implementation must be seed or compiler")
-    from main import ensure_selfhost_compiler_binary, get_repo_root
+    from compiler.Bootstrap import ensure_selfhost_compiler_binary
+    from common.Paths import get_repo_root
     executable = ensure_selfhost_compiler_binary(get_repo_root())
     completed = subprocess.run(
         [executable, "--emit-mir", str(source_path)],

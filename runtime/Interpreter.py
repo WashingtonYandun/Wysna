@@ -1,3 +1,5 @@
+from common.ExpressionDispatch import reject_unknown_node
+from runtime.ExpressionRules import EXPRESSION_RULES
 import sys
 from typing import Any, Dict, List, Optional, TextIO, Tuple
 from error.Error import WysnaRuntimeError
@@ -208,7 +210,9 @@ class Interpreter:
         if isinstance(stmt, ImportDecl):
             return self.eval_import_decl(stmt, env)
 
-        return WysnaUnit()
+        if isinstance(stmt, (FnDecl, StructDecl, EnumDecl, InterfaceDecl, ClassDecl)):
+            return WysnaUnit()
+        reject_unknown_node(stmt, self.file, "runtime", "statement")
 
     def eval_block(self, block: Block, env: Environment) -> WysnaValue:
         block_env = Environment(parent=env)
@@ -243,7 +247,8 @@ class Interpreter:
     # ==========================================
 
     def eval_expr(self, expr: Expr, env: Environment) -> WysnaValue:
-        value = self._eval_expr_impl(expr, env)
+        handler = EXPRESSION_RULES.handler_for(expr, self.file)
+        value = handler(self, expr, env)
         return WysnaOk(value) if hasattr(expr, "force_result_wrap_id") else value
 
     def range_bounds(self, expression, env):
@@ -261,400 +266,6 @@ class Interpreter:
     def eval_value(self, expr: Expr, env: Environment) -> WysnaValue:
         """Freeze an evaluated value before later expressions can mutate its owner."""
         return self.eval_expr(expr, env).clone_value()
-
-    def _eval_expr_impl(self, expr: Expr, env: Environment) -> WysnaValue:
-        if isinstance(expr, LambdaExpr):
-            original = self.global_env.lookup(expr.function_name)
-            closure = WysnaFunction(original.decl, self.global_env)
-            closure.captured_environment = self.eval_expr(expr.environment, env).clone_value()
-            return closure
-        if isinstance(expr, IntLiteral):
-            return WysnaInt(expr.value)
-
-        if isinstance(expr, FloatLiteral):
-            return WysnaFloat(expr.value)
-
-        if isinstance(expr, StringLiteral):
-            return WysnaStr(expr.value)
-
-        if isinstance(expr, BoolLiteral):
-            return WysnaBool(expr.value)
-
-        if isinstance(expr, NoneLiteral):
-            return WysnaNone()
-
-        if isinstance(expr, IdentExpr):
-            if hasattr(expr, "resolved_enum_name"):
-                return WysnaEnumValue(expr.resolved_enum_name, expr.name)
-            return env.lookup(expr.name)
-
-        if isinstance(expr, UnaryExpr):
-            operand_val = self.eval_expr(expr.operand, env)
-            if expr.op == "-":
-                if isinstance(operand_val, WysnaInt):
-                    return WysnaInt(-operand_val.value)
-                if isinstance(operand_val, WysnaFloat):
-                    return WysnaFloat(-operand_val.value)
-            if expr.op == "not":
-                if isinstance(operand_val, WysnaBool):
-                    return WysnaBool(not operand_val.value)
-            raise WysnaRuntimeError(
-                message=f"Invalid unary operator '{expr.op}' on '{operand_val}'",
-                line=expr.line,
-                col=expr.col,
-                file=self.file
-            )
-
-        if isinstance(expr, BinaryExpr):
-            # Short-circuit logical operators
-            if expr.op == "and":
-                lhs = self.eval_expr(expr.left, env)
-                if not isinstance(lhs, WysnaBool):
-                    raise WysnaRuntimeError("Expected bool operand for 'and'", line=expr.line, col=expr.col, file=self.file)
-                if not lhs.value:
-                    return WysnaBool(False)
-                rhs = self.eval_expr(expr.right, env)
-                if not isinstance(rhs, WysnaBool):
-                    raise WysnaRuntimeError("Expected bool operand for 'and'", line=expr.line, col=expr.col, file=self.file)
-                return WysnaBool(rhs.value)
-
-            if expr.op == "or":
-                lhs = self.eval_expr(expr.left, env)
-                if not isinstance(lhs, WysnaBool):
-                    raise WysnaRuntimeError("Expected bool operand for 'or'", line=expr.line, col=expr.col, file=self.file)
-                if lhs.value:
-                    return WysnaBool(True)
-                rhs = self.eval_expr(expr.right, env)
-                if not isinstance(rhs, WysnaBool):
-                    raise WysnaRuntimeError("Expected bool operand for 'or'", line=expr.line, col=expr.col, file=self.file)
-                return WysnaBool(rhs.value)
-
-            lhs = self.eval_value(expr.left, env)
-            rhs = self.eval_value(expr.right, env)
-
-            if expr.op == "+":
-                if isinstance(lhs, WysnaInt) and isinstance(rhs, WysnaInt):
-                    return WysnaInt(lhs.value + rhs.value)
-                if isinstance(lhs, WysnaFloat) and isinstance(rhs, WysnaFloat):
-                    return WysnaFloat(lhs.value + rhs.value)
-                if isinstance(lhs, WysnaStr) and isinstance(rhs, WysnaStr):
-                    return WysnaStr(lhs.value + rhs.value)
-
-            if expr.op == "-":
-                if isinstance(lhs, WysnaInt) and isinstance(rhs, WysnaInt):
-                    return WysnaInt(lhs.value - rhs.value)
-                if isinstance(lhs, WysnaFloat) and isinstance(rhs, WysnaFloat):
-                    return WysnaFloat(lhs.value - rhs.value)
-
-            if expr.op == "*":
-                if isinstance(lhs, WysnaInt) and isinstance(rhs, WysnaInt):
-                    return WysnaInt(lhs.value * rhs.value)
-                if isinstance(lhs, WysnaFloat) and isinstance(rhs, WysnaFloat):
-                    return WysnaFloat(lhs.value * rhs.value)
-
-            if expr.op == "/":
-                if isinstance(lhs, WysnaInt) and isinstance(rhs, WysnaInt):
-                    if rhs.value == 0:
-                        raise WysnaRuntimeError("Division by zero", line=expr.line, col=expr.col, file=self.file, code="W4001")
-                    if lhs.value == -9223372036854775808 and rhs.value == -1:
-                        return WysnaInt(-9223372036854775808)
-                    q = abs(lhs.value) // abs(rhs.value)
-                    if (lhs.value < 0) ^ (rhs.value < 0):
-                        q = -q
-                    return WysnaInt(q)
-                if isinstance(lhs, WysnaFloat) and isinstance(rhs, WysnaFloat):
-                    if rhs.value == 0.0:
-                        raise WysnaRuntimeError("Division by zero", line=expr.line, col=expr.col, file=self.file, code="W4001")
-                    return WysnaFloat(lhs.value / rhs.value)
-
-            if expr.op == "%":
-                if isinstance(lhs, WysnaInt) and isinstance(rhs, WysnaInt):
-                    if rhs.value == 0:
-                        raise WysnaRuntimeError("Modulo by zero", line=expr.line, col=expr.col, file=self.file, code="W4001")
-                    if lhs.value == -9223372036854775808 and rhs.value == -1:
-                        return WysnaInt(0)
-                    q = abs(lhs.value) // abs(rhs.value)
-                    if (lhs.value < 0) ^ (rhs.value < 0):
-                        q = -q
-                    return WysnaInt(lhs.value - q * rhs.value)
-
-            if expr.op == "==":
-                return WysnaBool(lhs == rhs)
-
-            if expr.op == "!=":
-                return WysnaBool(lhs != rhs)
-
-            if expr.op == "<":
-                return WysnaBool(lhs.value < rhs.value)
-
-            if expr.op == "<=":
-                return WysnaBool(lhs.value <= rhs.value)
-
-            if expr.op == ">":
-                return WysnaBool(lhs.value > rhs.value)
-
-            if expr.op == ">=":
-                return WysnaBool(lhs.value >= rhs.value)
-
-            raise WysnaRuntimeError(
-                message=f"Binary operator '{expr.op}' not supported for '{lhs}' and '{rhs}'",
-                line=expr.line,
-                col=expr.col,
-                file=self.file
-            )
-
-        if isinstance(expr, CoalesceExpr):
-            lhs = self.eval_expr(expr.left, env)
-            if isinstance(lhs, WysnaNone) or (isinstance(lhs, WysnaEnumValue) and (lhs.enum_name == "Option" or lhs.enum_name.startswith("Option__")) and lhs.variant == "None"):
-                return self.eval_expr(expr.right, env)
-            if isinstance(lhs, WysnaEnumValue) and (lhs.enum_name == "Option" or lhs.enum_name.startswith("Option__")) and lhs.variant == "Some":
-                return lhs.payload[0] if lhs.payload else WysnaUnit()
-            return lhs
-
-        if isinstance(expr, RangeExpr):
-            start, stop = self.range_bounds(expr, env)
-            return WysnaList(elements=[WysnaInt(value) for value in range(start, stop)])
-
-        if isinstance(expr, PostfixTryExpr):
-            val = self.eval_expr(expr.operand, env)
-            if expr.propagation_kind == "optional":
-                if isinstance(val, WysnaNone):
-                    raise PropagationSignal(WysnaNone())
-                if isinstance(val, WysnaEnumValue) and val.enum_name.startswith("Option"):
-                    if val.variant == "None":
-                        raise PropagationSignal(WysnaNone())
-                    if val.variant == "Some":
-                        return val.payload[0]
-                return val
-            if isinstance(val, WysnaNone):
-                raise PropagationSignal(WysnaNone())
-            if isinstance(val, WysnaEnumValue) and (val.enum_name == "Option" or val.enum_name.startswith("Option__")) and val.variant == "None":
-                raise PropagationSignal(WysnaNone())
-            if isinstance(val, WysnaErr):
-                raise PropagationSignal(val, is_error=True)
-            if isinstance(val, WysnaEnumValue) and (val.enum_name == "Result" or val.enum_name.startswith("Result__")) and val.variant == "Err":
-                err_val = val.payload[0] if val.payload else WysnaNone()
-                raise PropagationSignal(WysnaErr(err_val), is_error=True)
-            if isinstance(val, WysnaOk):
-                return val.value
-            if isinstance(val, WysnaEnumValue) and (val.enum_name == "Result" or val.enum_name.startswith("Result__")) and val.variant == "Ok":
-                return val.payload[0] if val.payload else WysnaUnit()
-            if isinstance(val, WysnaEnumValue) and (val.enum_name == "Option" or val.enum_name.startswith("Option__")) and val.variant == "Some":
-                return val.payload[0] if val.payload else WysnaUnit()
-            return val
-
-        if isinstance(expr, ElseErrExpr):
-            val = self.eval_expr(expr.operand, env)
-            if isinstance(val, WysnaOk):
-                return val.value
-            if isinstance(val, WysnaEnumValue) and (val.enum_name == "Result" or val.enum_name.startswith("Result__")) and val.variant == "Ok":
-                return val.payload[0] if val.payload else WysnaUnit()
-            if isinstance(val, WysnaErr):
-                handler_env = Environment(parent=env)
-                if expr.err_name is not None:
-                    handler_env.declare(expr.err_name, val.error, is_mut=False)
-                return self.eval_block(expr.handler, handler_env)
-            if isinstance(val, WysnaEnumValue) and (val.enum_name == "Result" or val.enum_name.startswith("Result__")) and val.variant == "Err":
-                handler_env = Environment(parent=env)
-                if expr.err_name is not None:
-                    err_val = val.payload[0] if val.payload else WysnaNone()
-                    handler_env.declare(expr.err_name, err_val, is_mut=False)
-                return self.eval_block(expr.handler, handler_env)
-            if isinstance(val, WysnaNone) or (isinstance(val, WysnaEnumValue) and (val.enum_name == "Option" or val.enum_name.startswith("Option__")) and val.variant == "None"):
-                handler_env = Environment(parent=env)
-                return self.eval_block(expr.handler, handler_env)
-            return val
-
-        if isinstance(expr, ThisExpr):
-            return env.lookup("this")
-
-        if isinstance(expr, SuperExpr):
-            return env.lookup("super")
-
-        if isinstance(expr, NewExpr):
-            return self.instantiate_class(expr.class_name, [self.eval_value(a, env) for a in expr.args], env, expr.line, expr.col)
-
-        if isinstance(expr, AssignmentExpr):
-            target = expr.target
-            prepared, indices = self.prepare_assignment(target, env)
-            val = self.eval_value(expr.value, env)
-            target_env = Environment(parent=env)
-            for name, value in indices.items():
-                target_env.declare(name, value)
-            target = prepared
-            env = target_env
-
-            if isinstance(target, IdentExpr):
-                env.assign(target.name, val)
-                return val
-
-            if isinstance(target, IndexExpr):
-                obj = self.eval_mutable_lvalue(target.object, env)
-                idx = self.eval_expr(target.index, env)
-                if isinstance(obj, WysnaList) and isinstance(idx, WysnaInt):
-                    if idx.value < 0 or idx.value >= len(obj):
-                        raise WysnaRuntimeError(f"List index out of bounds: {idx.value}", line=target.line, col=target.col, file=self.file)
-                    obj.set(idx.value, val)
-                    return val
-                if isinstance(obj, WysnaDict):
-                    key_raw = idx
-                    obj.set(key_raw, val)
-                    return val
-                raise WysnaRuntimeError(f"Cannot assign to index of '{type(obj).__name__}'", line=target.line, col=target.col, file=self.file)
-
-            if isinstance(target, MemberExpr):
-                obj = self.eval_mutable_lvalue(target.object, env)
-                if isinstance(obj, WysnaObjectInstance):
-                    obj.set_field(target.property, val)
-                    return val
-                if isinstance(obj, WysnaStructInstance):
-                    obj.set_field(target.property, val)
-                    return val
-                raise WysnaRuntimeError(f"Cannot assign to property of '{type(obj).__name__}'", line=target.line, col=target.col, file=self.file)
-
-            raise WysnaRuntimeError("Invalid assignment target", line=expr.line, col=expr.col, file=self.file)
-
-        if isinstance(expr, MemberExpr):
-            if expr.property in ("append", "pop", "clear"):
-                obj = self.eval_mutable_lvalue(expr.object, env)
-            else:
-                obj = self.eval_expr(expr.object, env)
-            if isinstance(obj, WysnaEnumNamespace):
-                return obj.get_variant(expr.property)
-            if isinstance(obj, WysnaSuperProxy):
-                return WysnaBoundMethod(receiver=obj.receiver, method_name=expr.property, target_class_name=obj.superclass_name)
-            if isinstance(obj, WysnaObjectInstance):
-                if expr.property in obj.fields:
-                    return obj.get_field(expr.property)
-                return WysnaBoundMethod(receiver=obj, method_name=expr.property, target_class_name=obj.class_name)
-            if isinstance(obj, WysnaStructInstance):
-                return obj.get_field(expr.property)
-            if isinstance(obj, (WysnaList, WysnaDict)):
-                return WysnaBoundMethod(receiver=obj, method_name=expr.property)
-            if isinstance(obj, WysnaModule):
-                return obj.get_member(expr.property)
-            raise WysnaRuntimeError(f"Cannot access property '{expr.property}' on '{obj}'", line=expr.line, col=expr.col, file=self.file)
-
-        if isinstance(expr, IndexExpr):
-            obj = self.eval_value(expr.object, env)
-            idx = self.eval_value(expr.index, env)
-
-            if isinstance(obj, WysnaList):
-                if not isinstance(idx, WysnaInt):
-                    raise WysnaRuntimeError("List index must be int", line=expr.line, col=expr.col, file=self.file)
-                if idx.value < 0 or idx.value >= len(obj):
-                    raise WysnaRuntimeError(f"List index out of bounds: index {idx.value}, length {len(obj)}", line=expr.line, col=expr.col, file=self.file)
-                return obj.get(idx.value)
-
-            if isinstance(obj, WysnaStr):
-                if not isinstance(idx, WysnaInt):
-                    raise WysnaRuntimeError("String index must be int", line=expr.line, col=expr.col, file=self.file)
-                if idx.value < 0 or idx.value >= len(obj.value):
-                    raise WysnaRuntimeError(f"String index out of bounds: index {idx.value}, length {len(obj.value)}", line=expr.line, col=expr.col, file=self.file)
-                return WysnaStr(obj.value[idx.value])
-
-            if isinstance(obj, WysnaDict):
-                key_raw = idx
-                res = obj.get(key_raw)
-                # SPEC 10.2: a missing key is W4002. `d.get(k)` is the optional form.
-                if res is None:
-                    raise WysnaRuntimeError(
-                        f"Dictionary key not found: {idx}",
-                        line=expr.line, col=expr.col, file=self.file)
-                return res
-
-            raise WysnaRuntimeError(f"Cannot index type '{type(obj).__name__}'", line=expr.line, col=expr.col, file=self.file)
-
-        if isinstance(expr, CallExpr):
-            from checker.WysnaType import ListType
-            mutable_collection = (isinstance(expr.callee, MemberExpr)
-                                  and isinstance(getattr(expr.callee.object, 'inferred_type', None), ListType)
-                                  and expr.callee.property in ('append', 'pop', 'clear'))
-            if mutable_collection:
-                prepared, held = self.prepare_assignment(expr.callee.object, env)
-                target_env = Environment(parent=env)
-                for name, value in held.items():
-                    target_env.declare(name, value)
-                args = [self.eval_value(a, env) for a in expr.args]
-                receiver = self.eval_mutable_lvalue(prepared, target_env)
-                callee = WysnaBoundMethod(receiver, expr.callee.property)
-            else:
-                callee = self.eval_expr(expr.callee, env)
-                args = [self.eval_value(a, env) for a in expr.args]
-
-            if isinstance(callee, WysnaEnumValue):
-                return WysnaEnumValue(callee.enum_name, callee.variant, args)
-            if isinstance(callee, WysnaClassDef):
-                return self.instantiate_class(callee.name, args, env, expr.line, expr.col)
-            if isinstance(callee, WysnaNativeFunction):
-                return callee.call_fn(args)
-            if isinstance(callee, WysnaFunction):
-                return self.call_function(callee, args)
-            if isinstance(callee, WysnaBoundMethod):
-                return self.call_bound_method(callee, args)
-
-            raise WysnaRuntimeError(f"Cannot call non-function '{callee}'", line=expr.line, col=expr.col, file=self.file)
-
-        if isinstance(expr, StructInitExpr):
-            field_dict = {}
-            for f in expr.fields:
-                field_dict[f.name] = self.eval_value(f.value, env)
-            definition = getattr(expr, "inferred_type", None)
-            field_order = getattr(definition, "fields", field_dict)
-            ordered = {name: field_dict[name] for name in field_order}
-            return WysnaStructInstance(expr.struct_name, fields=ordered)
-
-        if isinstance(expr, ListExpr):
-            return WysnaList(elements=[self.eval_value(e, env) for e in expr.elements])
-
-        if isinstance(expr, DictExpr):
-            pairs = {}
-            for entry in expr.entries:
-                k = self.eval_value(entry.key, env)
-                v = self.eval_value(entry.value, env)
-                key_raw = k
-                pairs[key_raw] = v
-            return WysnaDict(pairs=pairs)
-
-        if isinstance(expr, TupleExpr):
-            return WysnaTuple(elements=[self.eval_value(e, env) for e in expr.elements])
-
-        if isinstance(expr, IfExpr):
-            cond_val = self.eval_expr(expr.condition, env)
-            if not isinstance(cond_val, WysnaBool):
-                raise WysnaRuntimeError("Condition of 'if' must be bool", line=expr.line, col=expr.col, file=self.file)
-            if cond_val.value:
-                return self.eval_block(expr.then_branch, env)
-
-            for elif_b in expr.elif_branches:
-                elif_cond = self.eval_expr(elif_b.condition, env)
-                if not isinstance(elif_cond, WysnaBool):
-                    raise WysnaRuntimeError("Condition of 'elif' must be bool", line=elif_b.line, col=elif_b.col, file=self.file)
-                if elif_cond.value:
-                    return self.eval_block(elif_b.body, env)
-
-            if expr.else_branch is not None:
-                return self.eval_block(expr.else_branch, env)
-            return WysnaUnit()
-
-        if isinstance(expr, MatchExpr):
-            subj_val = self.eval_expr(expr.subject, env)
-            for arm in expr.arms:
-                matched, arm_bindings = self.match_pattern(arm.pattern, subj_val)
-                if matched:
-                    arm_env = Environment(parent=env)
-                    for k, v in arm_bindings.items():
-                        arm_env.declare(k, v, is_mut=False)
-                    if arm.guard is not None and not self.eval_expr(arm.guard, arm_env).value:
-                        continue
-                    return self.eval_block(arm.body, arm_env)
-            # No arm matched. The checker requires a `_ =>` fallback whenever a match
-            # produces a value, so reaching this point means it is a statement-position
-            # match, where the compiled backends simply fall through. Panicking here made
-            # the interpreter disagree with every other engine on valid programs.
-            return WysnaUnit()
-
-        return WysnaUnit()
 
     # ==========================================
     # Helper Call & OOP Methods
@@ -1018,8 +629,8 @@ class Interpreter:
         return False
 
 
-# Backward compatibility helper
 def evaluate(node: Any, env: Environment) -> WysnaValue:
+    """Evaluate a supported syntax fragment with an explicit environment."""
     interpreter = Interpreter()
     if isinstance(node, Program):
         return interpreter.interpret(node)
@@ -1027,4 +638,4 @@ def evaluate(node: Any, env: Environment) -> WysnaValue:
         return interpreter.eval_stmt(node, env)
     if isinstance(node, Expr):
         return interpreter.eval_expr(node, env)
-    return WysnaUnit()
+    reject_unknown_node(node, interpreter.file, "runtime", "node")

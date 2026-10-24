@@ -456,7 +456,8 @@ def _run_program(resolver, target_name, entry_override, program_args, report_pat
             return 3
         report_state = {"status": "pending", "tool_exit_code": None, "process_exit_code": None,
                         "execution": None, "diagnostics": []}
-    from main import _capture_application_exit, _set_run_report, run_pipeline
+    from tooling.RunReport import _capture_application_exit, _set_run_report
+    from tooling.SourceCommand import run_pipeline
     code = run_pipeline(
         source_code=source,
         file_name=str(entry),

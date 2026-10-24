@@ -30,7 +30,7 @@ def specialize(template, arguments, line, col, *, refresh_session=True):
         raise TypeError('Generic OOP specialization budget exceeded', file=checker.file, line=line, col=col, code='W2011')
     for parameter, argument in zip(template.type_params, arguments):
         checker._check_type_constraint(argument, parameter.constraint, line, col)
-    from checker.TypeChecker import mangle_generic_name
+    from checker.GenericState import mangle_generic_name
     declaration = clone_ast(template.ast_decl)
     declaration.name = mangle_generic_name(template.name, arguments)
     declaration.type_params = []

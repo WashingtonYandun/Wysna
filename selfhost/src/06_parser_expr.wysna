@@ -116,6 +116,7 @@ fn emit_call(emitter: CEmitter, callee: ExprRes, args_c: list[str], collection: 
                 }
                 return bind_call(emitter, "wysna_method_" + def_cls + "__" + method + "(" + joined + ")")
             }
+            report_error_at("W9999", at_tok(emitter), "missing checked superclass method")
             return ExprRes { val: "wysna_unit()", lref: "" }
         }
         if collection and method == "append" {
@@ -831,7 +832,7 @@ fn parse_prefix_expr(emitter: CEmitter, allow_struct: bool) -> ExprRes {
     if check_kind(emitter, "MATCH") {
         return parse_match_expr(emitter)
     }
-    advance_tok(emitter)
+    report_error_at("W9999", at_tok(emitter), "unsupported checked expression in C emission")
     return ExprRes { val: "wysna_unit()", lref: "" }
 }
 

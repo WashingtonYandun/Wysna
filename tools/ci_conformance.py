@@ -195,7 +195,7 @@ def main():
         'compile_timeout_seconds': 120, 'run_timeout_seconds': 30}, indent=2))
     # This subprocess is bounded separately because it builds the compiler itself.
     bootstrap = execute([sys.executable, '-c',
-        'from main import ensure_selfhost_compiler_binary; '
+        'from compiler.Bootstrap import ensure_selfhost_compiler_binary; '
         'print(ensure_selfhost_compiler_binary(' + repr(str(ROOT)) + '))'],
         artifacts, 'bootstrap', 600)
     if bootstrap['returncode']:

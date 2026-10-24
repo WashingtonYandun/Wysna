@@ -120,6 +120,19 @@ broken.nodes[i].children = children break } } }
     if mode == "bad_name" { for i in 0..len(broken.nodes) { if broken.nodes[i].kind == "call" and broken.nodes[i].target >= 0 { broken.nodes[i].text = "wrong" break } } }
     let ignored = mir_module_json(mir_build(broken))
 }
+if mode == "unknown_c_expression" {
+    let mut broken = check_source("print(1)", "corrupt-expression.wysna")
+    for i in 0..len(broken.c99.tokens) {
+        if broken.c99.tokens[i].kind == "INT" { broken.c99.tokens[i].kind = "UNSUPPORTED" break }
+    }
+    let ignored = compile_source(broken)
+}
+if mode == "missing_super_target" {
+    let checked = check_source("print(1)", "missing-super.wysna")
+    let emitter = new CEmitter(checked)
+    let arguments: list[str] = []
+    let ignored = emit_call(emitter, ExprRes { val: "missing", lref: "::missing::&v_super::v_super" }, arguments, false, "missing-super.wysna", 1, 1)
+}
 print("verified")
 '''
 
@@ -185,6 +198,17 @@ class CompilationContextTests(unittest.TestCase):
             paths.append(path)
         result = self.run_mode("imports", *paths)
         self.assertEqual((result.returncode, result.stdout, result.stderr), (0, "verified\n", ""))
+
+    def test_c_emission_rejects_corrupt_checked_inputs(self):
+        for mode, message in (("unknown_c_expression", "unsupported checked expression"),
+                              ("missing_super_target", "missing checked superclass method")):
+            with self.subTest(mode=mode):
+                result = self.run_mode(mode)
+                self.assertEqual(result.returncode, 1, result.stderr)
+                self.assertIn("[W9999]", result.stderr)
+                self.assertIn(message, result.stderr)
+                self.assertNotIn("AddressSanitizer", result.stderr)
+                self.assertNotIn("runtime error:", result.stderr)
 
     def test_phase_dependencies_do_not_regress(self):
         for path in (ROOT / "selfhost/src").glob("*.wysna"):

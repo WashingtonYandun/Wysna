@@ -13,7 +13,7 @@ from codegen.CCodeGen import CCodeGen
 from hir.HirBuilder import HirBuilder
 from hir.HirNodes import HirModule
 from hir.HirCCodeGen import HirCCodeGen
-from tests.engine_harness import panic_expectation, unsupported_reason
+from tests.engine_harness import PROFILES, panic_expectation, unsupported_reason
 from tests.unit.test_selfhost_split_conformance import test_split_conformance
 from tests.unit.test_generic_hardening import run_generic_hardening_tests
 from tests.unit.test_cow_telemetry import run_cow_telemetry_suite
@@ -362,6 +362,12 @@ def _run_suite_in_repo(repo_root: str) -> None:
     c99_targets = [f for f in runtime_files if os.path.exists(os.path.join(runtime_dir, f[:-6] + ".expected"))]
     c99_passed = 0
     bootstrap_ok = False
+    selfhost_suite_ok = False
+    examples_dir = "examples"
+    support_files = PROFILES.get('support_files', {})
+    example_files = sorted(f for f in os.listdir(examples_dir)
+                           if f.endswith(".wysna") and "examples/" + f not in support_files)
+    examples_passed = 0
 
     use_sanitize = os.environ.get("WYSNA_SANITIZE") == "1" or "--sanitize" in sys.argv
     extra_cc_flags = ["-fsanitize=address,undefined", "-fno-omit-frame-pointer"] if use_sanitize else []
@@ -442,9 +448,6 @@ def _run_suite_in_repo(repo_root: str) -> None:
                 selfhost_runtime_passed += 1
 
             # 10. Verify Showcase Examples (examples/*.wysna) on Wysna Seed Interpreter, Wysna Seed C99, and Wysna Compiler Stage-2 Native
-            examples_dir = "examples"
-            example_files = sorted([f for f in os.listdir(examples_dir) if f.endswith(".wysna")]) if os.path.exists(examples_dir) else []
-            examples_passed = 0
             for f in example_files:
                 ex_path = os.path.join(examples_dir, f)
                 ex_stem = f[:-6]
@@ -468,10 +471,9 @@ def _run_suite_in_repo(repo_root: str) -> None:
                 assert ex_res.returncode == 0, ex_res.stderr
                 assert ex_res.stdout == ex_expected, f"Wysna Compiler native mismatch on {f}"
                 examples_passed += 1
+            selfhost_suite_ok = True
         except Exception as e:
             print(f"  [BOOTSTRAP/SELFHOST FAIL] {e}")
-            example_files = []
-            examples_passed = 0
 
     # 11. Typed HIR -> C99 Native Backend (HirCCodeGen)
     hir_c99_passed = 0
@@ -611,6 +613,7 @@ def _run_suite_in_repo(repo_root: str) -> None:
         and toolkit_ok
         and examples_passed == len(example_files)
         and bootstrap_ok
+        and selfhost_suite_ok
     )
 
     if all_ok:

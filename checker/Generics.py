@@ -172,19 +172,3 @@ class GenericDefinitionChecker:
             )
 
         self._check_isolated(template, check)
-
-
-class Instantiator:
-    """Own the boundary between generic templates and concrete specializations."""
-
-    def __init__(self, checker):
-        self.checker = checker
-
-    def function(self, template, concrete_args, line, col):
-        return self.checker._monomorphize_fn_impl(template, concrete_args, line, col)
-
-    def structure(self, template, concrete_args, line, col):
-        return self.checker._monomorphize_struct_impl(template, concrete_args, line, col)
-
-    def enumeration(self, template, concrete_args, line, col):
-        return self.checker._monomorphize_enum_impl(template, concrete_args, line, col)

@@ -158,7 +158,7 @@ def test_bootstrap_cache_serializes_processes():
         (Path(directory) / 'selfhost' / 'compiler.wysna').write_text('print(0)\n')
         script = """import sys, time
 from pathlib import Path
-import main
+import compiler.Bootstrap as bootstrap
 root = sys.argv[1]
 def rebuild(path):
     marker = Path(path) / 'active'
@@ -167,8 +167,8 @@ def rebuild(path):
     time.sleep(0.15)
     marker.unlink()
     return 'ok'
-main._ensure_selfhost_compiler_binary_locked = rebuild
-print(main.ensure_selfhost_compiler_binary(root))
+bootstrap._ensure_selfhost_compiler_binary_locked = rebuild
+print(bootstrap.ensure_selfhost_compiler_binary(root))
 """
         children = [subprocess.Popen([sys.executable, '-c', script, directory], cwd=ROOT,
                                      stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)

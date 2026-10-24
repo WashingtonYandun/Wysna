@@ -184,7 +184,7 @@ def test_direct_selfhost_does_not_use_seed_checker():
         entry, emitted = root / 'input.wysna', root / 'output.c'
         entry.write_text('selfhost owns this source')
         with patch.object(CompilerService, 'check', side_effect=AssertionError('Seed pre-check')):
-            with patch.object(main, 'ensure_selfhost_compiler_binary', return_value='compiler'):
+            with patch('tooling.SourceCommand.ensure_selfhost_compiler_binary', return_value='compiler'):
                 with patch.object(NativeToolchain, 'emit_selfhost', return_value=SelfhostEmissionResult('/* direct */\n', 1.0)) as emit:
                     assert main.run_pipeline(entry.read_text(), str(entry), backend='selfhost',
                                              emit_c_path=str(emitted)) == 0

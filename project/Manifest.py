@@ -9,7 +9,7 @@ import re
 try:
     import tomllib
 except ImportError:  # Python 3.10 ships without tomllib.
-    from tooling._vendor import tomli as tomllib
+    from common._vendor import tomli as tomllib
 
 from common.Version import WYSNA_VERSION
 

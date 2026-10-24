@@ -62,8 +62,8 @@ def test_benchmark_checkout_requirement_precedes_bootstrap():
         def forbidden_bootstrap(*args):
             raise AssertionError('Benchmark capability must be checked before bootstrap')
         output = io.StringIO()
-        with patch.object(sys, 'argv', ['wysna', 'bench']), patch.object(main, 'get_repo_root', return_value=temporary):
-            with patch.object(main, 'ensure_selfhost_compiler_binary', forbidden_bootstrap), redirect_stderr(output):
+        with patch.object(sys, 'argv', ['wysna', 'bench']), patch('tooling.CLI.get_repo_root', return_value=temporary):
+            with patch('tooling.CLI.ensure_selfhost_compiler_binary', forbidden_bootstrap), redirect_stderr(output):
                 try:
                     main.main()
                 except SystemExit as error:

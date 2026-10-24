@@ -21,7 +21,7 @@ class Lowering:
         raise WysnaError(message, file=source.file, line=source.line, col=source.col,
                      code='W9999', stage='mir-lowering')
 
-    def lower(self, hir, optimize=True):
+    def lower(self, hir, optimize=True, *, call_entrypoint=None):
         from hir.HirVerifier import HirVerifier
         from codegen.VirtualDispatch import hir_virtual_method_slots
         HirVerifier(self.interner, self.file).verify(hir)
@@ -68,7 +68,9 @@ class Lowering:
                 entry_value = self.expr(statement.expr)
             else:
                 self.stmt(statement, top=True)
-        if not explicit and getattr(hir, 'call_entrypoint', not hir.top_level_stmts):
+        invoke_entrypoint = (getattr(hir, 'call_entrypoint', not hir.top_level_stmts)
+                             if call_entrypoint is None else call_entrypoint)
+        if not explicit and invoke_entrypoint:
             entry = next((fn for fn in hir.functions if fn.name == 'main'), None)
             if entry:
                 entry_value = self.call('wysna_fn_main', [], entry.return_type_id, entry)
