@@ -98,3 +98,10 @@ exact dispatch, read-only tables, source diagnostics, import direction, independ
 oracles, runtime header inclusion and generic rollback. Existing conformance,
 three-stage bootstrap, four-engine differential tests, ownership sanitizers and
 installed-wheel checks remain necessary; structural checks do not replace them.
+
+
+CI gives compiler/tooling contracts and executable conformance separate job budgets
+on the same platform/compiler matrix. Required conformance statuses reject failed,
+cancelled or skipped contract jobs explicitly; the split preserves every test,
+release fixture, bootstrap stage and sanitizer check. Workflow contracts enforce
+coverage and failure propagation without extending the execution time limit.
