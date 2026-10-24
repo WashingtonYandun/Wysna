@@ -69,4 +69,3 @@ def run_service_command(argv) -> int:
     except ServiceHostError as error:
         print(f"wysna service: {error}", file=sys.stderr)
         return 2
-
