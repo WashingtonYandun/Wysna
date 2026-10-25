@@ -8,7 +8,7 @@ Wysna Compiler's `native-core-v1` profile uses verified MIR for its normal C99 r
 
 ## Measured corpus
 
-The table below records the preceding consolidation baseline; it must be regenerated for the native pipeline before claiming current full-corpus acceptance. It comes from an actual `tools/ci_conformance.py --profile=release` run. It covers
+The table records the native MIR measurement at `f4c142183ec531fe973858a2c84da54bc538a5f4`, with the published versioned compiler and unchanged source inputs. It comes from an actual `tools/ci_conformance.py --profile=release` run. It covers
 the public runtime examples and negative fixtures, with no unsupported exclusions. The
 separate sanitizer gate checks memory safety; neither gate establishes universal language
 parity or measures code coverage.

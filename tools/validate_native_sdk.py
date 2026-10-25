@@ -35,6 +35,11 @@ def isolated_environment(work):
     return environment
 
 
+def terminal_bytes(value):
+    """Expected C text-stream bytes, preserving embedded NUL and platform newlines."""
+    return value.replace(b'\n', b'\r\n') if os.name == 'nt' else value
+
+
 def require(condition, detail):
     if not condition:
         raise AssertionError(detail)
@@ -75,13 +80,13 @@ def validate(sdk, report, strict_source=False, compiler_source=None):
         (project / 'runtime').mkdir()
         (project / 'runtime/wysna_runtime.h').write_text('#error Wrong runtime selected\n', encoding='utf-8')
 
-        def run(name, arguments, expected=0, stdout=None, error=None, custom=None, timeout=180):
+        def run(name, arguments, expected=0, stdout=None, error=None, custom=None, timeout=180, stdin=None):
             result = subprocess.run([str(cli)] + [str(value) for value in arguments], cwd=project,
-                                    env=custom or environment, capture_output=True, timeout=timeout)
+                                    env=custom or environment, capture_output=True, timeout=timeout, input=stdin)
             require(result.returncode == expected, (name, result.returncode,
                     result.stdout.decode('utf-8', 'replace')[-4000:], result.stderr.decode('utf-8', 'replace')[-4000:]))
             if stdout is not None:
-                require(result.stdout == stdout, (name, result.stdout, stdout))
+                require(result.stdout == terminal_bytes(stdout), (name, result.stdout, terminal_bytes(stdout)))
             if error:
                 require(error.encode() in result.stderr, (name, result.stderr))
             checks.append({'name': name, 'status': result.returncode})
@@ -99,9 +104,20 @@ def validate(sdk, report, strict_source=False, compiler_source=None):
         output = project / ('application á' + suffix)
         run('build-without-host-tools', ['build', source, '-o', output], stdout=b'')
         result = subprocess.run([str(output)], cwd=project, env=environment, capture_output=True, timeout=10)
-        require(result.returncode == 0 and result.stdout == 'hello Wysna á\n'.encode(), result)
+        require(result.returncode == 0 and result.stdout == terminal_bytes('hello Wysna á\n'.encode()), result)
         checks.append({'name': 'independent-application', 'status': result.returncode})
         run('run-without-host-tools', ['run', source], stdout='hello Wysna á\n'.encode())
+
+        adapter = project / 'adapter á.c'
+        adapter.write_text('#include <stdint.h>\n#include <stdio.h>\n'
+                           'int64_t wysna_sdk_double(int32_t value) { return (int64_t)value * 2; }\n'
+                           'int64_t wysna_sdk_input(void) { return (int64_t)getchar(); }\n', encoding='utf-8')
+        foreign = project / 'foreign.wysna'
+        foreign.write_text('extern "C" fn wysna_sdk_double(value: int32) -> int64\n'
+                           'extern "C" fn wysna_sdk_input() -> int64\n'
+                           'print(wysna_sdk_double(21), wysna_sdk_input())\n', encoding='utf-8')
+        run('external-C-adapter-widths-and-stdin', ['run', foreign, '--link', adapter],
+            stdout=b'42 65\n', stdin=b'A')
 
         semantics = project / 'semantics.wysna'
         semantics.write_text('struct Box[T] { value: T }\n'
@@ -123,7 +139,7 @@ def validate(sdk, report, strict_source=False, compiler_source=None):
         payload = ['two words', 'quote"inside', 'slash\\tail\\', '$(touch sentinel)', 'á界', '']
         result = run('argv-streams-cwd-exit', ['run', arguments, '--'] + payload,
                      expected=7, stdout=('\n'.join(payload) + '\n').encode())
-        require(result.stderr == b'stderr preserved\n' and not (project / 'sentinel').exists(), result)
+        require(result.stderr == terminal_bytes(b'stderr preserved\n') and not (project / 'sentinel').exists(), result)
         require((project / 'application cwd.txt').read_text() == 'cwd preserved', 'CWD changed')
 
         panic = project / 'panic.wysna'

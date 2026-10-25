@@ -13,10 +13,16 @@ from common.Platform import compiler_command, executable_name, native_stack_link
 from runtime import HostAbi
 from tools.package_components import extract
 from tools.package_native import COMPONENTS, assemble, host_platform
-from tools.validate_native_sdk import isolated_environment
+from tools.validate_native_sdk import isolated_environment, terminal_bytes
 
 
 class NativeSdkContractTests(unittest.TestCase):
+    def test_expected_terminal_bytes_preserve_NUL_and_C_text_mode(self):
+        with patch('tools.validate_native_sdk.os.name', 'nt'):
+            self.assertEqual(terminal_bytes(b'a\0\n'), b'a\0\r\n')
+        with patch('tools.validate_native_sdk.os.name', 'posix'):
+            self.assertEqual(terminal_bytes(b'a\0\n'), b'a\0\n')
+
     def test_windows_linkers_share_an_explicit_stack_reserve(self):
         with patch('common.Platform.os.name', 'nt'):
             self.assertEqual(native_stack_link_args(['clang']), ['-Wl,/STACK:8388608'])
