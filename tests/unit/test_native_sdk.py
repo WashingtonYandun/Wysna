@@ -113,7 +113,8 @@ int main(int argc, char** argv) {
             fixture = directory / 'contract.c'
             fixture.write_text(code)
             binary = directory / executable_name('contract')
-            command = compiler_command() + ['-std=c99', '-O1', '-I' + str(root), str(fixture), '-lm', '-o', str(binary)]
+            math_flags = [] if os.name == 'nt' else ['-lm']
+            command = compiler_command() + ['-std=c99', '-O1', '-I' + str(root), str(fixture)] + math_flags + ['-o', str(binary)]
             if os.name != 'nt':
                 command += ['-fsanitize=address,undefined', '-fno-omit-frame-pointer']
             compiled = subprocess.run(command, capture_output=True, text=True, timeout=120)

@@ -5,6 +5,11 @@
 #error "Include wysna_runtime.h before internal path helpers"
 #endif
 
+#if !defined(_WIN32) && !defined(__wasi__)
+/* POSIX ABI declaration also supports clients that included libc before this header. */
+extern char* realpath(const char* restrict path, char* restrict resolved_path);
+#endif
+
 static char* wysna_host_canonical_path_utf8(const char* path) {
 #if defined(__wasi__)
     (void)path; errno = ENOSYS; return NULL;

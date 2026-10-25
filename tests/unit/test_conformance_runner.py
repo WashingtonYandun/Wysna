@@ -8,7 +8,7 @@ import tempfile
 from unittest.mock import patch
 
 
-def _run_fixture(*, native_failure=False, missing_expected=False, include_support=False):
+def _run_fixture(*, native_failure=False, missing_expected=False, include_support=False, bootstrap_failure=False):
     import run_conformance as runner
 
     with tempfile.TemporaryDirectory() as temporary, ExitStack() as stack:
@@ -30,6 +30,10 @@ def _run_fixture(*, native_failure=False, missing_expected=False, include_suppor
             if name.startswith('run_') and name not in ('run_suite',):
                 stack.enter_context(patch.object(runner, name, return_value=True))
         stack.enter_context(patch.object(runner, 'test_split_conformance', return_value=True))
+        artifacts = SimpleNamespace(compiler=root / 'stage2', hashes=('same-native-hash',) * 3)
+        stack.enter_context(patch('compiler.Bootstrap.bootstrap_compiler',
+                                 side_effect=RuntimeError('synthetic bootstrap failure') if bootstrap_failure else None,
+                                 return_value=artifacts))
         for module, name in (
             ('test_d04_semantic_fuzzing', 'run_all'),
             ('test_d05_telemetry_benchmarks', 'run_all'),
@@ -66,6 +70,9 @@ def test_conformance_runner_contracts():
     assert status == 0, output
     assert 'Examples E2E Suite:  1/1' in output, output
     assert '[BOOTSTRAP/SELFHOST FAIL]' not in output, output
+    failed, failure_output = _run_fixture(bootstrap_failure=True)
+    assert failed == 1 and 'Bootstrap FixedPoint:0/1' in failure_output, failure_output
+    assert 'synthetic bootstrap failure' in failure_output, failure_output
     for options in ({'native_failure': True}, {'missing_expected': True}):
         status, output = _run_fixture(**options)
         assert status == 1, output

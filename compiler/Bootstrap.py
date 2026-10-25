@@ -72,9 +72,13 @@ def bootstrap_compiler(repo_root, output_directory):
 
     def compile_c(path, name):
         binary = directory / executable_name(name)
-        subprocess.run(compiler_command() + ["-std=c99", "-O1", "-I" + str(root),
-                                            str(path), "-lm", "-o", str(binary)],
-                       check=True, capture_output=True, text=True, timeout=120, cwd=root)
+        math_flags = [] if os.name == "nt" else ["-lm"]
+        built = subprocess.run(compiler_command() + ["-std=c99", "-O1", "-I" + str(root),
+                               str(path)] + math_flags + ["-o", str(binary)],
+                               capture_output=True, text=True, timeout=120, cwd=root)
+        if built.returncode:
+            from error.Error import ToolchainError
+            raise ToolchainError("Bootstrap C compilation failed: " + built.stdout + built.stderr)
         return binary
 
     binary = compile_c(bootstrap_c, "bootstrap")
