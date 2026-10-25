@@ -2,6 +2,15 @@ import weakref
 from typing import Any, Dict, List, Optional
 
 def nominal_display_name(name):
+    generic_prefix = '_WYSNA_G_'
+    if name.startswith(generic_prefix):
+        length_end = name.find('_', len(generic_prefix))
+        length_text = name[len(generic_prefix):length_end]
+        if length_end >= 0 and length_text.isascii() and length_text.isdigit():
+            start = length_end + 1
+            end = start + int(length_text)
+            if end <= len(name) and name[end:end + 2] == '__':
+                name = name[start:end]
     module_prefix = '__wysna_module_'
     if name.startswith(module_prefix):
         boundary = name.find('__', len(module_prefix))

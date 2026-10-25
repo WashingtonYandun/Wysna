@@ -121,6 +121,39 @@ static inline WVal* wysna_member_ref(WVal* obj, const char* prop) {
     exit(1);
 }
 
+/* Static types do not authorize dereferencing an uninitialized default value. */
+static inline WVal wysna_tuple_get_at(WVal value, int32_t index,
+                                     const char* file, int32_t line, int32_t col) {
+    wysna_runtime_set_position(file, line, col);
+    if (value.tag != W_TUPLE || !value.as.tuple)
+        wysna_runtime_fail("W4003", "Cannot destructure tuple: length mismatch");
+    if (index < 0 || index >= value.as.tuple->len)
+        wysna_runtime_fail("W4002", "Tuple index out of bounds");
+    return value.as.tuple->items[index];
+}
+static inline WVal wysna_tuple_get_owned_at(WVal value, int32_t index,
+                                           const char* file, int32_t line, int32_t col) {
+    return wysna_clone(wysna_tuple_get_at(value, index, file, line, col));
+}
+static inline int32_t wysna_list_iteration_length_at(WVal value,
+                                                    const char* file, int32_t line, int32_t col) {
+    wysna_runtime_set_position(file, line, col);
+    if (value.tag != W_LIST || !value.as.list)
+        wysna_runtime_fail("W4003", "For loop requires a list value");
+    return value.as.list->len;
+}
+static inline WVal wysna_list_iteration_get_at(WVal value, int32_t index,
+                                              const char* file, int32_t line, int32_t col) {
+    int32_t length = wysna_list_iteration_length_at(value, file, line, col);
+    if (index < 0 || index >= length)
+        wysna_runtime_fail("W4002", "List index out of bounds");
+    return value.as.list->data[index];
+}
+static inline WVal wysna_list_iteration_get_owned_at(WVal value, int32_t index,
+                                                    const char* file, int32_t line, int32_t col) {
+    return wysna_clone(wysna_list_iteration_get_at(value, index, file, line, col));
+}
+
 /* Physical field offsets resolved and checked before MIR reaches the backend. */
 static inline WVal wysna_field_get_at(WVal object, int32_t index) {
     if ((object.tag != W_STRUCT && object.tag != W_OBJECT) || index < 0 || index >= object.as.st->len)

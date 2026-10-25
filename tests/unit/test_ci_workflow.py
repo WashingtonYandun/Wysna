@@ -9,7 +9,7 @@ CONTRACT_MODULES = (
     'test_ci_harness', 'test_execution_context', 'test_hir_return_paths',
     'test_f03_error_unions', 'test_compilation_session', 'test_compiler_service',
     'test_architecture_contract', 'test_native_toolchain', 'test_expansion_contracts',
-    'test_audit_remediation', 'test_mir', 'test_selfhost_mir',
+    'test_audit_remediation', 'test_mir', 'test_selfhost_mir', 'test_native_mir_pipeline',
     'test_selfhost_compilation_context', 'test_distribution_contract',
     'test_audit_findings', 'test_standard_toolkit', 'test_http_client',
 )
@@ -29,6 +29,16 @@ def test_ci_workflow_contracts():
     jobs = {heading.group(1): body[heading.end():headings[index + 1].start()
                                   if index + 1 < len(headings) else len(body)]
             for index, heading in enumerate(headings)}
+    native_build, native_consumer = jobs['native-sdk-build'], jobs['installed-native-sdk']
+    for job in (native_build, native_consumer):
+        assert 'os: [ubuntu-latest, macos-latest, windows-latest]' in job
+        assert 'fail-fast: false' in job
+        assert 'actions/upload-artifact@v4' in job
+    assert 'package_native.py' in native_build and '--source-commit "$GITHUB_SHA"' in native_build
+    assert 'actions/checkout' not in native_consumer
+    assert 'needs: native-sdk-build' in native_consumer
+    assert '--strict-source --compiler-source' in native_consumer
+    assert 'validate_native_sdk.py' in native_consumer
     assert 'compiler-contracts' in jobs, 'Compiler contracts need their own execution budget'
     contracts, conformance = jobs['compiler-contracts'], jobs['conformance']
     for job in (contracts, conformance):

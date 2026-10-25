@@ -1,0 +1,151 @@
+fn mir_abi_name(name: str) -> str {
+    for i in 0..len(name) { if name[i] == "." { return "wysna_method_" + slice(name, 0, i) + "__" + slice(name, i + 1, len(name)) } }
+    return "wysna_fn_" + name
+}
+fn mir_virtual_index(context: MirBuilder, name: str, arity: int) -> int {
+    for i in 0..len(context.virtual_slots) { if context.virtual_slots[i].name == name and context.virtual_slots[i].arity == arity { return i } }
+    context.virtual_slots.append(MirVirtualSlot { name: name, arity: arity })
+    return len(context.virtual_slots) - 1
+}
+fn mir_virtual_call(context: MirBuilder, node: CheckedNode) -> int {
+    let signature = context.program.types[context.program.signatures[node.target].type_id].args
+    let mut arguments: list[int] = []
+    for i in 0..len(node.children) {
+        let value = mir_expression(context, node.children[i])
+        if context.current < 0 { return -1 }
+        arguments.append(mir_coerce(context, value, mir_type(context, signature[i], node.source), false, node.source))
+    }
+    if len(node.labels) != 2 { report_error_at("W9999", node.source, "checked virtual identity missing") }
+    let slot = mir_virtual_index(context, node.labels[1], len(arguments) - 1)
+    return mir_op(context, "virtual", mir_type(context, node.type_id, node.source), arguments, "", mir_literal_int(slot), node.source)
+}
+fn mir_default(context: MirBuilder, type_id: int, source: Token) -> int {
+    let kind = context.types[type_id].kind
+    if kind == "weak" { return mir_op(context, "runtime", type_id, [], "wysna_empty_weak", mir_literal_unit(), source) }
+    if kind == "list" or kind == "dict" { return mir_op(context, "construct", type_id, [], kind, mir_literal_unit(), source) }
+    let mut literal = MirLiteral { type_id: 6, integer: 0, floating: 0.0, boolean: false, text: "" }
+    if type_id <= 5 { literal.type_id = type_id }
+    return mir_op(context, "default", type_id, [], "", literal, source)
+}
+fn mir_new(context: MirBuilder, node: CheckedNode) -> int {
+    let source = node.source
+    let returned = mir_type(context, node.type_id, source)
+    let record = mir_find_record(context.records, returned, source)
+    let mut arguments: list[int] = []
+    for child in node.children { arguments.append(mir_expression(context, child)) }
+    if context.current < 0 { return -1 }
+    let mut values: list[int] = []
+    for field in record.fields { values.append(mir_default(context, field.type_id, source)) }
+    let result = mir_op(context, "construct", returned, values, "object", mir_literal_int(returned), source)
+    mir_append(context, MirOperation { owner_type: returned, labels: mir_empty_labels(), place: mir_empty_place(), opcode: "set_vtable", result: -1, args: [result], name: context.types[returned].name, value: mir_literal_unit(), source: source })
+    let mut initialized = false
+    for method in record.methods {
+        if method.name == "init" {
+            initialized = true
+            let signature = context.types[method.type_id].args
+            if len(arguments) + 1 != len(signature) { report_error_at("W9999", source, "checked constructor arity mismatch") }
+            let mut checked: list[int] = [mir_coerce(context, result, method.owner, false, source)]
+            for i in 0..len(arguments) { checked.append(mir_coerce(context, arguments[i], signature[i], false, source)) }
+            mir_op(context, "call", signature[len(signature) - 1], checked, method.target, mir_literal_unit(), source)
+        }
+    }
+    if not initialized and len(arguments) > 0 { report_error_at("W9999", source, "checked constructor has no initializer") }
+    return result
+}
+fn mir_virtual_slots_json(module: MirModule) -> str {
+    let mut out = "["
+    for i in 0..len(module.virtual_slots) {
+        if i > 0 { out = out + "," }
+        let slot = module.virtual_slots[i]
+        out = out + "{\"$tuple\":[" + mir_quote(slot.name) + "," + str(slot.arity) + "]}"
+    }
+    return out + "]"
+}
+
+fn mir_reference_definition_json(module: MirModule, record: MirRecord, kind: str) -> str {
+    let mut out = ""
+    if kind == "class" {
+        out = out + ",\"superclass\":" + (if record.parent < 0 { "null" } else { str(record.parent) }) + ",\"interfaces\":" + mir_ids(record.interfaces, false) + ",\"fields\":{"
+        for i in 0..len(record.fields) { if i > 0 { out = out + "," } let field = record.fields[i] out = out + mir_quote(field.name) + ":[" + str(field.type_id) + "," + str(field.visible) + "]" }
+        out = out + "}"
+    }
+    out = out + ",\"methods\":{"
+    let mut count = 0
+    let mut init = "null"
+    for method in record.methods {
+        if method.name == "init" { init = str(method.type_id) }
+        else {
+            if count > 0 { out = out + "," }
+            count = count + 1
+            out = out + mir_quote(method.name) + ":"
+            if kind == "class" { out = out + "[" + str(method.type_id) + "," + str(method.visible) + "]" }
+            else { out = out + str(method.type_id) }
+        }
+    }
+    out = out + "}"
+    if kind == "class" { out = out + ",\"init_sig\":" + init }
+    return out
+}
+fn mir_methods_json(module: MirModule, record: MirRecord) -> str {
+    let mut out = "{"
+    for i in 0..len(record.methods) {
+        if i > 0 { out = out + "," }
+        let method = record.methods[i]
+        let signature = module.types[method.type_id].args
+        let mut params: list[int] = []
+        for j in 0..len(signature) - 1 { params.append(signature[j]) }
+        out = out + mir_quote(method.name) + ":{\"$tuple\":[" + mir_quote(module.types[method.owner].name) + "," + mir_ids(params, false) + "," + str(signature[len(signature) - 1]) + "]}"
+    }
+    return out + "}"
+}
+fn mir_c_vtables(module: MirModule) -> str {
+    let mut out = ""
+    for record in module.records {
+        if module.types[record.type_id].kind == "class" {
+            let name = module.types[record.type_id].name
+            let mut entries: list[str] = []
+            for i in 0..len(module.virtual_slots) {
+                let slot = module.virtual_slots[i]
+                let mut entry = "NULL"
+                for method in record.methods {
+                    let signature = module.types[method.type_id].args
+                    if method.name == slot.name and len(signature) == slot.arity + 1 {
+                        entry = "wysna_virtual_" + str(record.type_id) + "_" + str(i)
+                        out = out + "static WVal " + entry + "(WVal receiver, int32_t argc, const WVal* argv) {\n    (void)argv;\n    if (argc != " + str(slot.arity) + ") wysna_runtime_fail(\"W4003\", \"Call arity mismatch\");\n    return "
+                        let mut call = method.target + "(receiver"
+                        for j in 0..slot.arity { call = call + ", " + mir_c_unbox("argv[" + str(j) + "]", signature[j]) }
+                        call = call + ")"
+                        out = out + mir_c_box(call, signature[len(signature) - 1]) + ";\n}\n"
+                    }
+                }
+                entries.append(entry)
+            }
+            if len(entries) > 0 {
+                out = out + "static const WInvoke wysna_slots_" + name + "[" + str(len(entries)) + "] = {"
+                for i in 0..len(entries) { if i > 0 { out = out + ", " } out = out + entries[i] }
+                out = out + "};\nstatic const WClassVTable wysna_vtable_" + name + " = {" + str(len(entries)) + ", wysna_slots_" + name + "};\n"
+            } else { out = out + "static const WClassVTable wysna_vtable_" + name + " = {0, NULL};\n" }
+        }
+    }
+    return out
+}
+
+fn mir_verify_virtual(module: MirModule, operation: MirOperation, slots: list[MirSlot]) -> bool {
+    let index = operation.value.integer
+    if index < 0 or index >= len(module.virtual_slots) or len(operation.args) == 0 { return false }
+    let slot = module.virtual_slots[index]
+    if len(operation.args) != slot.arity + 1 { return false }
+    let receiver = slots[operation.args[0]].type_id
+    let kind = module.types[receiver].kind
+    if kind != "class" and kind != "interface" { return false }
+    let record = mir_find_record(module.records, receiver, operation.source)
+    for method in record.methods {
+        if method.name == slot.name {
+            let signature = module.types[method.type_id].args
+            if len(signature) != slot.arity + 1 or slots[operation.result].type_id != signature[len(signature) - 1] { return false }
+            for i in 0..slot.arity { if not mir_compatible(module.types, module.records, slots[operation.args[i + 1]].type_id, signature[i]) { return false } }
+            return true
+        }
+    }
+    return false
+}

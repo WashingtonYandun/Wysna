@@ -1,0 +1,88 @@
+# Symbolic definition obligations are discharged by checking each concrete body.
+fn sem_symbolic(context: SemanticContext, type_id: int) -> bool {
+    let type_ = context.types[type_id]
+    if type_.kind == "typeparam" or type_.kind == "dependent" { return true }
+    for argument in type_.args { if sem_symbolic(context, argument) { return true } }
+    return false
+}
+fn sem_defer(context: SemanticContext, kind: str, types: list[int]) -> bool {
+    if not context.checking_definition { return false }
+    let mut dependent = false
+    for type_id in types { if sem_symbolic(context, type_id) { dependent = true } }
+    if not dependent { return false }
+    context.obligations.append(SemObligation { function: context.current_function, kind: kind, types: types, source: sem_at(context) })
+    return true
+}
+fn sem_type_contains(context: SemanticContext, outer: int, inner: int) -> bool {
+    if outer == inner { return true }
+    for child in context.types[outer].args { if sem_type_contains(context, child, inner) { return true } }
+    return false
+}
+fn sem_type_complexity(context: SemanticContext, id: int) -> int {
+    let mut size = 1
+    for child in context.types[id].args { size = size + sem_type_complexity(context, child) if size > 256 { return size } }
+    return size
+}
+fn sem_specialize(context: SemanticContext, template_id: int, selected: int, actual: list[int], source: Token) -> int {
+    let unification = new SemUnification()
+    let template = context.functions[template_id]
+    let declared = context.types[template.type_id].args
+    let chosen = context.types[selected].args
+    let names: list[str] = []
+    let types: list[int] = []
+    unification.names = names
+    unification.types = types
+    if selected != template.type_id { for i in 0..len(declared) { sem_unify_type(context, unification, declared[i], chosen[i]) } }
+    for i in 0..len(actual) { sem_unify_type(context, unification, declared[i], actual[i]) }
+    let mut arguments: list[int] = []
+    for parameter in template.type_params {
+        let mut type_id = -1
+        for i in 0..len(unification.names) { if unification.names[i] == parameter { type_id = unification.types[i] } }
+        if type_id < 0 or sem_symbolic(context, type_id) { report_error_at("W2001", source, "cannot infer generic type argument: " + parameter) }
+        if sem_type_complexity(context, type_id) > 256 { report_error_at("W2011", source, "generic specialization complexity exceeded") }
+        arguments.append(type_id)
+    }
+    for specialization in context.specializations { if specialization.template == template_id and specialization.arguments == arguments { return specialization.function } }
+    # Compare all occurrences in the ancestry, including mutual recursion.
+    for id in context.specialization_ancestry {
+        let ancestor = context.specializations[id]
+        if ancestor.template == template_id {
+            let mut grows = false
+            let mut contains = true
+            for i in 0..len(arguments) {
+                if not sem_type_contains(context, arguments[i], ancestor.arguments[i]) { contains = false }
+                if arguments[i] != ancestor.arguments[i] { grows = true }
+            }
+            if grows and contains { report_error_at("W2011", source, "structural generic expansion cycle detected: " + template.name) }
+        }
+    }
+    if len(context.specializations) >= 1024 or len(context.specialization_ancestry) >= 64 { report_error_at("W2011", source, "generic specialization budget exceeded") }
+    let mut parts: list[int] = []
+    for part in declared { parts.append(sem_substitute_type(context, part, template.type_params, arguments)) }
+    let empty: list[str] = []
+    let id = len(context.functions)
+    let name = "__wysna_specialization_" + str(len(context.specializations))
+    if sem_function(context, name) >= 0 { report_error_at("W1002", source, "reserved specialization identity collision") }
+    context.functions.append(SemFunction { abi_params: template.abi_params, abi_return: template.abi_return, name: name, params: template.params, type_params: empty, constraints: empty, type_id: sem_intern(context, "function", "", parts), body: template.body, end: template.end, owner: template.owner, visible: false })
+    let mut ancestry = context.specialization_ancestry
+    ancestry.append(len(context.specializations))
+    context.specializations.append(SemSpecialization { template: template_id, arguments: arguments, function: id, ancestry: ancestry })
+    return id
+}
+fn sem_complete_specializations(context: SemanticContext) {
+    let mut cursor = 0
+    while cursor < len(context.specializations) {
+        let item = context.specializations[cursor]
+        let template = context.functions[item.template]
+        context.substitution_names = template.type_params
+        context.substitution_types = item.arguments
+        context.specialization_ancestry = item.ancestry
+        sem_check_function(context, context.functions[item.function])
+        cursor = cursor + 1
+    }
+    let names: list[str] = []
+    let types: list[int] = []
+    context.substitution_names = names
+    context.substitution_types = types
+    context.specialization_ancestry = types
+}

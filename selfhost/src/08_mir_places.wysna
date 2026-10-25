@@ -1,0 +1,91 @@
+# Address evaluation happens before the RHS; class projections protect identity.
+fn mir_binding_place(context: MirBuilder, symbol: int, source: Token) -> MirPlace {
+    let projections: list[MirProjection] = []
+    for binding in context.bindings { if binding.symbol == symbol { return MirPlace { root: binding.slot, projections: projections } } }
+    for i in 0..len(context.globals) { if context.globals[i].symbol == symbol { return MirPlace { root: -i - 1, projections: projections } } }
+    report_error_at("W9999", source, "checked place has no storage")
+    return mir_empty_place()
+}
+fn mir_place(context: MirBuilder, id: int) -> MirPlace {
+    let node = context.program.nodes[id]
+    if node.kind == "binding" { return mir_binding_place(context, node.binding, node.source) }
+    if node.kind == "index" {
+        let mut parent = mir_place(context, node.children[0])
+        let index = mir_expression(context, node.children[1])
+        let owner = mir_type(context, context.program.nodes[node.children[0]].type_id, node.source)
+        parent.projections.append(MirProjection { kind: "index", index: index, owner_type: owner, type_id: mir_type(context, node.type_id, node.source), source: node.source })
+        return parent
+    }
+    if node.kind == "member" {
+        let receiver = node.children[0]
+        let owner = mir_type(context, context.program.nodes[receiver].type_id, node.source)
+        let mut parent = mir_empty_place()
+        if context.types[owner].kind == "class" { parent = MirPlace { root: mir_expression(context, receiver), projections: parent.projections } }
+        else { parent = mir_place(context, receiver) }
+        let record = mir_find_record(context.records, owner, node.source)
+        let index = mir_field_index(record, node.text, node.source)
+        parent.projections.append(MirProjection { kind: "field", index: index, owner_type: owner, type_id: record.fields[index].type_id, source: node.source })
+        return parent
+    }
+    mir_unsupported(node.source, "checked place " + node.kind)
+    return mir_empty_place()
+}
+fn mir_read_place(context: MirBuilder, place: MirPlace, source: Token) -> int {
+    let mut value = -1
+    if place.root < 0 {
+        let id = -place.root - 1
+        value = mir_op(context, "global_load", context.globals[id].type_id, [], "", mir_literal_int(id), source)
+    } else { value = mir_op(context, "clone", context.slots[place.root].type_id, [place.root], "", mir_literal_unit(), source) }
+    for projection in place.projections {
+        if projection.kind == "index" { value = mir_op(context, "runtime", projection.type_id, [value, projection.index], "wysna_index_get_owned_at", mir_literal_unit(), projection.source) }
+        elif projection.kind == "field" { value = mir_load_field(context, value, projection.index, projection.type_id, projection.source) }
+        else { report_error_at("W9999", source, "unknown checked place projection") }
+    }
+    return value
+}
+fn mir_place_json(place: MirPlace) -> str {
+    let mut projections = "["
+    for i in 0..len(place.projections) {
+        if i > 0 { projections = projections + "," }
+        let projection = place.projections[i]
+        projections = projections + "{\"$type\":\"Projection\",\"kind\":" + mir_quote(projection.kind) + ",\"index\":" + str(projection.index) + ",\"owner_type\":" + str(projection.owner_type) + ",\"type_id\":" + str(projection.type_id) + ",\"source\":" + mir_source_json(projection.source) + "}"
+    }
+    return "{\"$type\":\"Place\",\"root\":" + str(place.root) + ",\"projections\":{\"$tuple\":" + projections + "]}}"
+}
+fn mir_place_type(module: MirModule, function: MirFunction, place: MirPlace, source: Token) -> int {
+    let mut type_id = 0
+    if place.root < 0 {
+        let global = -place.root - 1
+        if global >= len(module.globals) { report_error_at("W9999", source, "invalid MIR global place") }
+        type_id = module.globals[global].type_id
+    } else {
+        if place.root >= len(function.slots) or function.slots[place.root].parameter { report_error_at("W9999", source, "invalid or borrowed MIR place") }
+        type_id = function.slots[place.root].type_id
+    }
+    for projection in place.projections {
+        if projection.owner_type != type_id { report_error_at("W9999", source, "MIR projection owner mismatch") }
+        let owner = module.types[type_id]
+        if projection.kind == "index" {
+            let index = projection.index
+            if index < 0 or index >= len(function.slots) { report_error_at("W9999", source, "invalid MIR index place") }
+            let key = if owner.kind == "dict" { owner.args[0] } else { 3 }
+            if owner.kind != "list" and owner.kind != "dict" { report_error_at("W9999", source, "invalid MIR index owner") }
+            if function.slots[index].type_id != key { report_error_at("W9999", source, "invalid MIR index type") }
+            type_id = owner.args[if owner.kind == "dict" { 1 } else { 0 }]
+        } elif projection.kind == "field" {
+            let record = mir_find_record(module.records, type_id, source)
+            if projection.index < 0 or projection.index >= len(record.fields) { report_error_at("W9999", source, "invalid MIR field offset") }
+            type_id = record.fields[projection.index].type_id
+        } else { report_error_at("W9999", source, "invalid MIR projection kind") }
+        if projection.type_id != type_id { report_error_at("W9999", source, "MIR projection result mismatch") }
+    }
+    return type_id
+}
+fn mir_c_place(module: MirModule, function: MirFunction, place: MirPlace) -> str {
+    let mut reference = "&" + (if place.root < 0 { module.globals[-place.root - 1].name } else { mir_c_name(place.root) })
+    for projection in place.projections {
+        if projection.kind == "field" { reference = "wysna_field_ref_at(" + reference + ", " + str(projection.index) + ")" }
+        else { reference = "wysna_index_ref_at(" + reference + ", " + mir_c_value(function, projection.index, false) + ", " + escape_c_str(projection.source.file) + ", " + str(projection.source.line) + ", " + str(projection.source.col) + ")" }
+    }
+    return reference
+}

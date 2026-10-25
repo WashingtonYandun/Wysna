@@ -1,3 +1,32 @@
+# The compiler owns canonicalization buffers; no path storage crosses the ABI.
+extern "C" fn wysna_host_buffer_new() -> opaque
+extern "C" fn wysna_host_buffer_append(handle: opaque, value: int) -> int
+extern "C" fn wysna_host_buffer_get(handle: opaque, index: int) -> int
+extern "C" fn wysna_host_fs_canonical(path: opaque, output: opaque) -> int
+extern "C" fn wysna_host_close(handle: opaque) -> int
+
+fn module_canonical(path: str) -> str {
+    let input = wysna_host_buffer_new()
+    let output = wysna_host_buffer_new()
+    for byte in bytes(path) { wysna_host_buffer_append(input, byte) }
+    let size = wysna_host_fs_canonical(input, output)
+    let mut parts: list[str] = []
+    let mut index = 0
+    if size >= 0 {
+        while index < size {
+            let first = wysna_host_buffer_get(output, index)
+            let width = if first < 128 { 1 } elif first < 224 { 2 } elif first < 240 { 3 } else { 4 }
+            let mut codepoint = if width == 1 { first } elif width == 2 { first % 32 } elif width == 3 { first % 16 } else { first % 8 }
+            for offset in 1..width { codepoint = codepoint * 64 + wysna_host_buffer_get(output, index + offset) % 64 }
+            parts.append(chr(codepoint))
+            index = index + width
+        }
+    }
+    wysna_host_close(input)
+    wysna_host_close(output)
+    return module_normalize(if size >= 0 { join_strings(parts, "") } else { path })
+}
+
 # An import graph belongs to one source expansion.
 class ModuleLoader {
     paths: list[str]
@@ -46,7 +75,8 @@ fn module_normalize(path: str) -> str {
         } else { part = part + ch }
     }
     let mut result = ""
-    if len(path) > 0 and path[0] == "/" { result = "/" }
+    if len(path) > 0 and (path[0] == "/" or path[0] == "\\") { result = "/" }
+    if len(path) > 1 and (path[0] == "/" or path[0] == "\\") and (path[1] == "/" or path[1] == "\\") { result = "//" }
     for i in 0..len(parts) {
         if i > 0 { result = result + "/" }
         result = result + parts[i]
@@ -66,9 +96,10 @@ fn module_contains(names: list[str], name: str) -> bool {
 }
 fn module_stdlib_path(requested: str) -> str {
     let relative = "stdlib/" + slice(requested, 4, len(requested)) + ".wysna"
-    let local = read_file(relative) else error { "" }
-    if local != "" { return relative }
     let arguments = args()
+    if len(arguments) > 2 and arguments[1] == "--stdlib-root" {
+        return module_normalize(arguments[2] + "/" + slice(requested, 4, len(requested)) + ".wysna")
+    }
     let mut directory = module_directory(module_normalize(arguments[0]))
     while directory != "" {
         let candidate = module_normalize(directory + relative)
@@ -81,7 +112,7 @@ fn module_stdlib_path(requested: str) -> str {
     return relative
 }
 fn module_expand(context: ModuleLoader, src: str, path: str, entry: bool) -> int {
-    let canonical = module_normalize(path)
+    let canonical = module_canonical(path)
 
     for i in 0..len(context.paths) {
         if context.paths[i] == canonical {

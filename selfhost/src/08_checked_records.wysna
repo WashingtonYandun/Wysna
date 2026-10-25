@@ -1,0 +1,77 @@
+fn checked_type_concrete(types: list[SemType], templates: list[SemGenericType], id: int) -> bool {
+    let type_ = types[id]
+    if type_.kind == "typeparam" or type_.kind == "dependent" { return false }
+    for argument in type_.args { if not checked_type_concrete(types, templates, argument) { return false } }
+    for template in templates { if template.name == type_.name and len(template.params) != len(type_.args) { return false } }
+    return true
+}
+fn checked_records(context: SemanticContext) -> list[CheckedRecord] {
+    let mut records: list[CheckedRecord] = []
+    let mut cursor = 0
+    while cursor < len(context.types) {
+        let id = cursor
+        cursor = cursor + 1
+        let type_ = context.types[id]
+        if (type_.kind == "struct" or type_.kind == "enum" or type_.kind == "class" or type_.kind == "interface") and checked_type_concrete(context.types, context.generic_types, id) {
+            let mut fields: list[CheckedField] = []
+            let mut variants: list[CheckedVariant] = []
+            let mut methods: list[CheckedMethod] = []
+            let mut interfaces: list[int] = []
+            let mut parent = -1
+            let mut lineage: list[str] = [type_.name]
+            let mut current = type_.name
+            let mut visits = 0
+            while current != "" and visits <= len(context.classes) {
+                let mut next = ""
+                for class_ in context.classes { if class_.name == current { next = class_.parent if current == type_.name { for interface_ in class_.interfaces { interfaces.append(sem_named(context, interface_)) } } } }
+                if next != "" { if parent < 0 { parent = sem_named(context, next) } lineage.append(next) }
+                current = next visits = visits + 1
+            }
+            let mut names: list[str] = []
+            let generic = sem_generic_type(context, type_.name)
+            if generic >= 0 { names = context.generic_types[generic].params }
+            let mut owner_index = len(lineage) - 1
+            while owner_index >= 0 {
+                let owner_name = lineage[owner_index]
+                for field in context.fields {
+                    if field.owner == owner_name { fields.append(CheckedField { name: field.name, type_id: sem_substitute_type(context, field.type_id, names, type_.args), visible: field.visible }) }
+                }
+                for i in 0..len(context.functions) {
+                    let function = context.functions[i]
+                    if function.owner == owner_name + "." {
+                        let method_name = slice(function.name, len(function.owner), len(function.name))
+                        let method = CheckedMethod { name: method_name, type_id: function.type_id, target: i, owner: sem_named(context, owner_name), visible: function.visible }
+                        let mut replaced = false
+                        for j in 0..len(methods) { if methods[j].name == method_name { methods[j] = method replaced = true } }
+                        if not replaced { methods.append(method) }
+                    }
+                }
+                owner_index = owner_index - 1
+            }
+            for i in 0..len(context.variants) {
+                if context.types[context.variant_types[i]].name == type_.name {
+                    let mut payloads: list[int] = []
+                    for payload in context.variant_payloads[i] { payloads.append(sem_substitute_type(context, payload, names, type_.args)) }
+                    variants.append(CheckedVariant { name: context.variants[i], payloads: payloads })
+                }
+            }
+            records.append(CheckedRecord { type_id: id, fields: fields, variants: variants, parent: parent, interfaces: interfaces, methods: methods })
+        }
+    }
+    return records
+}
+fn checked_record(program: CheckedProgram, type_id: int) -> CheckedRecord {
+    for record in program.records { if record.type_id == type_id { return record } }
+    report_error_at("W9999", program.source, "checked nominal definition is missing")
+    let fields: list[CheckedField] = []
+    let variants: list[CheckedVariant] = []
+    let interfaces: list[int] = []
+    let methods: list[CheckedMethod] = []
+    return CheckedRecord { type_id: -1, fields: fields, variants: variants, parent: -1, interfaces: interfaces, methods: methods }
+}
+
+fn checked_receiver_signature(context: SemanticContext, owner: int, type_id: int) -> int {
+    let mut args_: list[int] = [owner]
+    for arg in context.types[type_id].args { args_.append(arg) }
+    return sem_intern(context, "function", "", args_)
+}

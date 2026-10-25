@@ -116,6 +116,7 @@ jobs:
           python3 -m tests.unit.test_audit_remediation
           python3 -m tests.unit.test_mir
           python3 -m tests.unit.test_selfhost_mir
+          python3 -m tests.unit.test_native_mir_pipeline
           python3 -m tests.unit.test_selfhost_compilation_context
           python3 -m tests.unit.test_distribution_contract
           python3 -m tests.unit.test_audit_findings
@@ -505,3 +506,82 @@ jobs:
         run: python -m pip install -e ".[wasi]"
       - name: Build, inspect, compare and execute the WASI command fixture
         run: python -m tests.unit.test_wasi_target
+
+  native-sdk-build:
+    name: Build native SDK (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 40
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+    env:
+      CC: clang
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - uses: actions/cache@v4
+        with:
+          path: .wysna_cache/native-downloads
+          key: native-components-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('packaging/native/components.json') }}
+      - name: Verify native packaging contracts
+        run: python -m tests.unit.test_native_sdk
+      - name: Build verified native compiler and pinned offline SDK
+        run: |
+          mkdir -p dist/native
+          python tools/package_native.py --output dist/native/wysna-native --archive --source-commit "$GITHUB_SHA" > dist/native/package-report.json
+          cp tools/validate_native_sdk.py dist/native/validate_native_sdk.py
+          cp selfhost/compiler.wysna dist/native/compiler.wysna
+      - uses: actions/upload-artifact@v4
+        with:
+          name: native-sdk-${{ matrix.os }}
+          path: |
+            dist/native/*.tar.gz
+            dist/native/*.zip
+            dist/native/validate_native_sdk.py
+            dist/native/compiler.wysna
+            dist/native/package-report.json
+          if-no-files-found: error
+      - name: Preserve native bootstrap diagnostics
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: native-sdk-build-failure-${{ matrix.os }}
+          path: |
+            .wysna_cache/bootstrap/*/bootstrap.json
+            .wysna_cache/bootstrap/*/compiler*.c
+            dist/native/package-report.json
+          if-no-files-found: ignore
+
+  installed-native-sdk:
+    name: Installed native SDK (${{ matrix.os }})
+    needs: native-sdk-build
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+    steps:
+      # Python executes the validator only; every SDK child receives an isolated PATH.
+      # Deliberately do not check out repository sources in this consumer job.
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - uses: actions/download-artifact@v4
+        with:
+          name: native-sdk-${{ matrix.os }}
+          path: native-artifact
+      - name: Extract the platform archive
+        run: |
+          python -c "from pathlib import Path; import shutil; files=list(Path('native-artifact').glob('*.tar.gz'))+list(Path('native-artifact').glob('*.zip')); assert len(files)==1, files; shutil.unpack_archive(str(files[0]), 'installed')"
+      - name: Validate isolated installed workflows and native selfbuild
+        run: python native-artifact/validate_native_sdk.py --sdk installed/wysna-native --strict-source --compiler-source native-artifact/compiler.wysna --report native-install-report.json
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: native-sdk-acceptance-${{ matrix.os }}
+          path: native-install-report.json
+          if-no-files-found: error

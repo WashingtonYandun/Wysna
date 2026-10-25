@@ -1,37 +1,108 @@
 fn mir_verify_runtime(module: MirModule, operation: MirOperation, slots: list[MirSlot]) -> bool {
     let name = operation.name
     let returned = slots[operation.result].type_id
+    if name == "wysna_empty_weak" { return len(operation.args) == 0 and module.types[returned].kind == "weak" }
+    if name == "wysna_enum_payload_owned" {
+        if len(operation.args) != 1 or len(operation.labels) != 2 { return false }
+        let source = slots[operation.args[0]].type_id
+        if module.types[source].kind != "enum" or module.types[source].name != operation.labels[0] { return false }
+        let record = mir_find_record(module.records, source, operation.source)
+        for variant in record.variants {
+            if variant.name == operation.labels[1] {
+                if len(variant.payloads) == 1 { return returned == variant.payloads[0] }
+                return len(variant.payloads) > 1 and module.types[returned].kind == "tuple" and module.types[returned].args == variant.payloads
+            }
+        }
+        return false
+    }
+    if len(operation.labels) > 0 and (name == "wysna_enum" or name == "wysna_enum_payload") {
+        if len(operation.labels) != 2 or module.types[returned].kind != "enum" or module.types[returned].name != operation.labels[0] { return false }
+        let record = mir_find_record(module.records, returned, operation.source)
+        for variant in record.variants {
+            if variant.name == operation.labels[1] {
+                if len(variant.payloads) == 0 { return name == "wysna_enum" and len(operation.args) == 0 }
+                if name != "wysna_enum_payload" or len(operation.args) != 1 { return false }
+                let payload = slots[operation.args[0]].type_id
+                if len(variant.payloads) == 1 { return payload == variant.payloads[0] }
+                return module.types[payload].kind == "tuple" and module.types[payload].args == variant.payloads
+            }
+        }
+        return false
+    }
     if name == "wysna_builtin_print" or name == "wysna_builtin_eprint" { return returned == 1 }
+    if name == "wysna_builtin_args" { return len(operation.args) == 0 and module.types[returned].kind == "list" and module.types[returned].args[0] == 5 }
+    if name == "wysna_builtin_read_file" or name == "wysna_builtin_write_file" {
+        let expected = if name == "wysna_builtin_read_file" { 1 } else { 2 }
+        if len(operation.args) != expected or not mir_is_result(module.types, returned) { return false }
+        for argument in operation.args { if slots[argument].type_id != 5 { return false } }
+        let channel = module.types[returned].args
+        return channel[0] == (if expected == 1 { 5 } else { 1 }) and module.types[channel[1]].kind == "struct" and module.types[channel[1]].name == "IoError"
+    }
     if name == "wysna_builtin_slice" {
-        return len(operation.args) == 3 and returned == 5 and slots[operation.args[0]].type_id == 5 and slots[operation.args[1]].type_id == 3 and slots[operation.args[2]].type_id == 3
+        return len(operation.args) == 3 and slots[operation.args[0]].type_id == returned and (returned == 5 or module.types[returned].kind == "list") and slots[operation.args[1]].type_id == 3 and slots[operation.args[2]].type_id == 3
     }
     if len(operation.args) == 1 {
         let argument = operation.args[0]
         let type_ = slots[argument].type_id
+        if name == "wysna_builtin_weak_owned" { return module.types[type_].kind == "class" and module.types[returned].kind == "weak" and module.types[returned].args[0] == type_ }
+        if name == "wysna_builtin_upgrade" { return module.types[type_].kind == "weak" and mir_is_optional(module.types, returned) and module.types[returned].args[0] == module.types[type_].args[0] }
         if name == "wysna_ok" or name == "wysna_err" {
-            if not mir_is_result(module.result_types, returned) { return false }
-            let channel = module.result_types[returned - 7]
-            return type_ == (if name == "wysna_ok" { channel.ok } else { channel.error })
+            if not mir_is_result(module.types, returned) { return false }
+            let channel = module.types[returned]
+            return mir_compatible(module.types, module.records, type_, if name == "wysna_ok" { channel.args[0] } else { channel.args[1] })
         }
         if name == "wysna_unwrap_ok" or name == "wysna_unwrap_err" {
-            if not mir_is_result(module.result_types, type_) { return false }
-            let channel = module.result_types[type_ - 7]
-            return returned == (if name == "wysna_unwrap_ok" { channel.ok } else { channel.error })
+            if not mir_is_result(module.types, type_) { return false }
+            let channel = module.types[type_]
+            return returned == (if name == "wysna_unwrap_ok" { channel.args[0] } else { channel.args[1] })
+        }
+        if name == "wysna_enum_payload" { return mir_is_optional(module.types, returned) and module.types[returned].args[0] == type_ }
+        if name == "wysna_unwrap_optional" { return mir_is_optional(module.types, type_) and module.types[type_].args[0] == returned }
+        if name == "wysna_builtin_exit" { return type_ == 3 and returned == 1 }
+        if name == "wysna_builtin_bytes" { return type_ == 5 and module.types[returned].kind == "list" and module.types[returned].args[0] == 3 }
+        if name == "wysna_builtin_enumerate" or name == "wysna_builtin_dict_items" {
+            let input = module.types[type_]
+            let output = module.types[returned]
+            if output.kind != "list" { return false }
+            let pair = module.types[output.args[0]]
+            if pair.kind != "tuple" or len(pair.args) != 2 { return false }
+            if name == "wysna_builtin_enumerate" { return input.kind == "list" and pair.args == [3, input.args[0]] }
+            return input.kind == "dict" and pair.args == input.args
         }
         if name == "wysna_builtin_str" { return returned == 5 }
-        if name == "wysna_builtin_len" or name == "wysna_builtin_ord" { return type_ == 5 and returned == 3 }
+        if name == "wysna_builtin_len" { let kind = module.types[type_].kind return returned == 3 and (type_ == 5 or kind == "list" or kind == "dict" or kind == "tuple") }
+        if name == "wysna_builtin_ord" { return type_ == 5 and returned == 3 }
+        if name == "wysna_dict_keys" or name == "wysna_dict_values" {
+            let input = module.types[type_]
+            let output = module.types[returned]
+            return input.kind == "dict" and output.kind == "list" and output.args[0] == input.args[if name == "wysna_dict_keys" { 0 } else { 1 }]
+        }
         if name == "wysna_builtin_chr" { return type_ == 3 and returned == 5 }
         if name == "wysna_neg" { return type_ == returned and (type_ == 3 or type_ == 4) }
         if name == "wysna_not" { return type_ == 2 and returned == 2 }
-        if name == "wysna_builtin_int" { return type_ >= 2 and type_ <= 5 and returned == 3 }
-        if name == "wysna_builtin_float" { return type_ >= 2 and type_ <= 5 and returned == 4 }
+        if name == "wysna_builtin_int" { return type_ >= 2 and type_ <= 6 and returned == 3 }
+        if name == "wysna_builtin_float" { return type_ >= 2 and type_ <= 6 and returned == 4 }
         return false
     }
     if len(operation.args) != 2 { return false }
     let first = slots[operation.args[0]].type_id
     let second = slots[operation.args[1]].type_id
-    if name == "wysna_index_get_owned_at" { return first == 5 and second == 3 and returned == 5 }
-    if first != second or mir_is_result(module.result_types, first) { return false }
+    if name == "wysna_index_get_owned_at" {
+        if first == 5 { return second == 3 and returned == 5 }
+        let input = module.types[first]
+        if input.kind == "list" { return second == 3 and returned == input.args[0] }
+        if input.kind == "dict" { return second == input.args[0] and returned == input.args[1] }
+        return false
+    }
+    if name == "wysna_make_range" or name == "wysna_make_range_inclusive" { return first == 3 and second == 3 and module.types[returned].kind == "list" and module.types[returned].args[0] == 3 }
+    if name == "wysna_dict_get" {
+        let input = module.types[first]
+        let output = module.types[returned]
+        return input.kind == "dict" and second == input.args[0] and output.kind == "optional" and output.args[0] == input.args[1]
+    }
+    if name == "wysna_builtin_join_strings" { return module.types[first].kind == "list" and module.types[first].args[0] == 5 and second == 5 and returned == 5 }
+    if name == "wysna_equal" or name == "wysna_not_equal" { return returned == 2 and mir_equality(module, first, second) }
+    if first != second or mir_is_result(module.types, first) { return false }
     if name == "wysna_add" and first == 5 { return returned == 5 }
     if name == "wysna_equal" or name == "wysna_not_equal" { return returned == 2 }
     if first != 3 and first != 4 { return false }
@@ -42,11 +113,12 @@ fn mir_verify_runtime(module: MirModule, operation: MirOperation, slots: list[Mi
 
 # Validate structure before indexed access, then solve definite initialization and cleanup.
 fn mir_verify_shape(module: MirModule, function: MirFunction) {
-    if not mir_valid_type(module.result_types, function.return_type) or len(function.blocks) == 0 { report_error_at("W9999", function.source, "invalid MIR function signature or entry") }
+    if not mir_valid_type(module.types, function.return_type) or len(function.blocks) == 0 { report_error_at("W9999", function.source, "invalid MIR function signature or entry") }
     let mut parameters: list[bool] = []
     for slot in function.slots {
-        if not mir_valid_type(module.result_types, slot.type_id) { report_error_at("W9999", function.source, "invalid MIR slot type") }
+        if not mir_valid_type(module.types, slot.type_id) { report_error_at("W9999", function.source, "invalid MIR slot type") }
         if slot.predicate and (slot.type_id != 2 or slot.parameter) { report_error_at("W9999", function.source, "invalid MIR predicate storage") }
+        if slot.counter and (slot.type_id != 3 or slot.parameter) { report_error_at("W9999", function.source, "invalid MIR counter storage") }
         parameters.append(false)
     }
     for parameter in function.params {
@@ -62,7 +134,21 @@ fn mir_verify_shape(module: MirModule, function: MirFunction) {
             for arg in operation.args {
                 if arg < 0 or arg >= len(function.slots) { report_error_at("W9999", operation.source, "invalid MIR operand") }
             }
-            if operation.opcode == "release" {
+            if operation.opcode == "set_vtable" {
+                if operation.result != -1 or len(operation.args) != 1 { report_error_at("W9999", operation.source, "invalid MIR vtable shape") }
+                let type_id = function.slots[operation.args[0]].type_id
+                if type_id != operation.owner_type or module.types[type_id].kind != "class" or module.types[type_id].name != operation.name { report_error_at("W9999", operation.source, "MIR vtable does not match object") }
+            } elif operation.opcode == "store_place" {
+                let target = mir_place_type(module, function, operation.place, operation.source)
+                if operation.result != -1 or len(operation.args) != 1 { report_error_at("W9999", operation.source, "invalid MIR place store") }
+                let value = function.slots[operation.args[0]]
+                if value.parameter or value.type_id != target { report_error_at("W9999", operation.source, "invalid MIR place store type or ownership") }
+            } elif operation.opcode == "global_store" {
+                let global = operation.value.integer
+                if operation.result != -1 or len(operation.args) != 1 or global < 0 or global >= len(module.globals) { report_error_at("W9999", operation.source, "invalid MIR global store") }
+                let value = function.slots[operation.args[0]]
+                if value.parameter or value.type_id != module.globals[global].type_id { report_error_at("W9999", operation.source, "invalid MIR global store type or ownership") }
+            } elif operation.opcode == "release" {
                 if operation.result != -1 or len(operation.args) != 1 { report_error_at("W9999", operation.source, "invalid MIR release shape") }
                 let slot = function.slots[operation.args[0]]
                 if slot.parameter or not mir_value_storage(slot.type_id) { report_error_at("W9999", operation.source, "invalid MIR release") }
@@ -72,24 +158,109 @@ fn mir_verify_shape(module: MirModule, function: MirFunction) {
                 if function.slots[result].parameter { report_error_at("W9999", operation.source, "MIR overwrites borrowed storage") }
                 let type_ = function.slots[result].type_id
                 let mut valid = false
-                if operation.opcode == "const" { valid = len(operation.args) == 0 and operation.value.type_id == type_ and type_ <= 5 }
+                if operation.opcode == "default" {
+                    valid = len(operation.args) == 0 and (type_ <= 5 and operation.value.type_id == type_ or type_ >= 6 and operation.value.type_id == 6)
+                }
+                elif operation.opcode == "const" { valid = len(operation.args) == 0 and (operation.value.type_id == type_ and type_ <= 6 or operation.value.type_id == 6 and mir_is_optional(module.types, type_)) }
                 elif operation.opcode == "clone" or operation.opcode == "store" {
                     valid = len(operation.args) == 1
                     if valid {
                         let argument = operation.args[0]
-                        valid = function.slots[argument].type_id == type_
+                        valid = mir_compatible(module.types, module.records, function.slots[argument].type_id, type_)
                         if operation.opcode == "store" { valid = valid and not function.slots[argument].parameter and argument != result }
                     }
-                } elif operation.opcode == "test" {
-                    valid = type_ == 2 and function.slots[result].predicate and operation.name == "err" and len(operation.args) == 1
-                    if valid { valid = mir_is_result(module.result_types, function.slots[operation.args[0]].type_id) }
+                } elif operation.opcode == "construct" {
+                    let descriptor = module.types[type_]
+                    valid = (descriptor.kind == operation.name or descriptor.kind == "class" and operation.name == "object") and (descriptor.kind == "list" or descriptor.kind == "dict" or descriptor.kind == "tuple" or descriptor.kind == "struct" or descriptor.kind == "class")
+                    let mut fields: list[MirField] = []
+                    if valid and (descriptor.kind == "struct" or descriptor.kind == "class") {
+                        let record = mir_find_record(module.records, type_, operation.source)
+                        fields = record.fields
+                        valid = operation.value.integer == type_ and len(operation.args) == len(fields)
+                    }
+                    if valid and descriptor.kind == "dict" and len(operation.args) % 2 != 0 { valid = false }
+                    if valid and descriptor.kind == "tuple" and len(operation.args) != len(descriptor.args) { valid = false }
+                    if valid {
+                        for i in 0..len(operation.args) {
+                            let expected = if descriptor.kind == "list" { descriptor.args[0] } elif descriptor.kind == "dict" { descriptor.args[i % 2] } elif descriptor.kind == "struct" or descriptor.kind == "class" { fields[i].type_id } else { descriptor.args[i] }
+                            if function.slots[operation.args[i]].type_id != expected { valid = false }
+                        }
+                    }
+                } elif operation.opcode == "load_field" {
+                    valid = len(operation.args) == 1
+                    if valid {
+                        let owner = function.slots[operation.args[0]].type_id
+                        let record = mir_find_record(module.records, owner, operation.source)
+                        let index = operation.value.integer
+                        valid = owner == operation.owner_type and index >= 0 and index < len(record.fields)
+                        if valid { valid = record.fields[index].type_id == type_ }
+                    }
+                } elif operation.opcode == "tuple_get" {
+                    valid = len(operation.args) == 1
+                    if valid {
+                        let descriptor = module.types[function.slots[operation.args[0]].type_id]
+                        let index = operation.value.integer
+                        valid = descriptor.kind == "tuple" and index >= 0 and index < len(descriptor.args)
+                        if valid { valid = descriptor.args[index] == type_ }
+                    }
+                } elif operation.opcode == "test" { valid = mir_verify_test(module, operation, function.slots) }
+                elif operation.opcode == "narrow" {
+                    valid = len(operation.args) == 1
+                    if valid {
+                        let input = module.types[function.slots[operation.args[0]].type_id]
+                        valid = input.kind == "error_union"
+                        let mut member = false
+                        for alternative in input.args { if alternative == type_ { member = true } }
+                        valid = valid and member and operation.value.integer >= 0 and operation.value.integer < len(function.slots)
+                        if valid { valid = function.slots[operation.value.integer].predicate }
+                    }
+                } elif operation.opcode == "counter" { valid = type_ == 3 and function.slots[result].counter and len(operation.args) == 0 }
+                elif operation.opcode == "increment" {
+                    valid = type_ == 3 and function.slots[result].counter and len(operation.args) == 1
+                    if valid { valid = function.slots[operation.args[0]].counter }
+                } elif operation.opcode == "range_count" {
+                    valid = type_ == 3 and function.slots[result].counter and len(operation.args) == 2
+                    if valid { valid = function.slots[operation.args[0]].type_id == 3 and function.slots[operation.args[1]].type_id == 3 }
+                } elif operation.opcode == "iterate_test" or operation.opcode == "iterate_value" {
+                    valid = len(operation.args) == 2
+                    if valid {
+                        let counter = operation.args[if operation.opcode == "iterate_test" { 0 } else { 1 }]
+                        let iterable = operation.args[if operation.opcode == "iterate_test" { 1 } else { 0 }]
+                        valid = function.slots[counter].counter
+                        let iterable_type = function.slots[iterable].type_id
+                        let descriptor = module.types[iterable_type]
+                        if operation.value.boolean { valid = valid and iterable_type == 3 }
+                        else { valid = valid and descriptor.kind == "list" }
+                        if operation.opcode == "iterate_test" { valid = valid and type_ == 2 and function.slots[result].predicate }
+                        elif valid { valid = type_ == (if operation.value.boolean { 3 } else { descriptor.args[0] }) }
+                    }
+                } elif operation.opcode == "mutate" {
+                    let target = mir_place_type(module, function, operation.place, operation.source)
+                    let descriptor = module.types[target]
+                    if descriptor.kind == "list" {
+                        if operation.name == "pop" { valid = type_ == descriptor.args[0] and len(operation.args) == 0 }
+                        elif operation.name == "clear" { valid = type_ == 1 and len(operation.args) == 0 }
+                        elif operation.name == "append" { valid = type_ == 1 and len(operation.args) == 1 if valid { valid = function.slots[operation.args[0]].type_id == descriptor.args[0] } }
+                    }
+                } elif operation.opcode == "global_load" {
+                    let global = operation.value.integer
+                    valid = len(operation.args) == 0 and global >= 0 and global < len(module.globals)
+                    if valid { valid = module.globals[global].type_id == type_ }
                 } elif operation.opcode == "runtime" { valid = mir_verify_runtime(module, operation, function.slots) }
+                elif operation.opcode == "function" or operation.opcode == "indirect" { valid = mir_verify_function_value(module, operation, function.slots) }
+                elif operation.opcode == "virtual" { valid = mir_verify_virtual(module, operation, function.slots) }
                 elif operation.opcode == "call" {
+                    for external in module.externs {
+                        if external.name == operation.name and len(external.params) == len(operation.args) and external.return_type == type_ {
+                            valid = true
+                            for i in 0..len(external.params) { if function.slots[operation.args[i]].type_id != external.params[i] { valid = false } }
+                        }
+                    }
                     for callee in module.functions {
                         if callee.name == operation.name and len(callee.params) == len(operation.args) and callee.return_type == type_ {
                             valid = true
                             for i in 0..len(callee.params) {
-                                if callee.slots[callee.params[i]].type_id != function.slots[operation.args[i]].type_id { valid = false }
+                                if not mir_compatible(module.types, module.records, function.slots[operation.args[i]].type_id, callee.slots[callee.params[i]].type_id) { valid = false }
                             }
                         }
                     }
@@ -116,12 +287,12 @@ fn mir_verify_shape(module: MirModule, function: MirFunction) {
     }
 }
 
-struct MirGuard { predicate: int, value: int }
+struct MirGuard { predicate: int, value: int, dependencies: list[int], kind: str, target: int, labels: list[str] }
 
 fn mir_forget_facts(facts: list[int], value: int, guards: list[MirGuard]) -> list[int] {
     let mut next = facts
     next[value] = 0
-    for guard in guards { if guard.value == value { next[guard.predicate] = 0 } }
+    for guard in guards { for dependency in guard.dependencies { if dependency == value { next[guard.predicate] = 0 } } }
     return next
 }
 
@@ -135,7 +306,7 @@ fn mir_verify_flow(module: MirModule, function: MirFunction) {
     let mut guards: list[MirGuard] = []
     for block in function.blocks {
         for operation in block.operations {
-            if operation.opcode == "test" and definitions[operation.result] == 1 { guards.append(MirGuard { predicate: operation.result, value: operation.args[0] }) }
+            if operation.opcode == "test" and definitions[operation.result] == 1 { guards.append(MirGuard { predicate: operation.result, value: operation.args[0], dependencies: operation.args, kind: operation.name, target: operation.owner_type, labels: operation.labels }) }
         }
     }
     let mut states: list[MirState] = []
@@ -156,23 +327,40 @@ fn mir_verify_flow(module: MirModule, function: MirFunction) {
                 live[operation.args[0]] = false
                 facts = mir_forget_facts(facts, operation.args[0], guards)
             } else {
+                if operation.opcode == "store_place" or operation.opcode == "mutate" {
+                    let place = operation.place
+                    if place.root >= 0 and not defined[place.root] { report_error_at("W9999", operation.source, "uninitialized MIR place root") }
+                    for projection in place.projections { if projection.kind == "index" and not defined[projection.index] { report_error_at("W9999", operation.source, "uninitialized MIR place index") } }
+                }
                 for arg in operation.args {
                     if not defined[arg] { report_error_at("W9999", operation.source, "uninitialized or consumed MIR operand") }
                 }
-                if operation.opcode == "runtime" and (operation.name == "wysna_unwrap_ok" or operation.name == "wysna_unwrap_err") {
+                if operation.opcode == "runtime" and (operation.name == "wysna_unwrap_ok" or operation.name == "wysna_unwrap_err" or operation.name == "wysna_unwrap_optional") {
                     let required = if operation.name == "wysna_unwrap_err" { 1 } else { 2 }
                     let mut proven = false
-                    for guard in guards { if guard.value == operation.args[0] and facts[guard.predicate] == required { proven = true } }
+                    for guard in guards { if guard.value == operation.args[0] and facts[guard.predicate] == required and guard.kind == (if operation.name == "wysna_unwrap_optional" { "none" } else { "err" }) { proven = true } }
                     if not proven { report_error_at("W9999", operation.source, "MIR payload lacks a dominating channel test") }
+                }
+                if operation.opcode == "narrow" {
+                    let mut proven = false
+                    for guard in guards { if guard.predicate == operation.value.integer and guard.value == operation.args[0] and guard.kind == "error_type" and guard.target == function.slots[operation.result].type_id and facts[guard.predicate] == 1 { proven = true } }
+                    if not proven { report_error_at("W9999", operation.source, "MIR narrowing lacks a dominating type test") }
+                }
+                if operation.opcode == "runtime" and operation.name == "wysna_enum_payload_owned" {
+                    let mut proven = false
+                    for guard in guards { if guard.value == operation.args[0] and guard.kind == "variant" and guard.labels == operation.labels and facts[guard.predicate] == 1 { proven = true } }
+                    if not proven { report_error_at("W9999", operation.source, "MIR enum payload lacks a dominating variant test") }
                 }
                 if mir_consumes(operation) {
                     defined[operation.args[0]] = false
                     live[operation.args[0]] = false
                     facts = mir_forget_facts(facts, operation.args[0], guards)
                 }
-                defined[operation.result] = true
-                live[operation.result] = mir_value_storage(function.slots[operation.result].type_id)
-                facts = mir_forget_facts(facts, operation.result, guards)
+                if operation.result >= 0 {
+                    defined[operation.result] = true
+                    live[operation.result] = mir_value_storage(function.slots[operation.result].type_id)
+                    facts = mir_forget_facts(facts, operation.result, guards)
+                }
             }
         }
         let term = block.terminator
@@ -208,16 +396,32 @@ fn mir_verify_flow(module: MirModule, function: MirFunction) {
 }
 
 fn mir_verify(module: MirModule) {
-    for i in 0..len(module.result_types) {
-        let type_ = module.result_types[i]
-        if type_.ok < 1 or type_.ok > 5 or type_.error != 5 { report_error_at("W9999", module.source, "invalid MIR result type arena") }
-        for j in 0..i { if module.result_types[j].ok == type_.ok { report_error_at("W9999", module.source, "duplicate MIR result type") } }
+    let primitive_names: list[str] = ["error", "unit", "bool", "int", "float", "str", "none"]
+    if len(module.types) < 7 { report_error_at("W9999", module.source, "incomplete MIR type arena") }
+    for i in 0..len(module.types) {
+        let type_ = module.types[i]
+        if i < 7 {
+            if type_.kind != primitive_names[i] or type_.name != "" or len(type_.args) != 0 { report_error_at("W9999", module.source, "invalid reserved MIR type") }
+        } else {
+            let count = len(type_.args)
+            let kind = type_.kind
+            let nominal = (kind == "struct" or kind == "enum" or kind == "class" or kind == "interface") and count == 0 and type_.name != ""
+            let valid = nominal or (kind == "opaque" or kind == "any") and count == 0 or kind == "function" and count >= 1 or kind == "tuple" or (kind == "optional" or kind == "weak" or kind == "list") and count == 1 or (kind == "result" or kind == "dict") and count == 2 or kind == "error_union" and count >= 2
+            if not valid or not nominal and type_.name != "" { report_error_at("W9999", module.source, "invalid MIR type shape") }
+            for child in type_.args { if child <= 0 or child >= i { report_error_at("W9999", module.source, "invalid or cyclic MIR type reference") } }
+            if kind == "weak" and module.types[type_.args[0]].kind != "class" { report_error_at("W9999", module.source, "MIR weak target must be a class") }
+            for j in 7..i { if module.types[j].kind == kind and module.types[j].name == type_.name and module.types[j].args == type_.args { report_error_at("W9999", module.source, "duplicate MIR type") } }
+        }
     }
+    mir_verify_externs(module)
+    mir_verify_records(module)
+    for global in module.globals { if not mir_identifier(global.name) or not mir_valid_type(module.types, global.type_id) { report_error_at("W9999", module.source, "invalid MIR global type") } }
     let mut names: list[str] = []
     let mut entry = false
     # Validate every signature first so call validation cannot index malformed callees.
     for function in module.functions {
         for name in names { if name == function.name { report_error_at("W9999", function.source, "duplicate MIR function") } }
+        if not mir_identifier(function.name) { report_error_at("W9999", function.source, "invalid MIR function ABI identifier") }
         names.append(function.name)
         if function.name == "wysna_program" { entry = true }
         for parameter in function.params {

@@ -29,66 +29,13 @@ def run_bootstrap_test() -> bool:
         src = f.read()
 
     with tempfile.TemporaryDirectory() as tmpdir:
-        # 1. Stage 0 (Wysna Seed Python Compiler -> compiler0.c -> stage1 binary)
-        ast = Parser(file=compiler_src_path).parse(src)
-        TypeChecker(file=compiler_src_path).check(ast)
-        c0_code = CCodeGen(file=compiler_src_path).generate(ast)
-
-        compiler0_c = os.path.join(tmpdir, "compiler0.c")
-        stage1_bin = os.path.join(tmpdir, "stage1")
-        with open(compiler0_c, "w", encoding="utf-8") as f:
-            f.write(c0_code)
-
-        res1 = subprocess.run(
-            [os.environ.get("CC", "cc"), "-std=c99", "-O2", f"-I{repo_root}", compiler0_c, "-o", stage1_bin],
-            timeout=120, capture_output=True,
-            text=True
-        )
-        if res1.returncode != 0:
-            print(f"[FAIL] Stage 0 -> Stage 1 C compilation failed:\n{res1.stderr}")
-            return False
-        print("  [PASS] Stage 0: Wysna Seed compiled selfhost/compiler.wysna -> compiler0.c -> stage1")
-
-        # 2. Stage 1 (stage1 native binary -> compiler1.c -> stage2 binary)
-        compiler1_c = os.path.join(tmpdir, "compiler1.c")
-        stage2_bin = os.path.join(tmpdir, "stage2")
-        run1 = subprocess.run([stage1_bin, compiler_src_path, compiler1_c], timeout=120, capture_output=True, text=True)
-        if run1.returncode != 0 or not os.path.exists(compiler1_c):
-            print(f"[FAIL] Stage 1 execution failed:\n{run1.stderr}\n{run1.stdout}")
-            return False
-
-        res2 = subprocess.run(
-            [os.environ.get("CC", "cc"), "-std=c99", "-O2", f"-I{repo_root}", compiler1_c, "-o", stage2_bin],
-            timeout=120, capture_output=True,
-            text=True
-        )
-        if res2.returncode != 0:
-            print(f"[FAIL] Stage 1 -> Stage 2 C compilation failed:\n{res2.stderr}")
-            return False
-        print("  [PASS] Stage 1: stage1 compiled selfhost/compiler.wysna -> compiler1.c -> stage2")
-
-        # 3. Stage 2 (stage2 native binary -> compiler2.c)
-        compiler2_c = os.path.join(tmpdir, "compiler2.c")
-        run2 = subprocess.run([stage2_bin, compiler_src_path, compiler2_c], timeout=120, capture_output=True, text=True)
-        if run2.returncode != 0 or not os.path.exists(compiler2_c):
-            print(f"[FAIL] Stage 2 execution failed:\n{run2.stderr}\n{run2.stdout}")
-            return False
-        print("  [PASS] Stage 2: stage2 compiled selfhost/compiler.wysna -> compiler2.c")
-
-        # 4. Fixed-Point Hash Verification
-        h0 = sha256_file(compiler0_c)
-        h1 = sha256_file(compiler1_c)
-        h2 = sha256_file(compiler2_c)
-
-        print(f"  SHA256(compiler0.c) = {h0}")
-        print(f"  SHA256(compiler1.c) = {h1}")
-        print(f"  SHA256(compiler2.c) = {h2}")
-
-        if h1 != h2 or h0 != h1:
-            print("[FAIL] Fixed-Point verification failed: SHA256 mismatch across stages!")
-            return False
-
-        print("  [PASS] Fixed-Point verified: SHA256(compiler0.c) == SHA256(compiler1.c) == SHA256(compiler2.c)")
+        from compiler.Bootstrap import bootstrap_compiler
+        artifacts = bootstrap_compiler(repo_root, tmpdir)
+        stage2_bin = str(artifacts.compiler)
+        for index, digest in enumerate(artifacts.hashes):
+            print(f"  SHA256(native compiler{index}.c) = {digest}")
+        assert len(set(artifacts.hashes)) == 1
+        print("  [PASS] Seed AST bootstrap followed by three identical native MIR emissions")
 
         # 5. Stage 2 Native Binary Compiles & Runs Full Runtime Suite
         wysna_files = sorted(glob.glob(os.path.join(repo_root, "tests", "runtime", "*.wysna")))

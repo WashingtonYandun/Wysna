@@ -1,100 +1,3 @@
-fn compile_source(snapshot: CheckedProgram) -> str {
-    let emitter = new CEmitter(snapshot)
-    let mut has_main_fn = false
-    let mut has_main_call = false
-    let mut has_top_stmts = false
-    push_scope(emitter, "fn")
-    while not is_eof(emitter) {
-        skip_statement_separators(emitter)
-        if is_eof(emitter) { break }
-        if match_kind(emitter, "PUB") { continue }
-        if check_kind(emitter, "EXTERN") { parse_extern_decl(emitter) }
-        elif check_kind(emitter, "STRUCT") {
-            parse_struct_decl(emitter)
-        } elif check_kind(emitter, "ENUM") {
-            parse_enum_decl(emitter)
-        } elif check_kind(emitter, "INTERFACE") {
-            parse_interface_decl(emitter)
-        } elif check_kind(emitter, "CLASS") {
-            parse_class_decl(emitter)
-        } elif check_kind(emitter, "IMPORT") {
-            report_error_at("W9999", at_tok(emitter), "C emission requires expanded checked imports")
-        } elif check_kind(emitter, "FN") {
-            if peek_tok(emitter, 1).val == "main" {
-                has_main_fn = true
-            }
-            parse_fn_decl(emitter)
-        } elif check_kind(emitter, "LET") {
-            has_top_stmts = true
-            parse_let_stmt(emitter, true)
-        } elif check_kind(emitter, "WHILE") {
-            has_top_stmts = true
-            parse_while_stmt(emitter)
-        } elif check_kind(emitter, "FOR") {
-            has_top_stmts = true
-            parse_for_stmt(emitter)
-        } else {
-            has_top_stmts = true
-            # A bare `main()` line at top level returns the entrypoint Result. Its value
-            # must be inspected like the implicit form below, or a program whose main
-            # returns Err would exit 0 with no output.
-            let is_entry_call = check_kind(emitter, "IDENT") and at_tok(emitter).val == "main" and peek_tok(emitter, 1).kind == "LPAREN"
-            let expr_r = parse_expr(emitter, 0, true)
-            if is_entry_call {
-                has_main_call = true
-                emit_line(emitter, "WVal _t_main = " + own_expr(expr_r.val) + ";")
-                emit_line(emitter, "if (_t_main.tag == W_ERR) { wysna_report_entrypoint_error(_t_main.as.box->val); wysna_release(_t_main); wysna_runtime_cleanup(); return 1; }")
-                emit_line(emitter, "wysna_release(_t_main);")
-            } else {
-                emit_line(emitter, "(void)" + expr_r.val + ";")
-            }
-        }
-    }
-    if has_main_fn and not has_main_call {
-        emit_line(emitter, "WVal _t_main = wysna_fn_main();")
-        emit_line(emitter, "if (_t_main.tag == W_ERR) { wysna_report_entrypoint_error(_t_main.as.box->val); wysna_release(_t_main); wysna_runtime_cleanup(); return 1; }")
-        emit_line(emitter, "wysna_release(_t_main);")
-    }
-    pop_scope(emitter)
-    emit_oop_dispatchers(emitter)
-    for prototype in emitter.class_protos { emitter.protos.append(prototype) }
-    for prototype in emitter.dispatch_protos { emitter.protos.append(prototype) }
-    let mut out = "#include \"runtime/wysna_runtime.h\"\n\n"
-    if len(emitter.globals) > 0 {
-        for gv in emitter.globals {
-            out = out + "static WVal " + gv + ";\n"
-        }
-        out = out + "\n"
-    }
-    if len(emitter.protos) > 0 {
-        for pr in emitter.protos {
-            out = out + pr + "\n"
-        }
-        out = out + "\n"
-    }
-    if len(emitter.fn_defs) > 0 {
-        for fd in emitter.fn_defs {
-            out = out + fd + "\n\n"
-        }
-    }
-    out = out + "int main(int argc, char** argv) {\n"
-    out = out + "    wysna_init_args(argc, argv);\n"
-    for ms in emitter.cur_stmts {
-        out = out + "    " + ms + "\n"
-    }
-    if len(emitter.globals) > 0 {
-        let mut gi = len(emitter.globals) - 1
-        while gi >= 0 {
-            out = out + "    wysna_release(" + emitter.globals[gi] + ");\n"
-            gi = gi - 1
-        }
-    }
-    out = out + "    wysna_runtime_cleanup();\n"
-    out = out + "    return 0;\n"
-    out = out + "}\n"
-    return out
-}
-
 fn check_delimiters(tokens: list[Token]) -> unit {
     let mut delim_kinds: list[str] = []
     let mut delim_tokens: list[Token] = []
@@ -158,9 +61,15 @@ fn check_program(tokens: list[Token], file: str, capture: bool) -> CheckedProgra
     check_delimiters(tokens)
     let context = new SemanticContext(capture)
     sem_validate(context, tokens)
+    sem_complete_specializations(context)
     return checked_finish(context, tokens, file)
 }
 
 fn check_source(src: str, in_path: str) -> CheckedProgram {
-    return check_program(module_tokens(src, in_path), in_path, false)
+    let file = module_canonical(in_path)
+    let checked = check_program(module_tokens(src, file), file, true)
+    for node in checked.nodes { if node.kind == "unsupported" { report_error_at("W2013", node.source, "Compiler native-core-v1 does not support expression " + node.text) } }
+    return checked
 }
+
+fn compile_source(checked: CheckedProgram) -> str { return mir_emit_c(mir_build(checked)) }

@@ -7,14 +7,43 @@
 
 /* Formatting & String Conversion (matching Wysna Seed Values.__str__ exactly) */
 /* Internal module identity is retained for equality/dispatch, not display. */
-static inline const char* wysna_nominal_display_name(const char* name) {
-    static const char module_prefix[] = "__wysna_module_";
-    const size_t module_prefix_len = sizeof(module_prefix) - 1;
-    if (strncmp(name, module_prefix, module_prefix_len) == 0) {
-        const char* boundary = strstr(name + module_prefix_len, "__");
-        if (boundary) return boundary + 2;
+typedef struct { const char* data; size_t length; } WNominalName;
+static inline WNominalName wysna_nominal_display_name(const char* name) {
+    const char* start = name;
+    size_t length = strlen(name);
+    static const char generic[] = "_WYSNA_G_";
+    size_t prefix = sizeof(generic) - 1;
+    if (length > prefix && memcmp(name, generic, prefix) == 0) {
+        size_t cursor = prefix, characters = 0;
+        bool digits = false, valid = true;
+        while (cursor < length && name[cursor] >= '0' && name[cursor] <= '9') {
+            size_t digit = (size_t)(name[cursor++] - '0');
+            digits = true;
+            if (characters > (SIZE_MAX - digit) / 10) { valid = false; break; }
+            characters = characters * 10 + digit;
+        }
+        if (valid && digits && cursor < length && name[cursor] == '_') {
+            size_t begin = ++cursor, count = 0;
+            while (cursor < length && count < characters) {
+                size_t width;
+                if (!wysna_utf8_valid_codepoint_at_n(name, length, cursor, &width, NULL)) break;
+                cursor += width; count++;
+            }
+            if (count == characters && cursor + 2 <= length && name[cursor] == '_' && name[cursor + 1] == '_') {
+                start = name + begin; length = cursor - begin;
+            }
+        }
     }
-    return name;
+    static const char module[] = "__wysna_module_";
+    prefix = sizeof(module) - 1;
+    if (length >= prefix && memcmp(start, module, prefix) == 0) {
+        for (size_t index = prefix; index + 1 < length; index++) {
+            if (start[index] == '_' && start[index + 1] == '_') {
+                length -= index + 2; start += index + 2; break;
+            }
+        }
+    }
+    WNominalName result = {start, length}; return result;
 }
 
 typedef struct {
@@ -23,6 +52,7 @@ typedef struct {
     bool is_text;
     bool quote_str;
     bool leave_object;
+    size_t text_length;
 } WFormatTask;
 
 static inline void wysna_format_push(WFormatTask** tasks, int32_t* count, int32_t* capacity,
@@ -52,13 +82,21 @@ static inline void wysna_format_push_text(WFormatTask** tasks, int32_t* count, i
                                       bool* heap_tasks, const char* text) {
     WVal empty = {0};
     empty.tag = W_UNIT;
-    WFormatTask task = {empty, text, true, false, false};
+    WFormatTask task = {empty, text, true, false, false, strlen(text)};
+    wysna_format_push(tasks, count, capacity, heap_tasks, task);
+}
+
+static inline void wysna_format_push_name(WFormatTask** tasks, int32_t* count, int32_t* capacity,
+                                          bool* heap_tasks, const char* name) {
+    WNominalName display = wysna_nominal_display_name(name);
+    WVal empty = {0}; empty.tag = W_UNIT;
+    WFormatTask task = {empty, display.data, true, false, false, display.length};
     wysna_format_push(tasks, count, capacity, heap_tasks, task);
 }
 
 static inline void wysna_format_push_value(WFormatTask** tasks, int32_t* count, int32_t* capacity,
                                        bool* heap_tasks, WVal value, bool quote_str) {
-    WFormatTask task = {value, NULL, false, quote_str, false};
+    WFormatTask task = {value, NULL, false, quote_str, false, 0};
     wysna_format_push(tasks, count, capacity, heap_tasks, task);
 }
 
@@ -175,7 +213,7 @@ static inline char* wysna_to_cstr(WVal v, bool quote_str) {
             continue;
         }
         if (task.is_text) {
-            wysna_format_append_text(&buffer, &buffer_length, &buffer_capacity, task.text);
+            wysna_format_append(&buffer, &buffer_length, &buffer_capacity, task.text, task.text_length);
             continue;
         }
 
@@ -248,8 +286,7 @@ static inline char* wysna_to_cstr(WVal v, bool quote_str) {
                     wysna_format_push_text(&tasks, &task_count, &task_capacity, &heap_tasks,
                                        value.as.en.variant);
                     wysna_format_push_text(&tasks, &task_count, &task_capacity, &heap_tasks, ".");
-                    wysna_format_push_text(&tasks, &task_count, &task_capacity, &heap_tasks,
-                                       wysna_nominal_display_name(value.as.en.enum_name));
+                    wysna_format_push_name(&tasks, &task_count, &task_capacity, &heap_tasks, value.as.en.enum_name);
                 } else if (value.as.en.box) {
                     wysna_format_push_text(&tasks, &task_count, &task_capacity, &heap_tasks, ")");
                     wysna_format_push_value(&tasks, &task_count, &task_capacity, &heap_tasks,
@@ -258,14 +295,12 @@ static inline char* wysna_to_cstr(WVal v, bool quote_str) {
                     wysna_format_push_text(&tasks, &task_count, &task_capacity, &heap_tasks,
                                        value.as.en.variant);
                     wysna_format_push_text(&tasks, &task_count, &task_capacity, &heap_tasks, ".");
-                    wysna_format_push_text(&tasks, &task_count, &task_capacity, &heap_tasks,
-                                       wysna_nominal_display_name(value.as.en.enum_name));
+                    wysna_format_push_name(&tasks, &task_count, &task_capacity, &heap_tasks, value.as.en.enum_name);
                 } else {
                     wysna_format_push_text(&tasks, &task_count, &task_capacity, &heap_tasks,
                                        value.as.en.variant);
                     wysna_format_push_text(&tasks, &task_count, &task_capacity, &heap_tasks, ".");
-                    wysna_format_push_text(&tasks, &task_count, &task_capacity, &heap_tasks,
-                                       wysna_nominal_display_name(value.as.en.enum_name));
+                    wysna_format_push_name(&tasks, &task_count, &task_capacity, &heap_tasks, value.as.en.enum_name);
                 }
                 break;
             case W_LIST: {
@@ -315,7 +350,7 @@ static inline char* wysna_to_cstr(WVal v, bool quote_str) {
                         wysna_format_append_text(&buffer, &buffer_length, &buffer_capacity, "<cycle>");
                         break;
                     }
-                    WFormatTask leave = {value, NULL, false, false, true};
+                    WFormatTask leave = {value, NULL, false, false, true, 0};
                     wysna_format_push(&tasks, &task_count, &task_capacity, &heap_tasks, leave);
                 }
                 wysna_format_push_text(&tasks, &task_count, &task_capacity, &heap_tasks, " }");
@@ -329,8 +364,7 @@ static inline char* wysna_to_cstr(WVal v, bool quote_str) {
                                                   &heap_tasks, ", ");
                 }
                 wysna_format_push_text(&tasks, &task_count, &task_capacity, &heap_tasks, " { ");
-                wysna_format_push_text(&tasks, &task_count, &task_capacity, &heap_tasks,
-                                   wysna_nominal_display_name(structure->name));
+                wysna_format_push_name(&tasks, &task_count, &task_capacity, &heap_tasks, structure->name);
                 break;
             }
             case W_OK:

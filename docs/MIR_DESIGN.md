@@ -1,147 +1,58 @@
 # Wysna MIR: Verified Intermediate Representation
 
-Wysna Seed's default native pipeline is checked AST → typed and verified HIR → verified MIR → C99 → system compiler. `wysna emit-c` and `wysna build` use this pipeline; `--backend=ast` selects the secondary AST emitter. Wysna Compiler has its own frontend, a direct C99 route, and an experimental MIR producer. `wysna mir path.wysna` prints a session-local debug dump. `wysna emit-mir` produces the self-contained, versioned interchange described below.
+Wysna Seed's default pipeline is checked AST → typed and verified HIR → verified MIR → C99 → C compiler. The public backend name remains `hir`; `--backend=ast` selects the independent AST oracle. Wysna Compiler uses its own frontend and a single productive pipeline: checked nodes → verified MIR → native C99 emitter. Its positional CLI and MIR commands use the same implementation.
 
-## Interchange and the Compiler profile
+## Interchange and native-core-v1
+
+The Seed CLI selects a producer explicitly:
 
 ```sh
 wysna emit-mir --implementation=seed program.wysna -o seed.mir.json
 wysna emit-mir --implementation=compiler program.wysna -o compiler.mir.json
 ```
 
-The default implementation is `seed`. Both commands produce `wysna.mir` schema 1,
-semantic revision `0.5.0`, runtime ABI 2, and a complete type arena. The importer in
-`mir/Exchange.py` reconstructs an independent arena and verifies the module before
-`mir/CCodeGen.py` can emit C99. The two producers need equivalent behavior; their
-temporary identities and operation sequences need not be identical. Files are
-published atomically after verification. Source-file destinations are rejected.
+Both producers emit `wysna.mir` schema 1, semantic revision `0.5.0`, runtime ABI 2 and a self-contained type arena. `mir/Exchange.py` reconstructs an independent arena and verifies it before the Python MIR consumer can emit C99. Producer IDs and operation sequences are local implementation details; behavior, ownership and diagnostics are the compatibility contract.
 
-Compiler's `result-cfg-v1` profile checks source with its own semantic checker,
-produces a session-owned checked node program, builds typed slots, operations and
-basic blocks, verifies them, then serializes the interchange. The implementation
-separates checked nodes and their boundary verifier (`08_checked.wysna`), the MIR
-model and serialization (`08_mir.wysna`), lowering (`08_mir_lowering.wysna`), and
-independent structure and dataflow verification (`08_mir_verifier.wysna`) under
-`selfhost/src/`.
-A prebuilt binary can run without Seed:
+The standalone [native SDK](NATIVE_SDK.md) supplies `check`, `emit-mir`, `emit-c`, `build` and `run` without Python. Its native engine checks MIR before serialization or C emission. The Python wrapper remains available for Seed and independent interchange validation; it is not required by the SDK.
 
-```sh
-.wysna_cache/stage2 --emit-mir program.wysna > compiler.mir.json
-```
+The `native-core-v1` source profile contains:
 
-The `wysna` wrapper uses Python for bootstrap orchestration and independent IR
-verification. This is an incremental Compiler migration; distribution without
-Python and a Compiler MIR-to-C99 consumer are future work. Native `build` and
-`--backend=selfhost` retain their existing paths.
+- Scalars, UTF-8 strings including embedded NUL, globals, typed functions, explicit and inferred lambda returns, conditionals, loops, early returns and short-circuit operators.
+- Lists, dictionaries and tuples, collection operations, copy-on-write mutation, direct ranges, nested irrefutable tuple loop bindings and preserved left-to-right evaluation.
+- Optional and Result channels, nested/context-free builtin channel constructors, success lifting, propagation, handlers and closed error unions.
+- Structs, enums, classes, inheritance, interfaces and virtual/super calls; pattern matching with guards and explicit payload witnesses.
+- Function values, snapshot closures, indirect calls, concrete generic functions and concrete generic structs/enums. Generic definitions retain symbolic obligations and bounded specialization.
+- Relative/standard-library imports through one module loader, physical module identity, and the declared scalar/opaque C ABI.
 
-The supported source profile contains:
+Parameterized classes/interfaces, generic nominal values with unresolved type arguments, library-mode exports and WebAssembly targets are outside this native profile. An unresolved nominal value requires an explicit concrete type context. Seed's formatter, package/project and LSP commands remain outside the SDK. Unsupported source features report `W2013`; there is no Python fallback. This is a declared, tested profile, not universal Seed parity.
 
-- Single-file command programs; `int`, finite `float`, `bool`, `unit`, and managed `str` values.
-- Non-generic functions, typed parameters, explicit returns and tail expressions,
-  forward/direct calls, immutable and mutable local bindings, and command-local
-  top-level bindings. Assignment expressions preserve left-to-right snapshots.
-- Scalar arithmetic, comparisons, equality, unary negation and `not`, plus
-  `print`, `eprint`, `int`, and `float` calls. Arguments evaluate left to right.
-- String literals (including Unicode and embedded NUL), concatenation, equality,
-  indexing, `str`, `len`, `ord`, `chr`, and `slice`. String indices are codepoint
-  offsets; negative indices are rejected. Slice bounds retain the existing
-  clamping behavior.
-- Basic results with scalar/string success values and `str` errors, spelled
-  `T ! str` or `Result[T, str]`. `Ok`/`Err` constructors require a concrete result
-  context. Checked success lifting works in bindings, arguments and returns.
-- Result propagation with `?` and `else` handlers, optionally binding the error.
-  Handlers may return, break or continue. Unit-result tails discard successful
-  payloads while preserving errors, including nested conditional tails.
-- `if`/`elif`/`else` statements and expressions, `while`, nested loops, `break`,
-  `continue`, early returns, lexical scopes, and short-circuit `and`/`or`.
-- Signed int64 wrapping at runtime, division/remainder checks with source paths,
-  and the `INT64_MIN / -1` and remainder semantics of the runtime.
-- Implicit `main()` when the file contains only declarations, and explicit entry
-  calls. Other top-level statements suppress implicit entry invocation as in Seed.
+## Phase ownership and verification
 
-For example, both producers accept:
+`ModuleLoader` owns import expansion. `SemanticContext` owns checking and generic specialization; each call/initializer owns a separate `SemUnification` so nested expressions cannot replace outer substitutions. `CheckedProgram` contains typed nodes, bindings, resolved signatures/records, declarative generic templates and function bodies. It contains no expanded token stream, emitter context or source-position lookup tables. `MirBuilder` lowers that detached value; the emitter only accepts verified `MirModule` values. Mutable compiler state belongs to each invocation.
 
-```wysna
-fn label(prefix: str, value: int) -> str { prefix + str(value) }
-let message = label("total=", 30)
-print(message)
-```
+The implementation under `selfhost/src/` separates:
 
-Imports, shared global reads inside functions, `for`/ranges, collections,
-non-string error channels, nested or context-free results, binary result
-operators, optional channels, closures, generic functions, nominal types, FFI, and library exports are
-outside this profile. Statements after a terminating path, terminating conditions,
-and expressions with unreachable operands remain explicit profile limits.
-Unsupported constructs produce `W2013` at an explicit profile boundary before
-artifact publication. Guarded syntax is rejected before semantic checking;
-remaining feature checks happen during lowering. Source inside the profile retains the semantic
-checker's diagnostics. Numeric literals outside
-signed int64 or finite binary64 produce `W0002`. The normal C99 route has its own
-broader measured coverage.
+- `08_checked.wysna`, `08_checked_records.wysna` and `08_checked_verify.wysna`: detached checked data, nominal resolution and boundary verification.
+- `08_generics.wysna`: symbolic obligations, concrete specialization queue and budgets.
+- `08_mir.wysna`, `08_mir_lowering.wysna` and `08_mir_verifier.wysna`: MIR model/interchange, lowering and independent structure/dataflow verification.
+- `08_mir_channels`, `08_mir_patterns`, `08_mir_functions`, `08_mir_places`, `08_mir_collections`, `08_mir_nominals`, `08_mir_classes` and `08_mir_foreign`: focused lowering and emission policies.
+- `08_mir_c99.wysna`: the single native C99 consumer, with chunked output assembly.
 
-String and result parameters remain borrowed; reads clone them into owned slots,
-and stores move owned values. `Ok`/`Err` consume owned payloads; channel extraction
-borrows the box and returns an owned payload. Lowering and verification share the storage classification for
-cleanup. Escaping string values are moved to protected slots before lexical
-cleanup on normal exits, returns, `break`, and `continue`. Compiler currently emits
-conservative parameter clones; Seed may remove read-only clones in its optimization
-pass. These operation sequences need not match when their lifetimes and results do.
+Checked verification rejects invalid type, record, signature, binding, pattern, capture and indirect-call references before lowering indexes them. Native and Python MIR verifiers check arity, types, ownership, CFG initialization and dominating channel/pattern witnesses. Reassigning the tested value invalidates its proof. Verification does not prove runtime helpers correct or manage external opaque resources automatically.
 
-The checker builds `CheckedProgram` with typed nodes, resolved binding and call
-target IDs, function bodies and explicit unit-result tail markers for the MIR
-profile. Node IDs belong to that checked value; whitespace and comments do not
-renumber them. Lowering traverses this tree and never reparses source tokens,
-searches token-position facts or queries a live semantic checker. Its type mapping
-produces a self-contained arena with canonical, deduplicated result entries;
-semantic TypeIds are not reused as interchange identities. Payload extraction
-requires a dominating channel test in both MIR verifiers. Rewriting the tested
-value or predicate invalidates the proof; mutable predicates with multiple
-definitions cannot establish one.
+Snapshots use copy-on-write lists: consumers cannot mutate one another's checked programs or modules. Node and binding IDs remain stable under trivia changes. Generic nominal identities use a reserved compiler namespace; user-facing formatting hides specialization suffixes without changing identity.
 
-## Compiler phase ownership
+## Bootstrap provenance
 
-Lexical scopes use checked variable-count/depth checkpoints rather than copying
-and restoring variable arrays in each construct. Module expansion is the single
-import loader; the obsolete loader in C emission has been removed.
+`compiler/Bootstrap.py` is the authoritative bootstrap builder. Seed's AST oracle emits `bootstrap.c`, which builds the initial native engine. That engine emits native C0; C0 builds Stage 1, which emits C1; C1 builds Stage 2, which emits C2. Acceptance requires **C0 = C1 = C2** and unchanged source/runtime/build inputs. The Seed emission hash is recorded separately. Comparing Seed AST text to native MIR text is not the fixed-point contract.
 
-Every invocation owns its mutable state: `ModuleLoader` owns import expansion,
-`SemanticContext` owns semantic checking, `CEmitter` owns the direct C99 route,
-and `MirBuilder` owns MIR construction. There are no mutable module globals in
-`selfhost/src/`. Diagnostics receive their source file explicitly.
+Caches are versioned by implementation fingerprint, locked while constructing, and validate the compiler binary hash before reuse. `bootstrap.json` records provenance. A fixed point demonstrates deterministic self-hosting; independent behavior and rejection tests establish the measured semantic evidence.
 
-`CheckedProgram` and `MirModule` are value snapshots. Their lists use the language's
-copy-on-write semantics, so a consumer's modified copy does not mutate another
-consumer. The checker context is not part of the lowering interface. The checked
-boundary validates type/node references, acyclic node edges, binding/call IDs,
-function signatures and bodies before lowering indexes them. MIR verification and
-serialization receive a module value, independently of a builder's current state.
+## Validation boundaries
 
-The direct C99 route consumes the checked snapshot's `CEmissionMetadata` with
-expanded tokens and C-specific semantic annotations. Shared `CheckedSignature`
-records contain resolved declarations without parser body offsets. Its source parser remains broader than the MIR
-profile. It does not yet consume the checked node tree: completing that migration
-requires extending the declared MIR profile and implementing its native consumer.
-Normal C99 checking explicitly returns metadata without MIR nodes or binding IDs; passing
-that result to MIR lowering is rejected. This boundary does not claim that all
-Compiler language constructs already have typed node lowering.
+`test_native_mir_pipeline` compares native MIR C99, the independent Python MIR consumer and Seed HIR execution, including sanitizers and logical allocation checks. `test_selfhost_mir` covers deterministic interchange and adversarial MIR mutations. `test_selfhost_compilation_context` verifies detached compilation, interleaved state, import/source isolation and malformed checked programs. `test_native_sdk` tests package boundaries; `tools/validate_native_sdk.py` exercises installed commands outside the checkout with a tool PATH that cannot discover Python or a host C compiler.
 
-`tests/unit/test_selfhost_mir.py` compares both producers' executable results,
-evaluation order, CFG joins/backedges, loop transfers, cleanup, scalar boundaries
-and runtime locations. A native fault-injection harness also checks the independent
-Compiler verifier against malformed targets, conditions, parameters, operations,
-uninitialized joins, consumed operands and owned-value leaks. It also checks semantic
-rejection, unsupported features, stage1/stage2 IR determinism, and corrupted
-interchange rejection. String parity cases run with ASan/UBSan and logical
-allocation checks; Linux also enables LeakSanitizer. The three-stage bootstrap
-checks the compiler itself. Result cases also cover payload ownership, handler
-control flow, checked-program isolation, type-arena canonicalization and forged or
-stale channel proofs.
-
-`tests/unit/test_selfhost_compilation_context.py` exercises interleaved builders,
-multiple checked programs and C emitters in one process, import graph isolation,
-source-specific diagnostics, copy-on-write consumer isolation, stable node/binding
-IDs under trivia changes, and lowering after removing source tokens. It also
-rejects malformed checked programs with ASan/UBSan enabled where available.
+The [engine matrix](ENGINE_PARITY_MATRIX.md) identifies corpus measurements and their limits. Native SDK consumer CI is separate from compiler/bootstrap CI; producing an archive is not sufficient installation evidence.
 
 ## Representation
 
@@ -167,7 +78,7 @@ There are no specialized lists or unboxed payload layouts. Runtime ABI v2 stores
 
 `for item in start..end` and `..=` capture bounds once, from left to right, validate the range size, and use a counter without creating a list. The 100-million-element limit applies even when the loop body immediately executes `break`. An inclusive range ending at `INT64_MAX` keeps the existing error behavior. Ranges used as values remain lists with CoW semantics; Wysna does not add a range type.
 
-Wysna Compiler recognizes direct ranges in its parser. A parenthesized range expression may use the materialized-list path. Public semantics are the same, but this optimization is not applied uniformly to equivalent syntax.
+Both MIR lowerers recognize range nodes directly, including grouping that preserves the range expression. A range stored in a variable is a materialized collection.
 
 ## Verification and limits
 

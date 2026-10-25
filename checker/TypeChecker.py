@@ -60,6 +60,7 @@ class TypeChecker:
         self.global_scope = create_global_scope()
         self.current_scope = self.global_scope
         self.current_fn_ret_type: Optional[WysnaType] = None
+        self._lambda_return_inference: Optional[List[WysnaType]] = None
         self.expected_type: Optional[WysnaType] = None
         self.current_class: Optional[ClassType] = None
         self.scope_spans = []
@@ -288,6 +289,10 @@ class TypeChecker:
 
         elif isinstance(stmt, ReturnStmt):
             val_t = self._check_payload(stmt.value, self.current_fn_ret_type) if stmt.value else UnitType
+            inferred_returns = self._lambda_return_inference
+            if self.current_fn_ret_type is None and inferred_returns is not None:
+                inferred_returns.append(val_t)
+                return
             if self.current_fn_ret_type is None:
                 raise TypeError(
                     message="Return statement outside of function",
@@ -673,26 +678,21 @@ class TypeChecker:
         self.loop_depth += 1
 
         try:
-            if isinstance(stmt.pattern, IdentifierPattern):
-                loop_scope.define_symbol(
-                    Symbol(stmt.pattern.name, elem_t, is_mut=False, kind="var", line=stmt.pattern.line, col=stmt.pattern.col),
-                    file=self.file
-                )
-            elif isinstance(stmt.pattern, TuplePattern):
-                if not isinstance(elem_t, TupleType) or len(elem_t.elements) != len(stmt.pattern.elements):
-                    raise TypeError(
-                        message=f"Cannot destructure iterable element of type '{elem_t}' into {len(stmt.pattern.elements)} variables",
-                        line=stmt.pattern.line,
-                        col=stmt.pattern.col,
-                        file=self.file,
-                        code="W2001"
-                    )
-                for p_var, p_type in zip(stmt.pattern.elements, elem_t.elements):
-                    assert isinstance(p_var, IdentifierPattern)
+            def bind(pattern, type_):
+                if isinstance(pattern, IdentifierPattern):
                     loop_scope.define_symbol(
-                        Symbol(p_var.name, p_type, is_mut=False, kind="var", line=p_var.line, col=p_var.col),
-                        file=self.file
-                    )
+                        Symbol(pattern.name, type_, is_mut=False, kind="var",
+                               line=pattern.line, col=pattern.col), file=self.file)
+                elif isinstance(pattern, WildcardPattern):
+                    return
+                elif isinstance(pattern, TuplePattern):
+                    for child, child_type in zip(pattern.elements, type_.elements):
+                        bind(child, child_type)
+                else:
+                    raise TypeError("For bindings require identifiers, wildcards or tuples",
+                                    file=self.file, line=pattern.line, col=pattern.col, code="W2001")
+
+            bind(stmt.pattern, elem_t)
 
             for s in stmt.body.statements:
                 self._check_stmt(s)

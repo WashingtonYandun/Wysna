@@ -4,13 +4,11 @@ Wysna Seed (`seed`) is the reference implementation in Python. Its default nativ
 verified MIR → C99 → system compiler. The public backend name remains `hir`.
 The interpreter and AST C99 backend are execution oracles; Wysna Compiler (`selfhost`) is an independent
 self-hosted compiler. MIR is an intermediate representation, not a fifth engine.
-The experimental Compiler `result-cfg-v1` MIR producer has a separate focused parity
-suite in `tests/unit/test_selfhost_mir.py` and a native phase-isolation suite in
-`tests/unit/test_selfhost_compilation_context.py`; its profile is defined in [MIR design](MIR_DESIGN.md).
+Wysna Compiler's `native-core-v1` profile uses verified MIR for its normal C99 route and interchange. Focused parity, native phase isolation and installed SDK acceptance have separate gates. Profile bounds are defined in [MIR design](MIR_DESIGN.md).
 
 ## Measured corpus
 
-The table comes from an actual `tools/ci_conformance.py --profile=release` run. It covers
+The table below records the preceding consolidation baseline; it must be regenerated for the native pipeline before claiming current full-corpus acceptance. It comes from an actual `tools/ci_conformance.py --profile=release` run. It covers
 the public runtime examples and negative fixtures, with no unsupported exclusions. The
 separate sanitizer gate checks memory safety; neither gate establishes universal language
 parity or measures code coverage.
@@ -55,10 +53,7 @@ fixture does not prove equivalence of the two module implementations.
 
 ## Bootstrap Fixed-Point vs. Core Corpus Parity
 
-The three-stage bootstrap requires identical C output hashes when Wysna Seed and successive
-native Wysna Compiler stages compile the compiler itself (`selfhost/compiler.wysna`). This proves the recorded deterministic fixed point;
-it cannot prove semantic correctness. Corpus parity separately checks accepted output,
-exit status and rejection diagnostics across four engines.
+Seed AST builds a separately recorded initial engine. Three successive native MIR emissions of `selfhost/compiler.wysna` must have identical C0, C1 and C2 hashes. This demonstrates the recorded deterministic fixed point, not semantic correctness. Corpus parity separately checks output, exit status and rejection diagnostics across four engines. The native SDK additionally requires installed acceptance without Python or a discovered host C toolchain.
 
 ## Execution profiles
 

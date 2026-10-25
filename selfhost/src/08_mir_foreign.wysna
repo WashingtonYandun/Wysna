@@ -1,0 +1,84 @@
+fn mir_add_extern(context: MirBuilder, checked: CheckedSignature) {
+    let signature = context.program.types[checked.type_id].args
+    let mut params: list[int] = []
+    for i in 0..len(signature) - 1 { params.append(mir_type(context, signature[i], context.program.source)) }
+    context.externs.append(MirExtern { name: mir_abi_name(checked.name), native: checked.native, params: params, return_type: mir_type(context, signature[len(signature) - 1], context.program.source), abi_params: checked.abi_params, abi_return: checked.abi_return })
+}
+fn mir_externs_json(module: MirModule) -> str {
+    let mut out = "{"
+    for i in 0..len(module.externs) {
+        if i > 0 { out = out + "," }
+        let external = module.externs[i]
+        let mut params = "["
+        for j in 0..len(external.abi_params) { if j > 0 { params = params + "," } params = params + mir_quote(external.abi_params[j]) }
+        params = params + "]"
+        out = out + mir_quote(external.name) + ":{\"native\":" + mir_quote(external.native) + ",\"params\":" + mir_ids(external.params, false) + ",\"return_type\":" + str(external.return_type) + ",\"signature\":{\"$tuple\":[{\"$tuple\":" + params + "}," + mir_quote(external.abi_return) + "]}}"
+    }
+    return out + "}"
+}
+fn mir_c_externs(module: MirModule) -> str {
+    let mut out = ""
+    for external in module.externs {
+        let mut prototype = "extern " + foreign_c_type(external.abi_return, true, module.source) + " " + external.native + "("
+        let mut wrapper = "static WVal " + external.name + "("
+        let mut call = external.native + "("
+        for i in 0..len(external.params) {
+            if i > 0 { prototype = prototype + ", " wrapper = wrapper + ", " call = call + ", " }
+            let abi = external.abi_params[i]
+            prototype = prototype + foreign_c_type(abi, false, module.source)
+            let value = "v_" + str(i)
+            wrapper = wrapper + "WVal " + value
+            if abi == "int32" { call = call + "wysna_ffi_int32(" + value + ")" }
+            elif abi == "int" or abi == "int64" { call = call + value + ".as.i" }
+            elif abi == "float" or abi == "double" { call = call + value + ".as.f" }
+            elif abi == "bool" { call = call + value + ".as.b" }
+            else { call = call + value + ".as.pointer" }
+        }
+        if len(external.params) == 0 { prototype = prototype + "void" wrapper = wrapper + "void" }
+        call = call + ")"
+        let returned = foreign_type_id(external.abi_return)
+        let mut body = ""
+        if returned == "unit" { body = call + "; return wysna_unit();" }
+        elif returned == "opaque" {
+            let constructor = if external.native == "wysna_host_buffer_new" or external.native == "wysna_host_file_open" { "wysna_host_owned_pointer" } else { "wysna_pointer" }
+            body = "return " + constructor + "(" + call + ");"
+        } else {
+            let constructor = if returned == "int" { "wysna_int" } elif returned == "float" { "wysna_float" } else { "wysna_bool" }
+            body = "return " + constructor + "(" + call + ");"
+        }
+        out = out + prototype + ");\n" + wrapper + ") { " + body + " }\n"
+    }
+    return out
+}
+fn mir_verify_externs(module: MirModule) {
+    let mut names: list[str] = []
+    for external in module.externs {
+        for name in names { if name == external.name { report_error_at("W9999", module.source, "duplicate MIR external") } }
+        for function in module.functions { if function.name == external.name { report_error_at("W9999", module.source, "MIR external shadows function") } }
+        names.append(external.name)
+        if not mir_identifier(external.name) or not mir_identifier(external.native) { report_error_at("W9999", module.source, "invalid MIR external ABI identifier") }
+        if len(external.params) != len(external.abi_params) { report_error_at("W9999", module.source, "MIR C ABI arity mismatch") }
+        for i in 0..len(external.params) {
+            if not mir_valid_type(module.types, external.params[i]) { report_error_at("W9999", module.source, "invalid MIR external parameter") }
+            let abi = external.abi_params[i]
+            if not mir_foreign_abi(abi, false) { report_error_at("W9999", module.source, "invalid MIR C ABI parameter width") }
+            if module.types[external.params[i]].kind != foreign_type_id(abi) { report_error_at("W9999", module.source, "MIR C ABI parameter type mismatch") }
+        }
+        if not mir_valid_type(module.types, external.return_type) { report_error_at("W9999", module.source, "invalid MIR external return") }
+        if not mir_foreign_abi(external.abi_return, true) { report_error_at("W9999", module.source, "invalid MIR C ABI return width") }
+        if module.types[external.return_type].kind != foreign_type_id(external.abi_return) { report_error_at("W9999", module.source, "MIR C ABI return type mismatch") }
+    }
+}
+
+fn mir_foreign_abi(name: str, returned: bool) -> bool {
+    return name == "int" or name == "int32" or name == "int64" or name == "float" or name == "double" or name == "bool" or name == "opaque" or returned and name == "unit"
+}
+fn mir_identifier(name: str) -> bool {
+    if len(name) == 0 { return false }
+    for i in 0..len(name) {
+        let code = ord(name[i])
+        let letter = code >= 65 and code <= 90 or code >= 97 and code <= 122 or code == 95
+        if not letter and not (i > 0 and code >= 48 and code <= 57) { return false }
+    }
+    return true
+}

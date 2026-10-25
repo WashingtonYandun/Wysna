@@ -137,7 +137,7 @@ class CompilerMirTests(unittest.TestCase):
     def test_native_cfg_verifier_rejects_corruption(self):
         from tools.bundle_selfhost import MODULE_ORDER
         driver = r'''
-fn test_module(source: str, file: str) -> MirModule { return mir_build(check_mir_source(source, file)) }
+fn test_module(source: str, file: str) -> MirModule { return mir_build(check_source(source, file)) }
 let cli = args()
 let mut module = test_module("fn choose(flag: bool) -> int { let output = print(8)\nlet chosen = if flag { 2 } else { 3 }\nchosen }\nprint(choose(true))", "verifier.wysna")
 let fault = cli[1]
@@ -170,7 +170,7 @@ if fault == "consumed" {
             let mut moved = -1
             for operation in block.operations { if operation.opcode == "store" { moved = operation.args[0] } }
             let returned = block.terminator.value
-            module.functions[0].blocks[i].operations.append(MirOperation { opcode: "clone", result: returned, args: [moved], name: "", value: mir_literal_unit(), source: block.terminator.source })
+            module.functions[0].blocks[i].operations.append(MirOperation { owner_type: 0, labels: mir_empty_labels(), place: mir_empty_place(), opcode: "clone", result: returned, args: [moved], name: "", value: mir_literal_unit(), source: block.terminator.source })
         }
     }
 }
@@ -180,13 +180,13 @@ if fault == "backedge" or fault == "live_backedge" {
     let source = function.source
     let slot = len(function.slots)
     if fault == "backedge" {
-        module.functions[0].slots.append(MirSlot { type_id: 3, name: "", parameter: false, origin: -1, predicate: false })
+        module.functions[0].slots.append(MirSlot { type_id: 3, name: "", parameter: false, origin: -1, predicate: false, counter: false })
         let binding = function.blocks[0].operations[1].result
-        module.functions[0].blocks[2].operations.append(MirOperation { opcode: "store", result: slot, args: [binding], name: "", value: mir_literal_unit(), source: source })
+        module.functions[0].blocks[2].operations.append(MirOperation { owner_type: 0, labels: mir_empty_labels(), place: mir_empty_place(), opcode: "store", result: slot, args: [binding], name: "", value: mir_literal_unit(), source: source })
     } else {
-        module.functions[0].slots.append(MirSlot { type_id: 1, name: "", parameter: false, origin: -1, predicate: false })
+        module.functions[0].slots.append(MirSlot { type_id: 1, name: "", parameter: false, origin: -1, predicate: false, counter: false })
         let operands: list[int] = []
-        module.functions[0].blocks[2].operations.append(MirOperation { opcode: "const", result: slot, args: operands, name: "", value: mir_literal_unit(), source: source })
+        module.functions[0].blocks[2].operations.append(MirOperation { owner_type: 0, labels: mir_empty_labels(), place: mir_empty_place(), opcode: "const", result: slot, args: operands, name: "", value: mir_literal_unit(), source: source })
     }
 }
 if fault == "string_leak" or fault == "string_borrow" or fault == "string_move" or fault == "string_helper" or fault == "string_literal" {
@@ -206,8 +206,8 @@ if fault == "string_leak" or fault == "string_borrow" or fault == "string_move" 
 }
 if len(fault) >= 7 and slice(fault, 0, 7) == "result_" {
     module = test_module("fn value(flag: bool) -> str ! str { if flag { return Ok(\"ok\") }\nErr(\"bad\") }\nfn forward(flag: bool) -> str ! str { let local = \"held-\" + str(1)\nlet result = value(flag)?\nresult }\nprint(forward(false) else error { error })", "result.wysna")
-    if fault == "result_arena" { module.result_types[0].error = 3 }
-    if fault == "result_duplicate" { module.result_types.append(module.result_types[0]) }
+    if fault == "result_arena" { module.types[len(module.types) - 1].args[1] = len(module.types) }
+    if fault == "result_duplicate" { module.types.append(module.types[len(module.types) - 1]) }
     for i in 0..len(module.functions[1].blocks) {
         let block = module.functions[1].blocks[i]
         let mut operations: list[MirOperation] = []
@@ -220,9 +220,9 @@ if len(fault) >= 7 and slice(fault, 0, 7) == "result_" {
             if fault == "result_stale" and operation.name == "wysna_unwrap_err" {
                 let value = operation.args[0]
                 let copy = len(module.functions[1].slots)
-                module.functions[1].slots.append(MirSlot { type_id: module.functions[1].slots[value].type_id, name: "", parameter: false, origin: -1, predicate: false })
-                operations.append(MirOperation { opcode: "clone", result: copy, args: [value], name: "", value: mir_literal_unit(), source: operation.source })
-                operations.append(MirOperation { opcode: "store", result: value, args: [copy], name: "", value: mir_literal_unit(), source: operation.source })
+                module.functions[1].slots.append(MirSlot { type_id: module.functions[1].slots[value].type_id, name: "", parameter: false, origin: -1, predicate: false, counter: false })
+                operations.append(MirOperation { owner_type: 0, labels: mir_empty_labels(), place: mir_empty_place(), opcode: "clone", result: copy, args: [value], name: "", value: mir_literal_unit(), source: operation.source })
+                operations.append(MirOperation { owner_type: 0, labels: mir_empty_labels(), place: mir_empty_place(), opcode: "store", result: value, args: [copy], name: "", value: mir_literal_unit(), source: operation.source })
             }
             if fault != "result_leak" or operation.opcode != "release" { operations.append(operation) }
         }
@@ -238,19 +238,50 @@ if len(fault) >= 7 and slice(fault, 0, 7) == "result_" {
     }
     if fault == "result_const" {
         let slot = len(module.functions[1].slots)
-        module.functions[1].slots.append(MirSlot { type_id: 7, name: "", parameter: false, origin: -1, predicate: false })
+        module.functions[1].slots.append(MirSlot { type_id: 7, name: "", parameter: false, origin: -1, predicate: false, counter: false })
         let mut literal = mir_literal_unit()
         literal.type_id = 7
         let operands: list[int] = []
-        module.functions[1].blocks[0].operations.append(MirOperation { opcode: "const", result: slot, args: operands, name: "", value: literal, source: module.functions[1].source })
+        module.functions[1].blocks[0].operations.append(MirOperation { owner_type: 0, labels: mir_empty_labels(), place: mir_empty_place(), opcode: "const", result: slot, args: operands, name: "", value: literal, source: module.functions[1].source })
     }
     if fault == "result_facts" {
         let before = mir_module_json(module)
         let normal = check_source("print(1)", "normal.wysna")
-        if normal.has_nodes or len(normal.nodes) != 0 { report_error_at("W9999", module.source, "unexpected MIR nodes in metadata check") }
+        if not normal.has_nodes or len(normal.nodes) == 0 { report_error_at("W9999", module.source, "missing checked nodes in semantic check") }
         if mir_module_json(module) != before { report_error_at("W9999", module.source, "MIR module changed across check sessions") }
     }
 }
+
+if len(fault) >= 8 and slice(fault, 0, 8) == "closure_" {
+    module = test_module("let text = \"snapshot\"\nlet callback = || => text\nprint(callback())", "closure.wysna")
+    for i in 0..len(module.functions) {
+        for j in 0..len(module.functions[i].blocks) {
+            for k in 0..len(module.functions[i].blocks[j].operations) {
+                let operation = module.functions[i].blocks[j].operations[k]
+                if operation.opcode == "function" {
+                    if fault == "closure_target" { module.functions[i].blocks[j].operations[k].name = "missing" }
+                    if fault == "closure_arity" { module.functions[i].blocks[j].operations[k].value.integer = 2 }
+                    if fault == "closure_owner" { module.functions[i].blocks[j].operations[k].value.boolean = false }
+                    if fault == "closure_environment" { let empty: list[int] = [] module.functions[i].blocks[j].operations[k].args = empty }
+                }
+                if operation.opcode == "indirect" and fault == "closure_call" { module.functions[i].slots[operation.result].type_id = 3 }
+            }
+        }
+    }
+}
+if len(fault) >= 6 and slice(fault, 0, 6) == "match_" {
+    module = test_module("fn value() -> str ! int | str { Err(7) }\nprint(value() else error { match error { int(code) => str(code), str(text) => text } })", "match.wysna")
+    for i in 0..len(module.functions) {
+        for j in 0..len(module.functions[i].blocks) {
+            for k in 0..len(module.functions[i].blocks[j].operations) {
+                let operation = module.functions[i].blocks[j].operations[k]
+                if operation.opcode == "test" and operation.name == "error_type" and fault == "match_descriptor" { module.functions[i].blocks[j].operations[k].labels = ["int", "str"] }
+                if operation.opcode == "narrow" and fault == "match_witness" { module.functions[i].blocks[j].operations[k].value.integer = operation.args[0] }
+            }
+        }
+    }
+}
+
 mir_verify(module)
 print("verified")
 '''
@@ -266,7 +297,7 @@ print("verified")
             built = subprocess.run(compiler_command() + ["-std=c99", "-O0", f"-I{ROOT}", str(c_path), "-lm", "-o", str(binary)],
                                    capture_output=True, text=True, timeout=120)
             self.assertEqual(built.returncode, 0, built.stderr)
-            for fault in ("valid", "target", "condition", "parameter", "opcode", "terminator", "join", "leak", "consumed", "backedge", "live_backedge", "string_leak", "string_borrow", "string_move", "string_helper", "string_literal", "result_valid", "result_facts", "result_arena", "result_duplicate", "result_guard", "result_reuse", "result_stale", "result_leak", "result_move", "result_const"):
+            for fault in ("valid", "target", "condition", "parameter", "opcode", "terminator", "join", "leak", "consumed", "backedge", "live_backedge", "string_leak", "string_borrow", "string_move", "string_helper", "string_literal", "result_valid", "result_facts", "result_arena", "result_duplicate", "result_guard", "result_reuse", "result_stale", "result_leak", "result_move", "result_const", "closure_target", "closure_arity", "closure_owner", "closure_environment", "closure_call", "match_descriptor", "match_witness"):
                 with self.subTest(fault=fault):
                     result = subprocess.run([str(binary), fault], capture_output=True, text=True, timeout=15)
                     if fault in ("valid", "result_valid", "result_facts"):
@@ -434,7 +465,7 @@ print("verified")
                         CompilerService().check_file(source)
                     self.assertEqual(caught.exception.code, expected)
 
-    def test_unsupported_features_are_explicit(self):
+    def test_expanded_features_produce_verified_exchange(self):
         cases = [
             "for i in 0..3 { print(i) }",
             "fn identity[T](x: T) -> T { x }\nprint(identity(2))",
@@ -454,14 +485,14 @@ print("verified")
                     source.write_text(code + "\n", encoding="utf-8")
                     CompilerService().check_file(source)
                     compiled = self.compile_ir(source, output)
-                    self.assertNotEqual(compiled.returncode, 0)
-                    self.assertIn("[W2013]", compiled.stderr)
-                    self.assertIn("result-cfg-v1", compiled.stderr)
-                    self.assertFalse(output.exists())
+                    self.assertEqual(compiled.returncode, 0, compiled.stderr)
+                    import_module(output.read_text(encoding="utf-8"))
+                    output.unlink()
             source.write_text('import "missing.wysna"\n', encoding="utf-8")
             imported = self.compile_ir(source, output)
-            self.assertIn("[W2013]", imported.stderr)
-            self.assertIn("imports", imported.stderr)
+            self.assertNotEqual(imported.returncode, 0)
+            self.assertIn("[W1003]", imported.stderr)
+            self.assertFalse(output.exists())
 
     def test_exchange_verifier_rejects_tampered_compiler_ir(self):
         with tempfile.TemporaryDirectory() as temporary:
@@ -606,7 +637,7 @@ print("verified")
             outputs = []
             for stage in ("stage1", "stage2"):
                 output = Path(temporary).resolve() / (stage + ".json")
-                binary = ROOT / ".wysna_cache" / executable_name(stage)
+                binary = Path(self.compiler).parent / executable_name(stage)
                 result = self.compile_ir(source, output, str(binary))
                 self.assertEqual(result.returncode, 0, result.stderr)
                 outputs.append(output.read_bytes())

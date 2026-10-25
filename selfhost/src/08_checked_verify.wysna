@@ -1,0 +1,237 @@
+# Validate the phase boundary before lowering or indexing checked identities.
+fn checked_verify(program: CheckedProgram) {
+    let source = program.source
+    if not program.has_nodes { report_error_at("W9999", source, "MIR requires a completed checked node program") }
+    if program.unit_type < 0 or program.unit_type >= len(program.types) { report_error_at("W9999", source, "invalid checked unit type") }
+    if program.types[program.unit_type].kind != "unit" { report_error_at("W9999", source, "checked unit type mismatch") }
+    for i in 0..len(program.types) {
+        let type_ = program.types[i]
+        for child in type_.args { if child < 0 or child >= i { report_error_at("W9999", source, "invalid or cyclic checked type reference") } }
+        if (type_.kind == "list" or type_.kind == "optional" or type_.kind == "weak" or type_.kind == "ok" or type_.kind == "err") and len(type_.args) != 1 { report_error_at("W9999", source, "invalid checked unary type") }
+        if type_.kind == "dict" and len(type_.args) != 2 { report_error_at("W9999", source, "invalid checked dictionary type") }
+        if type_.kind == "result" and len(type_.args) != 2 { report_error_at("W9999", source, "invalid checked result type") }
+        if type_.kind == "function" and len(type_.args) == 0 { report_error_at("W9999", source, "invalid checked function type") }
+    }
+    for obligation in program.obligations {
+        for type_id in obligation.types { if type_id < 0 or type_id >= len(program.types) { report_error_at("W9999", obligation.source, "invalid checked generic obligation") } }
+    }
+    for binding in program.bindings {
+        if binding.type_id < 0 or binding.type_id >= len(program.types) { report_error_at("W9999", binding.source, "invalid checked binding type") }
+    }
+    for signature in program.signatures {
+        if signature.type_id < 0 or signature.type_id >= len(program.types) { report_error_at("W9999", source, "invalid checked signature type") }
+        let type_ = program.types[signature.type_id]
+        if type_.kind != "function" or len(type_.args) != len(signature.params) + 1 { report_error_at("W9999", source, "invalid checked signature shape") }
+        for type_id in type_.args { if type_id < 0 or type_id >= len(program.types) { report_error_at("W9999", source, "invalid checked signature reference") } }
+    }
+    let mut template_names: list[str] = []
+    for template in program.templates {
+        if module_contains(template_names, template.name) or len(template.params) == 0 { report_error_at("W9999", source, "invalid checked template identity") }
+        template_names.append(template.name)
+    }
+    checked_verify_records(program)
+    for i in 0..len(program.patterns) {
+        let pattern = program.patterns[i]
+        if pattern.type_id < 0 or pattern.type_id >= len(program.types) { report_error_at("W9999", pattern.source, "invalid checked pattern type") }
+        for child in pattern.children { if child < 0 or child >= i { report_error_at("W9999", pattern.source, "invalid or cyclic checked pattern") } }
+        if pattern.binding >= 0 {
+            if pattern.name != "*" or pattern.binding >= len(program.bindings) { report_error_at("W9999", pattern.source, "invalid checked pattern binding") }
+            if program.bindings[pattern.binding].type_id != pattern.type_id { report_error_at("W9999", pattern.source, "checked pattern binding type mismatch") }
+        }
+    }
+    # Validate every node reference before arms can inspect guard or subject types.
+    for i in 0..len(program.nodes) {
+        let node = program.nodes[i]
+        if not checked_valid_type(program, node.type_id) { report_error_at("W9999", node.source, "invalid checked node type") }
+        for child in node.children { if child < 0 or child >= i { report_error_at("W9999", node.source, "invalid or cyclic checked node reference") } }
+    }
+    for arm in program.arms {
+        if arm.pattern < 0 or arm.pattern >= len(program.patterns) or arm.body < 0 or arm.body >= len(program.nodes) or arm.guard < -1 or arm.guard >= len(program.nodes) { report_error_at("W9999", arm.source, "invalid checked match arm") }
+        if arm.guard >= 0 and program.types[program.nodes[arm.guard].type_id].kind != "bool" { report_error_at("W9999", arm.source, "checked match guard requires bool") }
+    }
+    for i in 0..len(program.nodes) {
+        let node = program.nodes[i]
+        let leaf_type = if node.kind == "integer" { "int" } elif node.kind == "boolean" { "bool" } elif node.kind == "string" { "str" } else { node.kind }
+        if node.kind == "integer" or node.kind == "boolean" or node.kind == "string" or node.kind == "float" or node.kind == "unit" {
+            if program.types[node.type_id].kind != leaf_type { report_error_at("W9999", node.source, "checked literal type mismatch") }
+        }
+        let count = len(node.children)
+        let mut valid = false
+        if node.kind == "integer" or node.kind == "float" or node.kind == "string" or node.kind == "boolean" or node.kind == "unit" or node.kind == "none" or node.kind == "binding" or node.kind == "super" or node.kind == "callee" or node.kind == "closure" or node.kind == "break" or node.kind == "continue" { valid = count == 0 }
+        elif node.kind == "unary" or node.kind == "propagate" or node.kind == "let" or node.kind == "return" { valid = count == 1 }
+        elif node.kind == "binary" or node.kind == "assign" or node.kind == "index" or node.kind == "handler" or node.kind == "while" { valid = count == 2 }
+        elif node.kind == "if" { valid = count == 3 }
+        elif node.kind == "new" or node.kind == "new_callee" or node.kind == "method" or node.kind == "direct_method" or node.kind == "virtual_call" or node.kind == "struct" or node.kind == "struct_call" or node.kind == "enum" or node.kind == "enum_call" or node.kind == "namespace" or node.kind == "constructor" or node.kind == "enum_callee" or node.kind == "call" or node.kind == "block" or node.kind == "list" or node.kind == "tuple" or node.kind == "collection_call" { valid = true }
+        elif node.kind == "indirect_call" { valid = count >= 1 }
+        elif node.kind == "dict" { valid = count % 2 == 0 }
+        elif node.kind == "match" or node.kind == "collection_method" or node.kind == "member" { valid = count == 1 }
+        elif node.kind == "for" { valid = count == 2 and node.pattern >= 0 and node.pattern < len(program.patterns) }
+        if not valid { report_error_at("W9999", node.source, "invalid checked node shape: " + node.kind) }
+        if node.kind != "for" and node.pattern != -1 { report_error_at("W9999", node.source, "unexpected checked binding pattern") }
+        for arm_id in node.arms {
+            if node.kind != "match" or arm_id < 0 or arm_id >= len(program.arms) { report_error_at("W9999", node.source, "invalid checked match arm identity") }
+            let arm = program.arms[arm_id]
+            checked_verify_pattern(program, arm.pattern, program.nodes[node.children[0]].type_id)
+            if arm.body >= i or arm.guard >= i { report_error_at("W9999", node.source, "cyclic checked match arm") }
+        }
+        if node.total and node.kind != "match" { report_error_at("W9999", node.source, "unexpected checked match totality") }
+        if node.discard and node.kind != "if" { report_error_at("W9999", node.source, "invalid checked discard marker") }
+        if node.kind == "super" or node.kind == "binding" or node.kind == "let" or node.kind == "handler" and node.binding >= 0 {
+            if node.binding < 0 or node.binding >= len(program.bindings) { report_error_at("W9999", node.source, "invalid checked binding identity") }
+            if node.kind == "binding" and node.type_id != program.bindings[node.binding].type_id { report_error_at("W9999", node.source, "checked binding type mismatch") }
+        } elif node.binding != -1 { report_error_at("W9999", node.source, "unexpected checked binding") }
+        if node.kind == "closure" {
+            if node.target < 0 or node.target >= len(program.functions) { report_error_at("W9999", node.source, "invalid checked closure target") }
+            let function = program.functions[node.target]
+            if not function.closure or function.type_id != node.type_id { report_error_at("W9999", node.source, "checked closure signature mismatch") }
+        } elif node.kind == "call" or node.kind == "callee" or node.kind == "method" or node.kind == "direct_method" or node.kind == "virtual_call" {
+            if node.target < -1 or node.target >= len(program.signatures) { report_error_at("W9999", node.source, "invalid checked call target") }
+            if node.kind == "call" and node.target < 0 {
+                let mut arity = -1
+                if node.text == "slice" { arity = 3 }
+                elif node.text == "Ok" or node.text == "Err" or node.text == "int" or node.text == "float" or node.text == "str" or node.text == "len" or node.text == "ord" or node.text == "chr" { arity = 1 }
+                if arity >= 0 and count != arity { report_error_at("W9999", node.source, "checked builtin arity mismatch") }
+            }
+            if node.target >= 0 {
+                let signature = program.signatures[node.target]
+                if signature.name != node.text { report_error_at("W9999", node.source, "checked call target name mismatch") }
+                if (node.kind == "call" or node.kind == "virtual_call") and count != len(signature.params) { report_error_at("W9999", node.source, "checked call arity mismatch") }
+                let returned = program.types[signature.type_id].args
+                if (node.kind == "call" or node.kind == "virtual_call") and node.type_id != returned[len(returned) - 1] { report_error_at("W9999", node.source, "checked call return type mismatch") }
+            }
+        } elif node.target != -1 { report_error_at("W9999", node.source, "unexpected checked call target") }
+        if node.kind == "for" {
+            let sequence = program.types[program.nodes[node.children[0]].type_id]
+            if sequence.kind != "list" { report_error_at("W9999", node.source, "checked for requires list type") }
+            checked_verify_pattern(program, node.pattern, sequence.args[0])
+        }
+        if node.kind == "indirect_call" {
+            let signature = program.types[program.nodes[node.children[0]].type_id]
+            if signature.kind != "function" or count != len(signature.args) or node.type_id != signature.args[len(signature.args) - 1] { report_error_at("W9999", node.source, "invalid checked indirect signature") }
+        }
+        if node.kind == "assign" {
+            let target = program.nodes[node.children[0]]
+            if target.kind != "binding" and target.kind != "index" and target.kind != "member" { report_error_at("W9999", node.source, "invalid checked assignment place") }
+            if target.kind == "binding" and not program.bindings[target.binding].mutable { report_error_at("W9999", node.source, "checked assignment mutates immutable binding") }
+        }
+    }
+    let mut expected_functions = 0
+    for signature in program.signatures { if not signature.foreign and not signature.abstract and len(signature.type_params) == 0 { expected_functions = expected_functions + 1 } }
+    for function in program.functions { if function.closure { expected_functions = expected_functions + 1 } }
+    if len(program.functions) != expected_functions { report_error_at("W9999", source, "incomplete checked function bodies") }
+    let mut names: list[str] = []
+    for function in program.functions {
+        for name in names { if name == function.name { report_error_at("W9999", function.source, "duplicate checked function body") } }
+        names.append(function.name)
+        if function.type_id < 0 or function.type_id >= len(program.types) { report_error_at("W9999", function.source, "invalid checked function type") }
+        if program.types[function.type_id].kind != "function" { report_error_at("W9999", function.source, "invalid checked function signature") }
+        let index = checked_function(program, function.name)
+        if not function.closure and (index < 0 or program.signatures[index].type_id != function.type_id) { report_error_at("W9999", function.source, "invalid checked function identity") }
+        if function.body < 0 or function.body >= len(program.nodes) { report_error_at("W9999", function.source, "invalid checked function body") }
+        if program.nodes[function.body].kind != "block" { report_error_at("W9999", function.source, "checked function requires block body") }
+        if not function.closure and len(function.captures) > 0 { report_error_at("W9999", function.source, "unexpected function captures") }
+        let mut captured: list[int] = []
+        for id in function.captures {
+            if id < 0 or id >= len(program.bindings) { report_error_at("W9999", function.source, "invalid checked capture identity") }
+            for previous in captured { if previous == id { report_error_at("W9999", function.source, "duplicate checked capture") } }
+            captured.append(id)
+        }
+        let signature = program.types[function.type_id].args
+        if len(function.params) + 1 != len(signature) { report_error_at("W9999", function.source, "invalid checked parameter count") }
+        let mut parameters: list[int] = []
+        for i in 0..len(function.params) {
+            let id = function.params[i]
+            if id < 0 or id >= len(program.bindings) { report_error_at("W9999", function.source, "invalid checked parameter identity") }
+            for capture in function.captures { if capture == id { report_error_at("W9999", function.source, "checked capture shadows parameter identity") } }
+            for previous in parameters { if previous == id { report_error_at("W9999", function.source, "duplicate checked parameter") } }
+            parameters.append(id)
+            if program.bindings[id].type_id != signature[i] { report_error_at("W9999", function.source, "checked parameter type mismatch") }
+        }
+    }
+    for id in program.entry { if id < 0 or id >= len(program.nodes) { report_error_at("W9999", source, "invalid checked entry identity") } }
+}
+
+fn checked_valid_type(program: CheckedProgram, type_id: int) -> bool { return type_id >= 0 and type_id < len(program.types) }
+fn checked_verify_records(program: CheckedProgram) {
+    let source = program.source
+    let mut seen: list[int] = []
+    for record in program.records {
+        if not checked_valid_type(program, record.type_id) { report_error_at("W9999", source, "invalid checked record identity") }
+        for id in seen { if id == record.type_id { report_error_at("W9999", source, "duplicate checked record identity") } }
+        seen.append(record.type_id)
+        let kind = program.types[record.type_id].kind
+        if kind != "struct" and kind != "enum" and kind != "class" and kind != "interface" { report_error_at("W9999", source, "invalid checked record kind") }
+        if record.parent != -1 {
+            if kind != "class" or not checked_valid_type(program, record.parent) { report_error_at("W9999", source, "invalid checked parent identity") }
+            if program.types[record.parent].kind != "class" { report_error_at("W9999", source, "invalid checked parent kind") }
+        }
+        for interface_ in record.interfaces {
+            if kind != "class" or not checked_valid_type(program, interface_) { report_error_at("W9999", source, "invalid checked interface identity") }
+            if program.types[interface_].kind != "interface" { report_error_at("W9999", source, "invalid checked interface kind") }
+        }
+        let mut names: list[str] = []
+        for field in record.fields {
+            if (kind != "struct" and kind != "class") or not checked_valid_type(program, field.type_id) or module_contains(names, field.name) { report_error_at("W9999", source, "invalid checked field metadata") }
+            names.append(field.name)
+        }
+        let variants: list[str] = []
+        names = variants
+        for variant in record.variants {
+            if kind != "enum" or module_contains(names, variant.name) { report_error_at("W9999", source, "invalid checked variant metadata") }
+            names.append(variant.name)
+            for payload in variant.payloads { if not checked_valid_type(program, payload) { report_error_at("W9999", source, "invalid checked variant payload") } }
+        }
+        let methods: list[str] = []
+        names = methods
+        for method in record.methods {
+            if (kind != "class" and kind != "interface") or method.target < 0 or method.target >= len(program.signatures) or not checked_valid_type(program, method.type_id) or not checked_valid_type(program, method.owner) or module_contains(names, method.name) { report_error_at("W9999", source, "invalid checked method metadata") }
+            names.append(method.name)
+            let signature = program.types[method.type_id]
+            let target = program.types[program.signatures[method.target].type_id]
+            if signature.kind != "function" or len(target.args) != len(signature.args) + 1 or target.args[0] != method.owner { report_error_at("W9999", source, "invalid checked method signature") }
+            for i in 0..len(signature.args) { if target.args[i + 1] != signature.args[i] { report_error_at("W9999", source, "checked method target signature mismatch") } }
+        }
+    }
+    for i in 0..len(program.types) {
+        let type_ = program.types[i]
+        if (type_.kind == "struct" or type_.kind == "enum" or type_.kind == "class" or type_.kind == "interface") and checked_type_concrete(program.types, program.templates, i) {
+            let mut found = false
+            for id in seen { if i == id { found = true } }
+            if not found { report_error_at("W9999", source, "missing checked concrete record") }
+        }
+    }
+}
+
+fn checked_verify_pattern(program: CheckedProgram, id: int, expected: int) {
+    let pattern = program.patterns[id]
+    let type_ = program.types[expected]
+    let source = pattern.source
+    if pattern.type_id != expected { report_error_at("W9999", source, "checked pattern subject mismatch") }
+    if pattern.name == "*" {
+        if len(pattern.children) != 0 { report_error_at("W9999", source, "invalid checked binding pattern") }
+        return
+    }
+    if len(pattern.name) >= 8 and slice(pattern.name, 0, 8) == "literal:" {
+        if len(pattern.children) != 0 or (type_.kind != "int" and type_.kind != "str" and type_.kind != "bool") { report_error_at("W9999", source, "invalid checked literal pattern") }
+        return
+    }
+    let mut payloads: list[int] = []
+    if type_.kind == "tuple" and pattern.name == "tuple" { payloads = type_.args }
+    elif type_.kind == "optional" and (pattern.name == "Some" or pattern.name == "None") { if pattern.name == "Some" { payloads = type_.args } }
+    elif type_.kind == "result" and (pattern.name == "Ok" or pattern.name == "Err") { payloads = [type_.args[if pattern.name == "Ok" { 0 } else { 1 }]] }
+    elif type_.kind == "error_union" {
+        if len(pattern.children) != 1 { report_error_at("W9999", source, "invalid checked error type pattern") }
+        let narrowed = program.patterns[pattern.children[0]].type_id
+        let mut found = false
+        for member in type_.args { if member == narrowed { found = true } }
+        if not found { report_error_at("W9999", source, "invalid checked error alternative") }
+        payloads = [narrowed]
+    } elif type_.kind == "enum" {
+        let record = checked_record(program, expected)
+        let mut found = false
+        for variant in record.variants { if variant.name == pattern.name { payloads = variant.payloads found = true } }
+        if not found { report_error_at("W9999", source, "invalid checked enum pattern") }
+    } else { report_error_at("W9999", source, "invalid checked constructor pattern") }
+    if len(payloads) != len(pattern.children) { report_error_at("W9999", source, "invalid checked pattern arity") }
+    for i in 0..len(payloads) { checked_verify_pattern(program, pattern.children[i], payloads[i]) }
+}

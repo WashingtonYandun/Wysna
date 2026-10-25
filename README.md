@@ -8,7 +8,7 @@
 
 Wysna is an experimental statically typed language for native programming, CLI tools, and high-performance applications. Wysna Seed compiles to portable C99 and combines deterministic reference counting (ARC), copy-on-write (CoW) value semantics, explicit error unions, and controlled C interoperability.
 
-This branch prepares Wysna `0.5.0`. Wysna Seed is the reference compiler and primary production implementation. Wysna Compiler is a modular self-hosted compiler for bootstrap; its supported subset is measured by the four-engine matrix.
+This branch prepares Wysna `0.5.0`. Wysna Seed is the reference compiler and primary production implementation. Wysna Compiler is a modular self-hosted compiler with one verified MIR pipeline and a [standalone native SDK](docs/NATIVE_SDK.md). Its declared profile is measured independently; Python remains required for the Seed CLI, not the native SDK.
 
 ---
 
@@ -21,8 +21,9 @@ Wysna distinguishes the language from its two compiler implementations. The self
 | **Language** | **Wysna** | `wysna` | — | Specification and grammar (`.wysna`) |
 | **Reference compiler** | **Wysna Seed** | `seed` | Python | Reference semantics, type interner, HIR/MIR, and default C99 pipeline |
 | **Self-hosted compiler** | **Wysna Compiler** | `selfhost` | Wysna | Independent bootstrap compiler with a narrower, measured feature profile |
-| **Bootstrap stage 1** | **Stage 1** | `stage1` | Native C99 (compiled by Seed) | First self-hosted compiler binary (`compiler0.c` &rarr; `stage1`) |
-| **Bootstrap stage 2** | **Stage 2** | `stage2` | Native C99 (recompiled by Stage 1) | Compiler binary at the deterministic fixed point (`compiler1.c` &rarr; `stage2`) |
+| **Bootstrap oracle** | **Bootstrap engine** | `bootstrap` | Seed AST C99 | Initial engine; its emission hash is recorded separately from the native fixed point |
+| **Bootstrap stage 1** | **Stage 1** | `stage1` | Native C99 (native C0) | First self-hosted compiler binary (`compiler0.c` &rarr; `stage1`) |
+| **Bootstrap stage 2** | **Stage 2** | `stage2` | Native C99 (native C1) | Compiler binary at the deterministic fixed point (`compiler1.c` &rarr; `stage2`) |
 
 See [compiler responsibilities and enforced boundaries](docs/COMPILER_ARCHITECTURE.md)
 for session ownership, semantic rule domains, target tooling and runtime headers.
