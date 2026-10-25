@@ -4376,19 +4376,6 @@ fn mir_place(context: MirBuilder, id: int) -> MirPlace {
     mir_unsupported(node.source, "checked place " + node.kind)
     return mir_empty_place()
 }
-fn mir_read_place(context: MirBuilder, place: MirPlace, source: Token) -> int {
-    let mut value = -1
-    if place.root < 0 {
-        let id = -place.root - 1
-        value = mir_op(context, "global_load", context.globals[id].type_id, [], "", mir_literal_int(id), source)
-    } else { value = mir_op(context, "clone", context.slots[place.root].type_id, [place.root], "", mir_literal_unit(), source) }
-    for projection in place.projections {
-        if projection.kind == "index" { value = mir_op(context, "runtime", projection.type_id, [value, projection.index], "wysna_index_get_owned_at", mir_literal_unit(), projection.source) }
-        elif projection.kind == "field" { value = mir_load_field(context, value, projection.index, projection.type_id, projection.source) }
-        else { report_error_at("W9999", source, "unknown checked place projection") }
-    }
-    return value
-}
 fn mir_place_json(place: MirPlace) -> str {
     let mut projections = "["
     for i in 0..len(place.projections) {
@@ -5269,8 +5256,10 @@ fn mir_expression(context: MirBuilder, id: int) -> int {
         let right = mir_expression(context, node.children[1])
         if context.current < 0 { return -1 }
         let checked = mir_coerce(context, right, mir_type(context, node.type_id, source), false, source)
+        # The expression returns its RHS snapshot, never a reread retaining its parent path.
+        let assigned = mir_op(context, "clone", context.slots[checked].type_id, [checked], "", mir_literal_unit(), source)
         mir_append(context, MirOperation { owner_type: 0, labels: mir_empty_labels(), place: place, opcode: "store_place", result: -1, args: [checked], name: "", value: mir_literal_unit(), source: source })
-        return mir_read_place(context, place, source)
+        return assigned
     }
     if node.kind == "binary" {
         let left = mir_expression(context, node.children[0])

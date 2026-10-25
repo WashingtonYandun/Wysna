@@ -30,19 +30,6 @@ fn mir_place(context: MirBuilder, id: int) -> MirPlace {
     mir_unsupported(node.source, "checked place " + node.kind)
     return mir_empty_place()
 }
-fn mir_read_place(context: MirBuilder, place: MirPlace, source: Token) -> int {
-    let mut value = -1
-    if place.root < 0 {
-        let id = -place.root - 1
-        value = mir_op(context, "global_load", context.globals[id].type_id, [], "", mir_literal_int(id), source)
-    } else { value = mir_op(context, "clone", context.slots[place.root].type_id, [place.root], "", mir_literal_unit(), source) }
-    for projection in place.projections {
-        if projection.kind == "index" { value = mir_op(context, "runtime", projection.type_id, [value, projection.index], "wysna_index_get_owned_at", mir_literal_unit(), projection.source) }
-        elif projection.kind == "field" { value = mir_load_field(context, value, projection.index, projection.type_id, projection.source) }
-        else { report_error_at("W9999", source, "unknown checked place projection") }
-    }
-    return value
-}
 fn mir_place_json(place: MirPlace) -> str {
     let mut projections = "["
     for i in 0..len(place.projections) {

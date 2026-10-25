@@ -160,6 +160,8 @@ CASES.extend([
 CASES.extend([
     ('nested_generic_initializer_call', 'struct Box[T] { value: T }\nfn twice[T](value: T) -> T { value + value }\nlet offset = 4\nlet work = |value: int| => twice(value) + offset\nlet value: Box[int] = Box { value: work(3) }\nprint(value.value)'),
     ('nested_generic_initializer_literal', 'struct Pair[T] { first: T, second: T }\nstruct Box[T] { value: T }\nlet value = Pair { first: Box { value: 1 }, second: Box { value: 2 } }\nprint(value.first.value, value.second.value)'),
+    ('assignment_result_snapshot', 'let mut values = [[1]]\nlet snapshot = (values[0] = [2])\nvalues[0].append(3)\nprint(values, snapshot)'),
+    ('imported_generic_display', 'import "generic.wysna" as generic\nprint(generic.make())'),
     ('generic_nominal_display', 'struct Box[T] { value: T }\nlet value: Box[int] = Box { value: 3 }\nprint(value)'),
     ('generic_nominal_name_collision', 'struct Box[T] { value: T }\nstruct Box__0 { text: str }\nlet value: Box[int] = Box { value: 3 }\nlet ordinary = Box__0 { text: "distinct" }\nprint(value.value, ordinary.text)'),
 ])
@@ -196,6 +198,8 @@ class NativeMirPipelineTests(unittest.TestCase):
         with tempfile.TemporaryDirectory(prefix="wysna-native-mir-") as temporary:
             directory = Path(temporary).resolve()
             source = directory / "source ü.wysna"
+            (directory / "generic.wysna").write_text(
+                'pub struct Box[T] { value: T }\npub fn make() -> Box[int] { Box { value: 3 } }\n', encoding="utf-8")
             for name, code in CASES:
                 with self.subTest(case=name):
                     source.write_text(code + "\n", encoding="utf-8")
