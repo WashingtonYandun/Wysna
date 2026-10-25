@@ -104,6 +104,8 @@ class Module:
     layouts: dict = field(default_factory=dict)
     virtual_slots: list = field(default_factory=list)
     externs: dict = field(default_factory=dict)
+    exports: list = field(default_factory=list)
+    library_mode: bool = False
     enum_count: int = 0
 
 

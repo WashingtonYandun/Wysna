@@ -83,7 +83,10 @@ def test_parameter_optimization_rejects_invalid_input_before_rewriting():
 
 
 def test_result_release_uses_no_temporary_heap_for_leaves_or_shared_boxes():
-    source = r'''#include <stdlib.h>
+    source = r'''#ifndef _WIN32
+#define _POSIX_C_SOURCE 200809L
+#endif
+#include <stdlib.h>
 #include <assert.h>
 static size_t allocation_calls;
 static void* counted_malloc(size_t size) { allocation_calls++; return malloc(size); }
@@ -131,7 +134,14 @@ int main(void) {
         command = shlex.split(os.environ.get('CC', 'cc')) + [
             '-std=c99', '-O1', '-g', '-fsanitize=address,undefined', '-fno-omit-frame-pointer',
             '-I' + str(ROOT), str(path), '-o', str(binary)]
-        subprocess.run(command, check=True, capture_output=True, text=True, timeout=60)
+        try:
+            subprocess.run(command, check=True, capture_output=True, text=True, timeout=60)
+        except subprocess.CalledProcessError as error:
+            raise AssertionError(
+                'failed to compile result-release sanitizer contract:\n'
+                + (error.stdout or '')
+                + (error.stderr or '')
+            ) from error
         environment = dict(os.environ, WYSNA_MEM_CHECK='1', UBSAN_OPTIONS='halt_on_error=1')
         environment['ASAN_OPTIONS'] = 'detect_leaks=' + ('1' if sys.platform.startswith('linux') else '0')
         result = subprocess.run([str(binary)], env=environment, capture_output=True, text=True, timeout=30)

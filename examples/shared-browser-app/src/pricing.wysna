@@ -1,0 +1,3 @@
+pub fn calculate_total_cents(quantity: int, unit_price_cents: int) -> int {
+    return quantity * unit_price_cents
+}

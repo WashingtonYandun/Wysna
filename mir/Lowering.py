@@ -21,7 +21,7 @@ class Lowering:
         raise WysnaError(message, file=source.file, line=source.line, col=source.col,
                      code='W9999', stage='mir-lowering')
 
-    def lower(self, hir, optimize=True):
+    def lower(self, hir, optimize=True, *, call_entrypoint=None):
         from hir.HirVerifier import HirVerifier
         from codegen.VirtualDispatch import hir_virtual_method_slots
         HirVerifier(self.interner, self.file).verify(hir)
@@ -68,7 +68,9 @@ class Lowering:
                 entry_value = self.expr(statement.expr)
             else:
                 self.stmt(statement, top=True)
-        if not explicit and getattr(hir, 'call_entrypoint', not hir.top_level_stmts):
+        invoke_entrypoint = (getattr(hir, 'call_entrypoint', not hir.top_level_stmts)
+                             if call_entrypoint is None else call_entrypoint)
+        if not explicit and invoke_entrypoint:
             entry = next((fn for fn in hir.functions if fn.name == 'main'), None)
             if entry:
                 entry_value = self.call('wysna_fn_main', [], entry.return_type_id, entry)
@@ -230,6 +232,15 @@ class Lowering:
         self.begin(name, declaration.return_type_id, self.source(declaration))
         self.current_class = owner
         self.fallible, self.err_type = declaration.is_fallible, declaration.err_type_name
+        source_file = getattr(declaration.span, 'file_path', None)
+        if (owner is None and declaration.is_public and source_file == self.file):
+            self.module.exports.append({
+                'name': declaration.name,
+                'function': name,
+                'params': tuple(parameter.type_id for parameter in declaration.params),
+                'return_type': declaration.return_type_id,
+                'fallible': declaration.is_fallible,
+            })
         if owner:
             self.receiver = self.slot(owner.type_id, 'v_self', ownership='borrowed', parameter=True)
         for index, parameter in enumerate(declaration.params):
@@ -694,6 +705,16 @@ class Lowering:
             return
         children = self.pattern_children(pattern, value)
         for channel, index, child in children:
+            if channel in ('ok', 'err'):
+                # A compound pattern predicate may hide the original tag witness.
+                # Re-establish a direct guard before binding an owned payload.
+                witness = self.predicate('err', [value], pattern)
+                accepted, impossible = self.new_block(), self.new_block()
+                self.branch(witness, accepted if channel == 'err' else impossible,
+                            impossible if channel == 'err' else accepted)
+                self.current = impossible
+                self.terminate('unreachable', node=pattern)
+                self.current = accepted
             self.pattern_children_cache = children
             payload = self.payload(channel, index, child, value, pattern)
             self.bind_pattern(child, payload)

@@ -194,5 +194,45 @@ def test_compiler_boundaries():
     print('  [PASS] Structural, control-flow, operand/result and collection metadata invariants')
 
 
+def test_unused_generic_type_declarations_are_checked_symbolically():
+    invalid_declarations = [
+        ('struct Broken[T] { value: Missing }', 'W1001'),
+        ('enum Broken[T] { Item(Missing) }', 'W1001'),
+        ('interface Broken[T] { fn get() -> Missing }', 'W1001'),
+        ('class Broken[T] { value: Missing }', 'W1001'),
+        ('class Broken[T: Missing] { value: T }', 'W2012'),
+        ('struct Broken[T] { value: dict[float, T] }', 'W2010'),
+        ('class Broken[T] { fn get() -> int { return "wrong" } }', 'W2004'),
+        ('struct Broken[T] { value: T, value: T }', 'W1002'),
+        ('enum Broken[T] { Item(T), Item(T) }', 'W1002'),
+    ]
+
+    for source, expected_code in invalid_declarations:
+        try:
+            TypeChecker().check(Parser().parse(source))
+        except WysnaError as error:
+            assert error.code == expected_code, f"{source}: expected {expected_code}, got {error}"
+        else:
+            raise AssertionError(f'Invalid uninstantiated generic declaration was accepted: {source}')
+
+    valid = '''
+    struct Box[T] { value: T }
+    struct Holder[T] { value: Box[T] }
+    enum Choice[T] { Item(Box[T]), Empty }
+    interface Reader[T] { fn read() -> T }
+    class Container[T] {
+        value: Box[T]
+        fn get() -> Box[T] { return this.value }
+    }
+    '''
+    checker = TypeChecker()
+    checker.check(Parser().parse(valid))
+    assert checker.monomorphized_struct_decls == []
+    assert checker.monomorphized_enum_decls == []
+    assert checker.monomorphized_oop_decls == []
+    assert checker.monomorphized_fn_decls == []
+
+
 if __name__ == '__main__':
     test_compiler_boundaries()
+    test_unused_generic_type_declarations_are_checked_symbolically()

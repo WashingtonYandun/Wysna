@@ -1,0 +1,245 @@
+import "std/buffer"
+import "std/bytes" as utf8
+import "std/json"
+import "std/text"
+
+extern "C" fn wysna_host_http_request(
+    url: opaque,
+    method: opaque,
+    request_headers: opaque,
+    request_body: opaque,
+    response_headers: opaque,
+    response_body: opaque,
+    timeout_ms: int,
+    max_response_bytes: int
+) -> int
+extern "C" fn wysna_host_last_error() -> int
+
+pub enum HttpErrorKind {
+    InvalidRequest,
+    RuntimeUnavailable,
+    Transport,
+    Tls,
+    Timeout,
+    LimitExceeded,
+    InvalidResponse,
+}
+
+pub struct HttpError {
+    kind: HttpErrorKind,
+    code: int,
+}
+
+pub struct Header {
+    name: str,
+    value: str,
+}
+
+pub struct Response {
+    status: int,
+    headers: list[Header],
+    body: buffer.Bytes,
+}
+
+pub fn make_header(name: str, value: str) -> Header {
+    return Header { name: name, value: value }
+}
+
+fn error_kind(value: int) -> HttpErrorKind {
+    if value == 1 { return HttpErrorKind.InvalidRequest }
+    if value == 2 { return HttpErrorKind.RuntimeUnavailable }
+    if value == 3 { return HttpErrorKind.Transport }
+    if value == 4 { return HttpErrorKind.Tls }
+    if value == 5 { return HttpErrorKind.Timeout }
+    if value == 6 { return HttpErrorKind.LimitExceeded }
+    return HttpErrorKind.InvalidResponse
+}
+
+fn find_colon(value: str) -> int {
+    for index in 0..len(value) {
+        if value[index] == ":" { return index }
+    }
+    return -1
+}
+
+fn parse_response_headers(source: str) -> list[Header] ! HttpError {
+    if len(source) > 32768 {
+        return Err(HttpError { kind: HttpErrorKind.LimitExceeded, code: 0 })
+    }
+    let lines = text.lines(source)
+    if len(lines) > 100 {
+        return Err(HttpError { kind: HttpErrorKind.LimitExceeded, code: 0 })
+    }
+    let mut result: list[Header] = []
+    for line in lines {
+        let colon = find_colon(line)
+        if colon <= 0 {
+            return Err(HttpError { kind: HttpErrorKind.InvalidResponse, code: 0 })
+        }
+        let mut value_start = colon + 1
+        while value_start < len(line) and line[value_start] == " " {
+            value_start = value_start + 1
+        }
+        result.append(Header {
+            name: slice(line, 0, colon),
+            value: slice(line, value_start, len(line)),
+        })
+    }
+    return result
+}
+
+fn decode_buffer(source: buffer.Bytes) -> str ! HttpError {
+    let mut values: list[int] = []
+    let mut index = 0
+    while index < source.size() {
+        let value = source.get(index) else {
+            return Err(HttpError { kind: HttpErrorKind.InvalidResponse, code: 0 })
+        }
+        values.append(value)
+        index = index + 1
+    }
+    return utf8.decode(values) else {
+        return Err(HttpError { kind: HttpErrorKind.InvalidResponse, code: 0 })
+    }
+}
+
+fn equal_ascii_case(left: str, right: str) -> bool {
+    if len(left) != len(right) { return false }
+    for index in 0..len(left) {
+        let mut first = ord(left[index])
+        let mut second = ord(right[index])
+        if first >= 65 and first <= 90 { first = first + 32 }
+        if second >= 65 and second <= 90 { second = second + 32 }
+        if first != second { return false }
+    }
+    return true
+}
+
+fn has_header(headers: list[Header], name: str) -> bool {
+    for header in headers {
+        if equal_ascii_case(header.name, name) { return true }
+    }
+    return false
+}
+
+fn utf8_size(value: str) -> int {
+    let mut total = 0
+    for index in 0..len(value) {
+        let codepoint = ord(value[index])
+        if codepoint <= 127 { total = total + 1 }
+        elif codepoint <= 2047 { total = total + 2 }
+        elif codepoint <= 65535 { total = total + 3 }
+        else { total = total + 4 }
+    }
+    return total
+}
+
+pub fn request(
+    url: str,
+    method: str,
+    headers: list[Header],
+    body: buffer.Bytes,
+    timeout_ms: int,
+    max_response_bytes: int
+) -> Response ! HttpError {
+    if len(url) > 8192 or len(method) > 16 or len(headers) > 100 or body.size() < 0 or body.size() > 1048576 or timeout_ms < 1 or timeout_ms > 30000 or max_response_bytes < 1 or max_response_bytes > 1048576 {
+        return Err(HttpError { kind: HttpErrorKind.InvalidRequest, code: 0 })
+    }
+
+    let encoded_headers = new buffer.Bytes()
+    let mut header_size = 0
+    for header in headers {
+        let line = header.name + ": " + header.value
+        header_size = header_size + len(line) + 1
+        if header_size > 32768 {
+            encoded_headers.close()
+            return Err(HttpError { kind: HttpErrorKind.LimitExceeded, code: 0 })
+        }
+        for value in utf8.encode(line + "\n") {
+            encoded_headers.append(value) else {
+                encoded_headers.close()
+                return Err(HttpError { kind: HttpErrorKind.LimitExceeded, code: 0 })
+            }
+        }
+    }
+
+    let encoded_url = buffer.from_text(url)
+    let encoded_method = buffer.from_text(method)
+    let response_headers = new buffer.Bytes()
+    let response_body = new buffer.Bytes()
+    let status = wysna_host_http_request(
+        encoded_url.borrow(),
+        encoded_method.borrow(),
+        encoded_headers.borrow(),
+        body.borrow(),
+        response_headers.borrow(),
+        response_body.borrow(),
+        timeout_ms,
+        max_response_bytes,
+    )
+    encoded_url.close()
+    encoded_method.close()
+    encoded_headers.close()
+
+    if status < 0 {
+        let kind = error_kind(-status)
+        let code = wysna_host_last_error()
+        response_headers.close()
+        response_body.close()
+        return Err(HttpError { kind: kind, code: code })
+    }
+
+    let header_text = decode_buffer(response_headers) else error {
+        response_headers.close()
+        response_body.close()
+        return Err(error)
+    }
+    response_headers.close()
+    let parsed_headers = parse_response_headers(header_text) else error {
+        response_body.close()
+        return Err(error)
+    }
+    return Response { status: status, headers: parsed_headers, body: response_body }
+}
+
+pub fn get(url: str) -> Response ! HttpError {
+    let empty_body = new buffer.Bytes()
+    let result = request(url, "GET", [], empty_body, 30000, 1048576)
+    empty_body.close()
+    return result
+}
+
+pub fn post_json(url: str, headers: list[Header], payload: json.Value) -> Response ! HttpError | json.JsonError {
+    if has_header(headers, "content-type") {
+        return Err(HttpError { kind: HttpErrorKind.InvalidRequest, code: 0 })
+    }
+    if len(headers) >= 100 {
+        return Err(HttpError { kind: HttpErrorKind.LimitExceeded, code: 0 })
+    }
+    let encoded = json.stringify(payload)?
+    if utf8_size(encoded) > 1048576 {
+        return Err(HttpError { kind: HttpErrorKind.LimitExceeded, code: 0 })
+    }
+    let request_body = buffer.from_text(encoded)
+    let mut request_headers = headers
+    request_headers.append(Header { name: "Content-Type", value: "application/json" })
+    let result = request(url, "POST", request_headers, request_body, 30000, 1048576)
+    request_body.close()
+    return result
+}
+
+pub fn response_text(response: Response) -> str ! HttpError {
+    return decode_buffer(response.body)
+}
+
+pub fn header(response: Response, name: str) -> str? {
+    for item in response.headers {
+        if equal_ascii_case(item.name, name) { return Some(item.value) }
+    }
+    return none
+}
+
+pub fn response_json(response: Response) -> json.Value ! HttpError | json.JsonError {
+    let source = response_text(response)?
+    return json.parse(source)?
+}

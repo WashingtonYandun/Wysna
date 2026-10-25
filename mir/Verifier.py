@@ -2,6 +2,7 @@
 from collections import deque
 import re
 from checker.TypeInterner import TYPE_BOOL, TYPE_INT, TYPE_UNIT, TYPE_NONE, TYPE_FLOAT, TYPE_STR
+from checker.TypeRelations import TypeRelations
 from error.Error import WysnaError
 from mir.Nodes import EFFECTS, Place
 
@@ -12,7 +13,7 @@ RUNTIME = {
     'wysna_unwrap_err', 'wysna_unwrap_success', 'wysna_enum_payload_owned', 'wysna_dict_get', 'wysna_dict_keys', 'wysna_dict_values',
     'wysna_builtin_print', 'wysna_builtin_eprint', 'wysna_builtin_len', 'wysna_builtin_str', 'wysna_builtin_int',
     'wysna_builtin_float', 'wysna_builtin_ord', 'wysna_builtin_chr', 'wysna_builtin_slice', 'wysna_builtin_bytes',
-    'wysna_builtin_args', 'wysna_builtin_exit', 'wysna_builtin_enumerate', 'wysna_builtin_dict_items',
+    'wysna_builtin_args', 'wysna_builtin_env', 'wysna_builtin_unix_time', 'wysna_builtin_exit', 'wysna_builtin_enumerate', 'wysna_builtin_dict_items',
     'wysna_builtin_read_file', 'wysna_builtin_write_file', 'wysna_builtin_join_strings', 'wysna_builtin_weak_owned',
     'wysna_builtin_upgrade',
 }
@@ -23,12 +24,12 @@ RUNTIME_ARITIES = {
                      'wysna_builtin_str', 'wysna_builtin_int', 'wysna_builtin_float', 'wysna_builtin_ord',
                      'wysna_builtin_chr', 'wysna_builtin_bytes', 'wysna_builtin_exit', 'wysna_builtin_enumerate',
                      'wysna_builtin_dict_items', 'wysna_builtin_read_file', 'wysna_builtin_weak_owned',
-                     'wysna_builtin_upgrade'), 1),
+                     'wysna_builtin_upgrade', 'wysna_builtin_env'), 1),
     **dict.fromkeys(('wysna_add', 'wysna_sub', 'wysna_mul', 'wysna_div_at', 'wysna_mod_at', 'wysna_lt', 'wysna_le',
                      'wysna_gt', 'wysna_ge', 'wysna_equal', 'wysna_not_equal', 'wysna_make_range',
                      'wysna_index_get_owned_at', 'wysna_dict_get', 'wysna_builtin_write_file',
                      'wysna_builtin_join_strings'), 2),
-    'wysna_builtin_slice': 3, 'wysna_builtin_args': 0, 'wysna_enum': 0, 'wysna_empty_weak': 0,
+    'wysna_builtin_slice': 3, 'wysna_builtin_args': 0, 'wysna_builtin_unix_time': 0, 'wysna_enum': 0, 'wysna_empty_weak': 0,
     'wysna_builtin_print': None, 'wysna_builtin_eprint': None,
 }
 assert set(RUNTIME_ARITIES) == RUNTIME, 'Every MIR runtime helper requires a signature'
@@ -40,13 +41,14 @@ CONSUMING = {'wysna_ok': (0,), 'wysna_err': (0,), 'wysna_enum_payload': (0,),
 class Verifier:
     def __init__(self, interner):
         self.interner = interner
+        self.relations = TypeRelations(interner)
 
     def fail(self, message, source=None):
         raise WysnaError(message, file=getattr(source, 'file', '<mir>'), line=getattr(source, 'line', 1),
                      col=getattr(source, 'col', 1), code='W9999', stage='mir-verification')
 
     def compatible(self, source, target):
-        return self.interner.is_assignable(source, target)
+        return self.relations.is_assignable(source, target)
 
     def verify(self, module):
         if module.arena_id != self.interner.arena_id:
@@ -137,7 +139,7 @@ class Verifier:
                     result.type_id == (TYPE_BOOL if comparison else types[0]))
         elif name in ('wysna_equal', 'wysna_not_equal'):
             require(result.type_id == TYPE_BOOL and
-                    self.interner.equality_compatible(types[0], types[1]))
+                    self.relations.equality_compatible(types[0], types[1]))
         elif name == 'wysna_make_range':
             require(types == [TYPE_INT, TYPE_INT] and list_of(TYPE_INT) and
                     isinstance(operation.data.get('inclusive'), bool))
@@ -156,6 +158,10 @@ class Verifier:
             require(types == [TYPE_STR] and list_of(TYPE_INT))
         elif name == 'wysna_builtin_args':
             require(list_of(TYPE_STR))
+        elif name == 'wysna_builtin_env':
+            require(types == [TYPE_STR] and returned.tag == 'optional' and returned.data == TYPE_STR)
+        elif name == 'wysna_builtin_unix_time':
+            require(result.type_id == TYPE_INT)
         elif name == 'wysna_builtin_exit':
             require(types == [TYPE_INT] and result.type_id == TYPE_UNIT)
         elif name == 'wysna_builtin_slice':
@@ -444,6 +450,39 @@ class Verifier:
         # Definite initialization intersects at joins; potentially live ownership unions.
         initial = frozenset(function.params) | frozenset(self.global_slots)
         tests = {op.result: op for block in function.blocks for op in block.operations if op.opcode == 'test'}
+        definitions = {}
+        for block in function.blocks:
+            for operation in block.operations:
+                if operation.result is not None:
+                    definitions[operation.result] = definitions.get(operation.result, 0) + 1
+        channel_tests = {slot: proof for slot, proof in tests.items() if definitions.get(slot) == 1}
+
+        def forget(facts, value):
+            facts.discard(value)
+            facts.discard(('false', value))
+            for witness, proof in tests.items():
+                if value in proof.args:
+                    facts.discard(witness)
+                    facts.discard(('false', witness))
+
+        def channel_proven(operation, facts):
+            error = operation.data['name'] == 'wysna_unwrap_err'
+            for witness, proof in channel_tests.items():
+                if proof.args != operation.args:
+                    continue
+                kind = proof.data.get('kind')
+                if kind in ('err', 'failed'):
+                    truth = error
+                elif (kind == 'variant' and
+                      (proof.data.get('enum') or '').split('__', 1)[0] == 'Result' and
+                      proof.data.get('variant') in ('Ok', 'Err')):
+                    truth = (proof.data['variant'] == 'Err') == error
+                else:
+                    continue
+                if (witness if truth else ('false', witness)) in facts:
+                    return True
+            return False
+
         incoming = {0: (initial, frozenset(), frozenset())}
         pending = deque([0])
         while pending:
@@ -457,6 +496,11 @@ class Verifier:
                     reads.extend(place_reads)
                 if kind != 'release' and any(operand not in defined for operand in reads):
                     self.fail('MIR reads an uninitialized or consumed value: ' + str([operand for operand in reads if operand not in defined]), operation.source)
+                if (kind == 'runtime' and operation.data['name'] in
+                        ('wysna_unwrap_ok', 'wysna_unwrap_err', 'wysna_unwrap_success') and
+                        self.interner.get_entry(slots[operation.args[0]].type_id).tag == 'result' and
+                        not channel_proven(operation, facts)):
+                    self.fail('MIR payload lacks a dominating channel test', operation.source)
                 if kind == 'narrow':
                     witness = operation.data['witness']
                     proof = tests.get(witness)
@@ -469,13 +513,13 @@ class Verifier:
                         self.fail('MIR narrowing lacks a dominating successful type test', operation.source)
                 if kind == 'release':
                     defined.discard(reads[0]); live.discard(reads[0])
+                    forget(facts, reads[0])
                 for index in operation.moves:
                     source = operation.args[index]
                     defined.discard(source); live.discard(source)
                 if operation.result is not None:
                     result = operation.result
-                    facts.discard(result)
-                    facts.difference_update(witness for witness, proof in tests.items() if result in proof.args)
+                    forget(facts, result)
                     if operation.data.get('placeholder'):
                         defined.discard(result); live.discard(result)
                     else:
@@ -500,8 +544,10 @@ class Verifier:
                 if term.kind == 'branch':
                     if index == 0:
                         edge_facts.add(term.value)
+                        edge_facts.discard(('false', term.value))
                     else:
                         edge_facts.discard(term.value)
+                        edge_facts.add(('false', term.value))
                 outgoing = (frozenset(defined), frozenset(live), frozenset(edge_facts))
                 previous = incoming.get(target)
                 merged = outgoing if previous is None else (previous[0] & outgoing[0], previous[1] | outgoing[1], previous[2] & outgoing[2])

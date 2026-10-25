@@ -1,5 +1,5 @@
-fn is_enum_name(name: str) -> bool {
-    for e in g_enums {
+fn is_enum_name(emitter: CEmitter, name: str) -> bool {
+    for e in emitter.enums {
         if e == name {
             return true
         }
@@ -7,21 +7,7 @@ fn is_enum_name(name: str) -> bool {
     return false
 }
 
-fn is_module_name(name: str) -> bool {
-    for m in g_modules {
-        if m == name {
-            return true
-        }
-    }
-    return false
-}
-
-fn c_fn_name(name: str) -> str {
-    if g_ns != "" {
-        return "wysna_fn_" + g_ns + "__" + name
-    }
-    return "wysna_fn_" + name
-}
+fn c_fn_name(name: str) -> str { return "wysna_fn_" + name }
 
 fn escape_c_str(s: str) -> str {
     let mut out = "\""
@@ -51,10 +37,10 @@ fn escape_c_str(s: str) -> str {
     return out
 }
 
-fn parsed_unit_return(start: int) -> bool {
+fn parsed_unit_return(emitter: CEmitter, start: int) -> bool {
     let mut found = false
-    for index in start..g_pos {
-        let token = g_tokens[index]
+    for index in start..emitter.pos {
+        let token = emitter.tokens[index]
         if token.kind == "LPAREN" or token.kind == "RPAREN" { continue }
         if not found and token.kind == "IDENT" and token.val == "unit" { found = true }
         else { return false }
@@ -62,10 +48,10 @@ fn parsed_unit_return(start: int) -> bool {
     return found
 }
 
-fn parsed_unit_result_return(start: int) -> bool {
+fn parsed_unit_result_return(emitter: CEmitter, start: int) -> bool {
     let mut found = false
-    for index in start..g_pos {
-        let token = g_tokens[index]
+    for index in start..emitter.pos {
+        let token = emitter.tokens[index]
         if token.kind == "BANG" { return found }
         if token.kind == "LPAREN" or token.kind == "RPAREN" { continue }
         if not found and token.kind == "IDENT" and token.val == "unit" { found = true }
@@ -74,49 +60,49 @@ fn parsed_unit_result_return(start: int) -> bool {
     return false
 }
 
-fn parse_type_ann() -> bool {
+fn parse_type_ann(emitter: CEmitter) -> bool {
     let mut is_fallible = false
-    if match_kind("FN") {
-        expect_kind("LPAREN")
-        if not check_kind("RPAREN") {
-            parse_type_ann()
-            while match_kind("COMMA") { parse_type_ann() }
+    if match_kind(emitter, "FN") {
+        expect_kind(emitter, "LPAREN")
+        if not check_kind(emitter, "RPAREN") {
+            parse_type_ann(emitter)
+            while match_kind(emitter, "COMMA") { parse_type_ann(emitter) }
         }
-        expect_kind("RPAREN")
-        expect_kind("ARROW")
-        return parse_type_ann()
+        expect_kind(emitter, "RPAREN")
+        expect_kind(emitter, "ARROW")
+        return parse_type_ann(emitter)
     }
-    if match_kind("LPAREN") {
-        is_fallible = parse_type_ann()
-        expect_kind("RPAREN")
+    if match_kind(emitter, "LPAREN") {
+        is_fallible = parse_type_ann(emitter)
+        expect_kind(emitter, "RPAREN")
     } else {
-        let type_token = at_tok()
-        advance_tok()
+        let type_token = at_tok(emitter)
+        advance_tok(emitter)
         if type_token.kind == "IDENT" and type_token.val == "Result" { is_fallible = true }
     }
-    if match_kind("LBRACKET") {
-        while not check_kind("RBRACKET") and not is_eof() {
-            parse_type_ann()
-            match_kind("COMMA")
+    if match_kind(emitter, "LBRACKET") {
+        while not check_kind(emitter, "RBRACKET") and not is_eof(emitter) {
+            parse_type_ann(emitter)
+            match_kind(emitter, "COMMA")
         }
-        expect_kind("RBRACKET")
+        expect_kind(emitter, "RBRACKET")
     }
-    if match_kind("QUESTION") {
+    if match_kind(emitter, "QUESTION") {
         is_fallible = false
     }
-    if match_kind("BANG") {
-        let err_tok = at_tok()
-        parse_type_ann()
-        while match_kind("PIPE") { parse_type_ann() }
+    if match_kind(emitter, "BANG") {
+        let err_tok = at_tok(emitter)
+        parse_type_ann(emitter)
+        while match_kind(emitter, "PIPE") { parse_type_ann(emitter) }
         is_fallible = true
-        g_cur_err_type = err_tok.val
+        emitter.cur_err_type = err_tok.val
     }
     return is_fallible
 }
 
-fn parse_field_default() -> str {
-    if check_kind("FN") { parse_type_ann() return "wysna_none()" }
-    let tname = at_tok().val
+fn parse_field_default(emitter: CEmitter) -> str {
+    if check_kind(emitter, "FN") { parse_type_ann(emitter) return "wysna_none()" }
+    let tname = at_tok(emitter).val
     let mut def_c = "wysna_none()"
     if tname == "Weak" {
         def_c = "wysna_empty_weak()"
@@ -133,37 +119,37 @@ fn parse_field_default() -> str {
     } elif tname == "dict" {
         def_c = "wysna_make_dict(0, NULL, NULL)"
     }
-    advance_tok()
-    if match_kind("LBRACKET") {
-        while not check_kind("RBRACKET") and not is_eof() {
-            parse_type_ann()
-            match_kind("COMMA")
+    advance_tok(emitter)
+    if match_kind(emitter, "LBRACKET") {
+        while not check_kind(emitter, "RBRACKET") and not is_eof(emitter) {
+            parse_type_ann(emitter)
+            match_kind(emitter, "COMMA")
         }
-        expect_kind("RBRACKET")
+        expect_kind(emitter, "RBRACKET")
     }
-    if match_kind("QUESTION") {
+    if match_kind(emitter, "QUESTION") {
         def_c = "wysna_none()"
     }
     return def_c
 }
 
-fn find_class_meta_idx(cls_name: str) -> int {
-    for i in 0..len(g_classes) {
-        if g_classes[i].name == cls_name {
+fn find_class_meta_idx(emitter: CEmitter, cls_name: str) -> int {
+    for i in 0..len(emitter.classes) {
+        if emitter.classes[i].name == cls_name {
             return i
         }
     }
     return -1
 }
 
-fn find_class_method_owner(start_cls: str, m_name: str) -> str {
+fn find_class_method_owner(emitter: CEmitter, start_cls: str, m_name: str) -> str {
     let mut cur = start_cls
     while cur != "" {
-        let idx = find_class_meta_idx(cur)
+        let idx = find_class_meta_idx(emitter, cur)
         if idx == -1 {
             return ""
         }
-        let cm = g_classes[idx]
+        let cm = emitter.classes[idx]
         for mi in 0..len(cm.method_names) {
             if cm.method_names[mi] == m_name {
                 return cm.name
@@ -174,14 +160,14 @@ fn find_class_method_owner(start_cls: str, m_name: str) -> str {
     return ""
 }
 
-fn find_class_method_arity(start_cls: str, m_name: str) -> int {
+fn find_class_method_arity(emitter: CEmitter, start_cls: str, m_name: str) -> int {
     let mut cur = start_cls
     while cur != "" {
-        let idx = find_class_meta_idx(cur)
+        let idx = find_class_meta_idx(emitter, cur)
         if idx == -1 {
             return -1
         }
-        let cm = g_classes[idx]
+        let cm = emitter.classes[idx]
         for mi in 0..len(cm.method_names) {
             if cm.method_names[mi] == m_name {
                 return cm.method_arities[mi]
@@ -192,19 +178,19 @@ fn find_class_method_arity(start_cls: str, m_name: str) -> int {
     return -1
 }
 
-fn register_dispatch(m_name: str, arity: int) -> unit {
-    for i in 0..len(g_dispatch_names) {
-        if g_dispatch_names[i] == m_name and g_dispatch_arities[i] == arity {
+fn register_dispatch(emitter: CEmitter, m_name: str, arity: int) -> unit {
+    for i in 0..len(emitter.dispatch_names) {
+        if emitter.dispatch_names[i] == m_name and emitter.dispatch_arities[i] == arity {
             return
         }
     }
-    g_dispatch_names.append(m_name)
-    g_dispatch_arities.append(arity)
+    emitter.dispatch_names.append(m_name)
+    emitter.dispatch_arities.append(arity)
     let mut sig = "WVal v_self"
     for ai in 0..arity {
         sig = sig + ", WVal _a" + str(ai)
     }
-    g_protos.append("static WVal wysna_dispatch__" + m_name + "__" + str(arity) + "(" + sig + ");")
+    emitter.dispatch_protos.append("static WVal wysna_dispatch__" + m_name + "__" + str(arity) + "(" + sig + ");")
 }
 
 fn op_precedence(k: str) -> int {
@@ -262,8 +248,8 @@ fn extract_module_ns(path: str) -> str {
     return slice(path, slash + 1, dot)
 }
 
-fn bind_call(c_call: str) -> ExprRes {
-    let tmp = new_temp()
-    declare_owned_var(tmp, c_call)
+fn bind_call(emitter: CEmitter, c_call: str) -> ExprRes {
+    let tmp = new_temp(emitter)
+    declare_owned_var(emitter, tmp, c_call)
     return ExprRes { val: tmp, lref: "" }
 }

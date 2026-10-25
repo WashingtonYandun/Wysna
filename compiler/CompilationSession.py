@@ -30,7 +30,8 @@ class SourceManager:
 
     def read(self, path):
         if path not in self.batch:
-            self.batch[path] = self.overlays[path] if path in self.overlays else Path(path).read_text(encoding='utf-8')
+            self.batch[path] = (self.overlays[path] if path in self.overlays
+                                else Path(path).read_bytes().decode('utf-8'))
             self.read_counts[path] = self.read_counts.get(path, 0) + 1
         self.snapshots[path] = self.batch[path]
         return self.batch[path]
@@ -51,8 +52,9 @@ class CheckedModule:
 
 
 class CompilationSession:
-    def __init__(self, project_root=None, options=None):
+    def __init__(self, project_root=None, options=None, project_resolver=None):
         self.project_root = os.path.realpath(project_root or os.getcwd())
+        self.project_resolver = project_resolver
         self.options = dict(options or {})
         self.sources = SourceManager()
         self.interner = TypeInterner()
@@ -232,21 +234,28 @@ class CompilationSession:
                     self.decorate(child, path, module_id)
 
     def import_module(self, statement, importer):
-        directory = os.path.dirname(importer) if not importer.startswith('<') else os.getcwd()
-        if statement.path.startswith('std/'):
-            subpath = statement.path[4:]
-            base = Path(__file__).resolve().parent.parent / 'stdlib' / subpath
-            candidate = self.path(str(base.with_suffix('.wysna')))
+        if self.project_resolver is not None:
+            candidate = self.project_resolver.resolve_import(statement.path, importer)
+            if candidate is None:
+                raise TypeError(f"Module not found in declared project roots: '{statement.path}'", file=importer,
+                                line=statement.line, col=statement.col, code='W1003')
+            candidate = self.path(str(candidate))
         else:
-            candidate = self.path(os.path.join(directory, statement.path))
+            directory = os.path.dirname(importer) if not importer.startswith('<') else os.getcwd()
+            if statement.path.startswith('std/'):
+                subpath = statement.path[4:]
+                base = Path(__file__).resolve().parent.parent / 'stdlib' / subpath
+                candidate = self.path(str(base.with_suffix('.wysna')))
+            else:
+                candidate = self.path(os.path.join(directory, statement.path))
+                if not os.path.isfile(candidate) and candidate not in self.sources.overlays:
+                    if os.path.isfile(candidate + '.wysna') or (candidate + '.wysna') in self.sources.overlays:
+                        candidate = self.path(candidate + '.wysna')
             if not os.path.isfile(candidate) and candidate not in self.sources.overlays:
-                if os.path.isfile(candidate + '.wysna') or (candidate + '.wysna') in self.sources.overlays:
-                    candidate = self.path(candidate + '.wysna')
-        if not os.path.isfile(candidate) and candidate not in self.sources.overlays:
-            candidate = self.path(statement.path)
-            if not os.path.isfile(candidate) and candidate not in self.sources.overlays:
-                if os.path.isfile(candidate + '.wysna') or (candidate + '.wysna') in self.sources.overlays:
-                    candidate = self.path(candidate + '.wysna')
+                candidate = self.path(statement.path)
+                if not os.path.isfile(candidate) and candidate not in self.sources.overlays:
+                    if os.path.isfile(candidate + '.wysna') or (candidate + '.wysna') in self.sources.overlays:
+                        candidate = self.path(candidate + '.wysna')
         if not os.path.isfile(candidate) and candidate not in self.sources.overlays:
             raise TypeError(f"Module not found: '{statement.path}'", file=importer,
                             line=statement.line, col=statement.col, code='W1003')

@@ -109,6 +109,8 @@ def create_global_scope() -> Scope:
     scope.define_symbol(Symbol("read_file", FunctionType([StrType], ResultType(StrType, io_err)), kind="builtin"))
     scope.define_symbol(Symbol("write_file", FunctionType([StrType, StrType], ResultType(UnitType, io_err)), kind="builtin"))
     scope.define_symbol(Symbol("args", FunctionType([], ListType(StrType)), kind="builtin"))
+    scope.define_symbol(Symbol("env", FunctionType([StrType], OptionalType(StrType)), kind="builtin"))
+    scope.define_symbol(Symbol("unix_time", FunctionType([], IntType), kind="builtin"))
 
     # Special generic builtins (typechecked contextually by checker)
     scope.define_symbol(Symbol("len", FunctionType([AnyType()], IntType), kind="builtin"))

@@ -1,0 +1,17 @@
+import "std/test"
+import "pricing.wysna" as pricing
+
+fn main() -> unit {
+    test.expect_equal_int(
+        pricing.calculate_total_cents(3, 1299),
+        3897,
+        "shared pricing calculation",
+    )
+    test.expect_equal_int(
+        pricing.calculate_total_cents(10, 0),
+        0,
+        "zero-price calculation",
+    )
+}
+
+main()

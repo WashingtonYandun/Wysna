@@ -36,7 +36,7 @@ from hir.HirNodes import (
 
 BUILTIN_NAMES = {
     "weak", "upgrade", "print", "eprint", "len", "range", "ord", "chr", "slice", "str", "int", "float", "bool",
-    "join_strings", "bytes", "args", "exit", "enumerate", "dict_items", "read_file", "write_file",
+    "join_strings", "bytes", "args", "env", "unix_time", "exit", "enumerate", "dict_items", "read_file", "write_file",
 }
 
 
@@ -141,7 +141,9 @@ class HirBuilder:
             return HirLiteralPattern(getattr(lit, "value", None), "unknown", expected_tid, span)
         if isinstance(pat, TuplePattern):
             entry = self.interner.get_entry(expected_tid)
-            subtypes = list(entry.data) if entry and entry.tag == "tuple" else [TYPE_ERROR] * len(pat.elements)
+            if entry.tag != "tuple" or len(entry.data) != len(pat.elements):
+                self._fail(pat, "Tuple pattern has no matching resolved tuple type")
+            subtypes = list(entry.data)
             elems = [self._lower_pattern(p, t) for p, t in zip(pat.elements, subtypes)]
             return HirTuplePattern(elems, expected_tid, span)
         if isinstance(pat, ErrorTypePattern):
@@ -151,34 +153,43 @@ class HirBuilder:
         if isinstance(pat, EnumPattern):
             variant = pat.variant
             enum_name = pat.enum_name
+            entry = self.interner.get_entry(expected_tid)
+            subtypes = []
             if variant in ("Some", "None") and (enum_name is None or enum_name.startswith("Option")):
                 enum_name = "Option"
                 variant_idx = 0 if variant == "Some" else 1
+                if entry.tag == "optional" and variant == "Some":
+                    subtypes = [entry.data]
+                elif entry.tag != "optional":
+                    self._fail(pat, "Option pattern has no matching resolved optional type")
             elif variant in ("Ok", "Err") and (enum_name is None or enum_name.startswith("Result")):
                 enum_name = "Result"
                 variant_idx = 0 if variant == "Ok" else 1
+                if entry.tag == "result":
+                    subtypes = [entry.data[0]] if variant == "Ok" else [entry.data[1]]
+                else:
+                    self._fail(pat, "Result pattern has no matching resolved result type")
             else:
                 if enum_name is None and variant in self.enum_variants:
                     enum_name = self.enum_variants[variant]
-                edef = self.interner.enum_defs.get(enum_name) if enum_name else None
-                variant_idx = edef.variants.index(variant) if edef and variant in edef.variants else 0
-            subtypes = []
-            entry = self.interner.get_entry(expected_tid)
-            if enum_name == "Option" and entry.tag == "optional":
-                subtypes = [entry.data]
-            elif enum_name == "Result" and entry.tag == "result":
-                subtypes = [entry.data[0]] if variant == "Ok" else [entry.data[1]]
-            else:
-                if enum_name in self.enum_payloads and variant in self.enum_payloads[enum_name]:
-                    subtypes = self.enum_payloads[enum_name][variant]
+                if entry.tag != "enum":
+                    self._fail(pat, "Enum pattern has no matching resolved enum type")
+                enum_def = self.interner.enum_defs.get(entry.data)
+                if enum_def is None or variant not in enum_def.variants:
+                    self._fail(pat, "Enum pattern variant is missing from the resolved enum definition")
+                if enum_name != entry.data:
+                    self._fail(pat, "Enum pattern owner does not match its resolved enum type")
+                variant_idx = enum_def.variants.index(variant)
+                subtypes = enum_def.variant_payloads.get(variant, [])
             args = getattr(pat, "args", getattr(pat, "payload", []))
+            if len(args) != len(subtypes):
+                self._fail(pat, "Enum pattern payload does not match its resolved variant")
             lowered_subs = []
             for idx, arg_p in enumerate(args):
-                sub_t = subtypes[idx] if idx < len(subtypes) else TYPE_ERROR
-                lowered_subs.append(self._lower_pattern(arg_p, sub_t))
+                lowered_subs.append(self._lower_pattern(arg_p, subtypes[idx]))
             return HirEnumPattern(enum_name, variant, variant_idx, lowered_subs, expected_tid, span,
                                   variant_id=VariantId(variant_idx, variant))
-        return HirWildcardPattern(expected_tid, span)
+        self._fail(pat, f"Unsupported checked pattern: {type(pat).__name__}")
 
     def _span(self, node):
         return Span(node.line, node.col, file_path=getattr(node, 'source_file', self.file_path),
@@ -188,7 +199,7 @@ class HirBuilder:
         if hasattr(program, "session"):
             if self.interner is not program.session.interner:
                 raise WysnaError("HIR builder must use the checked module arena", file=self.file_path,
-                             code="W9999", stage="hir-lowering")
+                             code="W9999", stage="hir")
             program = program.session.link(program)
         from codegen.VirtualDispatch import virtual_method_slots
         self.virtual_slots = virtual_method_slots(
@@ -252,7 +263,7 @@ class HirBuilder:
 
     def _handle_import(self, stmt: ImportDecl, fn_decls: List[HirFnDecl]) -> None:
         raise WysnaError("HIR imports require a checked compilation session", file=self.file_path,
-                     line=stmt.line, col=stmt.col, code="W9999", stage="hir-lowering")
+                     line=stmt.line, col=stmt.col, code="W9999", stage="hir")
 
     # -------------------------------------------------------------
     # Nominal Declarations
@@ -356,7 +367,7 @@ class HirBuilder:
             is_fallible=is_fallible,
             err_type_name=err_type_name,
             is_method=False,
-            is_public=True,
+            is_public=bool(getattr(decl, "is_exported", False)),
             span=self._span(decl)
         )
 
@@ -731,81 +742,35 @@ class HirBuilder:
     # -------------------------------------------------------------
 
     def _get_expr_type_id(self, expr: Expr) -> int:
-        if hasattr(expr, "inferred_type_id") and expr.inferred_type_id is not None:
-            return expr.inferred_type_id
-        if hasattr(expr, "inferred_type") and expr.inferred_type is not None:
-            return self.interner.from_type(expr.inferred_type)
-        return TYPE_ERROR
+        if getattr(expr, "session_arena_id", None) != self.interner.arena_id:
+            self._fail(expr, "Expression type belongs to a different or missing type arena")
+        type_id = getattr(expr, "inferred_type_id", None)
+        self._require_type_id(type_id, expr, "expression type")
+        return type_id
 
     def _get_type_id_from_node(self, node: Optional[TypeNode]) -> int:
         if node is None:
             return TYPE_UNIT
-        if hasattr(node, "resolved_type_id"):
-            return node.resolved_type_id
-        if isinstance(node, NamedType):
-            name = node.name
-            if name == "int":
-                return TYPE_INT
-            elif name == "float":
-                return TYPE_FLOAT
-            elif name == "bool":
-                return TYPE_BOOL
-            elif name == "str":
-                return TYPE_STR
-            elif name == "unit":
-                return TYPE_UNIT
-            elif name == "none":
-                return TYPE_NONE
-            elif name in self.structs:
-                return self.interner.mk_struct(name)
-            elif name in self.enums:
-                return self.interner.mk_enum(name)
-            elif name in self.classes:
-                return self.interner.mk_class(name)
-            return TYPE_ERROR
-        elif isinstance(node, AstOptionalType):
-            return self.interner.mk_optional(self._get_type_id_from_node(node.inner))
-        elif isinstance(node, AstListType):
-            return self.interner.mk_list(self._get_type_id_from_node(node.element_type))
-        elif isinstance(node, AstDictType):
-            return self.interner.mk_dict(
-                self._get_type_id_from_node(node.key_type),
-                self._get_type_id_from_node(node.value_type)
-            )
-        elif isinstance(node, AstResultType):
-            return self.interner.mk_result(
-                self._get_type_id_from_node(node.ok_type),
-                self._get_type_id_from_node(node.err_type)
-            )
-        elif isinstance(node, AstErrorUnionType):
-            return self.interner.mk_error_union(
-                tuple(self._get_type_id_from_node(member) for member in node.error_types)
-            )
-        elif isinstance(node, GenericType):
-            args_mangled = "__".join(self._get_type_name_from_node(a) for a in node.type_args)
-            mangled_name = f"_WYSNA_G_{len(node.name)}_{node.name}__{args_mangled}"
-            if mangled_name in self.structs:
-                return self.interner.mk_struct(mangled_name)
-            if mangled_name in self.enums:
-                return self.interner.mk_enum(mangled_name)
-            legacy_mangled = f"{node.name}__{args_mangled}"
-            if legacy_mangled in self.structs:
-                return self.interner.mk_struct(legacy_mangled)
-            if legacy_mangled in self.enums:
-                return self.interner.mk_enum(legacy_mangled)
-            return TYPE_ERROR
-        return TYPE_ERROR
+        if getattr(node, "session_arena_id", None) != self.interner.arena_id:
+            self._fail(node, "Type annotation belongs to a different or missing type arena")
+        type_id = getattr(node, "resolved_type_id", None)
+        self._require_type_id(type_id, node, "resolved type annotation")
+        return type_id
 
     def _get_type_name_from_node(self, node: TypeNode) -> str:
-        if isinstance(node, NamedType):
-            return node.name
+        self._get_type_id_from_node(node)
         if isinstance(node, AstErrorUnionType):
             return " | ".join(self._get_type_name_from_node(member) for member in node.error_types)
-        if isinstance(node, GenericType):
-            args = "__".join(self._get_type_name_from_node(a) for a in node.type_args)
-            return f"_WYSNA_G_{len(node.name)}_{node.name}__{args}"
-        if isinstance(node, AstOptionalType):
-            return f"opt__{self._get_type_name_from_node(node.inner)}"
-        if isinstance(node, AstListType):
-            return f"list__{self._get_type_name_from_node(node.element_type)}"
-        return "val"
+        if isinstance(node, NamedType):
+            return node.name
+        return self.interner.to_string(self._get_type_id_from_node(node))
+
+    def _require_type_id(self, type_id, owner, description):
+        if type(type_id) is not int or self.interner.get_entry(type_id).tag == "error":
+            self._fail(owner, f"Missing or invalid {description}: {type_id!r}")
+
+    def _fail(self, owner, message):
+        span = self._span(owner)
+        raise WysnaError(message, line=span.line, col=span.col,
+                         file=span.file_path or self.file_path,
+                         code="W9999", stage="hir")

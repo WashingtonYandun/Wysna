@@ -129,6 +129,7 @@ class Lexer:
 
         # Append EOF token
         tokens.append(Token(value=None, type=TokenType.EOF, line=self.line, col=self.col))
+        self._stamp(tokens[-1], self.pos)
         return tokens
 
     def _stamp(self, token, start):

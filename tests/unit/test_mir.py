@@ -158,7 +158,7 @@ def test_bootstrap_cache_serializes_processes():
         (Path(directory) / 'selfhost' / 'compiler.wysna').write_text('print(0)\n')
         script = """import sys, time
 from pathlib import Path
-import main
+import compiler.Bootstrap as bootstrap
 root = sys.argv[1]
 def rebuild(path):
     marker = Path(path) / 'active'
@@ -167,8 +167,8 @@ def rebuild(path):
     time.sleep(0.15)
     marker.unlink()
     return 'ok'
-main._ensure_selfhost_compiler_binary_locked = rebuild
-print(main.ensure_selfhost_compiler_binary(root))
+bootstrap._ensure_selfhost_compiler_binary_locked = rebuild
+print(bootstrap.ensure_selfhost_compiler_binary(root))
 """
         children = [subprocess.Popen([sys.executable, '-c', script, directory], cwd=ROOT,
                                      stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
@@ -178,10 +178,38 @@ print(main.ensure_selfhost_compiler_binary(root))
             assert child.returncode == 0 and output == 'ok\n', error
 
 
+def test_result_payload_requires_a_current_channel_proof():
+    source = '''fn value(flag: bool) -> str ! str {
+        if flag { return "ok" }
+        Err("bad")
+    }
+    fn read(flag: bool) -> str { value(flag) else error { error } }
+    print(read(false))'''
+    original, interner = lower(source, optimize=False)
+    for mode in ('swap', 'redefine', 'stale'):
+        broken = deepcopy(original)
+        function = next(fn for fn in broken.functions if fn.name == 'wysna_fn_read')
+        guard_block = next(block for block in function.blocks if any(op.opcode == 'test' for op in block.operations))
+        guard = next(op for op in guard_block.operations if op.opcode == 'test')
+        if mode == 'swap':
+            term = guard_block.terminator
+            term.targets = tuple(reversed(term.targets))
+        elif mode == 'redefine':
+            guard_block.operations.append(deepcopy(guard))
+        else:
+            arm = next(block for block in function.blocks if any(op.data.get('name') == 'wysna_unwrap_err' for op in block.operations))
+            value = guard.args[0]
+            copy = len(function.slots)
+            function.slots.append(replace(function.slots[value], id=copy, name='proof-copy'))
+            arm.operations[:0] = [Operation('clone', copy, (value,)), Operation('store', value, (copy,), moves=(0,))]
+        rejects(broken, interner)
+
+
 def run_mir_tests():
     test_cfg_and_ownership_rejections()
     test_physical_layout_and_runtime_rejections()
     test_error_narrowing_requires_successful_type_test()
+    test_result_payload_requires_a_current_channel_proof()
     test_range_iteration_and_limits_across_engines()
     test_mir_inspection_and_default_backend()
     test_bootstrap_cache_serializes_processes()

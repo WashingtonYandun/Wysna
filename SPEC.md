@@ -523,6 +523,9 @@ fn compile(source: str) {
        - `W4003`: Runtime execution error
      - **`W5xxx` — Host Toolchain Diagnostics:**
        - `W5001`: C compiler command unavailable or invalid. This is an environment error, not a source type error or compiler invariant failure.
+       - `W5002`: Invalid command usage or option.
+       - `W5003`: Source file could not be read.
+       - `W5004`: Requested output artifact could not be written or read back.
    - `wysna check --json <file.wysnaysna>` outputs deterministic machine-readable JSON:
    ```json
    {
@@ -540,7 +543,55 @@ fn compile(source: str) {
      }
    }
    ```
-3. **Stable AST Representation (`wysna ast file.wysna --json`):**
+3. **Versioned Tool Result (`--output-format=json-v1`):**
+   - The opt-in v1 protocol emits exactly one JSON document on stdout. The legacy
+     `--json` format remains unchanged and cannot be combined with v1.
+   - `check`, `fmt`, `emit-c`, and `build` support v1. Unsupported commands and
+     incompatible flags produce a `usage_error` envelope instead of silently falling
+     back to legacy output.
+   - The envelope has `schema_version`, `command`, `status`, `invocation_id`, tool and
+     process exit codes, execution metadata, toolchain and target metadata, diagnostics,
+     artifacts, and optional telemetry.
+   - Successful `fmt` returns formatted source inline unless `--write` was requested;
+     `emit-c` and `build` return the path and SHA-256 of the artifact they created.
+     An artifact path must not overwrite its source file. Failed commands never list an
+     existing output file as a newly produced artifact.
+   - Native compiler/linker stderr is capped at 8,192 characters in a diagnostic and
+     marked with `[tool output truncated]` when the cap is reached. Captured subprocess
+     stdout is not mixed into the control stream.
+   - A diagnostic uses stable code, severity, stage, message, primary span, related
+     locations, typed data, and fixes. The primary span contains the exact source hash
+     and UTF-8 byte offsets when its source and position are known. Existing point-only
+     diagnostics use a zero-width range; unavailable locations are `null`.
+   - File read failures use `W5003`, output artifact failures use `W5004`, and usage
+     failures use `W5002`. Successful commands have `status: "ok"` and empty diagnostics.
+     Type and syntax failures use
+     `status: "diagnostic_error"`.
+
+   ```text
+   wysna check --output-format=json-v1 src/main.wysna
+   wysna fmt --output-format=json-v1 src/main.wysna
+   wysna emit-c --output-format=json-v1 src/main.wysna -o build/main.c
+   wysna build --output-format=json-v1 src/main.wysna -o build/main
+   ```
+
+   ```json
+   {
+     "schema_version": "wysna.tool-result/1",
+     "command": "check",
+     "status": "ok",
+     "invocation_id": "generated-unique-id",
+     "tool_exit_code": 0,
+     "process_exit_code": 0,
+     "execution": null,
+     "toolchain": {"compiler": "0.5.0"},
+     "target": {"profile": "native-cli", "triple": null},
+     "diagnostics": [],
+     "artifacts": [],
+     "telemetry": null
+   }
+   ```
+4. **Stable AST Representation (`wysna ast file.wysna --json`):**
    - Emits a standardized JSON AST containing `"wysna_ast_version": "0.1"` for reliable agentic code analysis.
 
 ---
@@ -562,7 +613,7 @@ fn compile(source: str) {
 | `slice(x, a, b)` | `(str \| list[T], int, int) -> str \| list[T]` | Returns code-point substring or sub-list in `[a, b)`. Preserves the container kind; out-of-range bounds are clamped and an empty result is returned when `b <= a` |
 | `join_strings(parts, separator)` | `(list[str], str) -> str` | Joins strings with one result allocation and preserves NUL; O(output bytes + parts) |
 | `bytes(s)` | `(str) -> list[int]` | Returns raw UTF-8 unsigned bytes (`0..=255`) of `s` |
-| `args()` | `() -> list[str]` | Returns command-line arguments passed to the program |
+| `args()` | `() -> list[str]` | Returns the runner name followed by command-line arguments passed to the program |
 | `read_file(p)` | `(str) -> str ! IoError` | Reads a UTF-8 file from disk or returns `IoError` |
 | `write_file(p, c)` | `(str, str) -> unit ! IoError` | Writes UTF-8 content `c` to path `p` or returns `IoError` |
 
@@ -571,6 +622,12 @@ bool to a number produces 0 or 1. `float(str)` accepts ASCII decimals, signs, ex
 leading and trailing ASCII whitespace, and case-insensitive `nan`, `inf`, or `infinity`.
 It rejects Unicode digits, hexadecimal input, suffixes, and NUL with `W4003`; parsing does
 not depend on Python's grammar.
+
+For the interpreter, `wysna run <file.wysna> -- <args...>` makes `args()[0]` equal to
+`"wysna"` and places each value after `--` after it. Relative paths used by `read_file`
+and `write_file` are resolved from the process working directory that launched Wysna.
+Native binaries receive the operating system's argument vector, including its executable
+name in `args()[0]`.
 
 ### 11.2 Built-in Collection Methods
 * **`list[T]`:**

@@ -24,9 +24,12 @@ Wysna distinguishes the language from its two compiler implementations. The self
 | **Bootstrap stage 1** | **Stage 1** | `stage1` | Native C99 (compiled by Seed) | First self-hosted compiler binary (`compiler0.c` &rarr; `stage1`) |
 | **Bootstrap stage 2** | **Stage 2** | `stage2` | Native C99 (recompiled by Stage 1) | Compiler binary at the deterministic fixed point (`compiler1.c` &rarr; `stage2`) |
 
+See [compiler responsibilities and enforced boundaries](docs/COMPILER_ARCHITECTURE.md)
+for session ownership, semantic rule domains, target tooling and runtime headers.
+
 ### Wysna Seed Compiler Pipeline
 
-Wysna Seed uses multiple stages for type analysis and portable native code generation. Wysna Compiler is a separate self-hosted implementation that currently emits C99 directly.
+Wysna Seed uses multiple stages for type analysis and portable native code generation. Wysna Compiler owns compilation state per invocation and has a direct C99 route plus an experimental MIR producer over checked nodes, with scalar, string and basic result support. `wysna emit-mir --implementation=seed|compiler` exports versioned IR; see the [supported profile](docs/MIR_DESIGN.md#interchange-and-the-compiler-profile).
 
 | Stage | Component | Responsibility | Output representation |
 | :--- | :--- | :--- | :--- |
@@ -186,23 +189,118 @@ Wysna provides a focused, high-performance standard library:
 | **`std/path`** | Cross-platform path handling | `join()`, `dirname()`, `basename()` |
 | **`std/resources`** | Deterministic resource scopes | `Resource`, `acquire()`, `scope()`, `borrow()`, `close()` |
 | **`std/algorithms`** | Functional primitives | `map`, `fold`, `sort` |
+| **`std/environment`** | Program arguments and environment lookup | `arguments()`, `get()` |
+| **`std/time`** | Host wall-clock access | `unix_seconds()` |
+| **`std/process`** | Direct child-process execution with a timeout | `run(executable, arguments, timeout_ms)` |
+| **`std/http`** | Synchronous bounded HTTP/HTTPS requests with verified TLS | `request()`, `get()`, `post_json()`, `response_json()` |
+| **`wysna service serve`** | Experimental loopback JSON server with isolated native workers | Bounded workers and queue, input/output limits, SQLite pilot |
+| **`std/test`** | Minimal project-test assertions | `expect()`, `expect_equal_int()`, `expect_equal_text()` |
 
 See [docs/STDLIB.md](docs/STDLIB.md) for full API reference and examples.
+The HTTP example is [examples/http_json_client.wysna](examples/http_json_client.wysna).
+
+The local service pilot is experimental and listens on loopback only. Install its optional
+host adapter with `pip install 'wysna[service]'`. Build the SQLite worker from a source
+checkout and start it with:
+
+```sh
+wysna build examples/service/sqlite_worker.wysna -o build/sqlite_worker \
+  --link-lib examples/service/sqlite_adapter.c --link-lib sqlite3
+wysna service serve --worker build/sqlite_worker --database build/measurements.sqlite
+```
+
+The worker accepts one JSON request envelope from a unique temporary file and writes one
+JSON response to stdout. The supervisor starts a fresh native process per request, caps
+active workers, queued requests, input, output, and execution time, and discards a process
+after any failure. The sample exposes `GET /health`, `GET /measurements`, and
+`POST /measurements` with `{"id": 1, "value": 42}`. It is a local development pilot:
+it has no TLS or authentication, does not sandbox worker filesystem access, and has no
+supported network deployment mode.
+See [docs/SERVICE_FOUNDATIONS.md](docs/SERVICE_FOUNDATIONS.md) for the worker contract and
+resource limits.
+
+To capture a repeatable local load and resident-memory report, install the service extra
+and run the campaign from a source checkout:
+
+```sh
+python3 -m pip install '.[service]'
+python3 tools/measure_service.py --warmup-seconds 60 --duration-seconds 600 \
+  --repetitions 3 --clients 4 --workers 4 \
+  --report .wysna_cache/service-load/report.json
+```
+
+The campaign builds the native example worker, seeds a deterministic 1,000-row SQLite
+dataset, alternates read-only health and count requests, and reports throughput, raw
+latency samples and percentiles, saturation responses, one-second process-tree RSS
+samples, and shutdown cleanup. It checks a
+provisional RSS growth budget of the larger of 5% or 8 MiB between steady-load windows.
+Pull request CI runs three repetitions on Ubuntu. This fixed workload does not define a
+production SLO or qualify a network deployment.
+
+The [shared browser app example](examples/shared-browser-app/README.md) calls the same
+Wysna business-logic module from a native CLI and a WebAssembly browser interface.
 
 ---
 
 ## CLI & Tooling
 
 ```text
-wysna run <file.wysna>                 # Execute directly with reference interpreter
+wysna run <file.wysna> [-- args...]    # Execute with program arguments
+wysna run --report-json <path> [--invocation-id <id>] <file.wysna> [-- args...]
 wysna check <file.wysna>               # Parse and type-check without code execution
+wysna check --output-format=json-v1 <file.wysna>  # Emit a versioned machine-readable result
+wysna fmt --output-format=json-v1 <file.wysna>    # Return formatted source as a JSON artifact
 wysna build <file.wysna> -o <bin>      # Compile to native standalone executable
 wysna emit-c <file.wysna> -o <out.c>   # Generate human-readable portable C99 code
 wysna fmt <file.wysna>                 # Format source while preserving comments and layout
 wysna lsp                              # Launch Language Server Protocol daemon (stdio)
 wysna test                             # Run full test suite across all 4 execution engines
 wysna bench                            # Run self-hosted performance benchmarks
+wysna project check                    # Check the nearest wysna.toml project
+wysna project build -o build/app       # Build a declared project target
+wysna project run -- <args...>         # Run the declared project entry
+wysna project test --filter argv       # Run declared user test entries
+wysna project lock                    # Write or refresh wysna.lock explicitly
+wysna api std/json --output-format=json-v1  # Inspect standard-library symbols
+wysna capabilities --output-format=json-v1  # Inspect this installation's support
 ```
+
+Project commands use a strict `wysna.toml` manifest. Dependencies are local paths,
+`project lock` is the only command that writes `wysna.lock`, and `--frozen` checks
+the manifest and dependency hashes without downloading packages. See
+[`examples/automation`](examples/automation) for a command runner that passes
+arguments directly to a child executable without invoking a shell.
+
+Project manifests also support a bounded `wasi-command` profile that builds
+`wasm32-wasip1` modules and runs them in isolated Wasmtime instances. Filesystem access
+requires explicit manifest preopens; child processes, networking, and native C FFI
+are not available to this profile. See [Wysna Projects](docs/PROJECTS.md) for SDK
+installation, limits, and manifest configuration.
+
+The `browser-library` profile builds an importable JavaScript facade and WebAssembly
+module with Emscripten 5.0.1. Its generated ABI exposes only top-level, non-fallible
+`pub fn` operations using `int`, `float`, `bool`, `str`, and `unit`; `int` maps to JavaScript
+`BigInt`, and strings cross as owned UTF-8 buffers. `WVal`, runtime pointers, host
+filesystem, networking, and process APIs stay outside this browser interface.
+
+`check`, `fmt`, `emit-c`, and `build` also accept `--output-format=json-v1`. The
+formatter returns inline source content; code and binary generation report artifact
+paths and SHA-256 hashes. The default text output and legacy `--json` format remain
+unchanged when the option is omitted.
+
+Diagnostic `primary_span` values identify an exact source range in the UTF-8 snapshot
+named by `source_sha256`. Offsets are zero-based bytes with an exclusive end; locations
+without reliable source attribution are returned as `null`.
+
+`run --report-json <path>` writes its versioned control result to a sidecar file and
+leaves the program's stdout and stderr untouched. Wysna atomically writes a `pending`
+result before execution, then replaces it with the final result. If the pending result
+cannot be written, the program is not started. Supply `--invocation-id <id>` when a
+caller needs to match the report to a specific request; otherwise Wysna generates one.
+The report distinguishes the tool result from the application's exit code.
+
+Arguments after `--` are available through `args()`. The interpreter uses `"wysna"` as
+`args()[0]`; a native executable receives the operating system's argument vector.
 
 ---
 
@@ -213,6 +311,7 @@ wysna bench                            # Run self-hosted performance benchmarks
 - [HIR representation](docs/HIR_DESIGN.md) & [MIR representation](docs/MIR_DESIGN.md): intermediate forms and contracts.
 - [Ownership & lifetimes](docs/OWNERSHIP_LIFETIME.md): ARC, copy-on-write, weak references, and drop elaboration.
 - [Standard library reference](docs/STDLIB.md): complete API documentation for all standard modules.
+- [Project workflows](docs/PROJECTS.md): manifests, local dependencies, lockfiles, project commands, and user tests.
 - [Engine parity matrix](docs/ENGINE_PARITY_MATRIX.md): 4-engine test results and coverage.
 - [FFI & C interoperability](docs/FFI_VALIDATION.md): calling C functions and descriptor ABI.
 - [Known limits & boundaries](docs/KNOWN_LIMITS.md): current alpha constraints and guidelines.

@@ -14,9 +14,9 @@ ROOT = Path(__file__).resolve().parents[1]
 
 
 def measure(samples=5):
-    prefix = 'struct Token { kind: str, val: str, line: int, col: int }\nlet mut g_in_path = ""\n'
+    prefix = 'struct Token { kind: str, val: str, line: int, col: int, file: str }\nlet mut g_in_path = ""\nlet mut g_diag_file = ""\n'
     source = prefix + (ROOT / 'selfhost/src/02_lexer.wysna').read_text()
-    source += '\nfn measure() -> unit ! IoError { let text = read_file(args()[1])?\nprint(len(tokenize(text))) }\nmeasure() else err { print(err.message) }\n'
+    source += '\nfn measure() -> unit ! IoError { let text = read_file(args()[1])?\nprint(len(tokenize(text, "measure.wysna"))) }\nmeasure() else err { print(err.message) }\n'
     report = {'samples': samples, 'platform': sys.platform, 'compiler': os.environ.get('CC', 'cc'),
               'workload': 'unmodified Wysna Compiler tokenizer; alpha + beta newline; owned source read_file', 'rows': []}
     with tempfile.TemporaryDirectory(prefix='wysna-tokenizer-scaling-') as temporary:
@@ -35,7 +35,7 @@ def measure(samples=5):
                                         env=dict(os.environ, WYSNA_MEM_CHECK='1'), check=True, timeout=30)
                 elapsed = (time.perf_counter() - started) * 1000
                 assert not result.stderr, result.stderr
-                assert int(result.stdout) == repetitions * 3 + 1, result.stdout
+                assert int(result.stdout) == repetitions * 4 + 1, result.stdout
                 if sample:
                     durations.append(elapsed)
             report['rows'].append({'bytes': corpus.stat().st_size, 'tokens': int(result.stdout),

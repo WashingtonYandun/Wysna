@@ -21,13 +21,14 @@ Public syntax views contain frozen symbol/type summaries and no mutable type are
 Executable consumers use the service's interpretation, lowering and emission methods.
 Linking qualifies module references in a
 separate tree, preserving the checked module's member expressions for editor queries.
-`lower_hir`, `lower_mir` and `emit_c` reuse checked modules and their canonical type arena;
+`lower_hir`, `lower_mir`, `export_mir` and `emit_c` reuse checked modules and their canonical type arena;
 they do not read or check dependencies again. The AST emitter and interpreter remain
 independent execution paths. The REPL retains its interactive checker state.
 
 This boundary is an adapter over the existing checked AST. It does not yet remove HIR's
 type recovery paths, consolidate all type relations or check unused generic bodies.
-The MIR debug dump is still a session-local representation, rather than a portable IR.
+The MIR debug dump is session-local. `wysna emit-mir` exports the versioned,
+self-contained interchange, including a type arena; see [MIR design](MIR_DESIGN.md).
 
 ```mermaid
 flowchart TD

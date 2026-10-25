@@ -1,0 +1,7 @@
+import "std/test"
+
+fn main() -> unit {
+    let values = args()
+    test.expect_equal_text(values[0], "wysna", "project runner supplies a stable argv[0]")
+    test.expect_equal_int(len(values), 1, "no user arguments are added implicitly")
+}

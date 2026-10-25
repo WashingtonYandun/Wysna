@@ -109,7 +109,8 @@ def execute(command, directory, phase, timeout, env=None):
     return record
 
 
-def run_engine(engine, source, label, selfhost_bin, directory, sanitize=False, run_timeout=30):
+def run_engine(engine, source, label, selfhost_bin, directory, sanitize=False, run_timeout=30,
+               extra_compile_flags=(), extra_link_flags=()):
     directory = Path(directory) / engine
     directory.mkdir(parents=True, exist_ok=True)
     source_path = directory / 'source.wysna'
@@ -139,8 +140,9 @@ def run_engine(engine, source, label, selfhost_bin, directory, sanitize=False, r
     flags = ['-std=c99', '-O1', '-g', '-I' + str(ROOT)]
     if sanitize and os.name != 'nt':
         flags += ['-fsanitize=address,undefined', '-fno-omit-frame-pointer']
-    compiled = execute(compiler_command() + flags +
-                       [str(c_path), '-o', str(binary)], directory, 'compile', 120)
+    compile_command = (compiler_command() + flags + list(extra_compile_flags)
+                       + [str(c_path), '-o', str(binary)] + list(extra_link_flags))
+    compiled = execute(compile_command, directory, 'compile', 120)
     if compiled['returncode'] != 0:
         return EngineResult(engine, stderr=compiled['stderr'], exit_code=compiled['returncode'],
                             compile_ok=False, runtime_ok=False, infrastructure_error='C compilation failed')

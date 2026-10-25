@@ -1,60 +1,60 @@
-fn new_temp() -> str {
-    let name = "_t" + str(g_temp_id)
-    g_temp_id = g_temp_id + 1
+fn new_temp(emitter: CEmitter) -> str {
+    let name = "_t" + str(emitter.temp_id)
+    emitter.temp_id = emitter.temp_id + 1
     return name
 }
 
-fn new_aux(prefix: str) -> str {
-    let s = prefix + str(g_aux_id)
-    g_aux_id = g_aux_id + 1
+fn new_aux(emitter: CEmitter, prefix: str) -> str {
+    let s = prefix + str(emitter.aux_id)
+    emitter.aux_id = emitter.aux_id + 1
     return s
 }
 
-fn push_scope(kind: str) -> unit {
+fn push_scope(emitter: CEmitter, kind: str) -> unit {
     let empty_v: list[str] = []
-    g_scope_stack.append(CleanupScope { kind: kind, vars: empty_v })
+    emitter.scope_stack.append(CleanupScope { kind: kind, vars: empty_v })
 }
 
-fn register_var(v: str) -> unit {
-    let n = len(g_scope_stack)
+fn register_var(emitter: CEmitter, v: str) -> unit {
+    let n = len(emitter.scope_stack)
     if n > 0 {
-        g_scope_stack[n - 1].vars.append(v)
+        emitter.scope_stack[n - 1].vars.append(v)
     }
 }
 
-fn declare_owned_var(var_name: str, init_c_expr: str) -> str {
-    emit_line("WVal " + var_name + " = " + init_c_expr + ";")
-    register_var(var_name)
+fn declare_owned_var(emitter: CEmitter, var_name: str, init_c_expr: str) -> str {
+    emit_line(emitter, "WVal " + var_name + " = " + init_c_expr + ";")
+    register_var(emitter, var_name)
     return var_name
 }
 
-fn pop_scope() -> unit {
-    let n = len(g_scope_stack)
+fn pop_scope(emitter: CEmitter) -> unit {
+    let n = len(emitter.scope_stack)
     if n == 0 {
         return
     }
-    let top = g_scope_stack[n - 1]
-    g_scope_stack.pop()
+    let top = emitter.scope_stack[n - 1]
+    emitter.scope_stack.pop()
     let num_vars = len(top.vars)
     if num_vars > 0 {
         let mut idx = num_vars - 1
         while idx >= 0 {
-            emit_line("wysna_release(" + top.vars[idx] + ");")
+            emit_line(emitter, "wysna_release(" + top.vars[idx] + ");")
             idx = idx - 1
         }
     }
 }
 
-fn emit_cleanup_until_fn() -> unit {
-    let num_scopes = len(g_scope_stack)
+fn emit_cleanup_until_fn(emitter: CEmitter) -> unit {
+    let num_scopes = len(emitter.scope_stack)
     let mut si = num_scopes - 1
     while si >= 0 {
-        let sc = g_scope_stack[si]
+        let sc = emitter.scope_stack[si]
         let num_vars = len(sc.vars)
         if num_vars > 0 {
             let mut vi = num_vars - 1
             while vi >= 0 {
-                emit_line("wysna_release(" + sc.vars[vi] + ");")
+                emit_line(emitter, "wysna_release(" + sc.vars[vi] + ");")
                 vi = vi - 1
             }
         }
@@ -65,16 +65,16 @@ fn emit_cleanup_until_fn() -> unit {
     }
 }
 
-fn emit_cleanup_until_fn_indented() -> unit {
-    let num_scopes = len(g_scope_stack)
+fn emit_cleanup_until_fn_indented(emitter: CEmitter) -> unit {
+    let num_scopes = len(emitter.scope_stack)
     let mut si = num_scopes - 1
     while si >= 0 {
-        let sc = g_scope_stack[si]
+        let sc = emitter.scope_stack[si]
         let num_vars = len(sc.vars)
         if num_vars > 0 {
             let mut vi = num_vars - 1
             while vi >= 0 {
-                emit_line("    wysna_release(" + sc.vars[vi] + ");")
+                emit_line(emitter, "    wysna_release(" + sc.vars[vi] + ");")
                 vi = vi - 1
             }
         }
@@ -85,16 +85,16 @@ fn emit_cleanup_until_fn_indented() -> unit {
     }
 }
 
-fn emit_cleanup_until_loop() -> unit {
-    let num_scopes = len(g_scope_stack)
+fn emit_cleanup_until_loop(emitter: CEmitter) -> unit {
+    let num_scopes = len(emitter.scope_stack)
     let mut si = num_scopes - 1
     while si >= 0 {
-        let sc = g_scope_stack[si]
+        let sc = emitter.scope_stack[si]
         let num_vars = len(sc.vars)
         if num_vars > 0 {
             let mut vi = num_vars - 1
             while vi >= 0 {
-                emit_line("wysna_release(" + sc.vars[vi] + ");")
+                emit_line(emitter, "wysna_release(" + sc.vars[vi] + ");")
                 vi = vi - 1
             }
         }
@@ -105,11 +105,11 @@ fn emit_cleanup_until_loop() -> unit {
     }
 }
 
-fn has_cleanup_until_loop() -> bool {
-    let num_scopes = len(g_scope_stack)
+fn has_cleanup_until_loop(emitter: CEmitter) -> bool {
+    let num_scopes = len(emitter.scope_stack)
     let mut si = num_scopes - 1
     while si >= 0 {
-        let sc = g_scope_stack[si]
+        let sc = emitter.scope_stack[si]
         if len(sc.vars) > 0 {
             return true
         }
@@ -121,16 +121,16 @@ fn has_cleanup_until_loop() -> bool {
     return false
 }
 
-fn emit_cleanup_until_loop_indented() -> unit {
-    let num_scopes = len(g_scope_stack)
+fn emit_cleanup_until_loop_indented(emitter: CEmitter) -> unit {
+    let num_scopes = len(emitter.scope_stack)
     let mut si = num_scopes - 1
     while si >= 0 {
-        let sc = g_scope_stack[si]
+        let sc = emitter.scope_stack[si]
         let num_vars = len(sc.vars)
         if num_vars > 0 {
             let mut vi = num_vars - 1
             while vi >= 0 {
-                emit_line("    wysna_release(" + sc.vars[vi] + ");")
+                emit_line(emitter, "    wysna_release(" + sc.vars[vi] + ");")
                 vi = vi - 1
             }
         }
@@ -157,71 +157,71 @@ fn own_expr(val_expr: str) -> str {
     return "wysna_clone(" + val_expr + ")"
 }
 
-fn emit_line(line: str) -> unit {
-    g_cur_stmts.append(line)
+fn emit_line(emitter: CEmitter, line: str) -> unit {
+    emitter.cur_stmts.append(line)
 }
 
 
-fn snapshot_value(value: str) -> str {
+fn snapshot_value(emitter: CEmitter, value: str) -> str {
     if len(value) >= 2 and slice(value, 0, 2) == "_t" {
         return value
     }
     if len(value) >= 11 and slice(value, 0, 11) == "wysna_make_" {
-        return bind_call(value).val
+        return bind_call(emitter, value).val
     }
-    return bind_call("wysna_clone(" + value + ")").val
+    return bind_call(emitter, "wysna_clone(" + value + ")").val
 }
 
-fn is_bound_variable(value: str) -> bool {
-    for name in g_borrowed_vars { if name == value { return true } }
-    for name in g_globals { if name == value { return true } }
-    for scope in g_scope_stack { for name in scope.vars { if name == value { return true } } }
+fn is_bound_variable(emitter: CEmitter, value: str) -> bool {
+    for name in emitter.borrowed_vars { if name == value { return true } }
+    for name in emitter.globals { if name == value { return true } }
+    for scope in emitter.scope_stack { for name in scope.vars { if name == value { return true } } }
     return false
 }
-fn emit_indirect_call(callee: str, args: list[str]) -> ExprRes {
+fn emit_indirect_call(emitter: CEmitter, callee: str, args: list[str]) -> ExprRes {
     let mut joined = ""
     for i in 0..len(args) {
         if i > 0 { joined = joined + ", " }
         joined = joined + args[i]
     }
-    if len(args) == 0 { return bind_call("wysna_call(" + callee + ", 0, NULL)") }
-    let array = new_aux("_call_args")
-    emit_line("WVal " + array + "[" + str(len(args)) + "] = { " + joined + " };")
-    return bind_call("wysna_call(" + callee + ", " + str(len(args)) + ", " + array + ")")
+    if len(args) == 0 { return bind_call(emitter, "wysna_call(" + callee + ", 0, NULL)") }
+    let array = new_aux(emitter, "_call_args")
+    emit_line(emitter, "WVal " + array + "[" + str(len(args)) + "] = { " + joined + " };")
+    return bind_call(emitter, "wysna_call(" + callee + ", " + str(len(args)) + ", " + array + ")")
 }
 
-fn emit_function_value(name: str) -> ExprRes {
-    let index = sem_function(name)
-    let arity = len(sem_functions[index].params)
+fn emit_function_value(emitter: CEmitter, name: str) -> ExprRes {
+    let index = checked_function(emitter.checked, name)
+    let arity = len(emitter.checked.signatures[index].params)
     let adapter = "wysna_adapter_" + name
     let prototype = "static WVal " + adapter + "(WVal, int32_t, const WVal*);"
     let mut exists = false
-    for declaration in g_protos { if declaration == prototype { exists = true } }
+    for declaration in emitter.protos { if declaration == prototype { exists = true } }
     if not exists {
-        g_protos.append(prototype)
+        emitter.protos.append(prototype)
         let mut arguments = ""
         for i in 0..arity {
             if i > 0 { arguments = arguments + ", " }
             arguments = arguments + "argv[" + str(i) + "]"
         }
-        g_fn_defs.append("static WVal " + adapter + "(WVal environment, int32_t argc, const WVal* argv) { (void)environment; if (argc != " + str(arity) + ") (fprintf(stderr, \"[W4003] RuntimeError: Call arity mismatch\\n\"), exit(1)); return " + c_fn_name(name) + "(" + arguments + "); }")
+        emitter.fn_defs.append("static WVal " + adapter + "(WVal environment, int32_t argc, const WVal* argv) { (void)environment; if (argc != " + str(arity) + ") (fprintf(stderr, \"[W4003] RuntimeError: Call arity mismatch\\n\"), exit(1)); return " + c_fn_name(name) + "(" + arguments + "); }")
     }
-    return bind_call("wysna_function_new(" + adapter + ", wysna_unit())")
+    return bind_call(emitter, "wysna_function_new(" + adapter + ", wysna_unit())")
 }
 
-fn emit_struct_constructor(name: str, values: list[str]) -> ExprRes {
+fn emit_struct_constructor(emitter: CEmitter, name: str, values: list[str]) -> ExprRes {
     let mut keys: list[str] = []
     let mut field_count = 0
-    for field in sem_fields {
+    for field in emitter.checked.c99.fields {
         if field.owner == name {
             keys.append("\"" + field.name + "\"")
             field_count = field_count + 1
         }
     }
-    if field_count != len(values) { report_error("W2005", at_tok().line, at_tok().col, "struct constructor arity: " + name) }
-    if field_count == 0 { return bind_call("wysna_make_struct(\"" + name + "\", 0, NULL, NULL)") }
-    let keys_var = new_aux("_keys")
-    let values_var = new_aux("_values")
+    if field_count != len(values) { report_error(at_tok(emitter).file, "W2005", at_tok(emitter).line, at_tok(emitter).col, "struct constructor arity: " + name) }
+    if field_count == 0 { return bind_call(emitter, "wysna_make_struct(\"" + name + "\", 0, NULL, NULL)") }
+    let keys_var = new_aux(emitter, "_keys")
+    let values_var = new_aux(emitter, "_values")
     let mut joined_keys = ""
     let mut joined_values = ""
     for i in 0..field_count {
@@ -230,7 +230,7 @@ fn emit_struct_constructor(name: str, values: list[str]) -> ExprRes {
         joined_values = joined_values + values[i]
     }
     let count = str(field_count)
-    emit_line("const char* " + keys_var + "[" + count + "] = { " + joined_keys + " };")
-    emit_line("WVal " + values_var + "[" + count + "] = { " + joined_values + " };")
-    return bind_call("wysna_make_struct(\"" + name + "\", " + count + ", " + keys_var + ", " + values_var + ")")
+    emit_line(emitter, "const char* " + keys_var + "[" + count + "] = { " + joined_keys + " };")
+    emit_line(emitter, "WVal " + values_var + "[" + count + "] = { " + joined_values + " };")
+    return bind_call(emitter, "wysna_make_struct(\"" + name + "\", " + count + ", " + keys_var + ", " + values_var + ")")
 }

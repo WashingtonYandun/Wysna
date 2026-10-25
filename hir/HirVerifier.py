@@ -1,12 +1,14 @@
 """Validate HIR structure, type decorations and control-flow invariants."""
 from error.Error import WysnaError
 from checker.TypeInterner import TYPE_BOOL, TYPE_INT, TYPE_FLOAT, TYPE_STR, TYPE_UNIT, TYPE_NONE
+from checker.TypeRelations import TypeRelations
 from hir import HirNodes as H
 
 
 class HirVerifier:
     def __init__(self, interner, file_path):
         self.interner = interner
+        self.relations = TypeRelations(interner)
         self.file_path = file_path
         self.active = set()
         self.checked_types = set()
@@ -140,11 +142,11 @@ class HirVerifier:
         if isinstance(value, H.HirCoerce):
             if value.kind == "wrap_ok":
                 entry = self.interner.get_entry(value.type_id)
-                if entry.tag != "result" or not self.interner.is_assignable(value.expr.type_id, entry.data[0]):
+                if entry.tag != "result" or not self.relations.is_assignable(value.expr.type_id, entry.data[0]):
                     self._fail(value, "Invalid wrap_ok coercion")
             elif value.kind == "wrap_some":
                 entry = self.interner.get_entry(value.type_id)
-                if entry.tag != "optional" or not self.interner.is_assignable(value.expr.type_id, entry.data):
+                if entry.tag != "optional" or not self.relations.is_assignable(value.expr.type_id, entry.data):
                     self._fail(value, "Invalid wrap_some coercion")
 
     def _visit(self, value, loop_depth, in_function):

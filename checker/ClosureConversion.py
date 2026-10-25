@@ -140,7 +140,11 @@ def convert_lambda(checker, expression):
         checker._resolve_type_node(field.type_ann)
     checker.monomorphized_struct_decls.append(environment_decl)
     environment_annotation = checker._type_to_type_node(environment_type)
+    checker._resolve_type_node(environment_annotation)
     parameters = [A.Param(environment_parameter, environment_annotation)] + expression.params
+    for p in expression.params:
+        if p.type_ann is not None:
+            checker._resolve_type_node(p.type_ann)
     return_annotation = checker._type_to_type_node(returned)
     checker._resolve_type_node(return_annotation)
     declaration = A.FnDecl(name, parameters, return_annotation, body)

@@ -1,0 +1,230 @@
+fn mir_verify_runtime(module: MirModule, operation: MirOperation, slots: list[MirSlot]) -> bool {
+    let name = operation.name
+    let returned = slots[operation.result].type_id
+    if name == "wysna_builtin_print" or name == "wysna_builtin_eprint" { return returned == 1 }
+    if name == "wysna_builtin_slice" {
+        return len(operation.args) == 3 and returned == 5 and slots[operation.args[0]].type_id == 5 and slots[operation.args[1]].type_id == 3 and slots[operation.args[2]].type_id == 3
+    }
+    if len(operation.args) == 1 {
+        let argument = operation.args[0]
+        let type_ = slots[argument].type_id
+        if name == "wysna_ok" or name == "wysna_err" {
+            if not mir_is_result(module.result_types, returned) { return false }
+            let channel = module.result_types[returned - 7]
+            return type_ == (if name == "wysna_ok" { channel.ok } else { channel.error })
+        }
+        if name == "wysna_unwrap_ok" or name == "wysna_unwrap_err" {
+            if not mir_is_result(module.result_types, type_) { return false }
+            let channel = module.result_types[type_ - 7]
+            return returned == (if name == "wysna_unwrap_ok" { channel.ok } else { channel.error })
+        }
+        if name == "wysna_builtin_str" { return returned == 5 }
+        if name == "wysna_builtin_len" or name == "wysna_builtin_ord" { return type_ == 5 and returned == 3 }
+        if name == "wysna_builtin_chr" { return type_ == 3 and returned == 5 }
+        if name == "wysna_neg" { return type_ == returned and (type_ == 3 or type_ == 4) }
+        if name == "wysna_not" { return type_ == 2 and returned == 2 }
+        if name == "wysna_builtin_int" { return type_ >= 2 and type_ <= 5 and returned == 3 }
+        if name == "wysna_builtin_float" { return type_ >= 2 and type_ <= 5 and returned == 4 }
+        return false
+    }
+    if len(operation.args) != 2 { return false }
+    let first = slots[operation.args[0]].type_id
+    let second = slots[operation.args[1]].type_id
+    if name == "wysna_index_get_owned_at" { return first == 5 and second == 3 and returned == 5 }
+    if first != second or mir_is_result(module.result_types, first) { return false }
+    if name == "wysna_add" and first == 5 { return returned == 5 }
+    if name == "wysna_equal" or name == "wysna_not_equal" { return returned == 2 }
+    if first != 3 and first != 4 { return false }
+    if name == "wysna_lt" or name == "wysna_le" or name == "wysna_gt" or name == "wysna_ge" { return returned == 2 }
+    if name == "wysna_mod_at" { return first == 3 and returned == 3 }
+    return returned == first and (name == "wysna_add" or name == "wysna_sub" or name == "wysna_mul" or name == "wysna_div_at")
+}
+
+# Validate structure before indexed access, then solve definite initialization and cleanup.
+fn mir_verify_shape(module: MirModule, function: MirFunction) {
+    if not mir_valid_type(module.result_types, function.return_type) or len(function.blocks) == 0 { report_error_at("W9999", function.source, "invalid MIR function signature or entry") }
+    let mut parameters: list[bool] = []
+    for slot in function.slots {
+        if not mir_valid_type(module.result_types, slot.type_id) { report_error_at("W9999", function.source, "invalid MIR slot type") }
+        if slot.predicate and (slot.type_id != 2 or slot.parameter) { report_error_at("W9999", function.source, "invalid MIR predicate storage") }
+        parameters.append(false)
+    }
+    for parameter in function.params {
+        if parameter < 0 or parameter >= len(function.slots) { report_error_at("W9999", function.source, "invalid MIR parameter") }
+        if parameters[parameter] { report_error_at("W9999", function.source, "duplicate MIR parameter") }
+        parameters[parameter] = true
+    }
+    for i in 0..len(function.slots) {
+        if parameters[i] != function.slots[i].parameter { report_error_at("W9999", function.source, "invalid MIR parameter ownership") }
+    }
+    for block in function.blocks {
+        for operation in block.operations {
+            for arg in operation.args {
+                if arg < 0 or arg >= len(function.slots) { report_error_at("W9999", operation.source, "invalid MIR operand") }
+            }
+            if operation.opcode == "release" {
+                if operation.result != -1 or len(operation.args) != 1 { report_error_at("W9999", operation.source, "invalid MIR release shape") }
+                let slot = function.slots[operation.args[0]]
+                if slot.parameter or not mir_value_storage(slot.type_id) { report_error_at("W9999", operation.source, "invalid MIR release") }
+            } else {
+                let result = operation.result
+                if result < 0 or result >= len(function.slots) { report_error_at("W9999", operation.source, "invalid MIR result") }
+                if function.slots[result].parameter { report_error_at("W9999", operation.source, "MIR overwrites borrowed storage") }
+                let type_ = function.slots[result].type_id
+                let mut valid = false
+                if operation.opcode == "const" { valid = len(operation.args) == 0 and operation.value.type_id == type_ and type_ <= 5 }
+                elif operation.opcode == "clone" or operation.opcode == "store" {
+                    valid = len(operation.args) == 1
+                    if valid {
+                        let argument = operation.args[0]
+                        valid = function.slots[argument].type_id == type_
+                        if operation.opcode == "store" { valid = valid and not function.slots[argument].parameter and argument != result }
+                    }
+                } elif operation.opcode == "test" {
+                    valid = type_ == 2 and function.slots[result].predicate and operation.name == "err" and len(operation.args) == 1
+                    if valid { valid = mir_is_result(module.result_types, function.slots[operation.args[0]].type_id) }
+                } elif operation.opcode == "runtime" { valid = mir_verify_runtime(module, operation, function.slots) }
+                elif operation.opcode == "call" {
+                    for callee in module.functions {
+                        if callee.name == operation.name and len(callee.params) == len(operation.args) and callee.return_type == type_ {
+                            valid = true
+                            for i in 0..len(callee.params) {
+                                if callee.slots[callee.params[i]].type_id != function.slots[operation.args[i]].type_id { valid = false }
+                            }
+                        }
+                    }
+                }
+                if not valid { report_error_at("W9999", operation.source, "invalid typed MIR operation") }
+                if mir_consumes(operation) and function.slots[operation.args[0]].parameter { report_error_at("W9999", operation.source, "MIR consumes borrowed storage") }
+            }
+        }
+        let term = block.terminator
+        let mut arity = -1
+        if term.kind == "goto" { arity = 1 }
+        elif term.kind == "branch" { arity = 2 }
+        elif term.kind == "return" or term.kind == "unreachable" { arity = 0 }
+        if arity < 0 or len(term.targets) != arity { report_error_at("W9999", term.source, "invalid MIR terminator") }
+        for target in term.targets {
+            if target < 0 or target >= len(function.blocks) { report_error_at("W9999", term.source, "invalid MIR branch target") }
+        }
+        if term.kind == "branch" or term.kind == "return" {
+            if term.value < 0 or term.value >= len(function.slots) { report_error_at("W9999", term.source, "invalid MIR terminator value") }
+            let slot = function.slots[term.value]
+            if term.kind == "branch" and slot.type_id != 2 { report_error_at("W9999", term.source, "MIR branch requires bool") }
+            if term.kind == "return" and (slot.type_id != function.return_type or slot.parameter) { report_error_at("W9999", term.source, "invalid MIR return type or ownership") }
+        } elif term.value != -1 { report_error_at("W9999", term.source, "unexpected MIR terminator value") }
+    }
+}
+
+struct MirGuard { predicate: int, value: int }
+
+fn mir_forget_facts(facts: list[int], value: int, guards: list[MirGuard]) -> list[int] {
+    let mut next = facts
+    next[value] = 0
+    for guard in guards { if guard.value == value { next[guard.predicate] = 0 } }
+    return next
+}
+
+fn mir_verify_flow(module: MirModule, function: MirFunction) {
+    let mut initial: list[bool] = []
+    let mut empty: list[bool] = []
+    let mut unknown: list[int] = []
+    let mut definitions: list[int] = []
+    for slot in function.slots { initial.append(slot.parameter) empty.append(false) unknown.append(0) definitions.append(0) }
+    for block in function.blocks { for operation in block.operations { if operation.result >= 0 { definitions[operation.result] = definitions[operation.result] + 1 } } }
+    let mut guards: list[MirGuard] = []
+    for block in function.blocks {
+        for operation in block.operations {
+            if operation.opcode == "test" and definitions[operation.result] == 1 { guards.append(MirGuard { predicate: operation.result, value: operation.args[0] }) }
+        }
+    }
+    let mut states: list[MirState] = []
+    for block in function.blocks { states.append(MirState { seen: false, defined: empty, live: empty, facts: unknown }) }
+    states[0] = MirState { seen: true, defined: initial, live: empty, facts: unknown }
+    let mut work: list[int] = [0]
+    let mut cursor = 0
+    while cursor < len(work) {
+        let index = work[cursor]
+        cursor = cursor + 1
+        let mut defined = states[index].defined
+        let mut live = states[index].live
+        let mut facts = states[index].facts
+        let block = function.blocks[index]
+        for operation in block.operations {
+            if operation.opcode == "release" {
+                defined[operation.args[0]] = false
+                live[operation.args[0]] = false
+                facts = mir_forget_facts(facts, operation.args[0], guards)
+            } else {
+                for arg in operation.args {
+                    if not defined[arg] { report_error_at("W9999", operation.source, "uninitialized or consumed MIR operand") }
+                }
+                if operation.opcode == "runtime" and (operation.name == "wysna_unwrap_ok" or operation.name == "wysna_unwrap_err") {
+                    let required = if operation.name == "wysna_unwrap_err" { 1 } else { 2 }
+                    let mut proven = false
+                    for guard in guards { if guard.value == operation.args[0] and facts[guard.predicate] == required { proven = true } }
+                    if not proven { report_error_at("W9999", operation.source, "MIR payload lacks a dominating channel test") }
+                }
+                if mir_consumes(operation) {
+                    defined[operation.args[0]] = false
+                    live[operation.args[0]] = false
+                    facts = mir_forget_facts(facts, operation.args[0], guards)
+                }
+                defined[operation.result] = true
+                live[operation.result] = mir_value_storage(function.slots[operation.result].type_id)
+                facts = mir_forget_facts(facts, operation.result, guards)
+            }
+        }
+        let term = block.terminator
+        if term.kind == "return" or term.kind == "branch" {
+            if not defined[term.value] { report_error_at("W9999", term.source, "uninitialized MIR terminator value") }
+        }
+        if term.kind == "return" {
+            live[term.value] = false
+            for owned in live { if owned { report_error_at("W9999", term.source, "MIR return leaks owned storage") } }
+        }
+        for edge in 0..len(term.targets) {
+            let target = term.targets[edge]
+            let previous = states[target]
+            let mut next_defined = defined
+            let mut next_live = live
+            let mut next_facts = facts
+            if term.kind == "branch" { next_facts[term.value] = if edge == 0 { 1 } else { 2 } }
+            let mut changed = not previous.seen
+            if previous.seen {
+                for i in 0..len(defined) {
+                    next_defined[i] = previous.defined[i] and defined[i]
+                    next_live[i] = previous.live[i] or live[i]
+                    if previous.facts[i] != next_facts[i] { next_facts[i] = 0 }
+                    if next_defined[i] != previous.defined[i] or next_live[i] != previous.live[i] or next_facts[i] != previous.facts[i] { changed = true }
+                }
+            }
+            if changed {
+                states[target] = MirState { seen: true, defined: next_defined, live: next_live, facts: next_facts }
+                work.append(target)
+            }
+        }
+    }
+}
+
+fn mir_verify(module: MirModule) {
+    for i in 0..len(module.result_types) {
+        let type_ = module.result_types[i]
+        if type_.ok < 1 or type_.ok > 5 or type_.error != 5 { report_error_at("W9999", module.source, "invalid MIR result type arena") }
+        for j in 0..i { if module.result_types[j].ok == type_.ok { report_error_at("W9999", module.source, "duplicate MIR result type") } }
+    }
+    let mut names: list[str] = []
+    let mut entry = false
+    # Validate every signature first so call validation cannot index malformed callees.
+    for function in module.functions {
+        for name in names { if name == function.name { report_error_at("W9999", function.source, "duplicate MIR function") } }
+        names.append(function.name)
+        if function.name == "wysna_program" { entry = true }
+        for parameter in function.params {
+            if parameter < 0 or parameter >= len(function.slots) { report_error_at("W9999", function.source, "invalid MIR parameter") }
+        }
+    }
+    if not entry { report_error_at("W9999", module.source, "missing MIR program entry") }
+    for function in module.functions { mir_verify_shape(module, function) }
+    for function in module.functions { mir_verify_flow(module, function) }
+}

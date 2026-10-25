@@ -1,0 +1,304 @@
+# Session-local node and binding IDs belong to this value's type arena.
+struct CheckedNode { kind: str, type_id: int, source: Token, text: str, children: list[int], binding: int, target: int, discard: bool }
+struct CheckedBinding { name: str, type_id: int, mutable: bool, source: Token }
+struct CheckedFunction { name: str, type_id: int, params: list[int], body: int, source: Token }
+struct CheckedSignature { name: str, params: list[str], type_params: list[str], type_id: int, foreign: bool }
+# The broad direct emitter has its own parser metadata; MIR never consumes it.
+struct CEmissionMetadata {
+    tokens: list[Token], fields: list[SemField], generic_types: list[SemGenericType], lambdas: list[SemLambda],
+    indirect_positions: list[int], class_projection_positions: list[int], collection_call_positions: list[int],
+    result_lift_positions: list[int], error_pattern_positions: list[int], error_pattern_kinds: list[str], error_pattern_names: list[str],
+}
+struct CheckedProgram {
+    has_nodes: bool, file: str, source: Token, types: list[SemType], signatures: list[CheckedSignature],
+    nodes: list[CheckedNode], bindings: list[CheckedBinding], functions: list[CheckedFunction], entry: list[int], unit_type: int,
+    c99: CEmissionMetadata,
+}
+
+struct SemanticScope { variables: int, depth: int }
+
+# Reference identity is deliberate: each checker invocation owns one context.
+class SemanticContext {
+    capture_nodes: bool
+    tokens: list[Token]
+    pos: int
+    types: list[SemType]
+    generic_types: list[SemGenericType]
+    type_params: list[str]
+    active_constraints: list[str]
+    unify_names: list[str]
+    unify_types: list[int]
+    variables: list[SemVar]
+    functions: list[SemFunction]
+    fields: list[SemField]
+    classes: list[SemClass]
+    variants: list[str]
+    variant_types: list[int]
+    variant_payloads: list[list[int]]
+    depth: int
+    return_type: int
+    owner: str
+    current_function: str
+    layout_seen: list[str]
+    loop: int
+    integer_type: int
+    float_type: int
+    boolean_type: int
+    string_type: int
+    unit_type: int
+    none_type: int
+    initializing: bool
+    initialized: list[str]
+    lambdas: list[SemLambda]
+    capture_names: list[str]
+    capture_depth: int
+    statement_context: bool
+    token_offset: int
+    indirect_positions: list[int]
+    class_projection_positions: list[int]
+    collection_call_positions: list[int]
+    result_lift_positions: list[int]
+    error_pattern_positions: list[int]
+    error_pattern_kinds: list[str]
+    error_pattern_names: list[str]
+    patterns: list[SemPattern]
+    last_pattern: int
+    expected_type: int
+    nodes: list[CheckedNode]
+    symbols: list[CheckedBinding]
+    checked_functions: list[CheckedFunction]
+    top_nodes: list[int]
+    fn init(capture: bool) {
+        let initial_tokens: list[Token] = []
+        this.tokens = initial_tokens
+        this.pos = 0
+        let initial_types: list[SemType] = []
+        this.types = initial_types
+        let initial_generic_types: list[SemGenericType] = []
+        this.generic_types = initial_generic_types
+        let initial_type_params: list[str] = []
+        this.type_params = initial_type_params
+        let initial_active_constraints: list[str] = []
+        this.active_constraints = initial_active_constraints
+        let initial_unify_names: list[str] = []
+        this.unify_names = initial_unify_names
+        let initial_unify_types: list[int] = []
+        this.unify_types = initial_unify_types
+        let initial_variables: list[SemVar] = []
+        this.variables = initial_variables
+        let initial_functions: list[SemFunction] = []
+        this.functions = initial_functions
+        let initial_fields: list[SemField] = []
+        this.fields = initial_fields
+        let initial_classes: list[SemClass] = []
+        this.classes = initial_classes
+        let initial_variants: list[str] = []
+        this.variants = initial_variants
+        let initial_variant_types: list[int] = []
+        this.variant_types = initial_variant_types
+        let initial_variant_payloads: list[list[int]] = []
+        this.variant_payloads = initial_variant_payloads
+        this.depth = 0
+        this.return_type = 0
+        this.owner = ""
+        this.current_function = ""
+        let initial_layout_seen: list[str] = []
+        this.layout_seen = initial_layout_seen
+        this.loop = 0
+        this.integer_type = 0
+        this.float_type = 0
+        this.boolean_type = 0
+        this.string_type = 0
+        this.unit_type = 0
+        this.none_type = 0
+        this.initializing = false
+        let initial_initialized: list[str] = []
+        this.initialized = initial_initialized
+        let initial_lambdas: list[SemLambda] = []
+        this.lambdas = initial_lambdas
+        let initial_capture_names: list[str] = []
+        this.capture_names = initial_capture_names
+        this.capture_depth = -1
+        this.statement_context = false
+        this.token_offset = 0
+        let initial_indirect_positions: list[int] = []
+        this.indirect_positions = initial_indirect_positions
+        let initial_class_projection_positions: list[int] = []
+        this.class_projection_positions = initial_class_projection_positions
+        let initial_collection_call_positions: list[int] = []
+        this.collection_call_positions = initial_collection_call_positions
+        let initial_result_lift_positions: list[int] = []
+        this.result_lift_positions = initial_result_lift_positions
+        let initial_error_pattern_positions: list[int] = []
+        this.error_pattern_positions = initial_error_pattern_positions
+        let initial_error_pattern_kinds: list[str] = []
+        this.error_pattern_kinds = initial_error_pattern_kinds
+        let initial_error_pattern_names: list[str] = []
+        this.error_pattern_names = initial_error_pattern_names
+        let initial_patterns: list[SemPattern] = []
+        this.patterns = initial_patterns
+        this.last_pattern = -1
+        this.expected_type = -1
+        this.capture_nodes = capture
+        let initial_nodes: list[CheckedNode] = []
+        this.nodes = initial_nodes
+        let initial_symbols: list[CheckedBinding] = []
+        this.symbols = initial_symbols
+        let initial_checked_functions: list[CheckedFunction] = []
+        this.checked_functions = initial_checked_functions
+        let initial_top_nodes: list[int] = []
+        this.top_nodes = initial_top_nodes
+    }
+}
+
+fn sem_enter_scope(context: SemanticContext) -> SemanticScope {
+    let scope = SemanticScope { variables: len(context.variables), depth: context.depth }
+    context.depth = context.depth + 1
+    return scope
+}
+fn sem_leave_scope(context: SemanticContext, scope: SemanticScope) {
+    if len(context.variables) < scope.variables { report_error_at("W9999", context.tokens[context.pos], "invalid semantic scope checkpoint") }
+    while len(context.variables) > scope.variables { context.variables.pop() }
+    context.depth = scope.depth
+}
+
+fn sem_node(context: SemanticContext, kind: str, type_id: int, source: Token, text: str, children: list[int], binding: int, target: int) -> int {
+    if not context.capture_nodes { return -1 }
+    let id = len(context.nodes)
+    context.nodes.append(CheckedNode { kind: kind, type_id: type_id, source: source, text: text, children: children, binding: binding, target: target, discard: false })
+    return id
+}
+fn sem_expr(context: SemanticContext, kind: str, value: SemValue, source: Token, text: str, children: list[int], binding: int, target: int) -> SemValue {
+    if not context.capture_nodes { return value }
+    let mut checked = value
+    checked.node = sem_node(context, kind, value.type_id, source, text, children, binding, target)
+    return checked
+}
+fn sem_mark_unit_tail(context: SemanticContext, id: int) {
+    if not context.capture_nodes or id < 0 { return }
+    let node = context.nodes[id]
+    if node.kind == "block" {
+        if len(node.children) > 0 { sem_mark_unit_tail(context, node.children[len(node.children) - 1]) }
+    } elif node.kind == "if" {
+        context.nodes[id].discard = true
+        sem_mark_unit_tail(context, node.children[1])
+        sem_mark_unit_tail(context, node.children[2])
+    }
+}
+fn checked_function(program: CheckedProgram, name: str) -> int {
+    for i in 0..len(program.signatures) { if program.signatures[i].name == name { return i } }
+    return -1
+}
+fn checked_generic_type(program: CheckedProgram, name: str) -> int {
+    for i in 0..len(program.c99.generic_types) { if program.c99.generic_types[i].name == name { return i } }
+    return -1
+}
+fn checked_kind(program: CheckedProgram, type_id: int) -> str { return program.types[type_id].kind }
+fn checked_unit_return(program: CheckedProgram, type_id: int) -> bool {
+    return type_id == program.unit_type or type_id >= 0 and checked_kind(program, type_id) == "result" and program.types[type_id].args[0] == program.unit_type
+}
+fn checked_finish(context: SemanticContext, tokens: list[Token], file: str) -> CheckedProgram {
+    let mut signatures: list[CheckedSignature] = []
+    for function in context.functions {
+        signatures.append(CheckedSignature { name: function.name, params: function.params, type_params: function.type_params, type_id: function.type_id, foreign: function.body < 0 })
+    }
+    let c99 = CEmissionMetadata {
+        tokens: tokens, fields: context.fields, generic_types: context.generic_types, lambdas: context.lambdas,
+        indirect_positions: context.indirect_positions, class_projection_positions: context.class_projection_positions,
+        collection_call_positions: context.collection_call_positions, result_lift_positions: context.result_lift_positions,
+        error_pattern_positions: context.error_pattern_positions, error_pattern_kinds: context.error_pattern_kinds,
+        error_pattern_names: context.error_pattern_names,
+    }
+    return CheckedProgram {
+        has_nodes: context.capture_nodes, file: file, source: tokens[0], types: context.types, signatures: signatures,
+        nodes: context.nodes, bindings: context.symbols, functions: context.checked_functions, entry: context.top_nodes,
+        unit_type: context.unit_type, c99: c99,
+    }
+}
+
+# Validate the phase boundary before lowering or indexing checked identities.
+fn checked_verify(program: CheckedProgram) {
+    let source = program.source
+    if not program.has_nodes { report_error_at("W9999", source, "MIR requires a completed checked node program") }
+    if program.unit_type < 0 or program.unit_type >= len(program.types) { report_error_at("W9999", source, "invalid checked unit type") }
+    if program.types[program.unit_type].kind != "unit" { report_error_at("W9999", source, "checked unit type mismatch") }
+    for i in 0..len(program.types) {
+        let type_ = program.types[i]
+        for child in type_.args { if child < 0 or child >= i { report_error_at("W9999", source, "invalid or cyclic checked type reference") } }
+        if type_.kind == "result" and len(type_.args) != 2 { report_error_at("W9999", source, "invalid checked result type") }
+        if type_.kind == "function" and len(type_.args) == 0 { report_error_at("W9999", source, "invalid checked function type") }
+    }
+    for binding in program.bindings {
+        if binding.type_id < 0 or binding.type_id >= len(program.types) { report_error_at("W9999", binding.source, "invalid checked binding type") }
+    }
+    for signature in program.signatures {
+        if signature.type_id < 0 or signature.type_id >= len(program.types) { report_error_at("W9999", source, "invalid checked signature type") }
+        let type_ = program.types[signature.type_id]
+        if type_.kind != "function" or len(type_.args) != len(signature.params) + 1 { report_error_at("W9999", source, "invalid checked signature shape") }
+        for type_id in type_.args { if type_id < 0 or type_id >= len(program.types) { report_error_at("W9999", source, "invalid checked signature reference") } }
+    }
+    for i in 0..len(program.nodes) {
+        let node = program.nodes[i]
+        if node.type_id < 0 or node.type_id >= len(program.types) { report_error_at("W9999", node.source, "invalid checked node type") }
+        for child in node.children { if child < 0 or child >= i { report_error_at("W9999", node.source, "invalid or cyclic checked node reference") } }
+        let leaf_type = if node.kind == "integer" { "int" } elif node.kind == "boolean" { "bool" } elif node.kind == "string" { "str" } else { node.kind }
+        if node.kind == "integer" or node.kind == "boolean" or node.kind == "string" or node.kind == "float" or node.kind == "unit" {
+            if program.types[node.type_id].kind != leaf_type { report_error_at("W9999", node.source, "checked literal type mismatch") }
+        }
+        let count = len(node.children)
+        let mut valid = false
+        if node.kind == "integer" or node.kind == "float" or node.kind == "string" or node.kind == "boolean" or node.kind == "unit" or node.kind == "binding" or node.kind == "callee" or node.kind == "break" or node.kind == "continue" { valid = count == 0 }
+        elif node.kind == "unary" or node.kind == "propagate" or node.kind == "let" or node.kind == "return" { valid = count == 1 }
+        elif node.kind == "binary" or node.kind == "assign" or node.kind == "index" or node.kind == "handler" or node.kind == "while" { valid = count == 2 }
+        elif node.kind == "if" { valid = count == 3 }
+        elif node.kind == "call" or node.kind == "block" { valid = true }
+        if not valid { report_error_at("W9999", node.source, "invalid checked node shape: " + node.kind) }
+        if node.discard and node.kind != "if" { report_error_at("W9999", node.source, "invalid checked discard marker") }
+        if node.kind == "binding" or node.kind == "let" or node.kind == "handler" and node.binding >= 0 {
+            if node.binding < 0 or node.binding >= len(program.bindings) { report_error_at("W9999", node.source, "invalid checked binding identity") }
+            if node.kind == "binding" and node.type_id != program.bindings[node.binding].type_id { report_error_at("W9999", node.source, "checked binding type mismatch") }
+        } elif node.binding != -1 { report_error_at("W9999", node.source, "unexpected checked binding") }
+        if node.kind == "call" or node.kind == "callee" {
+            if node.target < -1 or node.target >= len(program.signatures) { report_error_at("W9999", node.source, "invalid checked call target") }
+            if node.kind == "call" and node.target < 0 {
+                let mut arity = -1
+                if node.text == "slice" { arity = 3 }
+                elif node.text == "Ok" or node.text == "Err" or node.text == "int" or node.text == "float" or node.text == "str" or node.text == "len" or node.text == "ord" or node.text == "chr" { arity = 1 }
+                if arity >= 0 and count != arity { report_error_at("W9999", node.source, "checked builtin arity mismatch") }
+            }
+            if node.target >= 0 {
+                let signature = program.signatures[node.target]
+                if signature.name != node.text { report_error_at("W9999", node.source, "checked call target name mismatch") }
+                if node.kind == "call" and count != len(signature.params) { report_error_at("W9999", node.source, "checked call arity mismatch") }
+                let returned = program.types[signature.type_id].args
+                if node.kind == "call" and node.type_id != returned[len(returned) - 1] { report_error_at("W9999", node.source, "checked call return type mismatch") }
+            }
+        } elif node.target != -1 { report_error_at("W9999", node.source, "unexpected checked call target") }
+        if node.kind == "assign" {
+            let target = program.nodes[node.children[0]]
+            if target.kind != "binding" { mir_unsupported(node.source, "non-binding assignment") }
+            if not program.bindings[target.binding].mutable { report_error_at("W9999", node.source, "checked assignment mutates immutable binding") }
+        }
+    }
+    if len(program.functions) != len(program.signatures) { report_error_at("W9999", source, "incomplete checked function bodies") }
+    let mut names: list[str] = []
+    for function in program.functions {
+        for name in names { if name == function.name { report_error_at("W9999", function.source, "duplicate checked function body") } }
+        names.append(function.name)
+        let index = checked_function(program, function.name)
+        if index < 0 or program.signatures[index].type_id != function.type_id { report_error_at("W9999", function.source, "invalid checked function identity") }
+        if function.body < 0 or function.body >= len(program.nodes) { report_error_at("W9999", function.source, "invalid checked function body") }
+        if program.nodes[function.body].kind != "block" { report_error_at("W9999", function.source, "checked function requires block body") }
+        let signature = program.types[function.type_id].args
+        if len(function.params) + 1 != len(signature) { report_error_at("W9999", function.source, "invalid checked parameter count") }
+        let mut parameters: list[int] = []
+        for i in 0..len(function.params) {
+            let id = function.params[i]
+            if id < 0 or id >= len(program.bindings) { report_error_at("W9999", function.source, "invalid checked parameter identity") }
+            for previous in parameters { if previous == id { report_error_at("W9999", function.source, "duplicate checked parameter") } }
+            parameters.append(id)
+            if program.bindings[id].type_id != signature[i] { report_error_at("W9999", function.source, "checked parameter type mismatch") }
+        }
+    }
+    for id in program.entry { if id < 0 or id >= len(program.nodes) { report_error_at("W9999", source, "invalid checked entry identity") } }
+}

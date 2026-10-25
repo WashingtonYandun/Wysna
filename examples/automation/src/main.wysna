@@ -1,0 +1,22 @@
+import "std/environment"
+import "std/process"
+import "std/time"
+
+fn main() -> unit {
+    let arguments = environment.arguments()
+    if len(arguments) < 2 {
+        eprint("usage: automation-runner <executable> [arguments...]")
+        exit(2)
+        return
+    }
+
+    let executable = arguments[1]
+    let child_arguments = slice(arguments, 2, len(arguments))
+    print("starting child at", time.unix_seconds())
+    let exit_code = process.run(executable, child_arguments, 30000) else error {
+        eprint("could not run child:", error.operation, error.code)
+        exit(70)
+        return
+    }
+    exit(exit_code)
+}

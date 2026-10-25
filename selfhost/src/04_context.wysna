@@ -1,0 +1,74 @@
+# Mutable C emission state is private to one checked program.
+class CEmitter {
+    checked: CheckedProgram
+    tokens: list[Token]
+    pos: int
+    temp_id: int
+    fn_fallible: bool
+    enums: list[str]
+    enum_variant_names: list[str]
+    enum_variant_owners: list[str]
+    enum_variant_arities: list[int]
+    pattern_bind_lines: list[str]
+    pattern_bind_names: list[str]
+    classes: list[ClassMeta]
+    dispatch_names: list[str]
+    dispatch_arities: list[int]
+    cur_class: str
+    cur_super: str
+    globals: list[str]
+    protos: list[str]
+    class_protos: list[str]
+    dispatch_protos: list[str]
+    fn_defs: list[str]
+    cur_stmts: list[str]
+    scope_stack: list[CleanupScope]
+    aux_id: int
+    cur_err_type: str
+    borrowed_vars: list[str]
+    fn init(checked: CheckedProgram) {
+        this.checked = checked
+        this.tokens = checked.c99.tokens
+        this.pos = 0
+        this.temp_id = 0
+        this.fn_fallible = false
+        let initial_enums: list[str] = []
+        this.enums = initial_enums
+        let initial_enum_variant_names: list[str] = []
+        this.enum_variant_names = initial_enum_variant_names
+        let initial_enum_variant_owners: list[str] = []
+        this.enum_variant_owners = initial_enum_variant_owners
+        let initial_enum_variant_arities: list[int] = []
+        this.enum_variant_arities = initial_enum_variant_arities
+        let initial_pattern_bind_lines: list[str] = []
+        this.pattern_bind_lines = initial_pattern_bind_lines
+        let initial_pattern_bind_names: list[str] = []
+        this.pattern_bind_names = initial_pattern_bind_names
+        let initial_classes: list[ClassMeta] = []
+        this.classes = initial_classes
+        let initial_dispatch_names: list[str] = []
+        this.dispatch_names = initial_dispatch_names
+        let initial_dispatch_arities: list[int] = []
+        this.dispatch_arities = initial_dispatch_arities
+        this.cur_class = ""
+        this.cur_super = ""
+        let initial_globals: list[str] = []
+        this.globals = initial_globals
+        let initial_protos: list[str] = []
+        this.protos = initial_protos
+        let initial_class_protos: list[str] = []
+        this.class_protos = initial_class_protos
+        let initial_dispatch_protos: list[str] = []
+        this.dispatch_protos = initial_dispatch_protos
+        let initial_fn_defs: list[str] = []
+        this.fn_defs = initial_fn_defs
+        let initial_cur_stmts: list[str] = []
+        this.cur_stmts = initial_cur_stmts
+        let initial_scope_stack: list[CleanupScope] = []
+        this.scope_stack = initial_scope_stack
+        this.aux_id = 0
+        this.cur_err_type = ""
+        let initial_borrowed_vars: list[str] = []
+        this.borrowed_vars = initial_borrowed_vars
+    }
+}

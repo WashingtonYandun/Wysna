@@ -1,12 +1,14 @@
 """Verify lexical names and direct-call/return contracts in the current HIR."""
 from hir import HirNodes as H
 from checker.TypeInterner import TYPE_UNIT, TYPE_NONE
+from checker.TypeRelations import TypeRelations
 
 
 class HirBindings:
     def __init__(self, verifier):
         self.verifier = verifier
         self.interner = verifier.interner
+        self.relations = TypeRelations(self.interner)
         self.functions = {}
         self.return_type = None
         self.classes = {}
@@ -14,9 +16,7 @@ class HirBindings:
         self.enums = {}
 
     def compatible(self, source, target):
-        from checker.WysnaType import is_assignable
-        return self.interner.is_assignable(source, target) or is_assignable(
-            self.interner.to_type(source), self.interner.to_type(target))
+        return self.relations.is_assignable(source, target)
 
     def check(self, module):
         from codegen.VirtualDispatch import hir_virtual_method_slots
@@ -173,7 +173,7 @@ class HirBindings:
             operand = self.interner.get_entry(node.operand.type_id)
             if returned.tag != operand.tag or (
                 operand.tag == "result"
-                and not self.interner.is_assignable(operand.data[1], returned.data[1])
+                and not self.relations.is_error_channel_assignable(operand.data[1], returned.data[1])
             ):
                 self.verifier._fail(node, "Propagation channel does not match function return type")
         if isinstance(node, H.HirBuiltinCall):

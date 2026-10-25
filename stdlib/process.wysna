@@ -1,0 +1,61 @@
+import "std/buffer"
+
+extern "C" fn wysna_host_process_run(executable: opaque, arguments: opaque, timeout_ms: int) -> int
+extern "C" fn wysna_host_last_error() -> int
+extern "C" fn wysna_host_last_error_domain() -> int
+
+pub struct ProcessError { operation: str, code: int, domain: int }
+
+fn encode_failure(operation: str) -> ProcessError {
+    return ProcessError { operation: operation, code: 22, domain: 1 }
+}
+
+fn append_byte(target: buffer.Bytes, value: int) -> unit ! ProcessError {
+    target.append(value) else error { return Err(encode_failure("encode arguments")) }
+}
+
+fn append_length(target: buffer.Bytes, length: int) -> unit ! ProcessError {
+    append_byte(target, length / 16777216 % 256)?
+    append_byte(target, length / 65536 % 256)?
+    append_byte(target, length / 256 % 256)?
+    append_byte(target, length % 256)?
+}
+
+fn encode_arguments(arguments: list[str]) -> buffer.Bytes ! ProcessError {
+    if len(arguments) > 256 { return Err(encode_failure("too many arguments")) }
+    let result = new buffer.Bytes()
+    for argument in arguments {
+        let encoded = bytes(argument)
+        if len(encoded) > 1048576 or result.size() + len(encoded) + 4 > 16777216 {
+            result.close()
+            return Err(encode_failure("argument limit exceeded"))
+        }
+        append_length(result, len(encoded)) else error { result.close() return Err(error) }
+        for value in encoded {
+            append_byte(result, value) else error { result.close() return Err(error) }
+        }
+    }
+    return result
+}
+
+# Arguments are passed directly to the executable; no command shell is involved.
+# Child stdout/stderr are inherited. Timeouts are bounded to 10 minutes.
+pub fn run(executable: str, arguments: list[str], timeout_ms: int) -> int ! ProcessError {
+    if len(executable) == 0 or timeout_ms < 1 or timeout_ms > 600000 {
+        return Err(encode_failure("invalid command or timeout"))
+    }
+    let command = buffer.from_text(executable)
+    let encoded_arguments = encode_arguments(arguments) else error {
+        command.close()
+        return Err(error)
+    }
+    let result = wysna_host_process_run(command.borrow(), encoded_arguments.borrow(), timeout_ms)
+    let code = wysna_host_last_error()
+    let domain = wysna_host_last_error_domain()
+    command.close()
+    encoded_arguments.close()
+    if result < 0 {
+        return Err(ProcessError { operation: "run", code: code, domain: domain })
+    }
+    return result
+}

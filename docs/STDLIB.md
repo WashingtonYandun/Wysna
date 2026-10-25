@@ -58,6 +58,26 @@ Wysna distributes modules under `std/` imported via canonical paths such as `imp
 - `std/bytes`: UTF-8 codec operations.
   - `bytes.encode(text) -> list[int]`: encode UTF-8 string into byte values (0–255).
   - `bytes.decode(bytes) -> str ! Utf8Error`: decode byte values into validated UTF-8 string.
+- `std/environment`: runner arguments and environment lookup.
+  - `environment.arguments() -> list[str]`: return the runner-defined argument vector; interpreted file and project runs use `"wysna"` at index zero.
+  - `environment.get(name) -> str?`: read an environment variable, preserving the difference between an absent value and an empty string.
+- `std/time`: host wall-clock access.
+  - `time.unix_seconds() -> int`: return seconds since the Unix epoch.
+- `std/process`: bounded child-process execution.
+  - `process.run(executable, arguments, timeout_ms) -> int ! ProcessError`: invoke an executable directly with an argument vector and no implicit shell. Child stdout/stderr inherit the parent streams. The timeout is 1–600,000 ms; at most 256 arguments are accepted, each up to 1 MiB, with a 16 MiB total encoded-argument limit.
+- `std/http`: synchronous HTTP and HTTPS client for bounded JSON API calls.
+  - `http.make_header(name, value) -> Header` constructs a request header.
+  - `http.request(url, method, headers, body, timeout_ms, max_response_bytes) -> Response ! HttpError`: issue one request using `GET`, `POST`, `PUT`, `PATCH`, `DELETE`, or `HEAD`. `GET` and `HEAD` reject request bodies.
+  - `http.get(url) -> Response ! HttpError`: issue a GET with a 30-second total timeout and 1 MiB response limit.
+  - `http.post_json(url, headers, payload) -> Response ! HttpError | JsonError`: serialize one JSON value and send it as `application/json`.
+  - `http.header(response, name) -> str?`, `http.response_text(response) -> str ! HttpError`, and `http.response_json(response) -> json.Value ! HttpError | JsonError` inspect a response.
+  - `Response` preserves the HTTP status, response headers and owned `buffer.Bytes` body. Close `response.body` when it is no longer needed. Statuses such as 401, 429, 302 and 503 are responses, not transport errors.
+  - The host enforces an 8 KiB URL limit, 32 KiB and 100 fields for request/response headers, 1 MiB request and response body limits, a 30-second total timeout, and a 5-second maximum connection timeout. A call may lower its timeout and response-body limit.
+  - TLS certificate and hostname checks are enabled. Redirects and retries are disabled; a 3xx response is returned as-is. Secrets can be passed in request headers and are never logged by this API. URLs must be ASCII with non-ASCII components percent-encoded; header names and values must be ASCII.
+  - The interpreter requires the optional `http` install extra (`pip install 'wysna[http]'`) and libcurl 8.3.0 or newer through PycURL. Native builds require libcurl 8.3.0 or newer, development files and `curl-config`; generated programs link libcurl. `std/http` is unavailable for `wasi-command` and does not sandbox network access. Streaming and an HTTP server are not included.
+  - See [`examples/http_json_client.wysna`](../examples/http_json_client.wysna) for a JSON endpoint example. It reads its endpoint and optional bearer token from `WYSNA_AI_ENDPOINT` and `WYSNA_AI_TOKEN`.
+- `std/test`: typed assertions for project test entries.
+  - `test.expect(condition, message)`, `expect_equal_int(actual, expected, message)`, and `expect_equal_text(actual, expected, message)` terminate the test process when an assertion fails.
 
 ## External Resources & Scopes
 
@@ -88,6 +108,11 @@ bytes; EOF returns an empty owned Bytes. A closed handle and an invalid read bou
 return recoverable errors. File.write checks both short writes and fflush failures;
 flush does not guarantee durable storage. Rename replaces a destination according
 to host rules and rejects cross-volume copy fallback; it is not a durability promise.
+
+`ProcessError` contains `operation`, `code`, and `domain`. `process.run` never
+implicitly invokes a shell; callers that need a shell must name it as the executable
+and pass the script as a normal argument. Child output is inherited instead of
+captured, and the process runner enforces a per-invocation timeout.
 
 The internal diagnostic ABI exposes `wysna_host_active_handles()` and
 `wysna_host_active_bytes()` for persistent workload tests. Handles include buffers,

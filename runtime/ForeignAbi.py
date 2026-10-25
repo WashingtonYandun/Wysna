@@ -11,7 +11,7 @@ C_TYPES = {'int': ctypes.c_int64, 'int64': ctypes.c_int64, 'int32': ctypes.c_int
            'opaque': ctypes.c_void_p, 'unit': None}
 
 
-def bind_foreign(declaration, libraries=()):
+def bind_foreign(declaration, libraries=(), execution_context=None):
     signature = [p.type_ann.name for p in declaration.params]
     returned = declaration.return_type.name
     name = getattr(declaration, 'source_name', declaration.name)
@@ -34,6 +34,13 @@ def bind_foreign(declaration, libraries=()):
     function = internal or next((getattr(handle, name) for handle in handles if hasattr(handle, name)), None)
     if function is None:
         raise WysnaRuntimeError("Unresolved C symbol: " + name, code='W4003')
+    if name == 'wysna_host_process_run':
+        from runtime.HostAbi import process_run
+        function = lambda executable, arguments, timeout_ms: process_run(
+            executable, arguments, timeout_ms,
+            cwd=execution_context.cwd if execution_context is not None else None,
+            env=execution_context.env if execution_context is not None else None,
+        )
     if not internal:
         function.argtypes = [C_TYPES[t] for t in signature]
         function.restype = C_TYPES[returned]

@@ -1,0 +1,3 @@
+pub fn unix_seconds() -> int {
+    return unix_time()
+}

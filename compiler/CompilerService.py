@@ -14,11 +14,13 @@ class EmissionResult:
     source: str
     telemetry: dict
     timing_ms: dict
+    abi_exports: tuple = ()
 
 
 class CompilerService:
-    def __init__(self, session=None, *, project_root=None, options=None):
-        self._session = session if session is not None else CompilationSession(project_root, options)
+    def __init__(self, session=None, *, project_root=None, options=None, project_resolver=None):
+        self._session = session if session is not None else CompilationSession(
+            project_root, options, project_resolver=project_resolver)
         self._parse_owner = object()
 
     def parse(self, source, file='<stdin>', *, recover=False, revision=None):
@@ -94,7 +96,7 @@ class CompilerService:
         path = self._session.path(str(path))
         source = self._session.sources.overlays.get(path)
         if source is None:
-            source = Path(path).read_text(encoding='utf-8')
+            source = Path(path).read_bytes().decode('utf-8')
         return self.check(source, path)
 
     def set_overlay(self, path, source):
@@ -111,6 +113,10 @@ class CompilerService:
     def source_text(self, path, default=''):
         snapshot = self.source_snapshot(path)
         return snapshot.text if snapshot is not None else default
+
+    def source_texts(self):
+        """Return the immutable text snapshots loaded for the current compilation."""
+        return dict(self._session.sources.snapshots)
 
     def _validate(self, checked):
         if not isinstance(checked, CheckedProgram):
@@ -129,10 +135,11 @@ class CompilerService:
         linked = self._session.link(checked._unit.program)
         return clone_syntax(linked, detached=True)
 
-    def interpret(self, checked, stdout=None, foreign_libraries=()):
+    def interpret(self, checked, stdout=None, foreign_libraries=(), execution_context=None):
         self._validate(checked)
         from runtime.Interpreter import Interpreter
-        interpreter = Interpreter(stdout=stdout, file=checked.source.file)
+        interpreter = Interpreter(stdout=stdout, file=checked.source.file,
+                                  execution_context=execution_context)
         interpreter.foreign_libraries = foreign_libraries
         return interpreter.interpret(self._linked_ast(checked))
 
@@ -146,13 +153,24 @@ class CompilerService:
         from mir.Lowering import Lowering
         return Lowering(checked._interner, checked.source.file).lower(self.lower_hir(checked))
 
-    def emit_c(self, checked, backend='hir'):
+    def export_mir(self, checked):
+        """Export verified interchange without exposing the checked type arena."""
         self._validate(checked)
+        from mir.Exchange import export_module
+        return export_module(self.lower_mir(checked), checked._interner)
+
+    def emit_c(self, checked, backend='hir', *, target_profile=None):
+        self._validate(checked)
+        browser_library = target_profile == 'browser-library'
         if backend == 'ast':
+            if browser_library:
+                raise WysnaError('browser-library requires verified HIR and MIR emission',
+                                 file=checked.source.file, code='W2013', stage='target')
             from codegen.CCodeGen import CCodeGen
             started = time.perf_counter()
             generator = CCodeGen(file=checked.source.file)
             source = generator.generate(self._linked_ast(checked))
+            source = self._enable_http_runtime(source)
             emitted = (time.perf_counter() - started) * 1000
             return EmissionResult(source, generator.telemetry.to_dict(),
                                   {'hir': 0.0, 'mir': 0.0, 'c_emit': emitted, 'codegen': emitted})
@@ -163,10 +181,21 @@ class CompilerService:
         module = self.lower_hir(checked)
         lowered = time.perf_counter()
         generator = HirCCodeGen(checked._interner, file_path=checked.source.file)
-        source = generator.generate(module)
+        source = generator.generate(module, library_mode=browser_library)
+        source = self._enable_http_runtime(source)
         emitted = time.perf_counter()
         return EmissionResult(source, generator.telemetry.to_dict(),
                               {'hir': (lowered - started) * 1000,
                                'mir': generator.phase_ms['mir'],
                                'c_emit': generator.phase_ms['c_emit'],
-                               'codegen': (emitted - lowered) * 1000})
+                               'codegen': (emitted - lowered) * 1000},
+                              tuple(getattr(generator, 'abi_exports', ())))
+
+    @staticmethod
+    def _enable_http_runtime(source):
+        if 'wysna_host_http_request' not in source or 'WYSNA_HAS_HTTP' in source:
+            return source
+        include = '#include "runtime/wysna_runtime.h"'
+        if include in source:
+            return source.replace(include, '#define WYSNA_HAS_HTTP 1\n' + include, 1)
+        return '#define WYSNA_HAS_HTTP 1\n' + source

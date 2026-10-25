@@ -1,70 +1,68 @@
-
-fn at_tok() -> Token {
-    return g_tokens[g_pos]
+fn at_tok(emitter: CEmitter) -> Token {
+    return emitter.tokens[emitter.pos]
 }
 
-fn peek_tok(offset: int) -> Token {
-    let idx = g_pos + offset
-    if idx >= len(g_tokens) {
-        return g_tokens[len(g_tokens) - 1]
+fn peek_tok(emitter: CEmitter, offset: int) -> Token {
+    let idx = emitter.pos + offset
+    if idx >= len(emitter.tokens) {
+        return emitter.tokens[len(emitter.tokens) - 1]
     }
-    return g_tokens[idx]
+    return emitter.tokens[idx]
 }
 
-fn is_eof() -> bool {
-    return at_tok().kind == "EOF"
+fn is_eof(emitter: CEmitter) -> bool {
+    return at_tok(emitter).kind == "EOF"
 }
 
-fn check_kind(k: str) -> bool {
-    return at_tok().kind == k
+fn check_kind(emitter: CEmitter, k: str) -> bool {
+    return at_tok(emitter).kind == k
 }
 
-fn advance_tok() -> Token {
-    let tok = g_tokens[g_pos]
-    if g_pos + 1 < len(g_tokens) {
-        g_pos = g_pos + 1
+fn advance_tok(emitter: CEmitter) -> Token {
+    let tok = emitter.tokens[emitter.pos]
+    if emitter.pos + 1 < len(emitter.tokens) {
+        emitter.pos = emitter.pos + 1
     }
     return tok
 }
 
-fn match_kind(k: str) -> bool {
-    if check_kind(k) {
-        advance_tok()
+fn match_kind(emitter: CEmitter, k: str) -> bool {
+    if check_kind(emitter, k) {
+        advance_tok(emitter)
         return true
     }
     return false
 }
 
-fn skip_statement_separators() {
-    while check_kind("NEWLINE") or check_kind("SEMICOLON") {
-        advance_tok()
+fn skip_statement_separators(emitter: CEmitter) {
+    while check_kind(emitter, "NEWLINE") or check_kind(emitter, "SEMICOLON") {
+        advance_tok(emitter)
     }
 }
 
-fn skip_newlines_before_branch() {
-    let saved = g_pos
-    while check_kind("NEWLINE") {
-        advance_tok()
+fn skip_newlines_before_branch(emitter: CEmitter) {
+    let saved = emitter.pos
+    while check_kind(emitter, "NEWLINE") {
+        advance_tok(emitter)
     }
-    if not check_kind("ELIF") and not check_kind("ELSE") {
-        g_pos = saved
+    if not check_kind(emitter, "ELIF") and not check_kind(emitter, "ELSE") {
+        emitter.pos = saved
     }
 }
 
-fn expect_kind(k: str) -> Token {
-    let tok = at_tok()
+fn expect_kind(emitter: CEmitter, k: str) -> Token {
+    let tok = at_tok(emitter)
     if tok.kind != k {
         if k == "RBRACE" or k == "RBRACKET" {
-            report_error("W0006", tok.line, tok.col, "expected '" + k + "', found '" + tok.val + "'")
+            report_error_at("W0006", tok, "expected '" + k + "', found '" + tok.val + "'")
         } else {
-            report_error("W0001", tok.line, tok.col, "expected '" + k + "', found '" + tok.val + "'")
+            report_error_at("W0001", tok, "expected '" + k + "', found '" + tok.val + "'")
         }
     }
-    advance_tok()
+    advance_tok(emitter)
     return tok
 }
 
 fn expression_starter(kind: str) -> bool {
     return kind == "INT" or kind == "FLOAT" or kind == "STR" or kind == "TRUE" or kind == "FALSE" or kind == "NONE" or kind == "IDENT" or kind == "THIS" or kind == "SUPER" or kind == "NEW" or kind == "MINUS" or kind == "NOT" or kind == "LPAREN" or kind == "LBRACKET" or kind == "LBRACE" or kind == "PIPE" or kind == "IF" or kind == "MATCH"
 }
-

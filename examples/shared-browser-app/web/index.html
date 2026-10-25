@@ -1,0 +1,35 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="description" content="One Wysna pricing function shared by a native CLI and WebAssembly.">
+  <title>Wysna shared pricing example</title>
+  <style>
+    :root { color-scheme: light dark; font: 16px/1.5 system-ui, sans-serif; }
+    body { margin: 0; padding: 2rem 1rem; }
+    main { max-width: 38rem; margin: 0 auto; }
+    form { display: grid; gap: 1rem; }
+    label { display: grid; gap: .35rem; }
+    input, button { font: inherit; padding: .65rem; }
+    output { display: block; min-height: 1.5em; font-size: 1.4rem; font-weight: 650; }
+    #error { min-height: 1.5em; color: #b42318; }
+  </style>
+</head>
+<body>
+  <main>
+    <h1>Shared Wysna pricing</h1>
+    <p>The native command and this page call the same Wysna function.</p>
+    <form id="quote-form">
+      <label for="quantity">Quantity (1–1000)</label>
+      <input id="quantity" name="quantity" type="number" min="1" max="1000" step="1" value="3" required>
+      <label for="unit-price-cents">Unit price in cents (0–100000000)</label>
+      <input id="unit-price-cents" name="unitPriceCents" type="number" min="0" max="100000000" step="1" value="1299" required>
+      <button id="calculate" type="submit" disabled>Loading Wysna…</button>
+    </form>
+    <p id="result" aria-live="polite">Loading the WebAssembly module…</p>
+    <p id="error" role="alert"></p>
+  </main>
+  <script type="module" src="./app.js"></script>
+</body>
+</html>

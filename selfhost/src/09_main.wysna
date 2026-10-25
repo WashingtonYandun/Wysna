@@ -1,5 +1,15 @@
 fn run_compiler() -> unit ! IoError {
     let cli = args()
+    if len(cli) > 1 and cli[1] == "--emit-mir" {
+        if len(cli) != 3 {
+            eprint("[W5002] Usage: Wysna Compiler --emit-mir INPUT")
+            exit(2)
+        }
+        let source = read_file(cli[2])?
+        let payload = emit_mir_module(source, cli[2])
+        print(payload)
+        return
+    }
     let mut in_path = "selfhost/compiler.wysna"
     let mut out_path = "build/compiler1.c"
     if len(cli) >= 3 {
@@ -7,8 +17,8 @@ fn run_compiler() -> unit ! IoError {
         out_path = cli[2]
     }
     let src = read_file(in_path)?
-    check_source(src, in_path)
-    let c_code = compile_source(src)
+    let checked = check_source(src, in_path)
+    let c_code = compile_source(checked)
     write_file(out_path, c_code)?
     print("[Wysna Compiler] Compiled", in_path, "->", out_path)
 }

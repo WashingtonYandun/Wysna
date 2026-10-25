@@ -87,8 +87,10 @@ the listed fixtures does not guarantee equivalent behaviour for every Wysna prog
 
 Wysna Compiler has modular source files under `selfhost/src/`, bundled into
 `selfhost/compiler.wysna`. It parses and checks source using its own implementation and
-emits C99 directly; it does not currently construct the Seed AST/HIR/MIR pipeline or
-share Seed's typed compilation sessions and canonical declaration arena. The bootstrap
+emits C99 directly for its normal route. Its experimental `emit-mir` managed CFG and basic Result profile
+constructs typed MIR independently and serializes the shared, verified interchange;
+see [MIR design](MIR_DESIGN.md) for its feature boundaries. Compiler does not share
+Seed's typed compilation sessions and canonical declaration arena. The bootstrap
 fixed point demonstrates deterministic self-hosting, not universal language parity or
 semantic correctness outside the tested programs.
 
@@ -207,7 +209,7 @@ limits remain part of the published scope:
 
 | Finding | Status in 0.5.0 | Remaining work |
 | :--- | :--- | :--- |
-| W01 · Compiler architecture | Wysna Seed retains AST/HIR/MIR as its main pipeline; Wysna Compiler parses and emits C99 directly through its modular implementation. | Design and validate a shared intermediate representation before expanding the self-hosted backend. |
+| W01 · Compiler architecture | Seed uses AST/HIR/MIR; Compiler isolates state per compilation and lowers checked nodes for its experimental MIR profile. Its broader direct C99 route still consumes expanded tokens and checked metadata. | Extend Compiler MIR through nominal/error-union payloads, collections, resources and modules, then provide a native consumer and distribution. |
 | W03 · Value size | On a 64-bit ABI, `WVal` occupies 32 bytes; list slots store full tagged values. | Measure a compact representation with explicit runtime and FFI compatibility. |
 | W04 · CoW cost | Mutating a shared buffer can copy all of its elements. No uniqueness analysis proves that it can be mutated in place. | Measure memory pressure and design a verifiable uniqueness rule before changing ownership or the ABI. |
 | W05 · Generics | A generic function body is checked when a specialization is created. A generic function that is never instantiated may not receive the same body checking. | Separate generic body checking from type substitution without losing concrete diagnostics. |

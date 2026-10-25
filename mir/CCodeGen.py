@@ -1,6 +1,6 @@
 """C99 emission from verified MIR only; no HIR traversal or semantic resolution."""
 import math
-from checker.TypeInterner import TYPE_UNIT, TYPE_INT, TYPE_BOOL, TYPE_FLOAT
+from checker.TypeInterner import TYPE_UNIT, TYPE_INT, TYPE_BOOL, TYPE_FLOAT, TYPE_STR
 from codegen.CStrings import quote
 from common.Telemetry import CodegenTelemetry
 from mir.Verifier import Verifier
@@ -9,6 +9,7 @@ from mir.Verifier import Verifier
 class CCodeGen:
     def __init__(self, interner):
         self.interner = interner
+        self.abi_exports = []
 
     def generate(self, module):
         Verifier(self.interner).verify(module)
@@ -23,6 +24,9 @@ class CCodeGen:
         for function in module.functions:
             params = ', '.join(self.ctype(function.slots[index].type_id) + ' ' + function.slots[index].name for index in function.params) or 'void'
             lines.append(f'static {self.ctype(function.return_type)} {function.name}({params});')
+        if module.library_mode:
+            lines.extend(['static bool wysna_web_initialized = false;',
+                          'static bool wysna_web_destroyed = false;'])
         wrappers = []
         for name, external in module.externs.items():
             from codegen.ForeignAbi import foreign_wrapper
@@ -48,6 +52,8 @@ class CCodeGen:
         lines.extend(wrappers)
         for function in module.functions:
             lines.extend(self.function(function))
+        if module.library_mode:
+            lines.extend(self.browser_exports(module))
         emitted = set()
         for layout in classes:
             entries = []
@@ -73,17 +79,148 @@ class CCodeGen:
             else:
                 lines.append(f'static const WClassVTable wysna_vtable_{layout.name} = {{ 0, NULL }};')
         entry_call = self.box_expression('wysna_program()', self.functions['wysna_program'].return_type)
-        lines.extend(['int main(int argc, char** argv) {', '    wysna_init_args(argc, argv);',
-                      '    WVal _t_main = ' + entry_call + ';', '    int status = 0;',
-                      '    if (_t_main.tag == W_ERR) { wysna_report_entrypoint_error(_t_main.as.box->val); status = 1; }',
-                      '    wysna_release(_t_main);'])
-        lines.extend(f'    wysna_release({slot.name});' for slot in reversed(module.globals))
-        lines.extend(['    wysna_runtime_cleanup();', '    return status;', '}'])
+        if module.library_mode:
+            lines.extend(['int32_t wysna_web_init(void) {',
+                          '    if (wysna_web_destroyed) return 2;',
+                          '    if (wysna_web_initialized) return 1;',
+                          '    wysna_init_args(0, NULL);',
+                          '    WVal _t_init = ' + entry_call + ';',
+                          '    if (_t_init.tag == W_ERR) {',
+                          '        wysna_release(_t_init);',
+                          '        wysna_runtime_cleanup();',
+                          '        wysna_web_destroyed = true;',
+                          '        return 3;',
+                          '    }',
+                          '    wysna_release(_t_init);',
+                          '    wysna_web_initialized = true;',
+                          '    return 0;',
+                          '}',
+                          'void wysna_web_destroy(void) {',
+                          '    if (wysna_web_destroyed) return;'])
+            lines.extend(f'    wysna_release({slot.name});' for slot in reversed(module.globals))
+            lines.extend(['    wysna_web_initialized = false;',
+                          '    wysna_web_destroyed = true;',
+                          '    wysna_runtime_cleanup();',
+                          '}'])
+        else:
+            lines.extend(['int main(int argc, char** argv) {', '    wysna_init_args(argc, argv);',
+                          '    WVal _t_main = ' + entry_call + ';', '    int status = 0;',
+                          '    if (_t_main.tag == W_ERR) { wysna_report_entrypoint_error(_t_main.as.box->val); status = 1; }',
+                          '    wysna_release(_t_main);'])
+            lines.extend(f'    wysna_release({slot.name});' for slot in reversed(module.globals))
+            lines.extend(['    wysna_runtime_cleanup();', '    return status;', '}'])
         source = '\n'.join(lines) + '\n'
         self.telemetry = CodegenTelemetry(len(module.functions) + len(wrappers) + len(adapters),
                                           len([layout for layout in module.layouts.values() if layout.kind == 'struct']),
                                           module.enum_count, len(classes), len(source.splitlines()), len(source.encode()))
         return source
+
+    def browser_exports(self, module):
+        """Emit a generated C ABI for explicitly public scalar and UTF-8 functions."""
+        allowed = {TYPE_INT: 'int', TYPE_FLOAT: 'float', TYPE_BOOL: 'bool',
+                   TYPE_UNIT: 'unit', TYPE_STR: 'str'}
+        exports = sorted(module.exports, key=lambda item: item['name'])
+        lines = ['static bool wysna_web_entered = false;',
+                 'static bool wysna_web_enter(void) {',
+                 '    if (!wysna_web_initialized || wysna_web_destroyed || wysna_web_entered) return false;',
+                 '    wysna_web_entered = true;',
+                 '    return true;',
+                 '}',
+                 'static void wysna_web_leave(void) { wysna_web_entered = false; }',
+                 'uint32_t wysna_web_alloc(uint32_t size) {',
+                 '    if (size == 0) size = 1;',
+                 '    return (uint32_t)(uintptr_t)malloc((size_t)size);',
+                 '}',
+                 'void wysna_web_free(uint32_t pointer) { free((void*)(uintptr_t)pointer); }']
+        for index, export in enumerate(exports):
+            function = self.functions.get(export['function'])
+            if function is None or export['fallible']:
+                continue
+            param_types = [function.slots[param_id].type_id for param_id in function.params]
+            return_type = function.return_type
+            if any(type_id not in allowed for type_id in param_types) or return_type not in allowed:
+                continue
+            if any(type_id == TYPE_UNIT for type_id in param_types):
+                continue
+
+            name = f'wysna_web_call_{index}'
+            signature = []
+            call_arguments = []
+            setup = []
+            cleanup = []
+            precheck = []
+            for param_index, type_id in enumerate(param_types):
+                if type_id == TYPE_STR:
+                    pointer = f'arg{param_index}_pointer'
+                    length = f'arg{param_index}_length'
+                    value = f'arg{param_index}'
+                    signature.extend([f'uint32_t {pointer}', f'uint32_t {length}'])
+                    precheck.extend([
+                        f'    if ({pointer} == 0 && {length} != 0) return 1;',
+                        f'    if ({length} == UINT32_MAX) return 1;',
+                    ])
+                    prior_cleanup = ' '.join(cleanup)
+                    setup.extend([
+                        f'    char* copy{param_index} = (char*)malloc((size_t){length} + 1);',
+                        f'    if (!copy{param_index}) {{ {prior_cleanup} wysna_web_leave(); return 2; }}',
+                        f'    if ({length}) memcpy(copy{param_index}, (const void*)(uintptr_t){pointer}, (size_t){length});',
+                        f'    copy{param_index}[{length}] = 0;',
+                        f'    WVal {value} = wysna_owned_str_n(copy{param_index}, (size_t){length});',
+                    ])
+                    cleanup.append(f'    wysna_release({value});')
+                    call_arguments.append(value)
+                elif type_id == TYPE_BOOL:
+                    value = f'arg{param_index}'
+                    signature.append(f'uint32_t {value}')
+                    call_arguments.append(f'({value} != 0)')
+                elif type_id == TYPE_INT:
+                    value = f'arg{param_index}'
+                    signature.append(f'int64_t {value}')
+                    call_arguments.append(value)
+                elif type_id == TYPE_FLOAT:
+                    value = f'arg{param_index}'
+                    signature.append(f'double {value}')
+                    call_arguments.append(value)
+            output_type = allowed[return_type]
+            if output_type != 'unit':
+                signature.append('uint32_t output_pointer')
+                precheck.append('    if (output_pointer == 0) return 1;')
+            lines.append(f'int32_t {name}({", ".join(signature) if signature else "void"}) {{')
+            lines.extend(precheck)
+            lines.append('    if (!wysna_web_enter()) return 3;')
+            lines.extend(setup)
+            call = export['function'] + '(' + ', '.join(call_arguments) + ')'
+            if output_type == 'unit':
+                lines.append(f'    {call};')
+            elif output_type == 'str':
+                lines.extend([
+                    f'    WVal returned = {call};',
+                    '    if (returned.tag != W_STR) { wysna_release(returned); ' + ' '.join(cleanup) + ' wysna_web_leave(); return 4; }',
+                    '    if (returned.as.string.length > UINT32_MAX) { wysna_release(returned); ' + ' '.join(cleanup) + ' wysna_web_leave(); return 5; }',
+                    '    uint32_t length = (uint32_t)returned.as.string.length;',
+                    '    uint32_t pointer = length ? wysna_web_alloc(length) : 0;',
+                    '    if (length && pointer == 0) { wysna_release(returned); ' + ' '.join(cleanup) + ' wysna_web_leave(); return 2; }',
+                    '    if (length) memcpy((void*)(uintptr_t)pointer, returned.as.string.data, length);',
+                    '    ((uint32_t*)(uintptr_t)output_pointer)[0] = pointer;',
+                    '    ((uint32_t*)(uintptr_t)output_pointer)[1] = length;',
+                    '    wysna_release(returned);',
+                ])
+            else:
+                c_type = {'int': 'int64_t', 'float': 'double', 'bool': 'uint32_t'}[output_type]
+                expression = {'int': call, 'float': call,
+                              'bool': f'({call} ? 1u : 0u)'}[output_type]
+                lines.extend([
+                    f'    {c_type} returned = {expression};',
+                    f'    *(({c_type}*)(uintptr_t)output_pointer) = returned;',
+                ])
+            lines.extend(cleanup)
+            lines.extend(['    wysna_web_leave();', '    return 0;', '}'])
+            self.abi_exports.append({
+                'name': export['name'], 'symbol': name,
+                'params': [allowed[type_id] for type_id in param_types],
+                'return': output_type,
+            })
+        return lines
 
     @staticmethod
     def ctype(type_id):

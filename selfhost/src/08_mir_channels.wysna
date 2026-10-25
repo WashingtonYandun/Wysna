@@ -1,0 +1,86 @@
+# Result channels use explicit branches; payload helpers borrow and return owned values.
+fn mir_pack(context: MirBuilder, value: int, type_id: int, error: bool, source: Token) -> int {
+    return mir_op(context, "runtime", type_id, [value], if error { "wysna_err" } else { "wysna_ok" }, mir_literal_unit(), source)
+}
+
+fn mir_error_test(context: MirBuilder, value: int, source: Token) -> int {
+    let predicate = mir_op(context, "test", 2, [value], "err", mir_literal_unit(), source)
+    context.slots[predicate].predicate = true
+    return predicate
+}
+
+fn mir_coerce(context: MirBuilder, value: int, target: int, discard: bool, source: Token) -> int {
+    let actual = context.slots[value].type_id
+    if actual == target { return value }
+    if mir_is_result(context.result_types, target) {
+        let ok = context.result_types[target - 7].ok
+        if actual == ok { return mir_pack(context, value, target, false, source) }
+        if discard and ok == 1 {
+            if mir_is_result(context.result_types, actual) {
+                let result = mir_slot(context, target, "", false)
+                let condition = mir_error_test(context, value, source)
+                let failed = mir_new_block(context, source)
+                let succeeded = mir_new_block(context, source)
+                let join = mir_new_block(context, source)
+                mir_terminate(context, "branch", [failed, succeeded], condition, source)
+                context.current = failed
+                let error = mir_op(context, "runtime", 5, [value], "wysna_unwrap_err", mir_literal_unit(), source)
+                let wrapped = mir_pack(context, error, target, true, source)
+                mir_store(context, result, wrapped, source)
+                mir_jump(context, join, source)
+                context.current = succeeded
+                let unit = mir_constant(context, mir_literal_unit(), 1, source)
+                let success = mir_pack(context, unit, target, false, source)
+                mir_store(context, result, success, source)
+                mir_jump(context, join, source)
+                context.current = join
+                return result
+            }
+            let unit = mir_constant(context, mir_literal_unit(), 1, source)
+            return mir_pack(context, unit, target, false, source)
+        }
+    }
+    report_error_at("W9999", source, "unsupported checked MIR coercion")
+    return -1
+}
+
+fn mir_channel(context: MirBuilder, value: int, source: Token, propagate: bool, error_binding: int, handler: int) -> int {
+    let channel = context.slots[value].type_id
+    if not mir_is_result(context.result_types, channel) { mir_unsupported(source, "non-result channels") }
+    let ok = context.result_types[channel - 7].ok
+    let result = mir_slot(context, ok, "", false)
+    let condition = mir_error_test(context, value, source)
+    let failed = mir_new_block(context, source)
+    let succeeded = mir_new_block(context, source)
+    let join = mir_new_block(context, source)
+    mir_terminate(context, "branch", [failed, succeeded], condition, source)
+    context.current = failed
+    if propagate {
+        if not mir_is_result(context.result_types, context.return_type) { report_error_at("W9999", source, "propagation requires a checked result return") }
+        let error = mir_op(context, "runtime", 5, [value], "wysna_unwrap_err", mir_literal_unit(), source)
+        let returned = mir_pack(context, error, context.return_type, true, source)
+        mir_return(context, returned, source)
+    } else {
+        let bindings = context.bindings
+        mir_push_scope(context)
+        if error_binding >= 0 {
+            let error = mir_op(context, "runtime", 5, [value], "wysna_unwrap_err", mir_literal_unit(), source)
+            context.bindings.append(MirBinding { symbol: error_binding, slot: error })
+        }
+        let fallback = mir_block(context, handler)
+        if context.current >= 0 {
+            let checked = mir_coerce(context, fallback, ok, false, source)
+            mir_store(context, result, checked, source)
+            mir_cleanup(context, len(context.scopes) - 1, source)
+            mir_jump(context, join, source)
+        }
+        context.scopes.pop()
+        context.bindings = bindings
+    }
+    context.current = succeeded
+    let unwrapped = mir_op(context, "runtime", ok, [value], "wysna_unwrap_ok", mir_literal_unit(), source)
+    mir_store(context, result, unwrapped, source)
+    mir_jump(context, join, source)
+    context.current = join
+    return result
+}

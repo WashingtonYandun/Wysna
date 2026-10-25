@@ -521,6 +521,14 @@ class TypeInterner:
         )
         return self._intern(key, TypeEntry("any"), caps)
 
+    def mk_type_param(self, name: str, owner: Optional[str] = None) -> int:
+        key = ("type_param", owner, name)
+        caps = TypeCapabilities(is_value=False, is_reference=False, is_copyable=False,
+                                is_comparable=False, is_valid_dict_key=False)
+        type_id = self._intern(key, TypeEntry("type_param", (owner, name)), caps)
+        self._id_to_type.setdefault(type_id, TypeParamType(name, owner=owner))
+        return type_id
+
     # -------------------------------------------------------------
     # Queries & Inspections
     # -------------------------------------------------------------
@@ -603,6 +611,8 @@ class TypeInterner:
         if src_entry.tag == "any":
             return True
         if dst_entry.tag == "any":
+            return False
+        if src_entry.tag == "type_param" or dst_entry.tag == "type_param":
             return False
 
         if src_entry.tag == "error_union" or dst_entry.tag == "error_union":
@@ -734,6 +744,8 @@ class TypeInterner:
             return f"fn({', '.join(p_strs)}) -> {self.to_string(ret_id)}"
         elif entry.tag in ("struct", "enum", "interface", "class"):
             return str(entry.data)
+        elif entry.tag == "type_param":
+            return str(entry.data[1])
         elif entry.tag == "module":
             return f"module {entry.data}"
         elif entry.tag == "any":
@@ -842,10 +854,12 @@ class TypeInterner:
             return self.mk_class(type_.name, superclass=sup_id, interfaces=intf_ids, fields=fields, methods=methods, init_sig=init_sig)
         elif isinstance(type_, ModuleType):
             return self.mk_module(type_.name)
-        elif isinstance(type_, (AnyType, TypeParamType)):
-            # `any` is the wildcard type identity; an unbound type parameter has no
-            # concrete identity yet, so it shares that representation instead of
-            # tripping the TYPE_ERROR fallthrough. See _concrete_type_args.
+        elif isinstance(type_, TypeParamType):
+            owner = str(type_.owner) if type_.owner is not None else None
+            type_id = self.mk_type_param(type_.name, owner)
+            self._id_to_type[type_id] = type_
+            return type_id
+        elif isinstance(type_, AnyType):
             return self.mk_any()
         return TYPE_ERROR
 
@@ -859,6 +873,9 @@ class TypeInterner:
 
         if entry.tag == "error":
             res = AnyType()
+        elif entry.tag == "type_param":
+            owner, name = entry.data
+            res = TypeParamType(name, owner=owner)
         elif entry.tag == "primitive":
             pname = entry.data
             if pname == "int":
@@ -929,3 +946,249 @@ class TypeInterner:
 
         self._id_to_type[type_id] = res
         return res
+
+    def to_snapshot(self) -> Dict[str, Any]:
+        """Return a JSON-safe, versioned snapshot of this type arena."""
+        def encode(value):
+            if isinstance(value, tuple):
+                return [encode(item) for item in value]
+            if isinstance(value, list):
+                return [encode(item) for item in value]
+            if isinstance(value, dict):
+                return {str(key): encode(item) for key, item in value.items()}
+            return value
+
+        return {
+            "version": 1,
+            "entries": [{"tag": entry.tag, "data": encode(entry.data)} for entry in self._entries],
+            "capabilities": [caps.to_dict() for caps in self._capabilities],
+            "structs": {
+                name: {"def_id": definition.def_id, "fields": dict(definition.fields)}
+                for name, definition in self.struct_defs.items()
+            },
+            "enums": {
+                name: {
+                    "def_id": definition.def_id,
+                    "variants": list(definition.variants),
+                    "variant_payloads": encode(definition.variant_payloads),
+                    "type_args": list(definition.type_args),
+                    "template_name": definition.template_name,
+                }
+                for name, definition in self.enum_defs.items()
+            },
+            "interfaces": {
+                name: {"def_id": definition.def_id, "methods": dict(definition.methods)}
+                for name, definition in self.interface_defs.items()
+            },
+            "classes": {
+                name: {
+                    "def_id": definition.def_id,
+                    "superclass": definition.superclass,
+                    "interfaces": list(definition.interfaces),
+                    "fields": {field: list(value) for field, value in definition.fields.items()},
+                    "methods": {method: list(value) for method, value in definition.methods.items()},
+                    "init_sig": definition.init_sig,
+                }
+                for name, definition in self.class_defs.items()
+            },
+        }
+
+    @classmethod
+    def from_snapshot(cls, snapshot: Dict[str, Any]) -> "TypeInterner":
+        """Restore a validated type arena snapshot without trusting external IDs."""
+        if not isinstance(snapshot, dict) or snapshot.get("version") != 1:
+            raise ValueError("Unsupported type arena snapshot version")
+        raw_entries = snapshot.get("entries")
+        raw_capabilities = snapshot.get("capabilities")
+        if not isinstance(raw_entries, list) or len(raw_entries) < 7:
+            raise ValueError("Invalid type arena entry table")
+        if not isinstance(raw_capabilities, list) or len(raw_capabilities) != len(raw_entries):
+            raise ValueError("Invalid type arena capability table")
+
+        def require_id(value):
+            if type(value) is not int or not 0 <= value < len(raw_entries):
+                raise ValueError(f"Invalid TypeId reference: {value!r}")
+            return value
+
+        normalized = []
+        allowed_tags = {
+            "error", "primitive", "optional", "weak", "result", "error_union", "list",
+            "dict", "tuple", "function", "struct", "enum", "interface", "class", "module",
+            "any", "type_param",
+        }
+        for type_id, raw in enumerate(raw_entries):
+            if not isinstance(raw, dict) or raw.get("tag") not in allowed_tags:
+                raise ValueError(f"Invalid type arena entry at TypeId {type_id}")
+            tag, data = raw["tag"], raw.get("data")
+            if tag in ("error", "any"):
+                if data is not None:
+                    raise ValueError(f"Unexpected data for {tag} TypeId {type_id}")
+            elif tag in ("primitive", "struct", "enum", "interface", "class", "module"):
+                if not isinstance(data, str):
+                    raise ValueError(f"Invalid {tag} data at TypeId {type_id}")
+            elif tag in ("optional", "weak", "list"):
+                data = require_id(data)
+            elif tag in ("result", "dict"):
+                if not isinstance(data, list) or len(data) != 2:
+                    raise ValueError(f"Invalid {tag} data at TypeId {type_id}")
+                data = tuple(require_id(item) for item in data)
+            elif tag in ("tuple", "error_union"):
+                if not isinstance(data, list):
+                    raise ValueError(f"Invalid {tag} data at TypeId {type_id}")
+                data = tuple(require_id(item) for item in data)
+                if tag == "error_union" and (len(data) < 2 or tuple(sorted(set(data))) != data):
+                    raise ValueError(f"Noncanonical error union at TypeId {type_id}")
+            elif tag == "function":
+                if (not isinstance(data, list) or len(data) != 3 or not isinstance(data[0], list)
+                        or type(data[2]) is not bool):
+                    raise ValueError(f"Invalid function data at TypeId {type_id}")
+                data = (tuple(require_id(item) for item in data[0]), require_id(data[1]), data[2])
+            elif tag == "type_param":
+                if (not isinstance(data, list) or len(data) != 2 or
+                        (data[0] is not None and not isinstance(data[0], str)) or
+                        not isinstance(data[1], str)):
+                    raise ValueError(f"Invalid type parameter at TypeId {type_id}")
+                data = tuple(data)
+            normalized.append(TypeEntry(tag, data))
+
+        capabilities = []
+        cap_names = {
+            "needs_retain", "needs_release", "is_value", "is_reference", "is_copyable",
+            "has_identity", "is_comparable", "is_valid_dict_key",
+        }
+        for type_id, raw in enumerate(raw_capabilities):
+            if (not isinstance(raw, dict) or set(raw) != cap_names or
+                    any(type(value) is not bool for value in raw.values())):
+                raise ValueError(f"Invalid capabilities for TypeId {type_id}")
+            capabilities.append(TypeCapabilities(**raw))
+
+        interner = cls()
+        fixed = interner._entries
+        for type_id in range(7):
+            if fixed[type_id].tag != normalized[type_id].tag or fixed[type_id].data != normalized[type_id].data:
+                raise ValueError("Type arena snapshot changes reserved primitive TypeIds")
+
+        def entry_key(entry):
+            tag, data = entry.tag, entry.data
+            if tag in ("error", "any"):
+                return (tag,)
+            if tag in ("primitive", "struct", "enum", "interface", "class", "module"):
+                return (tag, data)
+            if tag in ("optional", "weak", "list"):
+                return (tag, data)
+            if tag in ("result", "dict"):
+                return (tag, *data)
+            if tag in ("tuple", "error_union"):
+                return (tag, data)
+            if tag == "function":
+                params, returned, mutating = data
+                return (tag, params, returned, mutating)
+            if tag == "type_param":
+                owner, name = data
+                return (tag, owner, name)
+            raise ValueError(f"Unsupported type arena entry tag: {tag}")
+
+        keys = [entry_key(entry) for entry in normalized]
+        if len(set(keys)) != len(keys):
+            raise ValueError("Type arena contains duplicate canonical entries")
+
+        interner._entries = normalized
+        interner._capabilities = capabilities
+        interner._key_to_id = {key: type_id for type_id, key in enumerate(keys)}
+        interner._type_to_id = {}
+        interner._id_to_type = {type_id: interner._id_to_type[type_id] for type_id in range(7)}
+
+        def definition_id(name, raw, kind):
+            if not isinstance(raw, dict):
+                raise ValueError(f"Invalid {kind} definition: {name}")
+            type_id = require_id(raw.get("def_id"))
+            entry = interner.get_entry(type_id)
+            if entry.tag != kind or entry.data != name:
+                raise ValueError(f"Mismatched {kind} definition identity: {name}")
+            return type_id
+
+        structs = snapshot.get("structs", {})
+        enums = snapshot.get("enums", {})
+        interfaces = snapshot.get("interfaces", {})
+        classes = snapshot.get("classes", {})
+        if not all(isinstance(items, dict) for items in (structs, enums, interfaces, classes)):
+            raise ValueError("Invalid nominal type definitions")
+        for name, raw in structs.items():
+            type_id = definition_id(name, raw, "struct")
+            fields = raw.get("fields")
+            if not isinstance(fields, dict) or any(not isinstance(key, str) for key in fields):
+                raise ValueError(f"Invalid struct fields: {name}")
+            interner.struct_defs[name] = StructDef(type_id, name, {field: require_id(value) for field, value in fields.items()})
+        for name, raw in enums.items():
+            type_id = definition_id(name, raw, "enum")
+            variants = raw.get("variants")
+            payloads = raw.get("variant_payloads")
+            type_args = raw.get("type_args")
+            template_name = raw.get("template_name")
+            if (not isinstance(variants, list) or any(not isinstance(item, str) for item in variants) or
+                    not isinstance(payloads, dict) or not isinstance(type_args, list) or
+                    (template_name is not None and not isinstance(template_name, str))):
+                raise ValueError(f"Invalid enum definition: {name}")
+            normalized_payloads = {}
+            for variant, payload in payloads.items():
+                if variant not in variants or not isinstance(payload, list):
+                    raise ValueError(f"Invalid enum payload: {name}.{variant}")
+                normalized_payloads[variant] = [require_id(item) for item in payload]
+            interner.enum_defs[name] = EnumDef(
+                type_id, name, list(variants), normalized_payloads,
+                tuple(require_id(item) for item in type_args), template_name
+            )
+        for name, raw in interfaces.items():
+            type_id = definition_id(name, raw, "interface")
+            methods = raw.get("methods")
+            if not isinstance(methods, dict) or any(not isinstance(key, str) for key in methods):
+                raise ValueError(f"Invalid interface methods: {name}")
+            normalized_methods = {method: require_id(value) for method, value in methods.items()}
+            if any(interner.get_entry(value).tag != "function" for value in normalized_methods.values()):
+                raise ValueError(f"Interface method signature is not a function: {name}")
+            interner.interface_defs[name] = InterfaceDef(type_id, name, normalized_methods)
+        for name, raw in classes.items():
+            type_id = definition_id(name, raw, "class")
+            superclass = raw.get("superclass")
+            interfaces_raw = raw.get("interfaces")
+            fields = raw.get("fields")
+            methods = raw.get("methods")
+            init_sig = raw.get("init_sig")
+            if (superclass is not None and interner.get_entry(require_id(superclass)).tag != "class"):
+                raise ValueError(f"Invalid superclass for {name}")
+            if not isinstance(interfaces_raw, list) or any(
+                    interner.get_entry(require_id(item)).tag != "interface" for item in interfaces_raw):
+                raise ValueError(f"Invalid implemented interfaces for {name}")
+            if not isinstance(fields, dict) or not isinstance(methods, dict):
+                raise ValueError(f"Invalid class members: {name}")
+            normalized_fields, normalized_methods = {}, {}
+            for field, value in fields.items():
+                if not isinstance(value, list) or len(value) != 2 or type(value[1]) is not bool:
+                    raise ValueError(f"Invalid class field: {name}.{field}")
+                normalized_fields[field] = (require_id(value[0]), value[1])
+            for method, value in methods.items():
+                if (not isinstance(value, list) or len(value) != 2 or type(value[1]) is not bool or
+                        interner.get_entry(require_id(value[0])).tag != "function"):
+                    raise ValueError(f"Invalid class method: {name}.{method}")
+                normalized_methods[method] = (require_id(value[0]), value[1])
+            if init_sig is not None and interner.get_entry(require_id(init_sig)).tag != "function":
+                raise ValueError(f"Invalid initializer signature for {name}")
+            interner.class_defs[name] = ClassDef(
+                type_id, name, require_id(superclass) if superclass is not None else None,
+                [require_id(item) for item in interfaces_raw], normalized_fields,
+                normalized_methods, require_id(init_sig) if init_sig is not None else None
+            )
+
+        nominal_ids = {
+            "struct": {entry.data for entry in normalized if entry.tag == "struct"},
+            "enum": {entry.data for entry in normalized if entry.tag == "enum"},
+            "interface": {entry.data for entry in normalized if entry.tag == "interface"},
+            "class": {entry.data for entry in normalized if entry.tag == "class"},
+        }
+        definitions = {
+            "struct": set(interner.struct_defs), "enum": set(interner.enum_defs),
+            "interface": set(interner.interface_defs), "class": set(interner.class_defs),
+        }
+        if any(nominal_ids[kind] != definitions[kind] for kind in nominal_ids):
+            raise ValueError("Type arena has incomplete nominal definitions")
+        return interner

@@ -3,6 +3,7 @@ import os
 import math
 import re
 import sys
+import time
 from typing import Any, Dict, List, Optional, Set, TextIO
 from error.Error import WysnaRuntimeError
 from runtime.Values import (
@@ -10,6 +11,7 @@ from runtime.Values import (
     WysnaList, WysnaDict, WysnaTuple, WysnaStructInstance, WysnaEnumValue, WysnaEnumNamespace,
     WysnaOk, WysnaErr, WysnaWeak, WysnaObjectInstance, WysnaFunction, WysnaNativeFunction, cow_telemetry
 )
+from runtime.ExecutionContext import ExecutionContext
 
 # ==========================================
 # Control Flow Signals
@@ -89,10 +91,12 @@ class Environment:
         return self.lookup(name)
 
 
-def create_global_environment(stdout: Optional[TextIO] = None) -> Environment:
+def create_global_environment(stdout: Optional[TextIO] = None,
+                              execution_context: Optional[ExecutionContext] = None) -> Environment:
     """Pre-populates the top-level execution environment with Wysna standard built-ins."""
     env = Environment()
-    out = stdout if stdout is not None else sys.stdout
+    context = execution_context or ExecutionContext.from_process(stdout=stdout)
+    out = stdout if stdout is not None else context.stdout
 
     # 1. I/O: print
     def print_fn(args: List[WysnaValue]) -> WysnaValue:
@@ -114,22 +118,22 @@ def create_global_environment(stdout: Optional[TextIO] = None) -> Environment:
             else:
                 rendered.append(str(arg))
         msg = " ".join(rendered)
-        if (os.environ.get("WYSNA_COW_METRICS") == "1" and len(args) == 1
+        if (context.env.get("WYSNA_COW_METRICS") == "1" and len(args) == 1
                 and isinstance(args[0], WysnaStr) and msg.startswith("__COW_CHECKPOINT__:")):
             label = msg[19:]
-            sys.stderr.write(
+            context.stderr.write(
                 f"[WYSNA_COW_CHECKPOINT:{label}] detach_list={cow_telemetry.detach_list} "
                 f"detach_dict={cow_telemetry.detach_dict} detach_struct={cow_telemetry.detach_struct} "
                 f"copied_slots={cow_telemetry.copied_slots}\n"
             )
         else:
-            sys.stderr.write(msg + "\n")
-        sys.stderr.flush()
+            context.stderr.write(msg + "\n")
+        context.stderr.flush()
         return WysnaUnit()
 
     def exit_fn(args: List[WysnaValue]) -> WysnaValue:
         code = int(args[0].value) if args and isinstance(args[0], WysnaInt) else 0
-        sys.exit(code)
+        context.terminate(code)
 
     env.declare("print", WysnaNativeFunction("print", print_fn))
     env.declare("eprint", WysnaNativeFunction("eprint", eprint_fn))
@@ -287,7 +291,7 @@ def create_global_environment(stdout: Optional[TextIO] = None) -> Environment:
         if not isinstance(arg, WysnaStr):
             raise WysnaRuntimeError("read_file() expects str path")
         try:
-            with open(arg.value, 'r', encoding='utf-8', newline='') as f:
+            with open(context.resolve_path(arg.value), 'r', encoding='utf-8', newline='') as f:
                 content = f.read()
             return WysnaOk(WysnaStr(content))
         except Exception as e:
@@ -300,14 +304,25 @@ def create_global_environment(stdout: Optional[TextIO] = None) -> Environment:
         if not isinstance(p_arg, WysnaStr) or not isinstance(c_arg, WysnaStr):
             raise WysnaRuntimeError("write_file() expects str path and str content")
         try:
-            with open(p_arg.value, 'w', encoding='utf-8') as f:
+            with open(context.resolve_path(p_arg.value), 'w', encoding='utf-8') as f:
                 f.write(c_arg.value)
             return WysnaOk(WysnaUnit())
         except Exception as e:
             return WysnaErr(WysnaStructInstance("IoError", fields={"message": WysnaStr(str(e))}))
 
     def args_fn(args_list: List[WysnaValue]) -> WysnaValue:
-        return WysnaList(elements=[WysnaStr(a) for a in sys.argv])
+        return WysnaList(elements=[WysnaStr(a) for a in context.argv])
+
+    def env_fn(args_list: List[WysnaValue]) -> WysnaValue:
+        if len(args_list) != 1 or not isinstance(args_list[0], WysnaStr):
+            raise WysnaRuntimeError("env() expects one str variable name")
+        value = context.env.get(args_list[0].value)
+        return WysnaEnumValue("Option", "Some", [WysnaStr(value)]) if value is not None else WysnaNone()
+
+    def unix_time_fn(args_list: List[WysnaValue]) -> WysnaValue:
+        if args_list:
+            raise WysnaRuntimeError("unix_time() takes no arguments")
+        return WysnaInt(int(time.time()))
 
     def some_fn(args: List[WysnaValue]) -> WysnaValue:
         if len(args) != 1:
@@ -350,6 +365,8 @@ def create_global_environment(stdout: Optional[TextIO] = None) -> Environment:
     env.declare("read_file", WysnaNativeFunction("read_file", read_file_fn), is_mut=False)
     env.declare("write_file", WysnaNativeFunction("write_file", write_file_fn), is_mut=False)
     env.declare("args", WysnaNativeFunction("args", args_fn), is_mut=False)
+    env.declare("env", WysnaNativeFunction("env", env_fn), is_mut=False)
+    env.declare("unix_time", WysnaNativeFunction("unix_time", unix_time_fn), is_mut=False)
 
     env.declare("weak", WysnaNativeFunction("weak", weak_fn), is_mut=False)
     env.declare("upgrade", WysnaNativeFunction("upgrade", upgrade_fn), is_mut=False)

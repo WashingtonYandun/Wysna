@@ -4,6 +4,9 @@ Wysna Seed (`seed`) is the reference implementation in Python. Its default nativ
 verified MIR → C99 → system compiler. The public backend name remains `hir`.
 The interpreter and AST C99 backend are execution oracles; Wysna Compiler (`selfhost`) is an independent
 self-hosted compiler. MIR is an intermediate representation, not a fifth engine.
+The experimental Compiler `result-cfg-v1` MIR producer has a separate focused parity
+suite in `tests/unit/test_selfhost_mir.py` and a native phase-isolation suite in
+`tests/unit/test_selfhost_compilation_context.py`; its profile is defined in [MIR design](MIR_DESIGN.md).
 
 ## Measured corpus
 

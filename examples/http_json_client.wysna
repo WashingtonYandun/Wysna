@@ -1,0 +1,31 @@
+import "std/environment"
+import "std/http"
+import "std/json"
+
+fn main() -> unit ! http.HttpError | json.JsonError {
+    let mut endpoint = "http://127.0.0.1:8080/v1/chat/completions"
+    match environment.get("WYSNA_AI_ENDPOINT") {
+        Some(value) => { endpoint = value },
+        None => { endpoint = endpoint },
+    }
+    let mut headers: list[http.Header] = []
+    match environment.get("WYSNA_AI_TOKEN") {
+        Some(token) => {
+            let authorization = http.make_header("Authorization", "Bearer " + token)
+            headers.append(authorization)
+        },
+        None => {},
+    }
+
+    let payload = json.object({"prompt": json.string("Summarize the latest task.")})
+    let response = http.post_json(endpoint, headers, payload)?
+    print("HTTP status:", response.status)
+    let body = http.response_text(response) else error {
+        response.body.close()
+        return Err(error)
+    }
+    response.body.close()
+    print(body)
+}
+
+main()

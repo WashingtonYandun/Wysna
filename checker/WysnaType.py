@@ -162,15 +162,10 @@ class ErrorUnionType(WysnaType):
 
 
 def is_error_channel_assignable(source: WysnaType, target: WysnaType) -> bool:
-    """Check closed error-set inclusion without applying value constructors.
-
-    In particular, a scalar error must not become compatible with a Result error
-    channel merely because Result normally accepts its success payload.
-    """
-    source_alternatives = source.alternatives if isinstance(source, ErrorUnionType) else (source,)
-    target_alternatives = target.alternatives if isinstance(target, ErrorUnionType) else (target,)
-    return all(any(source_member == target_member for target_member in target_alternatives)
-               for source_member in source_alternatives)
+    """Compatibility adapter to the canonical session-local relation facade."""
+    from checker.TypeInterner import TypeInterner
+    from checker.TypeRelations import TypeRelations
+    return TypeRelations(TypeInterner()).is_error_channel_assignable(source, target)
 
 
 class FunctionType(WysnaType):
@@ -280,12 +275,13 @@ class AnyType(WysnaType):
 
 class TypeParamType(WysnaType):
     """Represents a type parameter in generic declarations: T, U, A, B."""
-    def __init__(self, name: str, constraint: Optional[WysnaType] = None):
+    def __init__(self, name: str, constraint: Optional[WysnaType] = None, owner: Optional[str] = None):
         self.name = name
         self.constraint = constraint
+        self.owner = owner
 
     def __eq__(self, other: Any) -> bool:
-        return isinstance(other, TypeParamType) and self.name == other.name
+        return isinstance(other, TypeParamType) and self.name == other.name and self.owner == other.owner
 
     def __str__(self) -> str:
         return self.name
@@ -337,123 +333,7 @@ class GenericEnumTemplate(WysnaType):
 
 
 def is_assignable(source: WysnaType, target: WysnaType) -> bool:
-    """
-    Check if a value of type `source` can be assigned to a variable/param of type `target`.
-    Strict rules:
-    - No implicit int -> float coercion.
-    - An optional T? accepts T and none.
-    - A result T ! E accepts T (auto-wrapping ok value).
-    - A non-optional T rejects none.
-    - Subclass is assignable to Superclass or implemented Interface.
-    - Canonical Option[T] <-> T? and Result[T, E] <-> T ! E equivalence.
-
-    `any` is one-directional on purpose. It exists only so that variadic builtin
-    signatures (`print`, `len`, `enumerate`, ...) can declare a wildcard parameter,
-    and so that internal inference can pass a placeholder. Nothing may be *assigned
-    to* an `any` target, because that is the operation that lets a value escape the
-    type system (a program could declare `fn f() -> int`, store a `str` in an `any`
-    local and return it, unobserved).
-    """
-    if isinstance(source, AnyType):
-        return True
-    if isinstance(target, AnyType):
-        return isinstance(source, AnyType)
-
-    if source == target:
-        return True
-
-    if isinstance(source, ErrorUnionType) or isinstance(target, ErrorUnionType):
-        source_alternatives = source.alternatives if isinstance(source, ErrorUnionType) else (source,)
-        target_alternatives = target.alternatives if isinstance(target, ErrorUnionType) else (target,)
-        return all(
-            any(source_alternative == target_alternative for target_alternative in target_alternatives)
-            for source_alternative in source_alternatives
-        )
-
-    def optional_inner(value):
-        if isinstance(value, OptionalType):
-            return value.inner
-        if isinstance(value, EnumType) and getattr(value, "template_name", None) == "Option":
-            return value.type_args[0]
-        return None
-
-    source_inner, target_inner = optional_inner(source), optional_inner(target)
-    if source_inner is not None and target_inner is not None:
-        if (optional_inner(source_inner) is not None) != (optional_inner(target_inner) is not None):
-            return False
-        return is_assignable(source_inner, target_inner)
-
-    # Canonical Option[T] <-> OptionalType(T) assignability
-    if isinstance(target, EnumType) and getattr(target, "template_name", None) == "Option" and getattr(target, "type_args", None):
-        if source == NoneType:
-            return True
-        opt_inner = target.type_args[0]
-        if is_assignable(source, opt_inner):
-            return True
-        if isinstance(source, OptionalType) and is_assignable(source.inner, opt_inner):
-            return True
-        if isinstance(source, EnumType) and getattr(source, "template_name", None) == "Option" and getattr(source, "type_args", None):
-            return is_assignable(source.type_args[0], opt_inner)
-    if isinstance(source, EnumType) and getattr(source, "template_name", None) == "Option" and getattr(source, "type_args", None) and isinstance(target, OptionalType):
-        return is_assignable(source.type_args[0], target.inner)
-
-    # Canonical Result[T, E] <-> ResultType(T, E) assignability
-    if isinstance(target, EnumType) and getattr(target, "template_name", None) == "Result" and getattr(target, "type_args", None) and len(target.type_args) == 2:
-        if isinstance(source, ResultType) and source.ok == target.type_args[0] and is_error_channel_assignable(source.err, target.type_args[1]):
-            return True
-        if isinstance(source, EnumType) and getattr(source, "template_name", None) == "Result" and getattr(source, "type_args", None) and len(source.type_args) == 2:
-            if source.type_args[0] == target.type_args[0] and is_error_channel_assignable(source.type_args[1], target.type_args[1]):
-                return True
-        if is_assignable(source, target.type_args[0]):
-            return True
-    if isinstance(source, EnumType) and getattr(source, "template_name", None) == "Result" and getattr(source, "type_args", None) and len(source.type_args) == 2 and isinstance(target, ResultType):
-        if source.type_args[0] == target.ok and is_error_channel_assignable(source.type_args[1], target.err):
-            return True
-        return is_assignable(source, target.ok)
-
-    # OOP Subtyping: Class -> Superclass
-    if isinstance(source, ClassType) and isinstance(target, ClassType):
-        return source.is_subclass_of(target.name)
-
-    # OOP Subtyping: Class -> Interface
-    if isinstance(source, ClassType) and isinstance(target, InterfaceType):
-        return source.implements_interface(target.name)
-
-    # Invariant List subtyping: list[S] -> list[T] iff S == T (SPEC 4.1 & ADR-002)
-    if isinstance(source, ListType) and isinstance(target, ListType):
-        return source.element == target.element
-
-    # Invariant Dict subtyping: dict[K1, V1] -> dict[K2, V2] iff K1 == K2 and V1 == V2
-    if isinstance(source, DictType) and isinstance(target, DictType):
-        return source.key == target.key and source.value == target.value
-
-    # Invariant Struct subtyping: S1 -> S2 iff S1.name == S2.name and type_args match
-    if isinstance(source, StructType) and isinstance(target, StructType):
-        if source.name != target.name:
-            return False
-        return getattr(source, "type_args", ()) == getattr(target, "type_args", ())
-
-    # Invariant Enum subtyping for non-Option/Result enums:
-    if isinstance(source, EnumType) and isinstance(target, EnumType):
-        if source.name != target.name:
-            return False
-        return getattr(source, "type_args", ()) == getattr(target, "type_args", ())
-
-
-    # An OptionalType(T) accepts T or none
-    if isinstance(target, OptionalType):
-        if source == NoneType:
-            return True
-        return is_assignable(source, target.inner)
-
-    # A narrower Result error set can be assigned to a wider Result channel.
-    # This preserves the tagged value; it is not an Ok lift.
-    if isinstance(source, ResultType) and isinstance(target, ResultType):
-        if source.ok == target.ok and is_error_channel_assignable(source.err, target.err):
-            return True
-
-    # A ResultType(ok, err) accepts ok value
-    if isinstance(target, ResultType):
-        return is_assignable(source, target.ok)
-
-    return False
+    """Compatibility adapter to the canonical session-local relation facade."""
+    from checker.TypeInterner import TypeInterner
+    from checker.TypeRelations import TypeRelations
+    return TypeRelations(TypeInterner()).is_assignable(source, target)

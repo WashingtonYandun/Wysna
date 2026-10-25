@@ -56,6 +56,7 @@
     "tests/regressions/invalid/inherited_field_type.wysna": "regressions"
   },
   "support_files": {
+    "examples/http_json_client.wysna": "Configurable HTTP example; its transport contract runs against loopback fixtures in tests/unit/test_http_client.py",
     "tests/runtime/math_lib.wysna": "Imported library exercised by tests/runtime/import_module.wysna",
     "tests/modules/checked_session/left.wysna": "Checked-module fixture dependency exercised by tests/modules/checked_session/main.wysna",
     "tests/modules/checked_session/right.wysna": "Checked-module fixture dependency exercised by tests/modules/checked_session/main.wysna",

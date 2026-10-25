@@ -1,0 +1,23 @@
+pub fn add(left: int, right: int) -> int {
+    return left + right
+}
+
+pub fn echo_int(value: int) -> int {
+    return value
+}
+
+pub fn echo_float(value: float) -> float {
+    return value
+}
+
+pub fn echo_bool(value: bool) -> bool {
+    return value
+}
+
+pub fn echo_text(value: str) -> str {
+    return value
+}
+
+pub fn noop(value: int) -> unit {
+    return
+}

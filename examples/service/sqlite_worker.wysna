@@ -1,0 +1,154 @@
+import "std/json"
+import "std/parse"
+
+extern "C" fn service_db_open() -> opaque
+extern "C" fn service_db_is_open(handle: opaque) -> bool
+extern "C" fn service_db_begin(handle: opaque) -> int32
+extern "C" fn service_db_insert(handle: opaque, id: int64, value: int64) -> int32
+extern "C" fn service_db_commit(handle: opaque) -> int32
+extern "C" fn service_db_rollback(handle: opaque) -> int32
+extern "C" fn service_db_count(handle: opaque) -> int64
+extern "C" fn service_db_close(handle: opaque) -> int32
+
+fn number_value(value: int) -> json.Value {
+    let result = json.number(str(value)) else error {
+        return json.null()
+    }
+    return result
+}
+
+fn emit(status: int, body: json.Value) -> unit {
+    let response: dict[str, json.Value] = {
+        "status": number_value(status),
+        "body": body,
+    }
+    let encoded = json.stringify(json.object(response)) else error {
+        print("{\"status\":500,\"body\":{\"error\":\"response_encoding_failed\"}}")
+        return
+    }
+    print(encoded)
+}
+
+fn error_body(code: str) -> json.Value {
+    let fields: dict[str, json.Value] = {"error": json.string(code)}
+    return json.object(fields)
+}
+
+fn success_body(fields: dict[str, json.Value]) -> json.Value {
+    return json.object(fields)
+}
+
+fn open_database() -> opaque {
+    return service_db_open()
+}
+
+fn main() -> unit {
+    let arguments = args()
+    if len(arguments) != 2 {
+        emit(400, error_body("expected_request_file"))
+        return
+    }
+    let raw_request = read_file(arguments[1]) else error {
+        emit(400, error_body("request_file_unavailable"))
+        return
+    }
+    let request = json.parse_with_limits(raw_request, 1146880, 32, 100000) else error {
+        emit(400, error_body("invalid_request_envelope"))
+        return
+    }
+    let method = json.as_string(json.get(request, "method") ?? json.null()) ?? ""
+    let path = json.as_string(json.get(request, "path") ?? json.null()) ?? ""
+
+    if method == "GET" and path == "/health" {
+        let fields: dict[str, json.Value] = {
+            "ok": json.boolean(true),
+            "runtime": json.string("wysna"),
+        }
+        emit(200, success_body(fields))
+        return
+    }
+
+    if method == "GET" and path == "/measurements" {
+        let database = open_database()
+        if not service_db_is_open(database) {
+            emit(500, error_body("database_unavailable"))
+            return
+        }
+        let count = service_db_count(database)
+        let closed = service_db_close(database)
+        if count < 0 or closed != 0 {
+            emit(500, error_body("database_read_failed"))
+            return
+        }
+        let fields: dict[str, json.Value] = {"count": number_value(count)}
+        emit(200, success_body(fields))
+        return
+    }
+
+    if method == "POST" and path == "/measurements" {
+        let request_body = json.as_string(json.get(request, "body") ?? json.null()) ?? ""
+        let payload = json.parse_with_limits(request_body, 1048576, 32, 100000) else error {
+            emit(400, error_body("invalid_json_body"))
+            return
+        }
+        let id_text = json.as_number(json.get(payload, "id") ?? json.null()) ?? ""
+        let value_text = json.as_number(json.get(payload, "value") ?? json.null()) ?? ""
+        let id = parse.parse_int(id_text) else error {
+            emit(400, error_body("id_must_be_an_integer"))
+            return
+        }
+        let value = parse.parse_int(value_text) else error {
+            emit(400, error_body("value_must_be_an_integer"))
+            return
+        }
+        if value < 0 {
+            emit(400, error_body("value_must_be_non_negative"))
+            return
+        }
+
+        let database = open_database()
+        if not service_db_is_open(database) {
+            emit(500, error_body("database_unavailable"))
+            return
+        }
+        let started = service_db_begin(database)
+        if started != 0 {
+            let closed = service_db_close(database)
+            emit(503, error_body("database_busy"))
+            return
+        }
+        let inserted = service_db_insert(database, id, value)
+        if inserted != 0 {
+            let rolled_back = service_db_rollback(database)
+            let closed = service_db_close(database)
+            if inserted == 19 {
+                emit(409, error_body("measurement_id_exists"))
+            } else {
+                emit(500, error_body("database_write_failed"))
+            }
+            return
+        }
+        let committed = service_db_commit(database)
+        if committed != 0 {
+            let rolled_back = service_db_rollback(database)
+            let closed = service_db_close(database)
+            emit(500, error_body("database_commit_failed"))
+            return
+        }
+        let closed = service_db_close(database)
+        if closed != 0 {
+            emit(500, error_body("database_close_failed"))
+            return
+        }
+        let fields: dict[str, json.Value] = {
+            "id": number_value(id),
+            "value": number_value(value),
+        }
+        emit(201, success_body(fields))
+        return
+    }
+
+    emit(404, error_body("route_not_found"))
+}
+
+main()

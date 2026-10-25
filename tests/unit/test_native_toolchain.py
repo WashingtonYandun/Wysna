@@ -37,6 +37,53 @@ int main(void) { printf("%" PRId64 "\\n", twice(21)); return 0; }
             result.output_path = 'changed'
 
 
+def test_http_native_build_resolves_and_links_libcurl_only_on_demand():
+    commands = []
+    compiled_sources = []
+    curl_outputs = {
+        '--checkfor': subprocess.CompletedProcess([], 0, stdout='', stderr=''),
+        '--cflags': subprocess.CompletedProcess([], 0, stdout='-I/curl/include', stderr=''),
+        '--libs': subprocess.CompletedProcess([], 0, stdout='-L/curl/lib -lcurl', stderr=''),
+    }
+
+    def run(command, **options):
+        if command[0] == '/curl-config':
+            assert options == {'capture_output': True, 'text': True, 'timeout': 10}
+            return curl_outputs[command[1]]
+        commands.append(command)
+        assert options == {'capture_output': True, 'text': True, 'timeout': 120}
+        if '-c' in command:
+            compiled_sources.append(Path(command[command.index('-c') + 1]).read_text(encoding='utf-8'))
+            Path(command[command.index('-o') + 1]).write_bytes(b'object')
+        return subprocess.CompletedProcess(command, 0, stdout='', stderr='')
+
+    source = '#include "runtime/wysna_runtime.h"\nextern int64_t wysna_host_http_request(void);\n'
+    with tempfile.TemporaryDirectory(prefix='wysna-http-native-') as temporary:
+        with patch('compiler.NativeToolchain.shutil.which', return_value='/curl-config'), \
+                patch('compiler.NativeToolchain.compiler_command', return_value=['fake-cc']), \
+                patch('compiler.NativeToolchain.subprocess.run', side_effect=run):
+            NativeToolchain(ROOT).build(source, Path(temporary) / 'http-app')
+
+    assert len(commands) == 2
+    compile_command, link_command = commands
+    assert '-I/curl/include' in compile_command
+    assert '-L/curl/lib' in link_command and '-lcurl' in link_command
+    assert compiled_sources[0].startswith('#define WYSNA_HAS_HTTP 1\n')
+
+
+def test_http_native_build_rejects_old_libcurl():
+    version_failure = subprocess.CompletedProcess(
+        ['/curl-config', '--checkfor', '8.3.0'], 1,
+        stdout='libcurl 8.2.1 is older than 8.3.0', stderr='',
+    )
+    with patch('compiler.NativeToolchain.shutil.which', return_value='/curl-config'), \
+            patch('compiler.NativeToolchain.subprocess.run', return_value=version_failure):
+        with expect_error(NativeCompilationError) as raised:
+            NativeToolchain(ROOT).build(
+                'extern int64_t wysna_host_http_request(void);', 'unused-output')
+    assert '8.3.0' in raised.exception.stderr
+
+
 def _check_native_failure_cleanup(failure_stage):
     commands = []
     owned_directories = set()
@@ -150,10 +197,12 @@ def test_selfhost_emission_preserves_input_cwd_and_cleans_output():
 
 def run_native_toolchain_tests():
     test_native_build_runs_explicit_c_adapter()
+    test_http_native_build_resolves_and_links_libcurl_only_on_demand()
+    test_http_native_build_rejects_old_libcurl()
     test_native_failure_cleans_only_owned_temporary_files()
     test_unavailable_native_compiler_keeps_structured_error()
     test_selfhost_emission_preserves_input_cwd_and_cleans_output()
-    print('Native toolchain: all 10 execution, failure, cleanup and ABI adapter cases passed')
+    print('Native toolchain: all 12 execution, dependency, cleanup and ABI adapter cases passed')
     return True
 
 

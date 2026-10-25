@@ -73,8 +73,8 @@ jobs:
           path: installed-wheel.json
           if-no-files-found: ignore
 
-  conformance:
-    name: Conformance (${{ matrix.os }}, ${{ matrix.cc }})
+  compiler-contracts:
+    name: Compiler contracts (${{ matrix.os }}, ${{ matrix.cc }})
     runs-on: ${{ matrix.os }}
     timeout-minutes: 30
     strategy:
@@ -92,20 +92,92 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: "3.11"
+      - name: Install libcurl development files on Linux
+        if: runner.os == 'Linux'
+        run: sudo apt-get update && sudo apt-get install -y libcurl4-openssl-dev
+      - name: Install libcurl development files on macOS
+        if: runner.os == 'macOS'
+        run: |
+          brew install curl
+          echo "$(brew --prefix curl)/bin" >> "$GITHUB_PATH"
+      - name: Install the optional interpreter HTTP adapter
+        run: python -m pip install -e '.[http,service]'
       - name: Verify CI harness failure contracts
         run: |
           python3 -m tests.unit.test_ci_harness
+          python3 -m tests.unit.test_execution_context
           python3 -m tests.unit.test_hir_return_paths
           python3 -m tests.unit.test_f03_error_unions
           python3 -m tests.unit.test_compilation_session
           python3 -m tests.unit.test_compiler_service
+          python3 -m tests.unit.test_architecture_contract
           python3 -m tests.unit.test_native_toolchain
           python3 -m tests.unit.test_expansion_contracts
           python3 -m tests.unit.test_audit_remediation
           python3 -m tests.unit.test_mir
+          python3 -m tests.unit.test_selfhost_mir
+          python3 -m tests.unit.test_selfhost_compilation_context
           python3 -m tests.unit.test_distribution_contract
           python3 -m tests.unit.test_audit_findings
           python3 -m tests.unit.test_standard_toolkit
+          python3 -m tests.unit.test_http_client
+      - name: Upload coverage reports
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: contract-coverage-${{ matrix.os }}-${{ matrix.cc }}
+          path: .wysna_cache/ci-artifacts/*.json
+          if-no-files-found: ignore
+      - name: Preserve failure reproductions and bootstrap C
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: contract-failures-${{ matrix.os }}-${{ matrix.cc }}
+          path: |
+            .wysna_cache/ci-artifacts/
+            .wysna_cache/compiler*.c
+            tests/differential/failures/
+            tests/fuzz/failures/
+
+  conformance:
+    needs: compiler-contracts
+    if: always()
+    name: Conformance (${{ matrix.os }}, ${{ matrix.cc }})
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - {os: ubuntu-latest, cc: clang}
+          - {os: ubuntu-latest, cc: gcc}
+          - {os: macos-latest, cc: clang}
+    env:
+      CC: ${{ matrix.cc }}
+      WYSNA_CI_ARTIFACTS: ${{ github.workspace }}/.wysna_cache/ci-artifacts
+    steps:
+      - name: Require compiler contract success
+        env:
+          CONTRACT_RESULT: ${{ needs.compiler-contracts.result }}
+        run: |
+          if [ "$CONTRACT_RESULT" != "success" ]; then
+            echo "Compiler contracts did not pass: $CONTRACT_RESULT" >&2
+            exit 1
+          fi
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: Install libcurl development files on Linux
+        if: runner.os == 'Linux'
+        run: sudo apt-get update && sudo apt-get install -y libcurl4-openssl-dev
+      - name: Install libcurl development files on macOS
+        if: runner.os == 'macOS'
+        run: |
+          brew install curl
+          echo "$(brew --prefix curl)/bin" >> "$GITHUB_PATH"
+      - name: Install the optional interpreter HTTP adapter
+        run: python -m pip install -e '.[http,service]'
       - name: Verify runtime, examples and direct selfhost negatives across four engines
         run: python3 tools/ci_conformance.py --profile=${{ inputs.profile || 'release' }}
       - name: Verify full conformance and SHA256 bootstrap
@@ -117,6 +189,12 @@ jobs:
       - name: Install SQLite development headers on Linux
         if: runner.os == 'Linux'
         run: sudo apt-get update && sudo apt-get install -y libsqlite3-dev
+      - name: Verify the loopback service and SQLite worker pilot
+        run: python3 -m tests.unit.test_service_pilot
+      - name: Verify service load measurement contracts
+        run: python3 -m tests.unit.test_service_measurement
+      - name: Verify the browser-library ABI contract
+        run: python3 -m tests.unit.test_browser_library
       - name: Verify SQLite FFI against C with sanitizers and persisted data
         run: python3 tools/validate_sqlite_ffi.py --sanitize --report .wysna_cache/ci-artifacts/sqlite-ffi.json
       - name: Verify atomic CSV imports, rollback and process memory against C
@@ -139,6 +217,82 @@ jobs:
             tests/differential/failures/
             tests/fuzz/failures/
 
+  service-load-campaign:
+    name: Service load and RSS campaign (Ubuntu)
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    env:
+      CC: clang
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: Install SQLite development files
+        run: sudo apt-get update && sudo apt-get install -y libsqlite3-dev
+      - name: Install the optional service adapter
+        run: python -m pip install -e '.[service]'
+      - name: Run three sustained service repetitions
+        run: >-
+          python3 tools/measure_service.py --warmup-seconds 60 --duration-seconds 600
+          --repetitions 3 --clients 4 --saturation-clients 48 --saturation-seconds 1
+          --workers 4 --queue-size 32 --minimum-latency-samples 10000
+          --rss-growth-budget-percent 5 --rss-growth-budget-bytes 8388608
+          --report .wysna_cache/ci-artifacts/service-load.json
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: service-load-rss-campaign
+          path: .wysna_cache/ci-artifacts/service-load.json
+          if-no-files-found: error
+
+  browser-library:
+    name: Browser library (Emscripten 5.0.1)
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - uses: emscripten-core/setup-emsdk@4528d102f7230f0e7b276855c01ea1159be0e984
+        with:
+          version: 5.0.1
+          actions-cache-folder: emsdk-cache
+      - name: Install Wysna from the checkout
+        run: python -m pip install -e .
+      - name: Verify the browser-library ABI contract
+        run: python3 -m tests.unit.test_browser_library
+      - name: Build the browser-library example
+        run: >-
+          python3 main.py project build --manifest examples/browser-library/wysna.toml
+          --target web --output "$RUNNER_TEMP/wysna-browser/library.mjs"
+      - name: Exercise the generated ESM and WebAssembly library
+        run: node tests/browser_library_smoke.mjs "$RUNNER_TEMP/wysna-browser/library.mjs"
+      - name: Verify shared source across native and browser targets
+        run: |
+          python3 main.py project check --manifest examples/shared-browser-app/wysna.toml --target app
+          python3 main.py project check --manifest examples/shared-browser-app/wysna.toml --target web
+          python3 main.py project test --manifest examples/shared-browser-app/wysna.toml
+      - name: Build native CLI from shared Wysna source
+        run: >-
+          python3 main.py project build --manifest examples/shared-browser-app/wysna.toml
+          --target app --output "$RUNNER_TEMP/wysna-shared-app/quote"
+      - name: Build browser module from shared Wysna source
+        run: >-
+          python3 main.py project build --manifest examples/shared-browser-app/wysna.toml
+          --target web --output "$RUNNER_TEMP/wysna-shared-app/build/pricing.mjs"
+      - name: Compare native and WebAssembly results
+        run: |
+          native_output="$("$RUNNER_TEMP/wysna-shared-app/quote" 3 1299)"
+          browser_output="$(node examples/shared-browser-app/tests/shared_browser_app_smoke.mjs "$RUNNER_TEMP/wysna-shared-app/build/pricing.mjs")"
+          test "$native_output" = "$browser_output"
+      - name: Stage browser application assets
+        run: cp -R examples/shared-browser-app/web "$RUNNER_TEMP/wysna-shared-app/web"
+      - name: Open the shared application in headless Chrome
+        run: python3 examples/shared-browser-app/tests/browser_smoke.py "$RUNNER_TEMP/wysna-shared-app"
+
   sanitizers:
     name: Memory safety (${{ matrix.os }})
     runs-on: ${{ matrix.os }}
@@ -155,6 +309,16 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: "3.11"
+      - name: Install libcurl development files on Linux
+        if: runner.os == 'Linux'
+        run: sudo apt-get update && sudo apt-get install -y libcurl4-openssl-dev
+      - name: Install libcurl development files on macOS
+        if: runner.os == 'macOS'
+        run: |
+          brew install curl
+          echo "$(brew --prefix curl)/bin" >> "$GITHUB_PATH"
+      - name: Install the optional interpreter HTTP adapter
+        run: python -m pip install -e '.[http]'
       - name: Verify the full acyclic runtime and example corpus with ASan and UBSan
         # Linux also enables LSan; Darwin does not support leak detection.
         run: python3 tools/ci_conformance.py --sanitize
@@ -168,6 +332,7 @@ jobs:
           WYSNA_SANITIZE=1 python3 -m tests.unit.test_audit_findings
           WYSNA_SANITIZE=1 python3 -m tests.unit.test_foundations
           WYSNA_SANITIZE=1 python3 -m tests.unit.test_standard_toolkit
+          WYSNA_SANITIZE=1 python3 -m tests.unit.test_http_client
           python3 -m tests.unit.test_phase_a
           python3 -m tests.unit.test_ownership_control_flow
           python3 -m tests.unit.test_f03_ownership
@@ -317,3 +482,26 @@ jobs:
           name: windows-installer-reports
           path: dist/windows-reports/
           if-no-files-found: warn
+
+  wasi-command:
+    name: WASI command target (wasm32-wasip1)
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: Download and verify wasi-sdk 34
+        run: |
+          archive="$RUNNER_TEMP/wasi-sdk-34.0-x86_64-linux.tar.gz"
+          curl --fail --location --silent --show-error \
+            "https://github.com/WebAssembly/wasi-sdk/releases/download/wasi-sdk-34/wasi-sdk-34.0-x86_64-linux.tar.gz" \
+            --output "$archive"
+          echo "b761e3a0721dbae9c09a0059e5fdb2bf917d1b4a8a7b430fb3b5aafb0984b2c4  $archive" | sha256sum --check
+          tar -xzf "$archive" -C "$RUNNER_TEMP"
+          echo "WASI_SDK_PATH=$RUNNER_TEMP/wasi-sdk-34.0-x86_64-linux" >> "$GITHUB_ENV"
+      - name: Install the pinned Wasmtime runner
+        run: python -m pip install -e ".[wasi]"
+      - name: Build, inspect, compare and execute the WASI command fixture
+        run: python -m tests.unit.test_wasi_target

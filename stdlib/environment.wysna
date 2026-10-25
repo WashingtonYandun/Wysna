@@ -1,0 +1,7 @@
+pub fn arguments() -> list[str] {
+    return args()
+}
+
+pub fn get(name: str) -> str? {
+    return env(name)
+}
