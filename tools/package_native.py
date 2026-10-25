@@ -15,6 +15,7 @@ if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
 from common.Version import WYSNA_VERSION
+from common.Platform import WINDOWS_NATIVE_STACK_BYTES, native_stack_link_args
 from compiler.Bootstrap import bootstrap_fingerprint, ensure_selfhost_compiler_binary
 from tools.package_components import download, extract, sha256
 
@@ -71,11 +72,15 @@ def assemble(output, cache, *, source_commit=None):
         environment = dict(os.environ, ZIG_LOCAL_CACHE_DIR=str(directory / "zig-local"),
                            ZIG_GLOBAL_CACHE_DIR=str(cache / "zig-global"))
         base = [str(zig), "cc", "-target", component["target"], "-std=c99", "-O2", "-mcpu=baseline", "-I" + str(ROOT)]
+        stack_flags = native_stack_link_args(base)
+        base += stack_flags
         for source, target in [(ROOT / "packaging/native/driver.c", stage / ("bin/wysna" + suffix)),
                                (compiler.parent / "compiler2.c", stage / ("libexec/wysna-compiler" + suffix))]:
             defines = ['-DWYSNA_NATIVE_TARGET="' + component["target"] + '"',
                        '-DWYSNA_NATIVE_VERSION="' + WYSNA_VERSION + '"'] if source.name == "driver.c" else []
             print("Compiling SDK component: " + target.name, file=sys.stderr, flush=True)
+            if stack_flags and source.name == "driver.c":
+                defines.append('-DWYSNA_NATIVE_STACK_LINK_ARGUMENT="' + stack_flags[0] + '"')
             built = subprocess.run(base + defines + [str(source), "-lc", "-lm", "-o", str(target)],
                                    capture_output=True, text=True, timeout=300, env=environment)
             if built.returncode:
@@ -105,6 +110,7 @@ def assemble(output, cache, *, source_commit=None):
                  for path in sorted(stage.rglob("*")) if path.is_file()}
         manifest = {"format": 1, "version": WYSNA_VERSION, "platform": host,
                     "profile": "native-core-v1", "target": component["target"], "commands": COMMANDS,
+                    "stack_reserve_bytes": WINDOWS_NATIVE_STACK_BYTES if os.name == "nt" else None,
                     "source_commit": actual_commit, "source_dirty": dirty,
                     "compiler_fingerprint": bootstrap["fingerprint"],
                     "compiler_source_sha256": bootstrap["provenance"]["inputs"]["selfhost/compiler.wysna"],

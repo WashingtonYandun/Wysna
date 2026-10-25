@@ -197,6 +197,9 @@ static int sdk_build(SdkInvocation* invocation, const SdkOptions* options) {
         arguments[count++] = sdk_owned(invocation, "", invocation->scratch);
     }
     for (int index = 0; index < options->library_count; index++) arguments[count++] = sdk_owned(invocation, "-l", options->libraries[index]);
+#ifdef _WIN32
+    arguments[count++] = WYSNA_NATIVE_STACK_LINK_ARGUMENT;
+#endif
     arguments[count++] = "-lc"; arguments[count++] = "-lm"; arguments[count++] = "-o"; arguments[count++] = invocation->product;
     int status = sdk_child(invocation->zig, count, arguments, 120000);
     int restored_local = sdk_environment("ZIG_LOCAL_CACHE_DIR", invocation->previous_local_cache);

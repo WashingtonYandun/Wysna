@@ -9,7 +9,7 @@ import tempfile
 import unittest
 from unittest.mock import patch
 
-from common.Platform import compiler_command, executable_name
+from common.Platform import compiler_command, executable_name, native_stack_link_args
 from runtime import HostAbi
 from tools.package_components import extract
 from tools.package_native import COMPONENTS, assemble, host_platform
@@ -17,6 +17,14 @@ from tools.validate_native_sdk import isolated_environment
 
 
 class NativeSdkContractTests(unittest.TestCase):
+    def test_windows_linkers_share_an_explicit_stack_reserve(self):
+        with patch('common.Platform.os.name', 'nt'):
+            self.assertEqual(native_stack_link_args(['clang']), ['-Wl,/STACK:8388608'])
+            self.assertEqual(native_stack_link_args(['zig.exe', 'cc', '-target', 'x86_64-windows-gnu']), ['-Wl,--stack,8388608'])
+            self.assertEqual(native_stack_link_args(['x86_64-w64-mingw32-gcc']), ['-Wl,--stack,8388608'])
+        with patch('common.Platform.os.name', 'posix'):
+            self.assertEqual(native_stack_link_args(['clang']), [])
+
     def test_pinned_platforms_declare_explicit_portable_targets(self):
         self.assertEqual(set(COMPONENTS['zig']), {'aarch64-macos', 'x86_64-macos', 'aarch64-linux', 'x86_64-linux', 'x86_64-windows'})
         for component in COMPONENTS['zig'].values():

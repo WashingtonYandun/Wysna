@@ -9,7 +9,7 @@ import subprocess
 import tempfile
 import uuid
 
-from common.Platform import cache_lock, compiler_command, executable_name
+from common.Platform import cache_lock, compiler_command, executable_name, native_stack_link_args
 from common.Paths import get_repo_root
 from compiler.CompilerService import CompilerService
 
@@ -73,8 +73,9 @@ def bootstrap_compiler(repo_root, output_directory):
     def compile_c(path, name):
         binary = directory / executable_name(name)
         math_flags = [] if os.name == "nt" else ["-lm"]
-        built = subprocess.run(compiler_command() + ["-std=c99", "-O1", "-I" + str(root),
-                               str(path)] + math_flags + ["-o", str(binary)],
+        command = compiler_command()
+        built = subprocess.run(command + ["-std=c99", "-O1", "-I" + str(root),
+                               str(path)] + math_flags + native_stack_link_args(command) + ["-o", str(binary)],
                                capture_output=True, text=True, timeout=120, cwd=root)
         if built.returncode:
             from error.Error import ToolchainError

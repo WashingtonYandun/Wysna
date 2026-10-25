@@ -8,7 +8,7 @@ import subprocess
 import tempfile
 import time
 
-from common.Platform import compiler_command, executable_name
+from common.Platform import compiler_command, executable_name, native_stack_link_args
 
 
 @dataclass(frozen=True)
@@ -52,7 +52,8 @@ class NativeToolchain:
         sanitizer_flags = (
             ['-fsanitize=address,undefined', '-fno-omit-frame-pointer'] if sanitize else []
         )
-        base = (compiler_command() + ['-std=c99', '-O2', f'-I{self.repo_root}']
+        command = compiler_command()
+        base = (command + ['-std=c99', '-O2', f'-I{self.repo_root}']
                 + curl_cflags + sanitizer_flags)
         output_path = executable_name(os.fspath(output))
         libraries = tuple(os.fspath(library) for library in link_libraries)
@@ -84,7 +85,7 @@ class NativeToolchain:
             ] + curl_libs
             started = time.perf_counter()
             result = subprocess.run(
-                base + [object_path, '-o', output_path] + linker_inputs,
+                base + [object_path, '-o', output_path] + linker_inputs + native_stack_link_args(command),
                 capture_output=True, text=True, timeout=120,
             )
             link_ms = (time.perf_counter() - started) * 1000.0
