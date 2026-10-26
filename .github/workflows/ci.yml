@@ -2,7 +2,7 @@ name: Wysna Compiler Integration Gates
 
 on:
   push:
-    branches: [main, develop, "feat/**", "codex/**"]
+    branches: [main, develop]
   pull_request:
     branches: [main, develop]
   workflow_dispatch:
@@ -239,7 +239,7 @@ jobs:
       - uses: actions/download-artifact@v4
         with:
           name: wysna-wheel
-          path: wheel-artifact
+          path: .wysna_cache/installation-wheel
       - name: Verify the installed CLI without checkout access or installed writes
         run: |
           python wheel-artifact/validate_wheel.py --wheel wheel-artifact/*.whl --forbid-source "$GITHUB_WORKSPACE" --report installed-wheel.json
@@ -287,6 +287,7 @@ jobs:
           python3 -m tests.unit.test_f03_error_unions
           python3 -m tests.unit.test_compilation_session
           python3 -m tests.unit.test_compiler_service
+          python3 -m tests.unit.test_effect_analysis
           python3 -m tests.unit.test_architecture_contract
           python3 -m tests.unit.test_native_toolchain
           python3 -m tests.unit.test_expansion_contracts
@@ -296,6 +297,7 @@ jobs:
           python3 -m tests.unit.test_native_mir_pipeline
           python3 -m tests.unit.test_selfhost_compilation_context
           python3 -m tests.unit.test_distribution_contract
+          python3 -m tests.unit.test_installers
           python3 -m tests.unit.test_audit_findings
           python3 -m tests.unit.test_standard_toolkit
           python3 -m tests.unit.test_http_client
@@ -435,7 +437,7 @@ jobs:
             tests/fuzz/failures/
 
   conformance:
-    needs: [compiler-contracts, runtime-conformance, integration-conformance, llvm-experimental, installed-llvm-sdk, llvm-comparison]
+    needs: [compiler-contracts, runtime-conformance, integration-conformance, llvm-experimental, installed-llvm-sdk, llvm-comparison, seed-installers, windows-installer]
     if: always()
     name: Conformance (${{ matrix.os }}, ${{ matrix.cc }})
     runs-on: ubuntu-latest
@@ -456,8 +458,10 @@ jobs:
           LLVM_RESULT: ${{ needs.llvm-experimental.result }}
           LLVM_SDK_RESULT: ${{ needs.installed-llvm-sdk.result }}
           LLVM_COMPARISON_RESULT: ${{ needs.llvm-comparison.result }}
+          SEED_INSTALLER_RESULT: ${{ needs.seed-installers.result }}
+          WINDOWS_INSTALLER_RESULT: ${{ needs.windows-installer.result }}
         run: |
-          if [ "$CONTRACT_RESULT" != "success" ] || [ "$RUNTIME_RESULT" != "success" ] || [ "$INTEGRATION_RESULT" != "success" ] || [ "$LLVM_RESULT" != "success" ] || [ "$LLVM_SDK_RESULT" != "success" ] || [ "$LLVM_COMPARISON_RESULT" != "success" ]; then
+          if [ "$CONTRACT_RESULT" != "success" ] || [ "$RUNTIME_RESULT" != "success" ] || [ "$INTEGRATION_RESULT" != "success" ] || [ "$LLVM_RESULT" != "success" ] || [ "$LLVM_SDK_RESULT" != "success" ] || [ "$LLVM_COMPARISON_RESULT" != "success" ] || [ "$SEED_INSTALLER_RESULT" != "success" ] || [ "$WINDOWS_INSTALLER_RESULT" != "success" ]; then
             echo "Prerequisites did not pass: compiler=$CONTRACT_RESULT runtime=$RUNTIME_RESULT integration=$INTEGRATION_RESULT llvm=$LLVM_RESULT sdk=$LLVM_SDK_RESULT comparison=$LLVM_COMPARISON_RESULT" >&2
             exit 1
           fi
@@ -687,7 +691,7 @@ jobs:
       - uses: actions/download-artifact@v4
         with:
           name: wysna-wheel
-          path: wheel-artifact
+          path: .wysna_cache/installation-wheel
       - uses: actions/cache@v4
         with:
           path: .wysna_cache/windows-downloads
@@ -698,19 +702,20 @@ jobs:
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
       - name: Bundle Wysna with private Python and a complete C toolchain
         run: |
-          $wheel = (Get-ChildItem wheel-artifact/*.whl).FullName
-          python tools/package_windows.py --wheel $wheel --output dist/windows-bundle --source-commit $env:GITHUB_SHA
+          $wheel = (Get-ChildItem .wysna_cache/installation-wheel/*.whl).FullName
+          python tools/package_distribution.py --wheel $wheel --output dist/windows-bundle --cache .wysna_cache/windows-downloads --source-commit $env:GITHUB_SHA
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
       - name: Build the per-user installer
         run: |
-          $version = (Get-Content dist/windows-bundle/windows-bundle.json | ConvertFrom-Json).version
+          python tools/package_installers.py --bundle dist/windows-bundle --output dist/windows-installer
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           $compiler = "${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe"
           if (!(Test-Path $compiler)) { throw "Inno Setup 6 is required on the Windows packaging runner" }
-          & $compiler /Q "/DBundleDir=$((Resolve-Path dist/windows-bundle).Path)" "/DWysnaVersion=$version" "/DOutputDir=$env:GITHUB_WORKSPACE\dist\windows-installer" packaging/windows/wysna.iss
+          & $compiler /Q "/DBundleDir=$((Resolve-Path dist/windows-bundle).Path)" "/DWysnaVersion=0.4.99" "/DOutputDir=$env:GITHUB_WORKSPACE\dist\upgrade-fixture" packaging/windows/wysna.iss
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
       - name: Test install, native build, repair and uninstall without host dependencies
         run: |
-          ./tools/validate_windows_lifecycle.ps1 -Installer (Get-ChildItem dist/windows-installer/*-setup.exe).FullName -ReportDirectory "$env:GITHUB_WORKSPACE\dist\windows-reports"
+          ./tools/validate_windows_lifecycle.ps1 -Installer (Get-ChildItem dist/windows-installer/*-setup.exe).FullName -UpgradeFrom (Get-ChildItem dist/upgrade-fixture/*-setup.exe).FullName -ReportDirectory "$env:GITHUB_WORKSPACE\dist\windows-reports"
       - name: Archive the portable distribution and calculate checksums
         run: |
           python -c "import shutil; shutil.make_archive('dist/windows-installer/wysna-windows-x64-portable', 'zip', 'dist/windows-bundle')"
@@ -726,6 +731,68 @@ jobs:
         with:
           name: windows-installer-reports
           path: dist/windows-reports/
+          if-no-files-found: warn
+
+  seed-installers:
+    name: Seed installer lifecycle (${{ matrix.os }})
+    needs: wheel-build
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 35
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - uses: actions/download-artifact@v4
+        with:
+          name: wysna-wheel
+          path: .wysna_cache/installation-wheel
+      - uses: actions/cache@v4
+        with:
+          path: .wysna_cache/installation-downloads
+          key: seed-${{ runner.os }}-${{ runner.arch }}-python-20261026-zig-0.15.2-v1
+      - name: Install Linux packaging and declared HTTP development inputs
+        if: runner.os == 'Linux'
+        run: sudo apt-get update && sudo apt-get install -y rpm libcurl4-openssl-dev
+      - name: Install macOS HTTP development inputs
+        if: runner.os == 'macOS'
+        run: |
+          brew install curl
+          echo "$(brew --prefix curl)/bin" >> "$GITHUB_PATH"
+      - name: Assemble the complete distribution from this clean source commit
+        run: |
+          wheel=$(find .wysna_cache/installation-wheel -name '*.whl' -print -quit)
+          python tools/package_distribution.py --wheel "$wheel" --output dist/seed --source-commit "$GITHUB_SHA"
+          python tools/package_installers.py --bundle dist/seed --output dist/installers
+      - name: Accept macOS install, repair, upgrade, installed application and uninstall
+        if: runner.os == 'macOS'
+        run: python tools/validate_unix_lifecycle.py --bundle dist/seed --installer dist/installers/*.pkg --reports dist/reports/macos --http
+      - name: Accept Debian install, repair, upgrade, installed application and uninstall
+        if: runner.os == 'Linux'
+        run: python tools/validate_unix_lifecycle.py --bundle dist/seed --installer dist/installers/*.deb --reports dist/reports/debian --http
+      - name: Accept RPM lifecycle inside a disposable Fedora system
+        if: runner.os == 'Linux'
+        run: |
+          docker run --rm -e CI=true -v "$GITHUB_WORKSPACE:/work" -w /work fedora:44 bash -c '
+            set -eu
+            dnf install -y python3 rpm-build
+            python3 tools/validate_unix_lifecycle.py --bundle dist/seed --installer dist/installers/*.rpm --reports dist/reports/fedora
+          '
+      - uses: actions/upload-artifact@v4
+        with:
+          name: wysna-seed-installers-${{ runner.os }}-${{ runner.arch }}
+          path: dist/installers/
+          compression-level: 0
+          if-no-files-found: error
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: seed-installer-reports-${{ runner.os }}-${{ runner.arch }}
+          path: dist/reports/
           if-no-files-found: warn
 
   wasi-command:

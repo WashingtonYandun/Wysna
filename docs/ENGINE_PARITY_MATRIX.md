@@ -3,7 +3,9 @@
 Wysna Seed (`seed`) is the reference implementation in Python. Its default native pipeline is checked AST → typed HIR →
 verified MIR → C99 → system compiler. The public backend name remains `hir`.
 The interpreter and AST C99 backend are execution oracles; Wysna Compiler (`selfhost`) is an independent
-self-hosted compiler. MIR is an intermediate representation, not a fifth engine.
+self-hosted compiler. MIR is an intermediate representation, not a fifth engine. The read-only
+[effect report](EFFECTS.md) is a static analysis of verified MIR, not another execution engine, and is
+not part of the engine parity counts.
 Wysna Compiler's `native-core-v1` profile uses verified MIR for its normal C99 route and interchange. Focused parity, native phase isolation and installed SDK acceptance have separate gates. Profile bounds are defined in [MIR design](MIR_DESIGN.md).
 
 ## Measured corpus

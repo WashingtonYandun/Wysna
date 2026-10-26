@@ -153,12 +153,30 @@ class NativeToolchain:
                 cflags.returncode or libs.returncode or 127,
             )
         try:
-            return shlex.split(cflags.stdout), shlex.split(libs.stdout)
+            compiler_flags, linker_flags = shlex.split(cflags.stdout), shlex.split(libs.stdout)
         except ValueError as error:
             raise NativeCompilationError(
                 'dependency', 'HTTP Dependency Error',
                 'curl-config returned invalid compiler flags', 127,
             ) from error
+        if sys.platform == 'darwin' and os.path.realpath(config) == '/usr/bin/curl-config':
+            # Apple's curl-config omits its SDK because Apple Clang finds it implicitly.
+            # The private compiler requires the same development inputs explicitly.
+            try:
+                sdk = os.environ.get('SDKROOT')
+                if not sdk:
+                    sdk = subprocess.run(['/usr/bin/xcrun', '--show-sdk-path'], capture_output=True,
+                                         text=True, timeout=10, check=True).stdout.strip()
+            except (OSError, subprocess.SubprocessError) as error:
+                raise NativeCompilationError('dependency', 'HTTP Dependency Error',
+                    'Apple libcurl requires an installed macOS SDK; install its development inputs '
+                    'or select a separate libcurl through PATH', 127) from error
+            if not (Path(sdk) / 'usr/include/curl/curl.h').is_file():
+                raise NativeCompilationError('dependency', 'HTTP Dependency Error',
+                                             'The selected macOS SDK has no libcurl headers', 127)
+            compiler_flags += ['-isysroot', sdk, '-idirafter', str(Path(sdk) / 'usr/include')]
+            linker_flags += ['-L' + str(Path(sdk) / 'usr/lib')]
+        return compiler_flags, linker_flags
 
     def emit_selfhost(self, compiler_path, file):
         """Use the independent compiler directly, resolving imports beside its input."""

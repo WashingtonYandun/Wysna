@@ -1,0 +1,10 @@
+enum Status { Active, Suspended(str), Terminated(int, str) }
+
+fn describe(status: Status) -> str {
+    return match status {
+        Status.Active => "Account is currently active",
+        Status.Suspended(reason) => "Suspended: " + reason,
+        Status.Terminated(code, message) => "Terminated (" + str(code) + "): " + message
+    }
+}
+print(describe(Status.Active))

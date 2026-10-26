@@ -1,6 +1,5 @@
 """Preserve CI coverage while assigning contracts and conformance separate budgets."""
 import os
-from itertools import product
 from pathlib import Path
 import re
 import subprocess
@@ -9,9 +8,9 @@ ROOT = Path(__file__).resolve().parents[2]
 CONTRACT_MODULES = (
     'test_ci_harness', 'test_execution_context', 'test_hir_return_paths',
     'test_f03_error_unions', 'test_compilation_session', 'test_compiler_service',
-    'test_architecture_contract', 'test_native_toolchain', 'test_expansion_contracts',
+    'test_effect_analysis', 'test_architecture_contract', 'test_native_toolchain', 'test_expansion_contracts',
     'test_audit_remediation', 'test_mir', 'test_selfhost_mir', 'test_native_mir_pipeline',
-    'test_selfhost_compilation_context', 'test_distribution_contract',
+    'test_selfhost_compilation_context', 'test_distribution_contract', 'test_installers',
     'test_audit_findings', 'test_standard_toolkit', 'test_http_client',
 )
 MATRIX = {'ubuntu-latest,clang', 'ubuntu-latest,gcc', 'macos-latest,clang'}
@@ -95,19 +94,31 @@ def test_ci_workflow_contracts():
     assert {os_name + ',' + compiler for os_name, compiler in rows} == MATRIX
     assert len(rows) == len(MATRIX)
     assert 'name: Conformance (${{ matrix.os }}, ${{ matrix.cc }})' in conformance
-    assert re.search(r'^    needs: \[compiler-contracts, runtime-conformance, integration-conformance, llvm-experimental, installed-llvm-sdk, llvm-comparison\]$', conformance, re.MULTILINE)
+    assert re.search(r'^    needs: \[compiler-contracts, runtime-conformance, integration-conformance, llvm-experimental, installed-llvm-sdk, llvm-comparison, seed-installers, windows-installer\]$', conformance, re.MULTILINE)
+    assert 'package_distribution.py' in jobs['seed-installers']
+    assert 'validate_unix_lifecycle.py' in jobs['seed-installers']
+    assert 'fedora:44' in jobs['seed-installers']
+    assert 'package_distribution.py' in jobs['windows-installer']
+    assert '-UpgradeFrom' in jobs['windows-installer']
     assert re.search(r'^    if: always\(\)$', conformance, re.MULTILINE)
     match = re.search(r'- name: Require compiler, runtime and integration conformance success\n[\s\S]*?        run: \|\n'
                       r'((?:          [^\n]*\n)+)', conformance)
     assert match, 'Required conformance statuses must reject failed or skipped contracts'
     script = '\n'.join(line[10:] for line in match.group(1).splitlines())
-    statuses = ('success', 'failure', 'cancelled', 'skipped')
-    for results in product(statuses, repeat=6):
-        contract_status, runtime_status, integration_status, llvm_status, llvm_sdk_status, llvm_comparison_status = results
+    variables = ('CONTRACT_RESULT','RUNTIME_RESULT','INTEGRATION_RESULT','LLVM_RESULT',
+                 'LLVM_SDK_RESULT','LLVM_COMPARISON_RESULT','SEED_INSTALLER_RESULT','WINDOWS_INSTALLER_RESULT')
+    # Exercise every required gate failing independently, including absent results.
+    # A Cartesian product repeats the same conjunction thousands of times.
+    cases = [('success',) * len(variables)]
+    for index in range(len(variables)):
+        for status in ('failure','cancelled','skipped',''):
+            row = ['success'] * len(variables)
+            row[index] = status
+            cases.append(tuple(row))
+    for results in cases:
         result = subprocess.run(
             ['bash', '-c', script], capture_output=True, text=True,
-            env=dict(os.environ, CONTRACT_RESULT=contract_status, RUNTIME_RESULT=runtime_status,
-                     INTEGRATION_RESULT=integration_status, LLVM_RESULT=llvm_status, LLVM_SDK_RESULT=llvm_sdk_status, LLVM_COMPARISON_RESULT=llvm_comparison_status), timeout=10)
+            env=dict(os.environ, **dict(zip(variables,results))), timeout=10)
         assert (result.returncode == 0) == all(status == 'success' for status in results), (results, result)
 
 

@@ -77,24 +77,33 @@ def print_help(prog: Optional[str] = None) -> None:
         prog = "wysna"
     print(f"Wysna Language Compiler & Toolchain v{WYSNA_VERSION}")
     print("Usage:")
+    print("Core tools (native C99 builds by default):")
     print(f"  {prog} lsp                                       # LSP over stdio")
-    print(f"  {prog} service serve --worker <bin> --database <db> # Local bounded HTTP/JSON pilot")
+    print(f"  {prog} explain <file.wysna> [--function NAME] [--output-format=json-v1] # Conservative effects and capability report")
+    print(f"  {prog} project <lock|check|build|run|test> [options] # Reproducible local projects")
+    print(f"  {prog} api [std/module] [--output-format=json-v1] # Discover standard-library APIs")
+    print(f"  {prog} capabilities [--output-format=json-v1]   # Discover target availability and requirements")
     print(f"  {prog} repl                                    # Start interactive REPL")
     print(f"  {prog} [run] [--stats] [--report-json <path>] [--invocation-id <id>] <file.wysna> [-- args...] # Execute Wysna source file")
     print(f"  {prog} check [--json|--output-format=json-v1] [--stats] <file.wysna>   # Static typecheck without execution")
     print(f"  {prog} fmt [--write] [--output-format=json-v1] <file.wysna> # Canonical deterministic formatter")
+    print(f"  {prog} build [--output-format=json-v1] <file.wysna> [-o <bin>] # Compile a native binary")
+    print(f"  {prog} version                                   # Show compiler version")
+    print("Compiler inspection and verification:")
     print(f"  {prog} ast [--json] <file.wysna>               # Emit canonical JSON AST (v0.1)")
     print(f"  {prog} mir <file.wysna>                        # Emit verified MIR as JSON")
     print(f"  {prog} emit-mir [--implementation=seed|compiler] <file.wysna> [-o <out.json>] # Emit portable MIR")
     print(f"  {prog} tokens <file.wysna>                     # Emit lexical token stream")
+    print(f"  {prog} emit-c [--backend=hir|ast|selfhost] [--output-format=json-v1] <file.wysna> [-o <out.c>] # Transpile to C99")
+    print(f"  {prog} build --backend=hir|ast|selfhost <file.wysna> [-o <bin>] # Select an explicit verification path")
+    print("Experimental tools (see docs/SCOPE.md for their contracts):")
+    print(f"  {prog} service serve --worker <bin> --database <db> # Local bounded HTTP/JSON pilot")
     print(f"  {prog} emit-llvm <file.wysna> [-o <out.ll>] # Native-command LLVM IR (Seed)")
     print(f"  {prog} run --backend=llvm-experimental [--sanitize] [--timeout-ms <N>] <file.wysna> [-- args...]")
     print(f"  {prog} build --backend=llvm-experimental --profile=dev|release|size <file.wysna> [-o <bin>]")
-    print(f"  {prog} emit-c [--backend=hir|ast|selfhost] [--output-format=json-v1] <file.wysna> [-o <out.c>] # Transpile to C99")
-    print(f"  {prog} build [--backend=hir|ast|selfhost] [--output-format=json-v1] <file.wysna> [-o <bin>] # Compile native binary")
+    print("Source-checkout maintenance:")
     print(f"  {prog} test [--differential [N]] [--fuzz [N]]            # Run conformance, differential, or fuzz suite")
     print(f"  {prog} bench [--update-baseline]                         # Run Seed/Compiler performance benchmark harness")
-    print(f"  {prog} version                                           # Show compiler version")
 
 
 
@@ -126,6 +135,9 @@ def main(argv=None) -> None:
     if args and args[0] == "project":
         from tooling.ProjectCLI import run_project_command
         raise SystemExit(run_project_command(args[1:]))
+    if args and args[0] == "explain":
+        from tooling.ExplainCLI import run_explain_command
+        raise SystemExit(run_explain_command(args[1:]))
     if args and args[0] == "emit-mir":
         from tooling.MirCLI import run_mir_command
         raise SystemExit(run_mir_command(args[1:]))

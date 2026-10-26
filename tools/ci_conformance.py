@@ -18,7 +18,7 @@ def source_fingerprint(root=ROOT):
     """Bind evidence to the commit and exact source, fixture and harness bytes."""
     roots = ('checker', 'codegen', 'common', 'compiler', 'error', 'formatter', 'hir',
              'lexer', 'mir', 'node', 'parser', 'runtime', 'selfhost/src', 'stdlib',
-             'tooling', 'tools', 'tests', 'examples', 'tokens', 'bench', 'packaging')
+             'tooling', 'tools', 'tests', 'examples', 'tokens', 'bench', 'packaging', 'project')
     suffixes = {'.py', '.wysna', '.c', '.h', '.def', '.expected', '.json', '.txt'}
     paths = {path for name in roots for path in (root / name).rglob('*')
              if path.is_file() and path.suffix in suffixes

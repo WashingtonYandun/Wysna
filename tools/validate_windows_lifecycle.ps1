@@ -1,6 +1,7 @@
 param(
     [Parameter(Mandatory = $true)][string]$Installer,
-    [Parameter(Mandatory = $true)][string]$ReportDirectory
+    [Parameter(Mandatory = $true)][string]$ReportDirectory,
+    [Parameter(Mandatory = $true)][string]$UpgradeFrom
 )
 $ErrorActionPreference = 'Stop'
 $installerPath = (Resolve-Path $Installer).Path
@@ -44,10 +45,20 @@ function Uninstall-Wysna([string]$Name) {
 }
 
 try {
+    # A synthetic older installer tests the upgrade path; it is never published.
+    $candidateInstaller = $installerPath
+    $installerPath = (Resolve-Path $UpgradeFrom).Path
+    Run-Installer 'previous-version-fixture' @('/TASKS=addtopath')
+    $installed = $true
+    $installerPath = $candidateInstaller
     Run-Installer 'install' @('/TASKS=addtopath')
     $installed = $true
     python (Join-Path $repoRoot 'tools/validate_windows_install.py') --installation $installRoot --report (Join-Path $reportRoot 'installed.json')
     if ($LASTEXITCODE -ne 0) { throw 'The installed compiler failed its isolated client checks.' }
+    python (Join-Path $repoRoot 'tools/validate_distribution.py') --installation $installRoot --report (Join-Path $reportRoot 'complete-installed.json')
+    if ($LASTEXITCODE -ne 0) { throw 'The installed product failed complete tool acceptance.' }
+    python (Join-Path $repoRoot 'tools/validate_installed_application.py') --installation $installRoot --report (Join-Path $reportRoot 'application.json')
+    if ($LASTEXITCODE -ne 0) { throw 'The installed product failed the reference application.' }
     $installedPath = Get-UserPath
     if ($installedPath -cne ($baseline + ';' + $installRoot)) { throw 'Installation changed unrelated PATH content.' }
 
@@ -84,7 +95,7 @@ try {
     Uninstall-Wysna 'no-path-uninstall'
     $installed = $false
     if ((Get-UserPath) -cne $baseline) { throw 'Uninstall changed PATH after opting out.' }
-    @{ passed = $true; install = $true; repair = $true; uninstall = $true; projects_preserved = $true;
+    @{ passed = $true; install = $true; repair = $true; upgrade_from_synthetic_fixture = $true; uninstall = $true; projects_preserved = $true;
        owned_path_removed = $true; unowned_path_preserved = $true; path_opt_out = $true } |
         ConvertTo-Json | Set-Content (Join-Path $reportRoot 'lifecycle.json') -Encoding utf8
 } finally {

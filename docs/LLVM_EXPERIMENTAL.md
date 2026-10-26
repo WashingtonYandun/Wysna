@@ -23,6 +23,10 @@ macOS needs `xcrun dsymutil`. `CC` selects that compiler. The installed LLVM SDK
 uses its own verified `opt`, `llc`, `dsymutil` and Zig instead and does not import
 llvmlite. Missing or incompatible tools produce an error, without another backend.
 
+`wysna explain` analyzes verified MIR before backend selection. It does not require
+LLVM, is not part of LLVM qualification, and is not exposed by the restricted LLVM
+SDK launcher.
+
 `check`, `emit-llvm` and `build` support `--output-format=json-v1`. Native `run`
 preserves arguments, environment, working directory, streams and application exit
 status. Use `--report-json PATH` for its separate structured execution result.

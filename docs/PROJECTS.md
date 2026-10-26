@@ -211,4 +211,6 @@ error channels, documentation when present, and explicit `unknown` values for
 ownership and effect facts that are not currently encoded in the language metadata.
 `wysna api --manifest path/to/wysna.toml` indexes a checked project module graph.
 `wysna capabilities --output-format=json-v1` reports commands and targets
-supported by the installed compiler.
+supported by the installed compiler. `wysna explain path/to/source.wysna --manifest
+path/to/wysna.toml` produces a separate read-only [effect report](EFFECTS.md); project
+target checks do not consume that report.
