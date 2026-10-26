@@ -1,5 +1,7 @@
 """Entry point for the installed Seed LLVM SDK; imports only its bundled Seed."""
 import json
+import hashlib
+import uuid
 import os
 from pathlib import Path
 import sys
@@ -10,22 +12,52 @@ sys.path.insert(0, str(ROOT / 'seed'))
 os.environ['WYSNA_LLVM_SDK'] = str(ROOT)
 
 
+# The packager fills this from the canonical ToolResult factory, before Seed imports.
+BOOTSTRAP_ERROR_TEMPLATE = None
+BOOTSTRAP_FILES = ('compiler/__init__.py', 'compiler/LlvmSdk.py', 'compiler/ArtifactCache.py',
+                   'compiler/NativeToolchain.py', 'common/__init__.py', 'common/Platform.py',
+                   'error/__init__.py', 'error/Error.py')
+
+
+def preflight():
+    record = json.loads((ROOT / 'llvm-sdk.json').read_text(encoding='utf-8'))
+    if not isinstance(record, dict) or not isinstance(record.get('files'), dict):
+        raise ValueError('LLVM SDK manifest has no valid file index')
+    for relative in BOOTSTRAP_FILES:
+        key = 'seed/' + relative
+        source = ROOT / key
+        expected = record['files'].get(key)
+        if (not expected or not source.resolve().is_relative_to(ROOT)
+                or hashlib.sha256(source.read_bytes()).hexdigest() != expected):
+            raise ValueError('LLVM SDK bootstrap file is corrupt or missing: ' + key)
+
+
+def failure(command, message, options):
+    if '--output-format=json-v1' in options and BOOTSTRAP_ERROR_TEMPLATE is not None:
+        result = dict(BOOTSTRAP_ERROR_TEMPLATE)
+        result['command'] = command
+        result['invocation_id'] = str(uuid.uuid4())
+        result['diagnostics'] = [{**result['diagnostics'][0], 'message': str(message)}]
+        print(json.dumps(result, ensure_ascii=False, separators=(',', ':')))
+    else:
+        print('[W5001] LLVM SDK Error: ' + str(message), file=sys.stderr)
+    return 3
+
+
 def main():
-    from compiler.LlvmSdk import LlvmSdk
-    from compiler.NativeToolchain import NativeCompilationError
-    from tooling.ToolResult import diagnostic_record, tool_result, write_tool_result
     args = sys.argv[1:]
     options = args[:args.index('--')] if '--' in args else args
     command = args[0] if args and not args[0].startswith('-') else 'run'
     try:
+        preflight()
+        from compiler.LlvmSdk import LlvmSdk
+        from compiler.NativeToolchain import NativeCompilationError
+    except (OSError, ValueError, KeyError, TypeError, ImportError, SyntaxError) as error:
+        return failure(command, error, options)
+    try:
         sdk = LlvmSdk(ROOT)
     except NativeCompilationError as error:
-        if '--output-format=json-v1' in options:
-            write_tool_result(tool_result(command, 'toolchain_error', 3,
-                              diagnostics=[diagnostic_record('W5001', 'llvm-sdk', error.stderr)]), sys.stdout)
-        else:
-            print('[W5001] LLVM SDK Error: ' + error.stderr, file=sys.stderr)
-        return 3
+        return failure(command, error.stderr, options)
     if args in (['version'], ['--version'], ['-v']):
         print('Wysna Seed LLVM SDK ' + sdk.record['version'] + ' (LLVM ' + sdk.record['llvm_version'] +
               ', ' + sdk.record['triple'] + ')')

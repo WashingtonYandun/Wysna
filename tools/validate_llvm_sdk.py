@@ -103,16 +103,33 @@ def validate(sdk, report, source_commit=None, forbid_source=None):
             protected = run(['emit-llvm', source, '-o', sdk / 'seed/main.py'], expected=1)
             assert 'W5002' in protected.stderr
             # Missing and corrupt components must fail before even the version command succeeds.
-            damaged = sdk / 'seed/runtime/wysna_llvm_operations.def'
-            saved = damaged.read_bytes()
-            damaged.chmod(0o644)
+            for component in ('runtime/wysna_llvm_operations.def', 'compiler/LlvmSdk.py',
+                              'tooling/ToolResult.py', 'common/Version.py'):
+                damaged = sdk / 'seed' / component
+                saved = damaged.read_bytes()
+                damaged.chmod(0o644)
+                try:
+                    damaged.write_bytes(saved + b'\0')
+                    result = run(['version', '--output-format=json-v1'], expected=3)
+                    diagnostic = json.loads(result.stdout)
+                    assert diagnostic['schema_version'] == 'wysna.tool-result/1'
+                    assert diagnostic['status'] == 'toolchain_error' and not result.stderr
+                    assert diagnostic['diagnostics'][0]['code'] == 'W5001'
+                finally:
+                    damaged.write_bytes(saved)
+                    damaged.chmod(before[damaged.relative_to(sdk).as_posix()][1])
+            manifest_path = sdk / 'llvm-sdk.json'
+            saved_manifest = manifest_path.read_bytes()
+            manifest_mode = stat.S_IMODE(manifest_path.stat().st_mode)
+            manifest_path.chmod(0o644)
             try:
-                damaged.write_bytes(saved + b'\n/* corrupt installation */\n')
-                result = run(['version', '--output-format=json-v1'], expected=3)
-                assert json.loads(result.stdout)['status'] == 'toolchain_error'
+                for malformed in ('[]', '{}', '{"files": []}'):
+                    manifest_path.write_text(malformed)
+                    rejected = json.loads(run(['version', '--output-format=json-v1'], expected=3).stdout)
+                    assert rejected['diagnostics'][0]['code'] == 'W5001'
             finally:
-                damaged.write_bytes(saved)
-                damaged.chmod(before[damaged.relative_to(sdk).as_posix()][1])
+                manifest_path.write_bytes(saved_manifest)
+                manifest_path.chmod(manifest_mode)
             missing = sdk / 'toolchain/llvm/bin/llc'
             directory_mode = stat.S_IMODE(missing.parent.stat().st_mode)
             missing.parent.chmod(directory_mode | 0o200)

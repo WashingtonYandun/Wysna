@@ -561,16 +561,19 @@ print(inspect(41))
         worker = self.directory / 'worker.py'
         marker = self.directory / 'orphan'
         ready = self.directory / 'ready'
-        grandchild = ('import time; from pathlib import Path; '
-                      + 'Path(' + repr(str(ready)) + ').write_text("ready"); time.sleep(1.5); '
-                      + 'Path(' + repr(str(marker)) + ').write_text("orphan")')
+        trigger = self.directory / 'trigger'
+        grandchild = ('import time\nfrom pathlib import Path\n'
+                      + 'Path(' + repr(str(ready)) + ').write_text("ready")\n'
+                      + 'deadline = time.monotonic() + 20\n'
+                      + 'while not Path(' + repr(str(trigger)) + ').exists() and time.monotonic() < deadline: time.sleep(0.02)\n'
+                      + 'if Path(' + repr(str(trigger)) + ').exists(): Path(' + repr(str(marker)) + ').write_text("orphan")\n')
         worker.write_text('import subprocess,sys,time\nsubprocess.Popen([sys.executable,"-c",'
-                          + repr(grandchild) + '],start_new_session=True)\ntime.sleep(10)\n')
+                          + repr(grandchild) + '],start_new_session=True)\ntime.sleep(20)\n')
         for backend, outer_timeout in (('llvm', True), ('llvm', False), ('c99', False)):
             with self.subTest(backend=backend, outer_timeout=outer_timeout):
-                for path in (ready, marker):
+                for path in (ready, marker, trigger):
                     path.unlink(missing_ok=True)
-                limit = 5000 if outer_timeout else 500
+                limit = 15000 if outer_timeout else 5000
                 source = ('import "std/process" as process\nprocess.run(' + json.dumps(sys.executable)
                           + ', [' + json.dumps(str(worker), ensure_ascii=False) + '], ' + str(limit)
                           + ') else error { print("timed out"); -1 }\n')
@@ -581,10 +584,11 @@ print(inspect(41))
                     build = NativeToolchain(ROOT).build(service.emit_c(checked).source, self.directory / 'tree')
                 context = ExecutionContext.for_program('wysna', stdin=io.StringIO(),
                                                        stdout=io.StringIO(), stderr=io.StringIO())
-                result = run_native(build.output_path, context, 500 if outer_timeout else 5000)
+                result = run_native(build.output_path, context, 5000 if outer_timeout else 12000)
                 self.assertEqual(result.timed_out, outer_timeout)
                 self.assertTrue(ready.exists(), 'The detached descendant must have started before cancellation')
-                time.sleep(1.6)
+                trigger.write_text('release')
+                time.sleep(0.4)
                 self.assertFalse(marker.exists(), 'A detached worker survived cancellation')
                 if not outer_timeout:
                     self.assertEqual(context.stdout.getvalue(), 'timed out\n')

@@ -18,6 +18,7 @@ from common.Version import WYSNA_VERSION
 from compiler.LlvmSdk import PLATFORMS, host_platform, query_layout, run_tool
 from tools.package_components import download, extract, sha256
 from tools.ci_conformance import source_fingerprint
+from tooling.ToolResult import tool_result, diagnostic_record
 
 LICENSE = {'url': 'https://raw.githubusercontent.com/llvm/llvm-project/llvmorg-20.1.8/llvm/LICENSE.TXT',
            'sha256': '8d85c1057d742e597985c7d4e6320b015a9139385cff4cbae06ffc0ebe89afee'}
@@ -141,7 +142,15 @@ def assemble(output, cache, wheel, *, llvm_archive=None, zig_archive=None, sourc
         shutil.move(str(roots[0]), stage / 'toolchain/zig')
         shutil.copy2(license_path, stage / 'toolchain/llvm/LICENSE.TXT')
         shutil.copy2(ROOT / 'LICENSE', stage / 'LICENSE')
-        shutil.copy2(ROOT / 'packaging/llvm/launcher.py', stage / 'launcher.py')
+        launcher_source = (ROOT / 'packaging/llvm/launcher.py').read_text(encoding='utf-8')
+        template = tool_result('sdk-bootstrap', 'toolchain_error', 3,
+                               diagnostics=[diagnostic_record('W5001', 'llvm-sdk', '')],
+                               invocation_id='bootstrap-template',
+                               target={'profile': 'llvm-native-v1', 'triple': policy['triple']})
+        marker = 'BOOTSTRAP_ERROR_TEMPLATE = None'
+        if launcher_source.count(marker) != 1:
+            raise ValueError('SDK bootstrap result marker is missing or ambiguous')
+        (stage / 'launcher.py').write_text(launcher_source.replace(marker, 'BOOTSTRAP_ERROR_TEMPLATE = ' + repr(template)), encoding='utf-8')
         (stage / 'bin').mkdir()
         launcher = stage / 'bin/wysna'
         launcher.write_text('''#!/bin/sh
