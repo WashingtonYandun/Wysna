@@ -196,10 +196,8 @@ jobs:
             tests/differential/failures/
             tests/fuzz/failures/
 
-  conformance:
-    needs: [compiler-contracts, runtime-conformance]
-    if: always()
-    name: Conformance (${{ matrix.os }}, ${{ matrix.cc }})
+  integration-conformance:
+    name: Integration conformance (${{ matrix.os }}, ${{ matrix.cc }})
     runs-on: ${{ matrix.os }}
     timeout-minutes: 30
     strategy:
@@ -213,15 +211,6 @@ jobs:
       CC: ${{ matrix.cc }}
       WYSNA_CI_ARTIFACTS: ${{ github.workspace }}/.wysna_cache/ci-artifacts
     steps:
-      - name: Require compiler and runtime conformance success
-        env:
-          CONTRACT_RESULT: ${{ needs.compiler-contracts.result }}
-          RUNTIME_RESULT: ${{ needs.runtime-conformance.result }}
-        run: |
-          if [ "$CONTRACT_RESULT" != "success" ] || [ "$RUNTIME_RESULT" != "success" ]; then
-            echo "Prerequisites did not pass: compiler=$CONTRACT_RESULT runtime=$RUNTIME_RESULT" >&2
-            exit 1
-          fi
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
         with:
@@ -272,6 +261,31 @@ jobs:
             .wysna_cache/compiler*.c
             tests/differential/failures/
             tests/fuzz/failures/
+
+  conformance:
+    needs: [compiler-contracts, runtime-conformance, integration-conformance]
+    if: always()
+    name: Conformance (${{ matrix.os }}, ${{ matrix.cc }})
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - {os: ubuntu-latest, cc: clang}
+          - {os: ubuntu-latest, cc: gcc}
+          - {os: macos-latest, cc: clang}
+    steps:
+      - name: Require compiler, runtime and integration conformance success
+        env:
+          CONTRACT_RESULT: ${{ needs.compiler-contracts.result }}
+          RUNTIME_RESULT: ${{ needs.runtime-conformance.result }}
+          INTEGRATION_RESULT: ${{ needs.integration-conformance.result }}
+        run: |
+          if [ "$CONTRACT_RESULT" != "success" ] || [ "$RUNTIME_RESULT" != "success" ] || [ "$INTEGRATION_RESULT" != "success" ]; then
+            echo "Prerequisites did not pass: compiler=$CONTRACT_RESULT runtime=$RUNTIME_RESULT integration=$INTEGRATION_RESULT" >&2
+            exit 1
+          fi
 
   service-load-campaign:
     name: Service load and RSS campaign (Ubuntu)

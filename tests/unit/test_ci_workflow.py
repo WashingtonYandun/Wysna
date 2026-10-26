@@ -44,8 +44,9 @@ def test_ci_workflow_contracts():
     assert 'compiler-contracts' in jobs, 'Compiler contracts need their own execution budget'
     contracts, conformance = jobs['compiler-contracts'], jobs['conformance']
     runtime = jobs['runtime-conformance']
+    integration = jobs['integration-conformance']
     assert 'PYTHONUNBUFFERED: "1"' in source
-    for job in (contracts, runtime, conformance):
+    for job in (contracts, runtime, integration):
         rows = re.findall(r'- \{os: ([\w-]+), cc: ([\w-]+)\}', job)
         assert {os_name + ',' + compiler for os_name, compiler in rows} == MATRIX
         assert len(rows) == len(MATRIX)
@@ -66,25 +67,34 @@ def test_ci_workflow_contracts():
         'python3 tools/validate_sqlite_ffi.py --sanitize',
         'python3 tools/validate_sqlite_import.py --sanitize --rows 1000 --samples 1',
     ):
-        assert command in conformance, command
+        assert command in integration, command
     full_suite = './wysna test 2>&1 | tee .wysna_cache/ci-artifacts/conformance.log'
-    assert full_suite in runtime and full_suite not in conformance
-    assert '    needs:' not in runtime
-    assert re.search(r'^    needs: \[compiler-contracts, runtime-conformance\]$', conformance, re.MULTILINE)
+    assert full_suite in runtime and full_suite not in integration
+    assert '    needs:' not in runtime and '    needs:' not in integration
+    assert 'actions/checkout' not in conformance
+    assert 'runs-on: ubuntu-latest' in conformance
+    assert 'timeout-minutes: 5' in conformance
+    rows = re.findall(r'- \{os: ([\w-]+), cc: ([\w-]+)\}', conformance)
+    assert {os_name + ',' + compiler for os_name, compiler in rows} == MATRIX
+    assert len(rows) == len(MATRIX)
+    assert 'name: Conformance (${{ matrix.os }}, ${{ matrix.cc }})' in conformance
+    assert re.search(r'^    needs: \[compiler-contracts, runtime-conformance, integration-conformance\]$', conformance, re.MULTILINE)
     assert re.search(r'^    if: always\(\)$', conformance, re.MULTILINE)
-    match = re.search(r'- name: Require compiler and runtime conformance success\n[\s\S]*?        run: \|\n'
+    match = re.search(r'- name: Require compiler, runtime and integration conformance success\n[\s\S]*?        run: \|\n'
                       r'((?:          [^\n]*\n)+)', conformance)
     assert match, 'Required conformance statuses must reject failed or skipped contracts'
     script = '\n'.join(line[10:] for line in match.group(1).splitlines())
     statuses = ('success', 'failure', 'cancelled', 'skipped')
     for contract_status in statuses:
         for runtime_status in statuses:
-            result = subprocess.run(
-                ['bash', '-c', script], capture_output=True, text=True,
-                env=dict(os.environ, CONTRACT_RESULT=contract_status, RUNTIME_RESULT=runtime_status),
-                timeout=10)
-            assert (result.returncode == 0) == (contract_status == runtime_status == 'success'), (
-                contract_status, runtime_status, result)
+            for integration_status in statuses:
+                result = subprocess.run(
+                    ['bash', '-c', script], capture_output=True, text=True,
+                    env=dict(os.environ, CONTRACT_RESULT=contract_status, RUNTIME_RESULT=runtime_status,
+                             INTEGRATION_RESULT=integration_status), timeout=10)
+                assert (result.returncode == 0) == (contract_status == runtime_status == integration_status == 'success'), (
+                    contract_status, runtime_status, integration_status, result)
+
 
 
 if __name__ == '__main__':

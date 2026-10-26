@@ -97,9 +97,10 @@ installed-wheel checks remain necessary; structural checks do not replace them.
 
 
 CI gives compiler/tooling contracts, full runtime conformance and integration
-conformance separate job budgets on the same platform/compiler matrix. Compiler
-contracts and full runtime conformance run independently; integration conformance
-rejects failed, cancelled or skipped prerequisite jobs explicitly. The split
-preserves every test, release fixture, bootstrap stage and sanitizer check.
-Workflow contracts enforce coverage and all prerequisite status combinations
-without extending the execution time limit.
+conformance separate job budgets on the same platform/compiler matrix. All three
+run independently. A final gate preserves the existing required conformance check
+names and rejects failed, cancelled or skipped prerequisite groups explicitly.
+These small status checks run on Linux and require no checkout or macOS runner.
+The split preserves every test, release fixture, bootstrap stage and sanitizer
+check. Workflow contracts enforce coverage and all 64 prerequisite status
+combinations without extending the execution time limit for any test suite.
