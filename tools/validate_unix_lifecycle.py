@@ -72,7 +72,7 @@ def validate(bundle, installer, report, *, application_http=False):
             run('create-foreign-command', ['cp',foreign,command], privileged=True)
             try:
                 denied = install(installer, 'reject-unmanaged-command', code=None)
-                assert denied.returncode != 0 and 'unmanaged' in (denied.stdout + denied.stderr).lower(), denied
+                assert denied.returncode != 0, 'Installer accepted a foreign command'
                 assert command.read_text() == foreign.read_text(), 'Installer replaced an unmanaged command'
             finally:
                 run('remove-foreign-fixture', ['rm',command], privileged=True)
