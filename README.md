@@ -7,8 +7,8 @@ scripting and native programs. It combines explicit error channels, deterministi
 reference counting and copy-on-write values with tools that inspect and validate
 programs before execution.
 
-The current source version is **0.5.0 development**. Installation and release
-qualification are in progress. The published `v0.4.0a1-pilot.2` prerelease is older
+The current source version is **0.5.0 development**. CI produces installer candidates
+and qualification reports for each source commit. The published `v0.4.0a1-pilot.2` prerelease is older
 and does not contain the current toolchain. See [scope and status](docs/SCOPE.md).
 
 ## Install

@@ -242,7 +242,7 @@ jobs:
           path: .wysna_cache/installation-wheel
       - name: Verify the installed CLI without checkout access or installed writes
         run: |
-          python wheel-artifact/validate_wheel.py --wheel wheel-artifact/*.whl --forbid-source "$GITHUB_WORKSPACE" --report installed-wheel.json
+          python .wysna_cache/installation-wheel/validate_wheel.py --wheel .wysna_cache/installation-wheel/*.whl --forbid-source "$GITHUB_WORKSPACE" --report installed-wheel.json
       - uses: actions/upload-artifact@v4
         if: always()
         with:

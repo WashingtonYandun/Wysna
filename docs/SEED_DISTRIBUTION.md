@@ -95,6 +95,9 @@ the bundled toolchain.
   Apple's system libcurl uses a macOS SDK; `SDKROOT` can select a compatible SDK.
   A separately installed libcurl must expose headers/libraries compatible with
   the private compiler target. Core native commands do not require these inputs.
+  The private Python does not bundle PycURL: use native HTTP builds for this
+  distribution. Interpreter HTTP extras described elsewhere apply to source/wheel
+  environments and are not installed by the graphical package.
 - Project, formatter and LSP commands come from the bundled Seed wheel.
 - WASI execution still needs the documented Wasmtime dependency and wasi-sdk;
   browser-library builds need Emscripten. These optional target toolchains are not

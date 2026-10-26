@@ -100,6 +100,8 @@ def test_ci_workflow_contracts():
     assert 'fedora:44' in jobs['seed-installers']
     assert 'package_distribution.py' in jobs['windows-installer']
     assert '-UpgradeFrom' in jobs['windows-installer']
+    assert 'path: .wysna_cache/installation-wheel' in jobs['installed-wheel']
+    assert 'python .wysna_cache/installation-wheel/validate_wheel.py --wheel .wysna_cache/installation-wheel/*.whl' in jobs['installed-wheel']
     assert re.search(r'^    if: always\(\)$', conformance, re.MULTILINE)
     match = re.search(r'- name: Require compiler, runtime and integration conformance success\n[\s\S]*?        run: \|\n'
                       r'((?:          [^\n]*\n)+)', conformance)

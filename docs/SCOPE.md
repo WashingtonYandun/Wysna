@@ -13,7 +13,7 @@ Users must not need to select a compiler implementation or install Python, pip o
 a C compiler to use the installed core tools. Source and silent command-line flows
 remain available for contributors and agents. See [distribution status](SEED_DISTRIBUTION.md).
 
-The installer work is in progress. A package must pass installation, repair/update,
+Installer artifacts are qualified per source commit. A package must pass installation, repair/update,
 relocation where applicable, real program execution and uninstallation acceptance
 on its OS before being announced as available. Signing and notarization are
 separate recorded properties, not consequences of a checksum.

@@ -81,7 +81,7 @@ def test_seed_wheel_validation_is_shared_and_precedes_any_extraction():
         directory = Path(temporary)
         source = directory / 'source'
         source.mkdir()
-        (source / 'main.py').write_text('print("current")\n')
+        (source / 'main.py').write_text('print("current")\n', newline='\n')
         for kind in ('valid', 'stale', 'duplicate', 'escape'):
             wheel = directory / (kind + '.whl')
             with warnings.catch_warnings():
