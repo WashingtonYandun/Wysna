@@ -1,21 +1,32 @@
 fn run_compiler() -> unit ! IoError {
-    let cli = args()
-    if len(cli) > 1 and cli[1] == "--emit-mir" {
-        if len(cli) != 3 {
+    let raw_cli = args()
+    let mut cli = raw_cli
+    if len(raw_cli) > 1 and raw_cli[1] == "--stdlib-root" {
+        if len(raw_cli) < 5 { eprint("[W5002] Missing SDK compiler arguments") exit(2) }
+        cli = [raw_cli[0]]
+        for index in 3..len(raw_cli) { cli.append(raw_cli[index]) }
+    }
+    if len(cli) > 1 and (cli[1] == "--emit-mir" or cli[1] == "--emit-c-mir" or cli[1] == "--check-mir") {
+        if (len(cli) != 3 and len(cli) != 4) or cli[1] == "--check-mir" and len(cli) != 3 {
             eprint("[W5002] Usage: Wysna Compiler --emit-mir INPUT")
             exit(2)
         }
         let source = read_file(cli[2])?
-        let payload = emit_mir_module(source, cli[2])
-        print(payload)
+        let module = mir_build(check_source(source, cli[2]))
+        if cli[1] == "--check-mir" { mir_verify(module) }
+        else {
+            let output = if cli[1] == "--emit-mir" { mir_module_json(module) } else { mir_emit_c(module) }
+            if len(cli) == 4 {
+                if module_normalize(cli[2]) == module_normalize(cli[3]) { eprint("[W5002] Output must differ from input") exit(2) }
+                write_file(cli[3], output)?
+            } else { print(output) }
+        }
         return
     }
-    let mut in_path = "selfhost/compiler.wysna"
-    let mut out_path = "build/compiler1.c"
-    if len(cli) >= 3 {
-        in_path = cli[1]
-        out_path = cli[2]
-    }
+    if len(cli) != 3 { eprint("[W5002] Usage: Wysna Compiler INPUT OUTPUT") exit(2) }
+    let in_path = cli[1]
+    let out_path = cli[2]
+    if module_normalize(in_path) == module_normalize(out_path) { eprint("[W5002] Output must differ from input") exit(2) }
     let src = read_file(in_path)?
     let checked = check_source(src, in_path)
     let c_code = compile_source(checked)

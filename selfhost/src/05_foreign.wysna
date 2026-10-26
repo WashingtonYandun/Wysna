@@ -1,0 +1,23 @@
+# Explicit scalar/opaque ABI policy; no source traversal or emission context.
+fn foreign_native_name(name: str) -> str {
+    let prefix = "__wysna_module_"
+    if len(name) > len(prefix) and slice(name, 0, len(prefix)) == prefix {
+        for i in len(prefix)..len(name) - 1 { if slice(name, i, i + 2) == "__" { return slice(name, i + 2, len(name)) } }
+    }
+    return name
+}
+fn foreign_c_type(name: str, returned: bool, source: Token) -> str {
+    if name == "int32" { return "int32_t" }
+    if name == "int" or name == "int64" { return "int64_t" }
+    if name == "float" or name == "double" { return "double" }
+    if name == "bool" { return "bool" }
+    if name == "opaque" { return "void*" }
+    if name == "unit" and returned { return "void" }
+    report_error_at("W2001", source, "unsupported C ABI type")
+    return "void"
+}
+fn foreign_type_id(name: str) -> str {
+    if name == "int" or name == "int32" or name == "int64" { return "int" }
+    if name == "float" or name == "double" { return "float" }
+    return name
+}

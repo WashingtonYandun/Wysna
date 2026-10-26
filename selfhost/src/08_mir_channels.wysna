@@ -4,7 +4,7 @@ fn mir_pack(context: MirBuilder, value: int, type_id: int, error: bool, source: 
 }
 
 fn mir_error_test(context: MirBuilder, value: int, source: Token) -> int {
-    let predicate = mir_op(context, "test", 2, [value], "err", mir_literal_unit(), source)
+    let predicate = mir_op(context, "test", 2, [value], if mir_is_optional(context.types, context.slots[value].type_id) { "none" } else { "err" }, mir_literal_unit(), source)
     context.slots[predicate].predicate = true
     return predicate
 }
@@ -12,11 +12,22 @@ fn mir_error_test(context: MirBuilder, value: int, source: Token) -> int {
 fn mir_coerce(context: MirBuilder, value: int, target: int, discard: bool, source: Token) -> int {
     let actual = context.slots[value].type_id
     if actual == target { return value }
-    if mir_is_result(context.result_types, target) {
-        let ok = context.result_types[target - 7].ok
+    if mir_is_result(context.types, actual) and mir_is_result(context.types, target) {
+        if not mir_compatible(context.types, context.records, actual, target) and actual != context.types[target].args[0] { return mir_retype_result(context, value, target, discard, source) }
+    }
+    if mir_is_optional(context.types, target) {
+        if actual == 6 { return mir_constant(context, MirLiteral { type_id: 6, integer: 0, floating: 0.0, boolean: false, text: "" }, target, source) }
+        if mir_is_optional(context.types, actual) and not mir_compatible(context.types, context.records, actual, target) {
+            return mir_retype_optional(context, value, target, source)
+        }
+        if actual == context.types[target].args[0] { return mir_op(context, "runtime", target, [value], "wysna_enum_payload", mir_literal_unit(), source) }
+    }
+    if mir_compatible(context.types, context.records, actual, target) { return mir_op(context, "clone", target, [value], "", mir_literal_unit(), source) }
+    if mir_is_result(context.types, target) {
+        let ok = context.types[target].args[0]
         if actual == ok { return mir_pack(context, value, target, false, source) }
         if discard and ok == 1 {
-            if mir_is_result(context.result_types, actual) {
+            if mir_is_result(context.types, actual) {
                 let result = mir_slot(context, target, "", false)
                 let condition = mir_error_test(context, value, source)
                 let failed = mir_new_block(context, source)
@@ -24,7 +35,7 @@ fn mir_coerce(context: MirBuilder, value: int, target: int, discard: bool, sourc
                 let join = mir_new_block(context, source)
                 mir_terminate(context, "branch", [failed, succeeded], condition, source)
                 context.current = failed
-                let error = mir_op(context, "runtime", 5, [value], "wysna_unwrap_err", mir_literal_unit(), source)
+                let error = mir_op(context, "runtime", context.types[actual].args[1], [value], "wysna_unwrap_err", mir_literal_unit(), source)
                 let wrapped = mir_pack(context, error, target, true, source)
                 mir_store(context, result, wrapped, source)
                 mir_jump(context, join, source)
@@ -46,8 +57,9 @@ fn mir_coerce(context: MirBuilder, value: int, target: int, discard: bool, sourc
 
 fn mir_channel(context: MirBuilder, value: int, source: Token, propagate: bool, error_binding: int, handler: int) -> int {
     let channel = context.slots[value].type_id
-    if not mir_is_result(context.result_types, channel) { mir_unsupported(source, "non-result channels") }
-    let ok = context.result_types[channel - 7].ok
+    if mir_is_optional(context.types, channel) { return mir_optional_channel(context, value, source, propagate, handler) }
+    if not mir_is_result(context.types, channel) { mir_unsupported(source, "non-result channels") }
+    let ok = context.types[channel].args[0]
     let result = mir_slot(context, ok, "", false)
     let condition = mir_error_test(context, value, source)
     let failed = mir_new_block(context, source)
@@ -56,15 +68,15 @@ fn mir_channel(context: MirBuilder, value: int, source: Token, propagate: bool, 
     mir_terminate(context, "branch", [failed, succeeded], condition, source)
     context.current = failed
     if propagate {
-        if not mir_is_result(context.result_types, context.return_type) { report_error_at("W9999", source, "propagation requires a checked result return") }
-        let error = mir_op(context, "runtime", 5, [value], "wysna_unwrap_err", mir_literal_unit(), source)
+        if not mir_is_result(context.types, context.return_type) { report_error_at("W9999", source, "propagation requires a checked result return") }
+        let error = mir_op(context, "runtime", context.types[channel].args[1], [value], "wysna_unwrap_err", mir_literal_unit(), source)
         let returned = mir_pack(context, error, context.return_type, true, source)
         mir_return(context, returned, source)
     } else {
         let bindings = context.bindings
         mir_push_scope(context)
         if error_binding >= 0 {
-            let error = mir_op(context, "runtime", 5, [value], "wysna_unwrap_err", mir_literal_unit(), source)
+            let error = mir_op(context, "runtime", context.types[channel].args[1], [value], "wysna_unwrap_err", mir_literal_unit(), source)
             context.bindings.append(MirBinding { symbol: error_binding, slot: error })
         }
         let fallback = mir_block(context, handler)
@@ -80,6 +92,83 @@ fn mir_channel(context: MirBuilder, value: int, source: Token, propagate: bool, 
     context.current = succeeded
     let unwrapped = mir_op(context, "runtime", ok, [value], "wysna_unwrap_ok", mir_literal_unit(), source)
     mir_store(context, result, unwrapped, source)
+    mir_jump(context, join, source)
+    context.current = join
+    return result
+}
+
+
+fn mir_optional_channel(context: MirBuilder, value: int, source: Token, propagate: bool, handler: int) -> int {
+    let channel = context.slots[value].type_id
+    if not mir_is_optional(context.types, channel) { report_error_at("W9999", source, "optional channel requires optional storage") }
+    let ok = context.types[channel].args[0]
+    let result = mir_slot(context, ok, "", false)
+    let condition = mir_error_test(context, value, source)
+    let failed = mir_new_block(context, source)
+    let succeeded = mir_new_block(context, source)
+    let join = mir_new_block(context, source)
+    mir_terminate(context, "branch", [failed, succeeded], condition, source)
+    context.current = failed
+    if propagate {
+        if not mir_is_optional(context.types, context.return_type) { report_error_at("W9999", source, "optional propagation requires optional return") }
+        let absent = mir_constant(context, MirLiteral { type_id: 6, integer: 0, floating: 0.0, boolean: false, text: "" }, context.return_type, source)
+        mir_return(context, absent, source)
+    } else {
+        let fallback = mir_expression(context, handler)
+        if context.current >= 0 {
+            mir_store(context, result, mir_coerce(context, fallback, ok, false, source), source)
+            mir_jump(context, join, source)
+        }
+    }
+    context.current = succeeded
+    let unwrapped = mir_op(context, "runtime", ok, [value], "wysna_unwrap_optional", mir_literal_unit(), source)
+    mir_store(context, result, unwrapped, source)
+    mir_jump(context, join, source)
+    context.current = join
+    return result
+}
+
+# Reconstruct channels when contextual typing resolves a constructor placeholder.
+fn mir_retype_result(context: MirBuilder, value: int, target: int, discard: bool, source: Token) -> int {
+    let actual = context.types[context.slots[value].type_id]
+    let expected = context.types[target]
+    let result = mir_slot(context, target, "", false)
+    let condition = mir_error_test(context, value, source)
+    let failed = mir_new_block(context, source)
+    let succeeded = mir_new_block(context, source)
+    let join = mir_new_block(context, source)
+    mir_terminate(context, "branch", [failed, succeeded], condition, source)
+    context.current = failed
+    let error = mir_op(context, "runtime", actual.args[1], [value], "wysna_unwrap_err", mir_literal_unit(), source)
+    let error_value = mir_coerce(context, error, expected.args[1], false, source)
+    mir_store(context, result, mir_pack(context, error_value, target, true, source), source)
+    mir_jump(context, join, source)
+    context.current = succeeded
+    let payload = mir_op(context, "runtime", actual.args[0], [value], "wysna_unwrap_ok", mir_literal_unit(), source)
+    let success = if discard and expected.args[0] == 1 { mir_constant(context, mir_literal_unit(), 1, source) } else { mir_coerce(context, payload, expected.args[0], false, source) }
+    mir_store(context, result, mir_pack(context, success, target, false, source), source)
+    mir_jump(context, join, source)
+    context.current = join
+    return result
+}
+
+fn mir_retype_optional(context: MirBuilder, value: int, target: int, source: Token) -> int {
+    let actual = context.types[context.slots[value].type_id]
+    let result = mir_slot(context, target, "", false)
+    let condition = mir_error_test(context, value, source)
+    let absent = mir_new_block(context, source)
+    let present = mir_new_block(context, source)
+    let join = mir_new_block(context, source)
+    mir_terminate(context, "branch", [absent, present], condition, source)
+    context.current = absent
+    let absent_value = mir_constant(context, MirLiteral { type_id: 6, integer: 0, floating: 0.0, boolean: false, text: "" }, target, source)
+    mir_store(context, result, absent_value, source)
+    mir_jump(context, join, source)
+    context.current = present
+    let payload = mir_op(context, "runtime", actual.args[0], [value], "wysna_unwrap_optional", mir_literal_unit(), source)
+    let checked = mir_coerce(context, payload, context.types[target].args[0], false, source)
+    let wrapped = mir_op(context, "runtime", target, [checked], "wysna_enum_payload", mir_literal_unit(), source)
+    mir_store(context, result, wrapped, source)
     mir_jump(context, join, source)
     context.current = join
     return result

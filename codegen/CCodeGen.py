@@ -573,7 +573,7 @@ class CCodeGen:
             idx_tmp = self.new_aux("_idx")
             item_tmp = self.new_aux("_item")
             self._declare_owned_var(iter_tmp, self._own_expr(iter_val), for_outer)
-            for_outer.append(f"for (int32_t {idx_tmp} = 0; {idx_tmp} < {iter_tmp}.as.list->len; {idx_tmp}++) {{")
+            for_outer.append(f"for (int32_t {idx_tmp} = 0; {idx_tmp} < wysna_list_iteration_length_at({iter_tmp}, {self.escape_c_str(self.file)}, {stmt.line}, {stmt.col}); {idx_tmp}++) {{")
             self._push_scope("loop")
             loop_inner = [f"WVal {item_tmp} = {iter_tmp}.as.list->data[{idx_tmp}];"]
             self._emit_pattern_bindings(stmt.pattern, item_tmp, loop_inner)
@@ -598,7 +598,8 @@ class CCodeGen:
                 self._declare_owned_var(f"v_{pattern.name}", f"wysna_clone({val_expr})", out)
         elif isinstance(pattern, TuplePattern):
             for idx, elem_pat in enumerate(pattern.elements):
-                sub_expr = f"({val_expr}).as.tuple->items[{idx}]"
+                sub_expr = (f"wysna_tuple_get_at({val_expr}, {idx}, {self.escape_c_str(self.file)}, "
+                            f"{elem_pat.line}, {elem_pat.col})")
                 self._emit_pattern_bindings(elem_pat, sub_expr, out)
         elif isinstance(pattern, ErrorTypePattern):
             self._emit_pattern_bindings(pattern.binding, val_expr, out)

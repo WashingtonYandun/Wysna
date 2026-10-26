@@ -11,7 +11,6 @@ import tempfile
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
-from common.Platform import executable_name
 from tests.engine_harness import ENGINES, PROFILES, corpus_paths, execute, verify_case
 
 
@@ -172,6 +171,20 @@ def generate_markdown_matrix(measured=None) -> str:
     return "\n".join(rows)
 
 
+def bootstrap_binary(output):
+    """Consume the published cache identity instead of guessing a legacy flat path."""
+    try:
+        value = json.loads(output)
+    except (TypeError, ValueError) as error:
+        raise RuntimeError('Bootstrap did not publish a JSON compiler path') from error
+    if not isinstance(value, str):
+        raise RuntimeError('Bootstrap compiler path must be a string')
+    binary = Path(value)
+    if not binary.is_absolute() or not binary.is_file():
+        raise RuntimeError('Bootstrap compiler is not an existing absolute file: ' + value)
+    return binary
+
+
 def main():
     arguments = sys.argv[1:]
     if '--matrix' in arguments:
@@ -195,13 +208,13 @@ def main():
         'compile_timeout_seconds': 120, 'run_timeout_seconds': 30}, indent=2))
     # This subprocess is bounded separately because it builds the compiler itself.
     bootstrap = execute([sys.executable, '-c',
-        'from compiler.Bootstrap import ensure_selfhost_compiler_binary; '
-        'print(ensure_selfhost_compiler_binary(' + repr(str(ROOT)) + '))'],
+        'import json; from compiler.Bootstrap import ensure_selfhost_compiler_binary; '
+        'print(json.dumps(ensure_selfhost_compiler_binary(' + repr(str(ROOT)) + ')))'],
         artifacts, 'bootstrap', 600)
     if bootstrap['returncode']:
         print(bootstrap['stderr'])
         return 1
-    selfhost_bin = ROOT / '.wysna_cache' / executable_name('stage2')
+    selfhost_bin = bootstrap_binary(bootstrap['stdout'])
     support_files = PROFILES['support_files']
     positives, negatives = corpus_paths()
     fixtures = positives + negatives

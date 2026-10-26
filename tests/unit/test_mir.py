@@ -6,6 +6,7 @@ import os
 import subprocess
 import sys
 import tempfile
+from common.Platform import executable_name
 from checker.TypeChecker import TypeChecker
 from checker.TypeInterner import TYPE_BOOL, TYPE_INT
 from error.Error import WysnaError
@@ -156,19 +157,41 @@ def test_bootstrap_cache_serializes_processes():
     with tempfile.TemporaryDirectory(prefix='wysna-bootstrap-lock-') as directory:
         (Path(directory) / 'selfhost').mkdir()
         (Path(directory) / 'selfhost' / 'compiler.wysna').write_text('print(0)\n')
-        script = """import sys, time
+        script = """import hashlib, json, sys, time
 from pathlib import Path
 import compiler.Bootstrap as bootstrap
-root = sys.argv[1]
-def rebuild(path):
-    marker = Path(path) / 'active'
+root = Path(sys.argv[1])
+fingerprint = 'a' * 64
+bootstrap.bootstrap_fingerprint = lambda path: (fingerprint, {})
+def rebuild(path, directory):
+    marker = root / 'active'
     assert not marker.exists(), 'concurrent bootstrap rebuild'
     marker.write_text('active')
-    time.sleep(0.15)
-    marker.unlink()
-    return 'ok'
-bootstrap._ensure_selfhost_compiler_binary_locked = rebuild
-print(bootstrap.ensure_selfhost_compiler_binary(root))
+    try:
+        with (root / 'builds').open('a') as stream:
+            stream.write('built\\n')
+        time.sleep(0.15)
+        directory = Path(directory)
+        contents = {'bootstrap.c': b'seed', 'compiler0.c': b'native',
+                    'compiler1.c': b'native', 'compiler2.c': b'native',
+                    bootstrap.executable_name('stage1'): b'compiler',
+                    bootstrap.executable_name('stage2'): b'compiler'}
+        for name, content in contents.items():
+            (directory / name).write_bytes(content)
+        hashes = {name: hashlib.sha256(content).hexdigest() for name, content in contents.items()}
+        native_hashes = [hashes['compiler0.c']] * 3
+        manifest = {'fingerprint': fingerprint, 'seed_c_sha256': hashes['bootstrap.c'],
+                    'native_c_sha256': native_hashes,
+                    'stage1_sha256': hashes[bootstrap.executable_name('stage1')],
+                    'stage2_sha256': hashes[bootstrap.executable_name('stage2')]}
+        (directory / 'bootstrap.json').write_text(json.dumps(manifest))
+        return bootstrap.BootstrapArtifacts(directory, fingerprint, tuple(native_hashes))
+    finally:
+        marker.unlink()
+bootstrap.bootstrap_compiler = rebuild
+binary = Path(bootstrap.ensure_selfhost_compiler_binary(str(root)))
+assert binary.read_bytes() == b'compiler'
+print('ok')
 """
         children = [subprocess.Popen([sys.executable, '-c', script, directory], cwd=ROOT,
                                      stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
@@ -176,6 +199,23 @@ print(bootstrap.ensure_selfhost_compiler_binary(root))
         results = [(child, child.communicate(timeout=30)) for child in children]
         for child, (output, error) in results:
             assert child.returncode == 0 and output == 'ok\n', error
+        builds = Path(directory) / 'builds'
+        assert builds.read_text().splitlines() == ['built'], 'A valid cache was rebuilt'
+        published = Path(directory) / '.wysna_cache/bootstrap' / ('a' * 64)
+        (published / executable_name('stage2')).write_bytes(b'corrupted')
+        for _ in range(2):
+            repaired = subprocess.run([sys.executable, '-c', script, directory], cwd=ROOT,
+                                      capture_output=True, text=True, timeout=30)
+            assert repaired.returncode == 0 and repaired.stdout == 'ok\n', repaired.stderr
+        assert builds.read_text().splitlines() == ['built', 'built'], 'Repaired cache pointer was not reused'
+        assert (published / executable_name('stage2')).read_bytes() == b'corrupted', 'A running cache entry was overwritten'
+        index = published.parent / (('a' * 64) + '.json')
+        index.write_text('{"directory":".."}')
+        bounded = subprocess.run([sys.executable, '-c', script, directory], cwd=ROOT,
+                                 capture_output=True, text=True, timeout=30)
+        assert bounded.returncode == 0 and bounded.stdout == 'ok\n', bounded.stderr
+        assert len(builds.read_text().splitlines()) == 3, 'Invalid cache index escaped its root'
+
 
 
 def test_result_payload_requires_a_current_channel_proof():

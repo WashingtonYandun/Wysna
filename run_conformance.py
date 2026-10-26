@@ -406,30 +406,11 @@ def _run_suite_in_repo(repo_root: str) -> None:
         # 8. Self-Hosting Bootstrap Fixed-Point (Wysna Seed -> Wysna Compiler Stage 1 -> Wysna Compiler Stage 2)
         compiler_src_path = os.path.join(repo_root, "selfhost", "compiler.wysna")
         try:
-            with open(compiler_src_path, "r", encoding="utf-8") as wf:
-                compiler_src = wf.read()
-            compiler_ast = Parser(file=compiler_src_path).parse(compiler_src)
-            TypeChecker(file=compiler_src_path).check(compiler_ast)
-            c0_code = CCodeGen(file=compiler_src_path).generate(compiler_ast)
-
-            c0_path = os.path.join(tmpdir, "compiler0.c")
-            c1_path = os.path.join(tmpdir, "compiler1.c")
-            c2_path = os.path.join(tmpdir, "compiler2.c")
-            s1_bin = os.path.join(tmpdir, "stage1")
-            s2_bin = os.path.join(tmpdir, "stage2")
-
-            with open(c0_path, "w", encoding="utf-8") as cf:
-                cf.write(c0_code)
-
-            subprocess.run([os.environ.get("CC", "cc"), "-std=c99", "-O2", f"-I{repo_root}", c0_path, "-o", s1_bin], check=True, timeout=120, capture_output=True)
-            subprocess.run([s1_bin, compiler_src_path, c1_path], check=True, timeout=120, capture_output=True)
-            subprocess.run([os.environ.get("CC", "cc"), "-std=c99", "-O2", f"-I{repo_root}", c1_path, "-o", s2_bin], check=True, timeout=120, capture_output=True)
-            subprocess.run([s2_bin, compiler_src_path, c2_path], check=True, timeout=120, capture_output=True)
-
-            h0 = sha256_file(c0_path)
-            h1 = sha256_file(c1_path)
-            h2 = sha256_file(c2_path)
-            assert h0 == h1 == h2, f"Hash mismatch: {h0} vs {h1} vs {h2}"
+            from compiler.Bootstrap import bootstrap_compiler
+            artifacts = bootstrap_compiler(repo_root, os.path.join(tmpdir, "bootstrap"))
+            s2_bin = str(artifacts.compiler)
+            h0, h1, h2 = artifacts.hashes
+            assert h0 == h1 == h2, f"Native MIR hash mismatch: {h0} vs {h1} vs {h2}"
             bootstrap_ok = True
 
             # 9. Verify Wysna Compiler Stage 2 Native Compiler on Core Runtime Conformance Programs

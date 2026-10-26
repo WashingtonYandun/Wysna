@@ -1,0 +1,95 @@
+# Function values carry a verified signature and an owned snapshot environment.
+fn mir_function_value(context: MirBuilder, type_id: int, target: str, environment: list[int], source: Token) -> int {
+    let value = mir_literal_bool(len(environment) > 0)
+    let mut metadata = value
+    metadata.integer = len(context.types[type_id].args) - 1
+    return mir_op(context, "function", type_id, environment, target, metadata, source)
+}
+fn mir_closure(context: MirBuilder, node: CheckedNode) -> int {
+    let function = context.program.functions[node.target]
+    let mut environment: list[int] = []
+    if len(function.captures) > 0 {
+        let mut values: list[int] = []
+        let mut types: list[int] = []
+        for symbol in function.captures {
+            let value = mir_lookup(context, symbol, node.source)
+            values.append(value)
+            types.append(context.slots[value].type_id)
+        }
+        environment.append(mir_op(context, "construct", mir_intern(context, "tuple", "", types), values, "tuple", mir_literal_unit(), node.source))
+    }
+    return mir_function_value(context, mir_type(context, node.type_id, node.source), "wysna_" + function.name, environment, node.source)
+}
+fn mir_indirect(context: MirBuilder, node: CheckedNode) -> int {
+    let callee = mir_expression(context, node.children[0])
+    if context.current < 0 { return -1 }
+    let signature = context.types[context.slots[callee].type_id].args
+    let mut values: list[int] = [callee]
+    for i in 1..len(node.children) {
+        let value = mir_expression(context, node.children[i])
+        if context.current < 0 { return -1 }
+        values.append(mir_coerce(context, value, signature[i - 1], false, node.source))
+    }
+    return mir_op(context, "indirect", mir_type(context, node.type_id, node.source), values, "", mir_literal_unit(), node.source)
+}
+fn mir_verify_function_value(module: MirModule, operation: MirOperation, slots: list[MirSlot]) -> bool {
+    let returned = slots[operation.result].type_id
+    if operation.opcode == "indirect" {
+        if len(operation.args) == 0 { return false }
+        let signature = module.types[slots[operation.args[0]].type_id]
+        if signature.kind != "function" or len(signature.args) != len(operation.args) or signature.args[len(signature.args) - 1] != returned { return false }
+        for i in 1..len(operation.args) { if not mir_compatible(module.types, module.records, slots[operation.args[i]].type_id, signature.args[i - 1]) { return false } }
+        return true
+    }
+    let signature = module.types[returned]
+    if signature.kind != "function" or operation.value.integer != len(signature.args) - 1 { return false }
+    let captured = operation.value.boolean
+    if len(operation.args) != (if captured { 1 } else { 0 }) { return false }
+    if captured and module.types[slots[operation.args[0]].type_id].kind != "tuple" { return false }
+    for function in module.functions {
+        if function.name == operation.name {
+            let offset = if captured { 1 } else { 0 }
+            if len(function.params) != len(signature.args) - 1 + offset or function.return_type != signature.args[len(signature.args) - 1] { return false }
+            if captured and function.slots[function.params[0]].type_id != slots[operation.args[0]].type_id { return false }
+            for i in 0..len(signature.args) - 1 { if function.slots[function.params[i + offset]].type_id != signature.args[i] { return false } }
+            return true
+        }
+    }
+    for external in module.externs {
+        if external.name == operation.name and not captured {
+            if external.return_type != signature.args[len(signature.args) - 1] or len(external.params) != len(signature.args) - 1 { return false }
+            for i in 0..len(external.params) { if external.params[i] != signature.args[i] { return false } }
+            return true
+        }
+    }
+    return false
+}
+fn mir_c_function_adapters(module: MirModule) -> str {
+    let mut emitted: list[str] = []
+    let mut out = ""
+    for function in module.functions {
+        for block in function.blocks {
+            for operation in block.operations {
+                if operation.opcode == "function" and not module_contains(emitted, operation.name) {
+                    emitted.append(operation.name)
+                    let signature = module.types[function.slots[operation.result].type_id].args
+                    let arity = len(signature) - 1
+                    let mut arguments: list[str] = []
+                    if operation.value.boolean { arguments.append("environment") }
+                    for i in 0..arity { arguments.append(mir_c_unbox("argv[" + str(i) + "]", signature[i])) }
+                    # Foreign adapters take boxed arguments at the internal boundary.
+                    for external in module.externs {
+                        if external.name == operation.name { for i in 0..arity { arguments[i] = "argv[" + str(i) + "]" } }
+                    }
+                    let mut call = operation.name + "("
+                    for i in 0..len(arguments) { if i > 0 { call = call + ", " } call = call + arguments[i] }
+                    call = call + ")"
+                    let mut boxed = false
+                    for external in module.externs { if external.name == operation.name { boxed = true } }
+                    out = out + "static WVal wysna_adapter_" + operation.name + "(WVal environment, int32_t argc, const WVal* argv) {\n    (void)environment; (void)argv;\n    if (argc != " + str(arity) + ") wysna_runtime_fail(\"W4003\", \"Call arity mismatch\");\n    return " + (if boxed { call } else { mir_c_box(call, signature[arity]) }) + ";\n}\n"
+                }
+            }
+        }
+    }
+    return out
+}

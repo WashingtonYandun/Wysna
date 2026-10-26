@@ -1,0 +1,95 @@
+# Collection lowering preserves operand snapshots and borrowed constructor inputs.
+fn mir_collection(context: MirBuilder, node: CheckedNode) -> int {
+    let returned = mir_type(context, node.type_id, node.source)
+    let type_ = context.types[returned]
+    let mut args_: list[int] = []
+    for i in 0..len(node.children) {
+        let value = mir_expression(context, node.children[i])
+        if context.current < 0 { return -1 }
+        let mut target = type_.args[0]
+        if node.kind == "tuple" { target = type_.args[i] }
+        elif node.kind == "dict" { target = type_.args[i % 2] }
+        args_.append(mir_coerce(context, value, target, false, node.source))
+    }
+    return mir_op(context, "construct", returned, args_, node.kind, mir_literal_unit(), node.source)
+}
+fn mir_collection_call(context: MirBuilder, node: CheckedNode) -> int {
+    let source = node.source
+    if node.text == "append" or node.text == "pop" or node.text == "clear" {
+        let place = mir_place(context, node.children[0])
+        let mut arguments: list[int] = []
+        for i in 1..len(node.children) { arguments.append(mir_expression(context, node.children[i])) }
+        if context.current < 0 { return -1 }
+        let returned = mir_slot(context, mir_type(context, node.type_id, source), "", false)
+        mir_append(context, MirOperation { owner_type: 0, labels: mir_empty_labels(), place: place, opcode: "mutate", result: returned, args: arguments, name: node.text, value: mir_literal_unit(), source: source })
+        return returned
+    }
+    let receiver = mir_expression(context, node.children[0])
+    let mut args_: list[int] = [receiver]
+    for i in 1..len(node.children) { args_.append(mir_expression(context, node.children[i])) }
+    if context.current < 0 { return -1 }
+    if node.text == "get" or node.text == "keys" or node.text == "values" {
+        return mir_op(context, "runtime", mir_type(context, node.type_id, source), args_, "wysna_dict_" + node.text, mir_literal_unit(), source)
+    }
+    mir_unsupported(source, "collection method " + node.text)
+    return -1
+}
+
+fn mir_for(context: MirBuilder, node: CheckedNode) {
+    let source = node.source
+    let bindings = context.bindings
+    mir_push_scope(context)
+    let sequence = context.program.nodes[node.children[0]]
+    let direct_range = sequence.kind == "binary" and (sequence.text == "DOT_DOT" or sequence.text == "DOT_DOT_EQ")
+    let mut iterable = -1
+    let mut bound = -1
+    let mut element_type = 3
+    if direct_range {
+        iterable = mir_expression(context, sequence.children[0])
+        let last = mir_expression(context, sequence.children[1])
+        bound = mir_op(context, "range_count", 3, [iterable, last], "", mir_literal_bool(sequence.text == "DOT_DOT_EQ"), source)
+        context.slots[bound].counter = true
+    } else {
+        iterable = mir_expression(context, node.children[0])
+        element_type = context.types[context.slots[iterable].type_id].args[0]
+        bound = iterable
+    }
+    if context.current < 0 { return }
+    let counter = mir_op(context, "counter", 3, [], "", mir_literal_unit(), source)
+    context.slots[counter].counter = true
+    let header = mir_new_block(context, source)
+    let body = mir_new_block(context, source)
+    let increment = mir_new_block(context, source)
+    let after = mir_new_block(context, source)
+    mir_jump(context, header, source)
+    context.current = header
+    let condition = mir_op(context, "iterate_test", 2, [counter, bound], "", mir_literal_bool(direct_range), source)
+    context.slots[condition].predicate = true
+    mir_terminate(context, "branch", [body, after], condition, source)
+    context.current = body
+    let value = mir_op(context, "iterate_value", element_type, [iterable, counter], "", mir_literal_bool(direct_range), source)
+    mir_bind_for_pattern(context, value, node.pattern)
+    context.loops.append(MirLoop { after: after, header: increment, depth: len(context.scopes) })
+    let tail = mir_block(context, node.children[1])
+    if context.current >= 0 { mir_release(context, tail, source) mir_jump(context, increment, source) }
+    context.loops.pop()
+    context.current = increment
+    mir_append(context, MirOperation { owner_type: 0, labels: mir_empty_labels(), place: mir_empty_place(), opcode: "increment", result: counter, args: [counter], name: "", value: mir_literal_unit(), source: source })
+    mir_release(context, value, source)
+    mir_jump(context, header, source)
+    context.current = after
+    mir_cleanup(context, len(context.scopes) - 1, source)
+    context.scopes.pop()
+    context.bindings = bindings
+}
+
+fn mir_bind_for_pattern(context: MirBuilder, value: int, id: int) {
+    let pattern = context.program.patterns[id]
+    if pattern.name == "tuple" {
+        for i in 0..len(pattern.children) {
+            let child = context.program.patterns[pattern.children[i]]
+            let item = mir_op(context, "tuple_get", mir_type(context, child.type_id, child.source), [value], "", mir_literal_int(i), child.source)
+            mir_bind_for_pattern(context, item, pattern.children[i])
+        }
+    } elif pattern.binding >= 0 { context.bindings.append(MirBinding { symbol: pattern.binding, slot: value }) }
+}

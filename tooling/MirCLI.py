@@ -84,7 +84,7 @@ def _write_atomic(path, payload):
 
 def run_mir_command(argv):
     parser = _Parser(prog="wysna emit-mir", allow_abbrev=False,
-                     description="Emit verified wysna.mir/1 interchange. Compiler supports result-cfg-v1.")
+                     description="Emit verified wysna.mir/1 interchange. Compiler supports native-core-v1.")
     parser.add_argument("source")
     parser.add_argument("--implementation", choices=("seed", "compiler"), default="seed")
     parser.add_argument("-o", "--output")

@@ -7,14 +7,22 @@ fn mir_lookup(context: MirBuilder, symbol: int, source: Token) -> int {
             return value
         }
     }
-    mir_unsupported(source, "global values or unavailable binding")
+    for i in 0..len(context.globals) {
+        let global = context.globals[i]
+        if global.symbol == symbol {
+            let value = mir_op(context, "global_load", global.type_id, [], "", mir_literal_int(i), source)
+            context.slots[value].origin = -i - 2
+            return value
+        }
+    }
+    mir_unsupported(source, "unavailable binding")
     return -1
 }
 
 fn mir_call(context: MirBuilder, node: CheckedNode) -> int {
     let mut arguments: list[int] = []
     for child in node.children {
-        if context.current < 0 { mir_unsupported(node.source, "unreachable call arguments") }
+        if context.current < 0 { return -1 }
         let argument = mir_expression(context, child)
         if context.current < 0 { arguments.append(argument) }
         elif node.target >= 0 {
@@ -24,18 +32,20 @@ fn mir_call(context: MirBuilder, node: CheckedNode) -> int {
     }
     if context.current < 0 { return -1 }
     let returned = mir_type(context, node.type_id, node.source)
+    if node.text == "Some" { return mir_op(context, "runtime", returned, arguments, "wysna_enum_payload", mir_literal_unit(), node.source) }
     if node.text == "Ok" or node.text == "Err" {
-        if not mir_is_result(context.result_types, returned) { mir_unsupported(node.source, "result constructors without a concrete result context") }
+        if not mir_is_result(context.types, returned) { mir_unsupported(node.source, "result constructors without a concrete result context") }
         let mut payload = arguments[0]
-        if node.text == "Ok" and context.result_types[returned - 7].ok == 1 and context.slots[payload].type_id != 1 { payload = mir_constant(context, mir_literal_unit(), 1, node.source) }
+        if node.text == "Ok" and context.types[returned].args[0] == 1 and context.slots[payload].type_id != 1 { payload = mir_constant(context, mir_literal_unit(), 1, node.source) }
         return mir_pack(context, payload, returned, node.text == "Err", node.source)
     }
     if node.target >= 0 {
         let function = context.program.signatures[node.target]
-        if len(function.type_params) > 0 or function.foreign { mir_unsupported(node.source, "generic or foreign calls") }
-        return mir_op(context, "call", returned, arguments, "wysna_fn_" + function.name, mir_literal_unit(), node.source)
+        if len(function.type_params) > 0 { mir_unsupported(node.source, "generic calls") }
+        return mir_op(context, "call", returned, arguments, mir_abi_name(function.name), mir_literal_unit(), node.source)
     }
-    let builtins: list[str] = ["print", "eprint", "int", "float", "str", "len", "ord", "chr", "slice"]
+    if node.text == "weak" { return mir_op(context, "runtime", returned, arguments, "wysna_builtin_weak_owned", mir_literal_unit(), node.source) }
+    let builtins: list[str] = ["upgrade", "print", "eprint", "int", "float", "str", "len", "ord", "chr", "slice", "bytes", "args", "exit", "join_strings", "enumerate", "dict_items", "read_file", "write_file"]
     for name in builtins { if node.text == name { return mir_op(context, "runtime", returned, arguments, "wysna_builtin_" + name, mir_literal_unit(), node.source) } }
     mir_unsupported(node.source, "builtin call " + node.text)
     return -1
@@ -57,6 +67,7 @@ fn mir_binary_name(kind: str) -> str {
 }
 
 fn mir_expression(context: MirBuilder, id: int) -> int {
+    if context.current < 0 { return -1 }
     let node = context.program.nodes[id]
     let source = node.source
     if node.kind == "integer" { return mir_integer(context, node.text, false, source) }
@@ -67,7 +78,22 @@ fn mir_expression(context: MirBuilder, id: int) -> int {
     }
     if node.kind == "string" { return mir_constant(context, mir_literal_str(node.text), 5, source) }
     if node.kind == "boolean" { return mir_constant(context, mir_literal_bool(node.text == "TRUE"), 2, source) }
+    if node.kind == "none" { return mir_constant(context, MirLiteral { type_id: 6, integer: 0, floating: 0.0, boolean: false, text: "" }, 6, source) }
+    if node.kind == "struct" or node.kind == "struct_call" or node.kind == "enum" or node.kind == "enum_call" { return mir_nominal_expression(context, node) }
+    if node.kind == "member" { return mir_member(context, node) }
+    if node.kind == "list" or node.kind == "dict" or node.kind == "tuple" { return mir_collection(context, node) }
+    if node.kind == "collection_call" { return mir_collection_call(context, node) }
     if node.kind == "unit" { return mir_constant(context, mir_literal_unit(), 1, source) }
+    if node.kind == "super" {
+        let receiver = mir_lookup(context, node.binding, source)
+        return mir_coerce(context, receiver, mir_type(context, node.type_id, source), false, source)
+    }
+    if node.kind == "closure" { return mir_closure(context, node) }
+    if node.kind == "callee" and node.target >= 0 { return mir_function_value(context, mir_type(context, node.type_id, source), mir_abi_name(context.program.signatures[node.target].name), [], source) }
+    if node.kind == "indirect_call" { return mir_indirect(context, node) }
+    if node.kind == "match" { return mir_match(context, node) }
+    if node.kind == "new" { return mir_new(context, node) }
+    if node.kind == "virtual_call" { return mir_virtual_call(context, node) }
     if node.kind == "binding" { return mir_lookup(context, node.binding, source) }
     if node.kind == "call" { return mir_call(context, node) }
     if node.kind == "if" { return mir_if(context, node) }
@@ -81,23 +107,23 @@ fn mir_expression(context: MirBuilder, id: int) -> int {
     }
     if node.kind == "propagate" or node.kind == "handler" {
         let value = mir_expression(context, node.children[0])
-        if context.current < 0 { mir_unsupported(source, "unreachable channel operand") }
+        if context.current < 0 { return -1 }
         return mir_channel(context, value, source, node.kind == "propagate", node.binding, if node.kind == "handler" { node.children[1] } else { -1 })
     }
     if node.kind == "assign" {
-        # Evaluate the checked place before the RHS, retaining the existing snapshot rule.
-        let left = mir_expression(context, node.children[0])
-        let destination = context.slots[left].origin
-        if destination < 0 { mir_unsupported(source, "assignment target") }
+        let place = mir_place(context, node.children[0])
         let right = mir_expression(context, node.children[1])
         if context.current < 0 { return -1 }
-        let checked = mir_coerce(context, right, context.slots[destination].type_id, false, source)
-        mir_store(context, destination, checked, source)
-        return mir_op(context, "clone", context.slots[destination].type_id, [destination], "", mir_literal_unit(), source)
+        let checked = mir_coerce(context, right, mir_type(context, node.type_id, source), false, source)
+        # The expression returns its RHS snapshot, never a reread retaining its parent path.
+        let assigned = mir_op(context, "clone", context.slots[checked].type_id, [checked], "", mir_literal_unit(), source)
+        mir_append(context, MirOperation { owner_type: 0, labels: mir_empty_labels(), place: place, opcode: "store_place", result: -1, args: [checked], name: "", value: mir_literal_unit(), source: source })
+        return assigned
     }
     if node.kind == "binary" {
         let left = mir_expression(context, node.children[0])
-        if context.current < 0 { mir_unsupported(source, "unreachable expression operands") }
+        if context.current < 0 { return -1 }
+        if node.text == "QQ" { return mir_optional_channel(context, left, source, false, node.children[1]) }
         if node.text == "AND" or node.text == "OR" {
             let result = mir_slot(context, 2, "", false)
             mir_store(context, result, left, source)
@@ -112,18 +138,20 @@ fn mir_expression(context: MirBuilder, id: int) -> int {
         }
         let right = mir_expression(context, node.children[1])
         if context.current < 0 { return -1 }
-        if mir_is_result(context.result_types, context.slots[left].type_id) or mir_is_result(context.result_types, context.slots[right].type_id) { mir_unsupported(source, "binary result operators") }
+        if node.text != "EQ" and node.text != "NEQ" and (mir_is_result(context.types, context.slots[left].type_id) or mir_is_result(context.types, context.slots[right].type_id)) { mir_unsupported(source, "binary result operators") }
         let name = mir_binary_name(node.text)
+        if node.text == "DOT_DOT" or node.text == "DOT_DOT_EQ" {
+            return mir_op(context, "runtime", mir_type(context, node.type_id, source), [left, right], if node.text == "DOT_DOT" { "wysna_make_range" } else { "wysna_make_range_inclusive" }, mir_literal_unit(), source)
+        }
         if name == "" { mir_unsupported(source, "operator " + node.text) }
         return mir_op(context, "runtime", mir_type(context, node.type_id, source), [left, right], name, mir_literal_unit(), source)
     }
     if node.kind == "index" {
         let value = mir_expression(context, node.children[0])
-        if context.current < 0 { mir_unsupported(source, "unreachable indexing") }
+        if context.current < 0 { return -1 }
         let index = mir_expression(context, node.children[1])
         if context.current < 0 { return -1 }
-        if context.slots[value].type_id != 5 { mir_unsupported(source, "non-string indexing") }
-        return mir_op(context, "runtime", 5, [value, index], "wysna_index_get_owned_at", mir_literal_unit(), source)
+        return mir_op(context, "runtime", mir_type(context, node.type_id, source), [value, index], "wysna_index_get_owned_at", mir_literal_unit(), source)
     }
     mir_unsupported(source, "checked expression " + node.kind)
     return -1
@@ -151,7 +179,7 @@ fn mir_block(context: MirBuilder, id: int) -> int {
 fn mir_if(context: MirBuilder, node: CheckedNode) -> int {
     let source = node.source
     let condition = mir_expression(context, node.children[0])
-    if context.current < 0 { mir_unsupported(source, "terminating conditions") }
+    if context.current < 0 { return -1 }
     let yes = mir_new_block(context, source)
     let no = mir_new_block(context, source)
     let join = mir_new_block(context, source)
@@ -159,14 +187,14 @@ fn mir_if(context: MirBuilder, node: CheckedNode) -> int {
     context.current = yes
     let mut yes_value = mir_expression(context, node.children[1])
     if context.current >= 0 and node.discard {
-        if mir_is_result(context.result_types, context.slots[yes_value].type_id) { mir_channel(context, yes_value, source, true, -1, -1) }
+        if mir_is_result(context.types, context.slots[yes_value].type_id) { mir_channel(context, yes_value, source, true, -1, -1) }
         yes_value = mir_constant(context, mir_literal_unit(), 1, source)
     }
     let yes_end = context.current
     context.current = no
     let mut no_value = mir_expression(context, node.children[2])
     if context.current >= 0 and node.discard {
-        if mir_is_result(context.result_types, context.slots[no_value].type_id) { mir_channel(context, no_value, source, true, -1, -1) }
+        if mir_is_result(context.types, context.slots[no_value].type_id) { mir_channel(context, no_value, source, true, -1, -1) }
         no_value = mir_constant(context, mir_literal_unit(), 1, source)
     }
     let no_end = context.current
@@ -175,13 +203,13 @@ fn mir_if(context: MirBuilder, node: CheckedNode) -> int {
     let result = mir_slot(context, returned, "", false)
     if yes_end >= 0 {
         context.current = yes_end
-        if context.slots[yes_value].type_id != returned { yes_value = mir_constant(context, mir_literal_unit(), 1, source) }
+        if context.slots[yes_value].type_id != returned { yes_value = if returned == 1 { mir_constant(context, mir_literal_unit(), 1, source) } else { mir_coerce(context, yes_value, returned, false, source) } }
         mir_store(context, result, yes_value, source)
         mir_jump(context, join, source)
     }
     if no_end >= 0 {
         context.current = no_end
-        if context.slots[no_value].type_id != returned { no_value = mir_constant(context, mir_literal_unit(), 1, source) }
+        if context.slots[no_value].type_id != returned { no_value = if returned == 1 { mir_constant(context, mir_literal_unit(), 1, source) } else { mir_coerce(context, no_value, returned, false, source) } }
         mir_store(context, result, no_value, source)
         mir_jump(context, join, source)
     }
@@ -192,12 +220,18 @@ fn mir_if(context: MirBuilder, node: CheckedNode) -> int {
 fn mir_statement(context: MirBuilder, id: int) -> int {
     let node = context.program.nodes[id]
     let source = node.source
-    if context.current < 0 { mir_unsupported(source, "unreachable statements") }
+    if context.current < 0 { return -1 }
     if node.kind == "let" {
         let binding = context.program.bindings[node.binding]
         let type_id = mir_type(context, binding.type_id, source)
         let value = mir_expression(context, node.children[0])
         if context.current >= 0 {
+            if binding.global {
+                for i in 0..len(context.globals) {
+                    if context.globals[i].symbol == node.binding { mir_append(context, MirOperation { owner_type: 0, labels: mir_empty_labels(), place: mir_empty_place(), opcode: "global_store", result: -1, args: [mir_coerce(context, value, type_id, false, source)], name: "", value: mir_literal_int(i), source: source }) }
+                }
+                return -1
+            }
             let slot = mir_slot(context, type_id, "", false)
             mir_store(context, slot, mir_coerce(context, value, type_id, false, source), source)
             context.bindings.append(MirBinding { symbol: node.binding, slot: slot })
@@ -209,6 +243,7 @@ fn mir_statement(context: MirBuilder, id: int) -> int {
         if context.current >= 0 { mir_return(context, value, source) }
         return -1
     }
+    if node.kind == "for" { mir_for(context, node) return -1 }
     if node.kind == "while" {
         let header = mir_new_block(context, source)
         let body = mir_new_block(context, source)
@@ -217,7 +252,7 @@ fn mir_statement(context: MirBuilder, id: int) -> int {
         context.current = header
         mir_push_scope(context)
         let condition = mir_expression(context, node.children[0])
-        if context.current < 0 { mir_unsupported(source, "terminating loop conditions") }
+        if context.current < 0 { context.scopes.pop() return -1 }
         mir_cleanup(context, len(context.scopes) - 1, source)
         context.scopes.pop()
         mir_terminate(context, "branch", [body, after], condition, source)
@@ -243,24 +278,39 @@ fn mir_lower_function(context: MirBuilder, function: CheckedFunction) {
     let signature = context.program.types[function.type_id].args
     let returned = mir_type(context, signature[len(signature) - 1], function.source)
     mir_begin(context, function.source, returned)
+    if function.closure and len(function.captures) > 0 {
+        let mut captured_types: list[int] = []
+        for id in function.captures { captured_types.append(mir_type(context, context.program.bindings[id].type_id, function.source)) }
+        let environment = mir_slot(context, mir_intern(context, "tuple", "", captured_types), "v_environment", true)
+        for i in 0..len(function.captures) {
+            let value = mir_op(context, "tuple_get", captured_types[i], [environment], "", mir_literal_int(i), function.source)
+            context.bindings.append(MirBinding { symbol: function.captures[i], slot: value })
+        }
+    }
     for i in 0..len(function.params) {
         let slot = mir_slot(context, mir_type(context, signature[i], function.source), "v_arg" + str(i), true)
         context.bindings.append(MirBinding { symbol: function.params[i], slot: slot })
     }
     let value = mir_block(context, function.body)
     if context.current >= 0 { mir_return(context, if returned == 1 { mir_constant(context, mir_literal_unit(), 1, function.source) } else { value }, function.source) }
-    mir_finish(context, "wysna_fn_" + function.name, function.source)
+    mir_finish(context, if function.closure { "wysna_" + function.name } else { mir_abi_name(function.name) }, function.source)
 }
 
 fn mir_build(program: CheckedProgram) -> MirModule {
-    for signature in program.signatures { if len(signature.type_params) > 0 or signature.foreign { mir_unsupported(program.source, "generic or foreign functions") } }
     checked_verify(program)
     let context = new MirBuilder(program)
+    for i in 0..len(program.bindings) {
+        let binding = program.bindings[i]
+        if binding.global { context.globals.append(MirGlobal { symbol: i, type_id: mir_type(context, binding.type_id, binding.source), name: "wysna_global_" + str(i) }) }
+    }
+    for signature in program.signatures { if signature.foreign { mir_add_extern(context, signature) } }
     for function in program.functions { mir_lower_function(context, function) }
     let source = program.source
     mir_begin(context, source, 1)
     let mut explicit_entry = -1
+    let mut root_entry = false
     for id in program.entry {
+        if module_normalize(program.nodes[id].source.file) == module_normalize(program.file) { root_entry = true }
         let value = mir_statement(context, id)
         explicit_entry = -1
         let node = program.nodes[id]
@@ -269,7 +319,7 @@ fn mir_build(program: CheckedProgram) -> MirModule {
     if context.current >= 0 {
         let mut value = -1
         let main_index = checked_function(program, "main")
-        if len(program.entry) == 0 and main_index >= 0 {
+        if not root_entry and main_index >= 0 {
             let signature = program.types[program.signatures[main_index].type_id].args
             context.return_type = mir_type(context, signature[len(signature) - 1], source)
             value = mir_op(context, "call", context.return_type, [], "wysna_fn_main", mir_literal_unit(), source)
@@ -278,19 +328,7 @@ fn mir_build(program: CheckedProgram) -> MirModule {
         mir_return(context, value, source)
     }
     mir_finish(context, "wysna_program", source)
-    return MirModule { file: program.file, functions: context.functions, result_types: context.result_types, source: source }
-}
-
-fn check_mir_source(src: str, file: str) -> CheckedProgram {
-    let tokens = tokenize(src, file)
-    let unsupported: list[str] = ["NONE", "MATCH", "FOR", "STRUCT", "ENUM", "CLASS", "INTERFACE", "EXTERN", "NEW", "THIS", "SUPER", "PIPE", "DOT", "QQ"]
-    for token in tokens {
-        if token.kind == "IMPORT" { mir_unsupported(token, "imports") }
-        for kind in unsupported { if token.kind == kind { mir_unsupported(token, "syntax " + kind) } }
-    }
-    let checked = check_program(tokens, file, true)
-    for node in checked.nodes { if node.kind == "unsupported" { mir_unsupported(node.source, "expression " + node.text) } }
-    return checked
+    return MirModule { file: program.file, functions: context.functions, globals: context.globals, records: context.records, virtual_slots: context.virtual_slots, externs: context.externs, types: context.types, source: source }
 }
 
 fn mir_module_json(module: MirModule) -> str {
@@ -300,10 +338,19 @@ fn mir_module_json(module: MirModule) -> str {
         if i > 0 { functions = functions + "," }
         functions = functions + mir_function_json(module.functions[i])
     }
-    let payload = "{\"$type\":\"Module\",\"file\":" + mir_quote(module.file) + ",\"arena_id\":\"compiler-result-cfg-v1\",\"functions\":" + functions + "],\"globals\":[],\"layouts\":{},\"virtual_slots\":[],\"externs\":{},\"exports\":[],\"library_mode\":false,\"enum_count\":0}"
-    return "{\"format\":\"wysna.mir\",\"schema_version\":1,\"semantic_revision\":\"0.5.0\",\"runtime_abi_version\":2,\"type_arena\":" + mir_arena_json(module.result_types) + ",\"module\":" + payload + "}\n"
+    let mut globals = "["
+    for i in 0..len(module.globals) {
+        if i > 0 { globals = globals + "," }
+        let global = module.globals[i]
+        globals = globals + "{\"$type\":\"Slot\",\"id\":" + str(-i - 1) + ",\"type_id\":" + str(global.type_id) + ",\"name\":" + mir_quote(global.name) + ",\"storage\":\"value\",\"ownership\":\"global\",\"parameter\":false}"
+    }
+    globals = globals + "]"
+    let mut enum_count = 0
+    for record in module.records { if module.types[record.type_id].kind == "enum" { enum_count = enum_count + 1 } }
+    let payload = "{\"$type\":\"Module\",\"file\":" + mir_quote(module.file) + ",\"arena_id\":\"compiler-native-core-v1\",\"functions\":" + functions + "],\"globals\":" + globals + ",\"layouts\":" + mir_layouts_json(module) + ",\"virtual_slots\":" + mir_virtual_slots_json(module) + ",\"externs\":" + mir_externs_json(module) + ",\"exports\":[],\"library_mode\":false,\"enum_count\":" + str(enum_count) + "}"
+    return "{\"format\":\"wysna.mir\",\"schema_version\":1,\"semantic_revision\":\"0.5.0\",\"runtime_abi_version\":2,\"type_arena\":" + mir_arena_json(module) + ",\"module\":" + payload + "}\n"
 }
 
 fn emit_mir_module(src: str, file: str) -> str {
-    return mir_module_json(mir_build(check_mir_source(src, file)))
+    return mir_module_json(mir_build(check_source(src, file)))
 }

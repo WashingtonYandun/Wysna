@@ -82,7 +82,7 @@ def test_component_checksum_failure_precedes_network_and_extraction():
     with tempfile.TemporaryDirectory() as temporary:
         cache = Path(temporary)
         (cache / 'python.zip').write_bytes(b'corrupted')
-        with patch('tools.package_windows.urllib.request.urlopen', side_effect=AssertionError('No download expected')):
+        with patch('tools.package_components.urllib.request.urlopen', side_effect=AssertionError('No download expected')):
             try:
                 download({'url': 'https://www.python.org/python.zip', 'sha256': '0' * 64}, cache)
             except ValueError as error:

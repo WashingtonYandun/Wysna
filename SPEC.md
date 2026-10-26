@@ -125,7 +125,9 @@ process(item)
   }
   ```
 
-In block functions and lambdas declared as `unit`—including functions with an omitted return type—the implicit tail expression is evaluated for its effects and discarded. An explicit `return` with an incompatible value is rejected. `unit ! E` preserves errors from its tail; a failed result does not become success when its value is discarded.
+In block functions and lambdas declared as `unit`—including named functions with an omitted return type—the implicit tail expression is evaluated for its effects and discarded. An explicit `return` with an incompatible value is rejected. `unit ! E` preserves errors from its tail; a failed result does not become success when its value is discarded.
+
+A lambda without a return annotation or expected function type infers its result from explicit returns and its reachable tail. These candidates must have compatible types; incompatible returns report `W2004`. Named functions still default to `unit` when their return type is omitted.
 
 A bare `return` is one that is followed by `}`, `)`, `]`, `,`, `else`, `elif` or EOF.
 It is **not** decided by line breaks: `return` followed by an expression on the next
@@ -328,6 +330,8 @@ Equality is partitioned cleanly along the value vs reference boundary:
       # ...
   }
   ```
+
+Loop bindings accept identifiers, `_`, and recursively nested tuple patterns. These patterns must be irrefutable for the iterable's element type. Each identifier in one binding pattern must be unique. For example, `for (number, (text, flag)) in values { ... }` binds a nested tuple element without introducing a runtime match failure.
 
 ### 6.3 Exhaustive `match`
 `match` must be exhaustive when switching on `enum` variants:

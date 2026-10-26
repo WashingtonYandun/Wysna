@@ -1,0 +1,223 @@
+# Nominal metadata is resolved once at the checked boundary and copied into MIR.
+fn mir_find_record(records: list[MirRecord], type_id: int, source: Token) -> MirRecord {
+    for record in records { if record.type_id == type_id { return record } }
+    report_error_at("W9999", source, "MIR nominal definition is missing")
+    let fields: list[MirField] = []
+    let variants: list[MirVariant] = []
+    let methods: list[MirMethod] = []
+    let interfaces: list[int] = []
+    return MirRecord { type_id: -1, fields: fields, variants: variants, parent: -1, methods: methods, interfaces: interfaces }
+}
+fn mir_complete_record(context: MirBuilder, source_type: int, type_id: int) {
+    let source = context.program.source
+    let checked = checked_record(context.program, source_type)
+    let mut fields: list[MirField] = []
+    let mut variants: list[MirVariant] = []
+    let mut methods: list[MirMethod] = []
+    let mut interfaces: list[int] = []
+    let index = len(context.records)
+    context.records.append(MirRecord { type_id: type_id, fields: fields, variants: variants, parent: -1, interfaces: interfaces, methods: methods })
+    for field in checked.fields { fields.append(MirField { name: field.name, type_id: mir_type(context, field.type_id, source), visible: field.visible }) }
+    for variant in checked.variants {
+        let mut payloads: list[int] = []
+        for payload in variant.payloads { payloads.append(mir_type(context, payload, source)) }
+        variants.append(MirVariant { name: variant.name, payloads: payloads })
+    }
+    context.records[index].fields = fields
+    context.records[index].variants = variants
+    for method in checked.methods {
+        let owner = mir_type(context, method.owner, source)
+        let type_ = mir_type(context, method.type_id, source)
+        methods.append(MirMethod { name: method.name, type_id: type_, target: mir_abi_name(context.program.signatures[method.target].name), owner: owner, visible: method.visible })
+    }
+    for interface_ in checked.interfaces { interfaces.append(mir_type(context, interface_, source)) }
+    context.records[index].methods = methods
+    context.records[index].interfaces = interfaces
+    if checked.parent >= 0 { context.records[index].parent = mir_type(context, checked.parent, source) }
+}
+fn mir_field_index(record: MirRecord, name: str, source: Token) -> int {
+    for i in 0..len(record.fields) { if record.fields[i].name == name { return i } }
+    report_error_at("W9999", source, "checked nominal field is missing")
+    return -1
+}
+fn mir_member(context: MirBuilder, node: CheckedNode) -> int {
+    let value = mir_expression(context, node.children[0])
+    if context.current < 0 { return -1 }
+    let record = mir_find_record(context.records, context.slots[value].type_id, node.source)
+    let index = mir_field_index(record, node.text, node.source)
+    return mir_load_field(context, value, index, record.fields[index].type_id, node.source)
+}
+fn mir_nominal_expression(context: MirBuilder, node: CheckedNode) -> int {
+    let source = node.source
+    let returned = mir_type(context, node.type_id, source)
+    let record = mir_find_record(context.records, returned, source)
+    let mut evaluated: list[int] = []
+    for child in node.children { evaluated.append(mir_expression(context, child)) }
+    if context.current < 0 { return -1 }
+    if node.kind == "struct" or node.kind == "struct_call" {
+        let mut values: list[int] = []
+        for i in 0..len(record.fields) {
+            let field = record.fields[i]
+            let mut index = i
+            if node.kind == "struct" {
+                index = -1
+                for j in 0..len(node.labels) { if node.labels[j] == field.name { index = j } }
+            }
+            if index < 0 or index >= len(evaluated) { report_error_at("W9999", source, "checked struct initializer is incomplete") }
+            values.append(mir_coerce(context, evaluated[index], field.type_id, false, source))
+        }
+        return mir_op(context, "construct", returned, values, "struct", mir_literal_int(returned), source)
+    }
+    if len(node.labels) != 2 { report_error_at("W9999", source, "checked enum constructor identity missing") }
+    let name = context.types[returned].name
+    let variant = node.labels[1]
+    let mut types: list[int] = []
+    let mut found = false
+    for alternative in record.variants { if alternative.name == variant { types = alternative.payloads found = true } }
+    if not found or len(types) != len(evaluated) { report_error_at("W9999", source, "checked enum payload shape mismatch") }
+    let mut values: list[int] = []
+    for i in 0..len(evaluated) { values.append(mir_coerce(context, evaluated[i], types[i], false, source)) }
+    let mut arguments: list[int] = []
+    if len(values) == 1 { arguments = values }
+    elif len(values) > 1 {
+        let tuple_type = mir_intern(context, "tuple", "", types)
+        arguments = [mir_op(context, "construct", tuple_type, values, "tuple", mir_literal_unit(), source)]
+    }
+    let result = mir_op(context, "runtime", returned, arguments, if len(values) == 0 { "wysna_enum" } else { "wysna_enum_payload" }, mir_literal_unit(), source)
+    let block = context.current
+    let index = len(context.blocks[block].operations) - 1
+    context.blocks[block].operations[index].labels = [name, variant]
+    return result
+}
+fn mir_nominal_definitions(module: MirModule, kind: str) -> str {
+    let mut out = "{"
+    let mut count = 0
+    for record in module.records {
+        let type_ = module.types[record.type_id]
+        if type_.kind == kind {
+            if count > 0 { out = out + "," }
+            count = count + 1
+            out = out + mir_quote(type_.name) + ":{\"def_id\":" + str(record.type_id)
+            if kind == "struct" {
+                out = out + ",\"fields\":{"
+                for i in 0..len(record.fields) { if i > 0 { out = out + "," } let field = record.fields[i] out = out + mir_quote(field.name) + ":" + str(field.type_id) }
+                out = out + "}"
+            } elif kind == "class" or kind == "interface" {
+                out = out + mir_reference_definition_json(module, record, kind)
+            } else {
+                out = out + ",\"variants\":["
+                for i in 0..len(record.variants) { if i > 0 { out = out + "," } out = out + mir_quote(record.variants[i].name) }
+                out = out + "],\"variant_payloads\":{"
+                for i in 0..len(record.variants) { if i > 0 { out = out + "," } let variant = record.variants[i] out = out + mir_quote(variant.name) + ":" + mir_ids(variant.payloads, false) }
+                out = out + "},\"type_args\":[],\"template_name\":null"
+            }
+            out = out + "}"
+        }
+    }
+    return out + "}"
+}
+fn mir_layouts_json(module: MirModule) -> str {
+    let mut out = "{"
+    let mut count = 0
+    for record in module.records {
+        let type_ = module.types[record.type_id]
+        if type_.kind == "struct" or type_.kind == "class" {
+            if count > 0 { out = out + "," }
+            count = count + 1
+            out = out + mir_quote(str(record.type_id)) + ":{\"$type\":\"Layout\",\"name\":" + mir_quote(type_.name) + ",\"kind\":" + mir_quote(type_.kind) + ",\"type_id\":" + str(record.type_id) + ",\"fields\":["
+            for i in 0..len(record.fields) { if i > 0 { out = out + "," } let field = record.fields[i] out = out + "{\"$tuple\":[" + mir_quote(field.name) + "," + str(field.type_id) + "]}" }
+            out = out + "],\"parent\":" + (if record.parent < 0 { "null" } else { mir_quote(module.types[record.parent].name) }) + ",\"methods\":" + mir_methods_json(module, record) + "}"
+        }
+    }
+    return out + "}"
+}
+
+fn mir_load_field(context: MirBuilder, value: int, index: int, type_id: int, source: Token) -> int {
+    let result = mir_op(context, "load_field", type_id, [value], "", mir_literal_int(index), source)
+    let block = context.current
+    context.blocks[block].operations[len(context.blocks[block].operations) - 1].owner_type = context.slots[value].type_id
+    return result
+}
+
+fn mir_verify_records(module: MirModule) {
+    let mut ids: list[int] = []
+    for record in module.records {
+        let id = record.type_id
+        if not mir_valid_type(module.types, id) { report_error_at("W9999", module.source, "invalid MIR nominal identity") }
+        let kind = module.types[id].kind
+        if kind != "struct" and kind != "enum" and kind != "class" and kind != "interface" { report_error_at("W9999", module.source, "invalid MIR nominal kind") }
+        for previous in ids { if previous == id { report_error_at("W9999", module.source, "duplicate MIR nominal definition") } }
+        ids.append(id)
+        let mut fields: list[str] = []
+        for field in record.fields {
+            if (kind != "struct" and kind != "class") or not mir_valid_type(module.types, field.type_id) { report_error_at("W9999", module.source, "invalid MIR nominal field") }
+            for name in fields { if name == field.name { report_error_at("W9999", module.source, "duplicate MIR nominal field") } }
+            fields.append(field.name)
+        }
+        if record.parent >= 0 and (not mir_valid_type(module.types, record.parent) or module.types[record.parent].kind != "class") { report_error_at("W9999", module.source, "invalid MIR superclass") }
+        for interface_ in record.interfaces { if not mir_valid_type(module.types, interface_) or module.types[interface_].kind != "interface" { report_error_at("W9999", module.source, "invalid MIR interface") } }
+        let mut methods: list[str] = []
+        for method in record.methods {
+            if (kind != "class" and kind != "interface") or not mir_valid_type(module.types, method.type_id) or module.types[method.type_id].kind != "function" or not mir_valid_type(module.types, method.owner) { report_error_at("W9999", module.source, "invalid MIR method signature") }
+            for previous in methods { if previous == method.name { report_error_at("W9999", module.source, "duplicate MIR method") } }
+            methods.append(method.name)
+            if kind == "class" {
+                let signature = module.types[method.type_id].args
+                let mut found = false
+                for function in module.functions {
+                    if function.name == method.target and len(function.params) == len(signature) {
+                        found = function.return_type == signature[len(signature) - 1] and function.slots[function.params[0]].type_id == method.owner
+                        for i in 1..len(function.params) { if function.slots[function.params[i]].type_id != signature[i - 1] { found = false } }
+                    }
+                }
+                if not found { report_error_at("W9999", module.source, "unresolved MIR method implementation") }
+            }
+        }
+        let mut variants: list[str] = []
+        for variant in record.variants {
+            if kind != "enum" { report_error_at("W9999", module.source, "invalid MIR enum definition") }
+            for name in variants { if name == variant.name { report_error_at("W9999", module.source, "duplicate MIR enum variant") } }
+            variants.append(variant.name)
+            for payload in variant.payloads { if not mir_valid_type(module.types, payload) { report_error_at("W9999", module.source, "invalid MIR enum payload") } }
+        }
+    }
+    for i in 0..len(module.types) {
+        let kind = module.types[i].kind
+        if kind == "struct" or kind == "enum" or kind == "class" or kind == "interface" {
+            let mut found = false
+            for id in ids { if id == i { found = true } }
+            if not found { report_error_at("W9999", module.source, "missing MIR nominal definition") }
+        }
+    }
+}
+
+fn mir_equality_shapes(module: MirModule, left: int, right: int) -> bool {
+    if mir_compatible(module.types, module.records, left, right) or mir_compatible(module.types, module.records, right, left) { return true }
+    let a = module.types[left]
+    let b = module.types[right]
+    if a.kind != b.kind or len(a.args) != len(b.args) { return false }
+    if a.kind != "list" and a.kind != "optional" and a.kind != "tuple" and a.kind != "result" and a.kind != "error_union" { return false }
+    for i in 0..len(a.args) { if not mir_equality_shapes(module, a.args[i], b.args[i]) { return false } }
+    return true
+}
+fn mir_equality(module: MirModule, left: int, right: int) -> bool {
+    let mut pending: list[int] = [left, right]
+    let mut seen: list[int] = []
+    while len(pending) > 0 {
+        let id = pending.pop()
+        let mut visited = false
+        for previous in seen { if previous == id { visited = true } }
+        if not visited {
+            seen.append(id)
+            let type_ = module.types[id]
+            if type_.kind == "function" { return false }
+            for child in type_.args { pending.append(child) }
+            if type_.kind == "struct" or type_.kind == "enum" {
+                let record = mir_find_record(module.records, id, module.source)
+                for field in record.fields { pending.append(field.type_id) }
+                for variant in record.variants { for payload in variant.payloads { pending.append(payload) } }
+            }
+        }
+    }
+    return mir_equality_shapes(module, left, right)
+}

@@ -25,6 +25,20 @@ def run_ci_harness_tests():
     assert not harness.unsupported_reason('tests/runtime/generic_function.wysna', 'hir')
     with tempfile.TemporaryDirectory() as temporary:
         directory = Path(temporary)
+        from tools.ci_conformance import bootstrap_binary
+        published = directory / 'versioned compiler á' / 'stage2'
+        published.parent.mkdir()
+        published.write_bytes(b'validated compiler')
+        stale = directory / 'stage2'
+        stale.write_bytes(b'obsolete compiler')
+        assert bootstrap_binary(json.dumps(str(published.resolve()))) == published.resolve()
+        for invalid in ('', '[]', json.dumps('relative/stage2'), json.dumps(str(directory / 'missing'))):
+            try:
+                bootstrap_binary(invalid)
+            except RuntimeError:
+                pass
+            else:
+                raise AssertionError('Invalid bootstrap identity was accepted: ' + invalid)
         timed = harness.execute([sys.executable, '-c', 'while True: pass'], directory, 'timeout', 0.1)
         assert timed['returncode'] == 124 and timed['timeout'] == 0.1
         started = time.monotonic()

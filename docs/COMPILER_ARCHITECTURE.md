@@ -56,11 +56,7 @@ an AST C99 receiver marker consumed by method-call emission; standalone emission
 is explicitly rejected. Missing checked superclass targets also raise `W9999`.
 Valid statement-position control flow can still produce `unit` by language design.
 
-HIR and MIR retain independent verifiers. The native Wysna Compiler remains an
-independent implementation: its checked-node MIR producer supports the declared
-`result-cfg-v1` profile, while its broader C99 route uses checked emission metadata.
-This organization does not enlarge that MIR profile or imply a standalone native
-distribution or a direct LLVM backend.
+HIR and MIR retain independent verifiers. Native Wysna Compiler is an independent implementation with one checked-node → verified MIR → C99 pipeline for `native-core-v1`. Expanded source tokens and C-specific semantic metadata are not lowering inputs. Native and Python consumers enforce the same interchange contract through independent verifiers. See [MIR design](MIR_DESIGN.md) for ownership and the declared profile, and [native SDK](NATIVE_SDK.md) for distribution without Python. This does not introduce a direct LLVM backend.
 
 ## Tool and target boundaries
 
@@ -100,8 +96,11 @@ three-stage bootstrap, four-engine differential tests, ownership sanitizers and
 installed-wheel checks remain necessary; structural checks do not replace them.
 
 
-CI gives compiler/tooling contracts and executable conformance separate job budgets
-on the same platform/compiler matrix. Required conformance statuses reject failed,
-cancelled or skipped contract jobs explicitly; the split preserves every test,
-release fixture, bootstrap stage and sanitizer check. Workflow contracts enforce
-coverage and failure propagation without extending the execution time limit.
+CI gives compiler/tooling contracts, full runtime conformance and integration
+conformance separate job budgets on the same platform/compiler matrix. All three
+run independently. A final gate preserves the existing required conformance check
+names and rejects failed, cancelled or skipped prerequisite groups explicitly.
+These small status checks run on Linux and require no checkout or macOS runner.
+The split preserves every test, release fixture, bootstrap stage and sanitizer
+check. Workflow contracts enforce coverage and all 64 prerequisite status
+combinations without extending the execution time limit for any test suite.
