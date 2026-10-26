@@ -11,7 +11,7 @@ import tempfile
 ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
-from tools.package_components import download, extract, sha256
+from tools.package_components import download, extract, sha256, unpack_seed
 COMPONENTS = {
     'python': {
         'version': '3.14.8',
@@ -26,7 +26,7 @@ COMPONENTS = {
 }
 
 
-def assemble(wheel, output, cache, launcher_compiler=None, source_commit=None):
+def assemble(wheel, output, cache, launcher_compiler=None, source_commit=None, *, entrypoint='main.py'):
     wheel, output, cache = Path(wheel).resolve(), Path(output).resolve(), Path(cache).resolve()
     if output.exists():
         raise ValueError('Choose a new output directory; existing files are never replaced')
@@ -35,8 +35,7 @@ def assemble(wheel, output, cache, launcher_compiler=None, source_commit=None):
     output.parent.mkdir(parents=True, exist_ok=True)
     with tempfile.TemporaryDirectory(prefix='wysna-windows-package-', dir=output.parent) as temporary:
         stage = Path(temporary) / 'bundle'
-        stage.mkdir()
-        extract(wheel, stage)
+        unpack_seed(wheel, stage)
         for required in ('main.py', 'common/Version.py', 'runtime/wysna_runtime.h', 'stdlib/text.wysna'):
             if not (stage / required).is_file():
                 raise ValueError('Wheel is missing ' + required)
@@ -50,7 +49,10 @@ def assemble(wheel, output, cache, launcher_compiler=None, source_commit=None):
         extract(archives['zig'], stage / 'toolchain')
         (stage / 'toolchain/zig-x86_64-windows-0.15.2').rename(stage / 'toolchain/zig')
         compiler = Path(launcher_compiler).resolve() if launcher_compiler else stage / 'toolchain/zig/zig.exe'
+        if entrypoint not in ('main.py', 'wysna_entry.py'):
+            raise ValueError('Unknown installed entrypoint')
         subprocess.run([str(compiler), 'cc', '-target', 'x86_64-windows-gnu', '-mcpu=baseline',
+                        '-DWYSNA_ENTRYPOINT=L"' + entrypoint + '"',
                         '-O2', '-municode', str(ROOT / 'packaging/windows/launcher.c'),
                         '-o', str(stage / 'wysna.exe')], check=True, timeout=300)
         shutil.copy2(ROOT / 'LICENSE', stage / 'LICENSE')

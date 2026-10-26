@@ -381,6 +381,19 @@ class LlvmBackendTests(unittest.TestCase):
         with redirect_stderr(io.StringIO()):
             self.assertEqual(run_pipeline('print(1)', backend='llvm-experimental', use_selfhost=True), 1)
 
+    def test_cli_reuses_one_validated_provider_for_emission_and_linking(self):
+        calls = []
+        original = LlvmToolchain.__init__
+        def configure(toolchain, *args, **kwargs):
+            calls.append(kwargs.get('profile', 'dev'))
+            original(toolchain, *args, **kwargs)
+        output = self.directory / 'single-provider'
+        with patch.object(LlvmToolchain, '__init__', configure), redirect_stdout(io.StringIO()):
+            self.assertEqual(run_pipeline('print(42)', backend='llvm-experimental',
+                                          build_bin_path=str(output)), 0)
+        self.assertEqual(calls, ['dev'])
+        self.assertEqual(self.execute(output).stdout, b'42\n')
+
     def test_optional_arguments_use_callee_representation(self):
         source = '''fn add(first: int?, second: int?) -> int {
     (first ?? 0) + (second ?? 0)

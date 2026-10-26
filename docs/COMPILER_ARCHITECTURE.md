@@ -6,13 +6,15 @@ The Seed pipeline is:
 
 ```text
 SourceSnapshot -> AST -> CheckedProgram -> typed HIR -> verified MIR -> C99 | LLVM (explicit)
+                                                      \-> effect report (read-only)
 ```
 
 `CompilationSession` owns source snapshots, dependency identity, declarations and
 the canonical type arena. `CompilerService` is the consumer-facing API for parsing,
-checking, interpretation, lowering, interchange and emission. Checked results are
-bound to their originating session and generation. Consumers receive detached
-syntax; lowering must not reread dependencies or invoke a checker again.
+checking, interpretation, lowering, interchange, effect reporting and emission.
+Checked results are bound to their originating session and generation. Consumers
+receive detached syntax; lowering must not reread dependencies or invoke a checker
+again.
 
 `TypeRelations` is the authority for assignability over canonical type identities.
 `TypeChecker` coordinates declaration collection, symbolic definition checking,
@@ -65,6 +67,7 @@ Python consumers. Productive modules must not import it.
 
 - `tooling/CLI.py`: command parsing, command selection and terminal presentation.
 - `tooling/SourceCommand.py`: source command orchestration and diagnostics.
+- `tooling/ExplainCLI.py`: read-only effect/capability report presentation.
 - `tooling/RunReport.py`: application exit and JSON run-report protocol.
 - `compiler/Bootstrap.py`: locked bootstrap cache and compiler construction.
 - `compiler/*Toolchain.py`: target-specific build and link execution.

@@ -1,0 +1,10 @@
+import "std/files"
+
+fn inspect_file(path: str) -> unit ! files.FileError {
+    let file = files.open(path, 0)?  # 0 read, 1 truncate/write, 2 append
+    let chunk = file.read(4096)?
+    print("Read bytes:", chunk.size())
+    # File and Bytes release their host storage with their last owner.
+    # Use close() explicitly when its status matters.
+}
+inspect_file("README.md") else error { print(error.operation, error.code) }

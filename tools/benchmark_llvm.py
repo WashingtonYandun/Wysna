@@ -48,8 +48,9 @@ def compile_worker(source, backend, profile, output):
     checked = service.check_parsed(parsed)
     checked_ms = (time.perf_counter() - checked_start) * 1000
     if backend == 'llvm-experimental':
-        emission = service.emit_llvm(checked, profile=profile)
-        built = LlvmToolchain(profile=profile).build(emission, output, link_libraries=libraries)
+        toolchain = LlvmToolchain(profile=profile)
+        emission = service.emit_llvm(checked, profile=profile, toolchain=toolchain)
+        built = toolchain.build(emission, output, link_libraries=libraries)
         phases = dict(emission.timing_ms)
         phases.update(built.timing_ms)
         target = asdict(emission.target)

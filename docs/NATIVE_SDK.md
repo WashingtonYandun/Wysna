@@ -2,7 +2,7 @@
 
 The `native-core-v1` SDK runs Wysna Compiler and the C toolchain as native executables. It includes the runtime headers, standard library, a pinned Zig 0.15.2 toolchain and its licenses. Python and Wysna Seed are build-time tools and are not included in the SDK.
 
-This is the native compiler profile for development on `develop`. The reference Seed distribution remains available. This package does not change the default backend of the Python CLI or introduce a direct LLVM backend.
+This is the native compiler profile for development on `develop`. The [standalone Seed distribution](SEED_DISTRIBUTION.md) remains available for the broader Seed tooling set. This package does not change the default backend of the Python CLI or introduce a direct LLVM backend.
 
 ## Installation and commands
 

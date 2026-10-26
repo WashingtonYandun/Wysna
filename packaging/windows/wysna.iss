@@ -7,6 +7,9 @@
 #ifndef OutputDir
   #define OutputDir "."
 #endif
+#ifndef WysnaCompression
+  #define WysnaCompression "lzma2/fast"
+#endif
 
 [Setup]
 AppId={{E7DFAD44-C0AF-447A-BD57-39A0498CA07A}
@@ -23,8 +26,12 @@ MinVersion=10.0
 DisableDirPage=yes
 DisableProgramGroupPage=yes
 ChangesEnvironment=yes
-Compression=lzma2/fast
+Compression={#WysnaCompression}
+#if WysnaCompression == "none"
+SolidCompression=no
+#else
 SolidCompression=yes
+#endif
 OutputDir={#OutputDir}
 OutputBaseFilename=wysna-{#WysnaVersion}-windows-x64-setup
 UninstallDisplayIcon={app}\wysna.exe

@@ -320,10 +320,10 @@ def run_capabilities_command(argv):
             "compiler_version": WYSNA_VERSION,
             "commands": ["run", "check", "fmt", "ast", "mir", "tokens", "emit-c", "build",
                          "project.lock", "project.check", "project.build", "project.run", "project.test",
-                         "api", "capabilities", "lsp", "repl"],
+                         "api", "capabilities", "explain", "lsp", "repl"],
             "machine_output": {"format": "json-v1", "commands": ["check", "fmt", "emit-c", "build",
                                                                           "project.check", "project.build",
-                                                                          "api", "capabilities"]},
+                                                                          "api", "capabilities", "explain"]},
             "profiles": ["native-cli", "wasi-command", "browser-library", "c99-source"],
             "targets": ["native", "wasm32-wasip1", "wasm32-unknown-emscripten"],
             "runtimes": {"wasi-command": "wasmtime==50.0.1",
@@ -348,6 +348,12 @@ def run_capabilities_command(argv):
                             "project dependencies are local paths only",
                             "project lockfiles do not claim bit-for-bit binary reproducibility"],
         }
+        root = _STDLIB_ROOT.parent
+        if (root / 'installation.json').is_file() and (root / 'wysna_entry.py').is_file():
+            payload['commands'].append('doctor')
+            payload['machine_output']['commands'].append('doctor')
+            payload['requirements']['std/http']['interpreter'] = (
+                'PycURL is not bundled in the private runtime; use a native HTTP build with declared libcurl inputs')
         return _emit("capabilities", payload=payload)
     except (ValueError, ManifestError) as error:
         return _emit("capabilities", error=error)

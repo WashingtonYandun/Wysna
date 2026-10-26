@@ -10,13 +10,12 @@ import subprocess
 import sys
 import tarfile
 import tempfile
-import zipfile
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 from common.Version import WYSNA_VERSION
 from compiler.LlvmSdk import PLATFORMS, host_platform, query_layout, run_tool
-from tools.package_components import download, extract, sha256
+from tools.package_components import download, extract, sha256, unpack_seed
 from tools.ci_conformance import source_fingerprint
 from tooling.ToolResult import tool_result, diagnostic_record
 
@@ -67,21 +66,6 @@ def extract_llvm_tools(archive, destination):
     for name in ('opt', 'llc'):
         if not (destination / 'bin' / name).is_file():
             raise ValueError('LLVM archive is missing ' + name)
-
-
-def unpack_seed(wheel, destination):
-    with zipfile.ZipFile(wheel) as packed:
-        for member in packed.infolist():
-            path = PurePosixPath(member.filename)
-            if (path.is_absolute() or PureWindowsPath(member.filename).drive or '..' in path.parts
-                    or '\\' in member.filename or stat.S_ISLNK(member.external_attr >> 16)):
-                raise ValueError('Unsafe Seed wheel member')
-            if member.is_dir():
-                continue
-            source = ROOT / path
-            if source.is_file() and source.read_bytes() != packed.read(member):
-                raise ValueError('Seed wheel does not match checkout: ' + str(path))
-        packed.extractall(destination)
 
 
 def verified_archive(component, cache, supplied):

@@ -72,6 +72,7 @@ def protect_output(output, source_files):
 
 class LlvmToolchain:
     def __init__(self, repo_root=None, profile='dev'):
+        started = time.perf_counter()
         if profile not in PROFILES:
             raise WysnaError('Unknown LLVM optimization profile: ' + str(profile), code='W5002', stage='options')
         self.root = Path(repo_root or get_repo_root())
@@ -97,6 +98,7 @@ class LlvmToolchain:
                 raise NativeCompilationError('configuration', 'LLVM SDK Error', 'SDK target layout does not match its tools', 1)
             self.target = LlvmTargetSpec(triple, layout, profile, binding_version=None,
                                          driver='sdk-tools', sdk_manifest_sha256=self.sdk.manifest_digest)
+            self.configure_ms = (time.perf_counter() - started) * 1000
             return
         try:
             import llvmlite
@@ -114,6 +116,7 @@ class LlvmToolchain:
         speed, _, _ = PROFILES[profile]
         self.machine = llvm.Target.from_triple(triple).create_target_machine(cpu='generic', features='', opt=speed, reloc='pic')
         self.target = LlvmTargetSpec(triple, str(self.machine.target_data), profile)
+        self.configure_ms = (time.perf_counter() - started) * 1000
 
     def _module(self, source, context):
         module = self.llvm.parse_assembly(source, context=context)
@@ -276,7 +279,9 @@ class LlvmToolchain:
             def compile_runtime(arguments, phase):
                 return run(arguments, 'runtime_' + phase)
             cache_hits['runtime'], timings['runtime_cache'] = compile_cached_c(
-                cache, bridge, runtime, flags, identity, compile_runtime, extra_contract=asdict(self.target))
+                cache, bridge, runtime,
+                [('-gline-tables-only' if 'clang' in version.lower() else '-g1') if flag == '-g' else flag
+                 for flag in flags], identity, compile_runtime, extra_contract=asdict(self.target))
             timings['runtime_compile'] = timings.pop('runtime_c_compile', 0.0)
             linked = []
             for index, library in enumerate(libraries):

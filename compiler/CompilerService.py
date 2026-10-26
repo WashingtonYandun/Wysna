@@ -159,6 +159,24 @@ class CompilerService:
         from mir.Exchange import export_module
         return export_module(self.lower_mir(checked), checked._interner)
 
+    def explain(self, checked):
+        """Analyze verified resolved MIR without interpreting, linking or loading FFI."""
+        self._validate(checked)
+        from compiler.EffectAnalysis import analyze_effects
+        from compiler.EffectModel import HOST_EFFECTS
+        from common.Paths import get_repo_root
+        from mir.Lowering import Lowering
+        hir = self.lower_hir(checked)
+        module = Lowering(checked._interner, checked.source.file).lower(hir)
+        stdlib = (Path(get_repo_root()) / 'stdlib').resolve()
+        trusted = {}
+        for declaration in hir.functions:
+            if hasattr(declaration, 'extern_types') and declaration.extern_name in HOST_EFFECTS:
+                file = declaration.span.file_path
+                if file and Path(file).resolve().is_relative_to(stdlib):
+                    trusted['wysna_fn_' + declaration.name] = declaration.extern_name
+        return analyze_effects(module, checked._interner, self.source_texts(), trusted)
+
     def emit_c(self, checked, backend='hir', *, target_profile=None):
         self._validate(checked)
         browser_library = target_profile == 'browser-library'
@@ -191,7 +209,7 @@ class CompilerService:
                                'codegen': (emitted - lowered) * 1000},
                               tuple(getattr(generator, 'abi_exports', ())))
 
-    def emit_llvm(self, checked, *, profile='dev'):
+    def emit_llvm(self, checked, *, profile='dev', toolchain=None):
         """Emit the verified native-command LLVM profile from the same resolved HIR/MIR boundary."""
         self._validate(checked)
         from compiler.LlvmToolchain import LlvmToolchain, LlvmEmission
@@ -204,17 +222,23 @@ class CompilerService:
         debug = DebugModule()
         module = Lowering(checked._interner, checked.source.file, debug=debug).lower(hir)
         lowered_mir = time.perf_counter()
-        toolchain = LlvmToolchain(profile=profile)
+        owns_configuration = toolchain is None
+        if owns_configuration:
+            toolchain = LlvmToolchain(profile=profile)
+        elif not isinstance(toolchain, LlvmToolchain) or toolchain.profile != profile:
+            raise WysnaError('LLVM toolchain does not match the requested profile',
+                             code='W9999', stage='llvm-configuration')
         configured = time.perf_counter()
         generator = LlvmCodeGen(checked._interner)
         source = generator.generate(module, triple=toolchain.target.triple,
                                     data_layout=toolchain.target.data_layout, profile=profile, debug_info=debug)
         emitted = time.perf_counter()
         verified = toolchain.verify(source)
+        configure_ms = (configured - lowered_mir) * 1000 if owns_configuration else toolchain.configure_ms
         timings = {'hir': (lowered_hir - started) * 1000, 'mir': (lowered_mir - lowered_hir) * 1000,
-                   'llvm_configure': (configured - lowered_mir) * 1000,
+                   'llvm_configure': configure_ms,
                    'llvm_emit': (emitted - configured) * 1000, 'llvm_verify': verified,
-                   'codegen': (time.perf_counter() - started) * 1000}
+                   'codegen': (time.perf_counter() - started) * 1000 + (0 if owns_configuration else configure_ms)}
         files = tuple(self.source_texts()) or (checked.source.file,)
         from compiler.LlvmForeign import runtime_adapters
         adapters = runtime_adapters(module)

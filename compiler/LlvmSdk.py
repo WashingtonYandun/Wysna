@@ -144,5 +144,6 @@ class LlvmSdk:
             optimize_ms = (time.perf_counter() - started) * 1000
             started = time.perf_counter()
             run_tool([self.tool('llc'), '-filetype=obj', '-relocation-model=pic', '-mcpu=generic',
+                      '-function-sections', '-data-sections',
                       '-O=' + str(speed), optimized, '-o', object_path], 'object_emit')
             return object_path.read_bytes(), {'llvm_optimize': optimize_ms, 'object_emit': (time.perf_counter() - started) * 1000}

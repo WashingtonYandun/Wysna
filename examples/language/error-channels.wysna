@@ -1,0 +1,13 @@
+import "std/parse"
+
+fn compute_ratio(raw: str, divisor: int) -> int ! str {
+    let value = parse.parse_int(raw) else error { return Err("Invalid number format") }
+    if divisor == 0 { return Err("Division by zero") }
+    return value / divisor
+}
+
+fn show_ratio() {
+    let result = compute_ratio("42", 2) else error { print(error) return }
+    print("Ratio:", result)
+}
+show_ratio()
