@@ -21,6 +21,8 @@ from tools.package_components import download, extract, sha256
 
 COMPONENTS = json.loads((ROOT / "packaging/native/components.json").read_text(encoding="utf-8"))
 COMMANDS = ["check", "emit-c", "emit-mir", "build", "run"]
+# Cold release compilation of the compiler itself needs the SDK build budget.
+SDK_COMPONENT_BUILD_TIMEOUT_SECONDS = 600
 
 
 def host_platform():
@@ -82,7 +84,7 @@ def assemble(output, cache, *, source_commit=None):
             if stack_flags and source.name == "driver.c":
                 defines.append('-DWYSNA_NATIVE_STACK_LINK_ARGUMENT="' + stack_flags[0] + '"')
             built = subprocess.run(base + defines + [str(source), "-lc", "-lm", "-o", str(target)],
-                                   capture_output=True, text=True, timeout=300, env=environment)
+                                   capture_output=True, text=True, timeout=SDK_COMPONENT_BUILD_TIMEOUT_SECONDS, env=environment)
             if built.returncode:
                 raise RuntimeError("Native SDK compilation failed for " + source.name + ":\n" + built.stderr)
         if os.name == "nt":
@@ -111,6 +113,7 @@ def assemble(output, cache, *, source_commit=None):
         manifest = {"format": 1, "version": WYSNA_VERSION, "platform": host,
                     "profile": "native-core-v1", "target": component["target"], "commands": COMMANDS,
                     "stack_reserve_bytes": WINDOWS_NATIVE_STACK_BYTES if os.name == "nt" else None,
+                    "component_build_timeout_seconds": SDK_COMPONENT_BUILD_TIMEOUT_SECONDS,
                     "source_commit": actual_commit, "source_dirty": dirty,
                     "compiler_fingerprint": bootstrap["fingerprint"],
                     "compiler_source_sha256": bootstrap["provenance"]["inputs"]["selfhost/compiler.wysna"],

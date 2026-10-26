@@ -40,7 +40,11 @@ def test_ci_workflow_contracts():
     assert '${wheel}[llvm]' in llvm
     assert '--sanitize --output .wysna_cache/llvm-sanitized' in llvm
     sdk_build, sdk_consumer = jobs['llvm-sdk-build'], jobs['installed-llvm-sdk']
-    assert 'package_llvm_sdk.py' in sdk_build and 'benchmark_llvm.py' in sdk_build
+    assert 'package_llvm_sdk.py' in sdk_build and 'benchmark_llvm.py' not in sdk_build
+    comparison = jobs['llvm-comparison']
+    assert 'needs: llvm-sdk-build' in comparison and 'profile: [dev, release, size]' in comparison
+    assert 'benchmark_llvm.py' in comparison and '--profiles ${{ matrix.profile }}' in comparison
+    assert 'llvm-sdk-qualification-${{ matrix.os }}' in comparison
     assert 'qualify_llvm.py' in sdk_build and '--source-commit "$GITHUB_SHA"' in sdk_build
     assert 'actions/checkout' not in sdk_consumer
     assert 'needs: llvm-sdk-build' in sdk_consumer and 'validate_llvm_sdk.py' in sdk_consumer
@@ -91,19 +95,19 @@ def test_ci_workflow_contracts():
     assert {os_name + ',' + compiler for os_name, compiler in rows} == MATRIX
     assert len(rows) == len(MATRIX)
     assert 'name: Conformance (${{ matrix.os }}, ${{ matrix.cc }})' in conformance
-    assert re.search(r'^    needs: \[compiler-contracts, runtime-conformance, integration-conformance, llvm-experimental, installed-llvm-sdk\]$', conformance, re.MULTILINE)
+    assert re.search(r'^    needs: \[compiler-contracts, runtime-conformance, integration-conformance, llvm-experimental, installed-llvm-sdk, llvm-comparison\]$', conformance, re.MULTILINE)
     assert re.search(r'^    if: always\(\)$', conformance, re.MULTILINE)
     match = re.search(r'- name: Require compiler, runtime and integration conformance success\n[\s\S]*?        run: \|\n'
                       r'((?:          [^\n]*\n)+)', conformance)
     assert match, 'Required conformance statuses must reject failed or skipped contracts'
     script = '\n'.join(line[10:] for line in match.group(1).splitlines())
     statuses = ('success', 'failure', 'cancelled', 'skipped')
-    for results in product(statuses, repeat=5):
-        contract_status, runtime_status, integration_status, llvm_status, llvm_sdk_status = results
+    for results in product(statuses, repeat=6):
+        contract_status, runtime_status, integration_status, llvm_status, llvm_sdk_status, llvm_comparison_status = results
         result = subprocess.run(
             ['bash', '-c', script], capture_output=True, text=True,
             env=dict(os.environ, CONTRACT_RESULT=contract_status, RUNTIME_RESULT=runtime_status,
-                     INTEGRATION_RESULT=integration_status, LLVM_RESULT=llvm_status, LLVM_SDK_RESULT=llvm_sdk_status), timeout=10)
+                     INTEGRATION_RESULT=integration_status, LLVM_RESULT=llvm_status, LLVM_SDK_RESULT=llvm_sdk_status, LLVM_COMPARISON_RESULT=llvm_comparison_status), timeout=10)
         assert (result.returncode == 0) == all(status == 'success' for status in results), (results, result)
 
 

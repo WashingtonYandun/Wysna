@@ -50,6 +50,24 @@ def qualify(output, profiles=('dev', 'release', 'size'), sanitize=False):
     started = time.perf_counter()
     with tempfile.TemporaryDirectory(prefix='wysna-llvm-qualification-') as temporary:
         temporary = Path(temporary)
+        # Reject broken provider configuration once, before repeating every case.
+        smoke = CompilerService()
+        checked_smoke = smoke.check('print(42)', '<llvm-qualification-preflight>')
+        for profile in profiles:
+            directory = output / 'preflight' / profile
+            directory.mkdir(parents=True)
+            try:
+                emission = smoke.emit_llvm(checked_smoke, profile=profile)
+                built = LlvmToolchain(profile=profile).build(emission, temporary / 'preflight', sanitize=sanitize)
+                observed = execution(built.output_path, directory, sanitize)
+                if observed != {'exit_code': 0, 'stdout': '42\n', 'stderr': ''}:
+                    raise AssertionError(observed)
+                record = {'status': 'passed', 'target': asdict(emission.target),
+                          'toolchain': built.toolchain_identity}
+            except Exception as error:
+                (directory / 'preflight.json').write_text(json.dumps({'status': 'failed', 'error': str(error)}, indent=2))
+                raise
+            (directory / 'preflight.json').write_text(json.dumps(record, indent=2), encoding='utf-8')
         for number, path in enumerate(positives, 1):
             label = path.relative_to(ROOT).as_posix()
             try:

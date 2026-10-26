@@ -12,7 +12,11 @@ from compiler.NativeToolchain import NativeCompilationError
 
 def compiler_identity(command):
     try:
-        process = subprocess.run(command + ['--version'], capture_output=True, text=True, timeout=30)
+        # Zig's version-only Clang path rejects GNU ABI versions that real builds accept.
+        zig_driver = (Path(command[0]).name.lower() in ('zig', 'zig.exe')
+                      and command[1:2] in (['cc'], ['c++']))
+        version_command = command[:2] if zig_driver else command
+        process = subprocess.run(version_command + ['--version'], capture_output=True, text=True, timeout=30)
     except (OSError, subprocess.TimeoutExpired) as error:
         raise NativeCompilationError('configuration', 'C Compiler Error', str(error), 127) from error
     if process.returncode or not process.stdout.strip():

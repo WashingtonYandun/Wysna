@@ -451,6 +451,18 @@ print(add(20, 22), add(none, 42), add(42, none))
             self.assertFalse(cache.obtain('objects', {'profile': 'dev'}, produce)[1])
         self.assertEqual(len(calls), 5)
 
+    def test_zig_identity_queries_version_without_losing_target_flags(self):
+        from compiler.CObjectCache import compiler_identity
+        zig = self.directory / 'zig'
+        zig.write_text('#!/bin/sh\nif [ "$#" = 2 ] && [ "$1" = cc ] && [ "$2" = --version ]; then\n'
+                       '  echo "clang version 20.1.2"\n  exit 0\nfi\necho "invalid GNU version" >&2\nexit 1\n')
+        zig.chmod(0o755)
+        command = [str(zig), 'cc', '-target', 'x86_64-linux-gnu.2.28', '-mcpu=baseline']
+        identity = compiler_identity(command)
+        self.assertEqual(identity['command'], command)
+        self.assertEqual(identity['version'], 'clang version 20.1.2')
+        self.assertEqual(len(identity['executable_sha256']), 64)
+
     def test_c_cache_tracks_real_header_changes(self):
         from compiler.ArtifactCache import ArtifactCache
         from compiler.CObjectCache import compiler_identity, compile_cached_c

@@ -82,7 +82,7 @@ jobs:
           if-no-files-found: error
 
   llvm-sdk-build:
-    name: Build and measure LLVM SDK (${{ matrix.os }})
+    name: Build and qualify LLVM SDK (${{ matrix.os }})
     needs: wheel-build
     runs-on: ${{ matrix.os }}
     timeout-minutes: 60
@@ -110,10 +110,6 @@ jobs:
         env:
           WYSNA_LLVM_SDK: ${{ github.workspace }}/.wysna_cache/llvm-sdk
         run: python tools/qualify_llvm.py --output .wysna_cache/llvm-sdk-qualification
-      - name: Measure all workloads and profiles against C99 with the same bundled C toolchain
-        env:
-          WYSNA_LLVM_SDK: ${{ github.workspace }}/.wysna_cache/llvm-sdk
-        run: python tools/benchmark_llvm.py --qualification .wysna_cache/llvm-sdk-qualification/summary.json --output .wysna_cache/llvm-comparison
       - uses: actions/upload-artifact@v4
         with:
           name: llvm-sdk-${{ matrix.os }}
@@ -126,11 +122,49 @@ jobs:
       - uses: actions/upload-artifact@v4
         if: always()
         with:
-          name: llvm-measurements-${{ matrix.os }}
+          name: llvm-sdk-qualification-${{ matrix.os }}
           path: |
             .wysna_cache/llvm-sdk-qualification/
-            .wysna_cache/llvm-comparison/**/*.json
             .wysna_cache/llvm-sdk/llvm-sdk.json
+          include-hidden-files: true
+          if-no-files-found: error
+
+  llvm-comparison:
+    name: LLVM comparison (${{ matrix.os }}, ${{ matrix.profile }})
+    needs: llvm-sdk-build
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 60
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+        profile: [dev, release, size]
+    env:
+      WYSNA_LLVM_SDK: ${{ github.workspace }}/.wysna_cache/llvm-sdk
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - uses: actions/download-artifact@v4
+        with:
+          name: llvm-sdk-${{ matrix.os }}
+          path: .wysna_cache/llvm-artifact
+      - uses: actions/download-artifact@v4
+        with:
+          name: llvm-sdk-qualification-${{ matrix.os }}
+          path: .wysna_cache/llvm-sdk-evidence
+      - name: Restore the exact qualified SDK outside its archive
+        run: tar -xzf .wysna_cache/llvm-artifact/llvm-sdk.tar.gz -C .wysna_cache
+      - name: Measure every workload with the unchanged sample protocol
+        run: |
+          qualification=$(find .wysna_cache/llvm-sdk-evidence -name summary.json -print -quit)
+          python tools/benchmark_llvm.py --qualification "$qualification" --profiles ${{ matrix.profile }} --output .wysna_cache/llvm-comparison
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: llvm-measurements-${{ matrix.os }}-${{ matrix.profile }}
+          path: .wysna_cache/llvm-comparison/**/*.json
           include-hidden-files: true
           if-no-files-found: error
 
@@ -401,7 +435,7 @@ jobs:
             tests/fuzz/failures/
 
   conformance:
-    needs: [compiler-contracts, runtime-conformance, integration-conformance, llvm-experimental, installed-llvm-sdk]
+    needs: [compiler-contracts, runtime-conformance, integration-conformance, llvm-experimental, installed-llvm-sdk, llvm-comparison]
     if: always()
     name: Conformance (${{ matrix.os }}, ${{ matrix.cc }})
     runs-on: ubuntu-latest
@@ -421,9 +455,10 @@ jobs:
           INTEGRATION_RESULT: ${{ needs.integration-conformance.result }}
           LLVM_RESULT: ${{ needs.llvm-experimental.result }}
           LLVM_SDK_RESULT: ${{ needs.installed-llvm-sdk.result }}
+          LLVM_COMPARISON_RESULT: ${{ needs.llvm-comparison.result }}
         run: |
-          if [ "$CONTRACT_RESULT" != "success" ] || [ "$RUNTIME_RESULT" != "success" ] || [ "$INTEGRATION_RESULT" != "success" ] || [ "$LLVM_RESULT" != "success" ] || [ "$LLVM_SDK_RESULT" != "success" ]; then
-            echo "Prerequisites did not pass: compiler=$CONTRACT_RESULT runtime=$RUNTIME_RESULT integration=$INTEGRATION_RESULT llvm=$LLVM_RESULT sdk=$LLVM_SDK_RESULT" >&2
+          if [ "$CONTRACT_RESULT" != "success" ] || [ "$RUNTIME_RESULT" != "success" ] || [ "$INTEGRATION_RESULT" != "success" ] || [ "$LLVM_RESULT" != "success" ] || [ "$LLVM_SDK_RESULT" != "success" ] || [ "$LLVM_COMPARISON_RESULT" != "success" ]; then
+            echo "Prerequisites did not pass: compiler=$CONTRACT_RESULT runtime=$RUNTIME_RESULT integration=$INTEGRATION_RESULT llvm=$LLVM_RESULT sdk=$LLVM_SDK_RESULT comparison=$LLVM_COMPARISON_RESULT" >&2
             exit 1
           fi
 

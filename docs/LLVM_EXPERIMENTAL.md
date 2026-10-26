@@ -130,7 +130,7 @@ backends, separately from process launch; raw timing output is retained.
 
 CI runs ten workloads plus separate startup and sustained-work fixtures, all three profiles, five cold and five warm compile samples,
 and fifteen runtime samples after warmups. Raw reports are published as
-`llvm-measurements-OS` artifacts of the relevant CI commit. A failed budget does not
+`llvm-measurements-OS-PROFILE` artifacts of the relevant CI commit. A failed budget does not
 silently disappear when LLVM remains opt-in.
 
 The implementation decision is to retain C99 by default and expose qualified LLVM
