@@ -97,15 +97,19 @@ def validate(installation, report, *, http=False, archive=None):
 
         if http:
             # Only declared libcurl discovery is available; no host C compiler is used.
-            config = shutil.which('curl-config')
+            config = os.environ.get('WYSNA_CURL_CONFIG') or shutil.which('curl-config')
             if not config:
                 raise ValueError('--http requires declared libcurl development inputs and curl-config')
             discovery = empty / 'curl-config'
-            discovery.symlink_to(config)
+            discovery.write_text('#!/bin/sh\nexec ' + shlex.quote(config) + ' "$@"\n')
+            discovery.chmod(0o755)
             for name in ('cut', 'sed', 'dirname', 'uname', 'tr', 'awk', 'grep', 'expr', 'head', 'cat'):
                 utility = shutil.which(name)
                 if utility:
                     (empty / name).symlink_to(utility)
+            report['http_dependency'] = {'config': config}
+            for option in ('--version', '--cflags', '--libs'):
+                report['http_dependency'][option.removeprefix('--')] = run('libcurl' + option, [discovery, option]).stdout.strip()
             downloader = work / 'measurement-fetch'
             run('build-installed-http-client', [cli, 'build', work / 'fetch.wysna', '-o', downloader])
             payload = b'[{"id":3,"value":5}]'

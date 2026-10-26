@@ -757,7 +757,9 @@ jobs:
           key: seed-${{ runner.os }}-${{ runner.arch }}-python-20261026-zig-0.15.2-v1
       - name: Install Linux packaging and declared HTTP development inputs
         if: runner.os == 'Linux'
-        run: sudo apt-get update && sudo apt-get install -y rpm libcurl4-openssl-dev
+        run: |
+          sudo apt-get update && sudo apt-get install -y rpm libcurl4-openssl-dev
+          echo "WYSNA_CURL_CONFIG=/usr/bin/curl-config" >> "$GITHUB_ENV"
       - name: Install macOS HTTP development inputs
         if: runner.os == 'macOS'
         run: |
