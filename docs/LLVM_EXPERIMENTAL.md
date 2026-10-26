@@ -90,6 +90,10 @@ Run the optional suite with:
 python -m tests.unit.test_llvm_backend -v
 ```
 
+General test discovery skips this optional suite if LLVM or the supported host is
+unavailable. Running the module explicitly fails if its toolchain is missing; CI
+therefore cannot pass by skipping the experiment.
+
 CI runs the suite on Linux x64 and macOS arm64 and compiles from the installed wheel
 outside the checkout. Tests compare executable stdout, stderr, exit status and
 runtime allocation checks with C99, exercise the three optimization profiles,

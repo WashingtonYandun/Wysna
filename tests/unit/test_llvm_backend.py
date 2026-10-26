@@ -3,6 +3,7 @@
 Run explicitly with the pinned LLVM extra; missing LLVM is a test failure.
 """
 import builtins
+import importlib.util
 from contextlib import redirect_stdout, redirect_stderr
 from dataclasses import replace
 import io
@@ -79,6 +80,10 @@ print()
 }
 
 
+@unittest.skipUnless(importlib.util.find_spec('llvmlite') is not None and
+                     ((platform.system() == 'Darwin' and platform.machine().lower() in ('arm64', 'aarch64'))
+                      or (platform.system() == 'Linux' and platform.machine().lower() in ('x86_64', 'amd64'))),
+                     'Optional LLVM tools and a supported host are required; run this module explicitly to validate setup')
 class LlvmBackendTests(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
@@ -372,4 +377,5 @@ class LlvmBackendTests(unittest.TestCase):
 
 
 if __name__ == '__main__':
+    LlvmToolchain()  # Explicit execution must fail instead of silently skipping a missing toolchain.
     unittest.main()
