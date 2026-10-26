@@ -553,6 +553,17 @@ print(inspect(41))
         self.assertEqual(payload['execution']['kind'], 'timeout')
         self.assertEqual(payload['status'], 'execution_error')
 
+    def test_empty_process_group_does_not_mask_cancellation(self):
+        import signal
+        from common.ProcessTree import terminate_tree
+        with patch('common.ProcessTree._children', return_value=[]), \
+                patch('common.ProcessTree.os.kill') as kill, \
+                patch('common.ProcessTree.os.killpg', side_effect=PermissionError('terminated group')) as group:
+            terminate_tree(12345)
+        self.assertEqual(kill.call_args_list, [unittest.mock.call(12345, signal.SIGSTOP),
+                                              unittest.mock.call(12345, signal.SIGKILL)])
+        group.assert_called_once_with(12345, signal.SIGKILL)
+
     def test_cancellation_includes_descendants_with_separate_process_groups(self):
         import time
         import io

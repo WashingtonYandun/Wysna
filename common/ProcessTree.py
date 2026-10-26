@@ -49,5 +49,7 @@ def terminate_tree(root):
                 pass
         try:
             os.killpg(root, signal.SIGKILL)
-        except ProcessLookupError:
+        except (ProcessLookupError, PermissionError):
+            # Darwin can report EPERM for a group containing only terminated processes.
+            # The individual descendants above have already been killed.
             pass
