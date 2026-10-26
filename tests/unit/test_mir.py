@@ -171,12 +171,21 @@ def rebuild(path, directory):
         with (root / 'builds').open('a') as stream:
             stream.write('built\\n')
         time.sleep(0.15)
-        target = Path(directory) / bootstrap.executable_name('stage2')
-        target.write_bytes(b'compiler')
-        manifest = {'fingerprint': fingerprint,
-                    'stage2_sha256': hashlib.sha256(target.read_bytes()).hexdigest()}
-        (Path(directory) / 'bootstrap.json').write_text(json.dumps(manifest))
-        return bootstrap.BootstrapArtifacts(Path(directory), fingerprint, ('same',) * 3)
+        directory = Path(directory)
+        contents = {'bootstrap.c': b'seed', 'compiler0.c': b'native',
+                    'compiler1.c': b'native', 'compiler2.c': b'native',
+                    bootstrap.executable_name('stage1'): b'compiler',
+                    bootstrap.executable_name('stage2'): b'compiler'}
+        for name, content in contents.items():
+            (directory / name).write_bytes(content)
+        hashes = {name: hashlib.sha256(content).hexdigest() for name, content in contents.items()}
+        native_hashes = [hashes['compiler0.c']] * 3
+        manifest = {'fingerprint': fingerprint, 'seed_c_sha256': hashes['bootstrap.c'],
+                    'native_c_sha256': native_hashes,
+                    'stage1_sha256': hashes[bootstrap.executable_name('stage1')],
+                    'stage2_sha256': hashes[bootstrap.executable_name('stage2')]}
+        (directory / 'bootstrap.json').write_text(json.dumps(manifest))
+        return bootstrap.BootstrapArtifacts(directory, fingerprint, tuple(native_hashes))
     finally:
         marker.unlink()
 bootstrap.bootstrap_compiler = rebuild
