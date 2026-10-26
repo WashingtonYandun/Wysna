@@ -5,6 +5,7 @@ import io
 import os
 from pathlib import Path
 import sys
+import subprocess
 import tempfile
 import warnings
 import zipfile
@@ -14,6 +15,7 @@ import main
 from common.Platform import compiler_command, executable_name
 from error.Error import ToolchainError, WysnaError
 from tools.package_components import unpack_seed
+from project.Manifest import tomllib
 
 
 def test_compiler_configuration_and_unavailable_command():
@@ -107,10 +109,27 @@ def test_seed_wheel_validation_is_shared_and_precedes_any_extraction():
         assert not (directory / 'outside.py').exists()
 
 
+def test_every_packaged_text_input_has_portable_checkout_bytes():
+    root = Path(__file__).resolve().parents[2]
+    configuration = tomllib.loads((root / 'pyproject.toml').read_text(encoding='utf-8'))['tool']['setuptools']
+    paths = {root / (name + '.py') for name in configuration['py-modules']}
+    for name in configuration['packages']:
+        paths.update((root / name.replace('.', '/')).glob('*.py'))
+    for name, patterns in configuration['package-data'].items():
+        for pattern in patterns:
+            paths.update((root / name.replace('.', '/')).glob(pattern))
+    text_paths = sorted(path.relative_to(root).as_posix() for path in paths if b'\n' in path.read_bytes())
+    result = subprocess.run(['git','check-attr','eol','--',*text_paths],cwd=root,
+                            capture_output=True,text=True,check=True,timeout=30)
+    unnormalized = [line for line in result.stdout.splitlines() if not line.endswith(': eol: lf')]
+    assert not unnormalized, 'Packaged source bytes change on Windows checkout: ' + repr(unnormalized)
+
+
 if __name__ == '__main__':
     test_compiler_configuration_and_unavailable_command()
     test_unavailable_compiler_is_structured_and_check_remains_available()
     test_missing_selfhost_sources_fail_before_any_cache_write()
     test_benchmark_checkout_requirement_precedes_bootstrap()
     test_seed_wheel_validation_is_shared_and_precedes_any_extraction()
+    test_every_packaged_text_input_has_portable_checkout_bytes()
     print('Distribution: compiler configuration, structured host errors and source-only commands passed')
