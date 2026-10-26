@@ -1,0 +1,1 @@
+"""Wysna Seed error package."""

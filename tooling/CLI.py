@@ -87,6 +87,9 @@ def print_help(prog: Optional[str] = None) -> None:
     print(f"  {prog} mir <file.wysna>                        # Emit verified MIR as JSON")
     print(f"  {prog} emit-mir [--implementation=seed|compiler] <file.wysna> [-o <out.json>] # Emit portable MIR")
     print(f"  {prog} tokens <file.wysna>                     # Emit lexical token stream")
+    print(f"  {prog} emit-llvm <file.wysna> [-o <out.ll>] # Native-command LLVM IR (Seed)")
+    print(f"  {prog} run --backend=llvm-experimental [--sanitize] [--timeout-ms <N>] <file.wysna> [-- args...]")
+    print(f"  {prog} build --backend=llvm-experimental --profile=dev|release|size <file.wysna> [-o <bin>]")
     print(f"  {prog} emit-c [--backend=hir|ast|selfhost] [--output-format=json-v1] <file.wysna> [-o <out.c>] # Transpile to C99")
     print(f"  {prog} build [--backend=hir|ast|selfhost] [--output-format=json-v1] <file.wysna> [-o <bin>] # Compile native binary")
     print(f"  {prog} test [--differential [N]] [--fuzz [N]]            # Run conformance, differential, or fuzz suite")
@@ -103,7 +106,7 @@ def main(argv=None) -> None:
     report_json_path = None
     requested_invocation_id = None
     command_for_output = args[0] if args and args[0] in (
-        "run", "check", "fmt", "ast", "mir", "tokens", "emit-c", "build",
+        "run", "check", "fmt", "ast", "mir", "tokens", "emit-c", "emit-llvm", "build",
         "test", "bench", "version", "repl",
     ) else "run"
 
@@ -151,13 +154,16 @@ def main(argv=None) -> None:
     use_hir = None
     emit_c_path: Optional[str] = None
     build_bin_path: Optional[str] = None
+    emit_llvm_path: Optional[str] = None
+    optimization_profile = None
+    run_timeout_ms = None
     show_mir = False
     subcmd: Optional[str] = None
     file_to_run: Optional[str] = None
     sanitize = False
     link_libraries = []
 
-    if args and args[0] in ("run", "check", "fmt", "ast", "mir", "tokens", "emit-c", "build", "test", "bench", "version", "repl"):
+    if args and args[0] in ("run", "check", "fmt", "ast", "mir", "tokens", "emit-c", "emit-llvm", "build", "test", "bench", "version", "repl"):
         subcmd = args[0]
         command_for_output = subcmd
         args = args[1:]
@@ -237,6 +243,8 @@ def main(argv=None) -> None:
         elif subcmd == "version":
             print(f"Wysna Language Compiler v{WYSNA_VERSION} (Wysna Seed + Wysna Compiler Self-Hosted C99)")
             return
+        elif subcmd == "emit-llvm":
+            backend = "llvm-experimental"
         elif subcmd == "check":
             check_only = True
         elif subcmd == "fmt":
@@ -306,10 +314,21 @@ def main(argv=None) -> None:
             use_hir = False
         elif arg.startswith("--backend="):
             b_val = arg.split("=", 1)[1]
-            if b_val in ("hir", "ast", "selfhost"):
-                backend = b_val
+            if b_val in ("c99", "hir", "ast", "selfhost", "llvm-experimental"):
+                backend = "hir" if b_val == "c99" else b_val
+                use_selfhost = False
+                use_hir = None
             else:
-                usage_error(f"Unknown backend '{b_val}'. Valid backends: hir, ast, selfhost")
+                usage_error(f"Unknown backend '{b_val}'. Valid backends: c99, hir, ast, selfhost, llvm-experimental")
+        elif arg == "--timeout-ms":
+            i += 1
+            if i >= len(args) or not args[i].isdigit() or not 1 <= int(args[i]) <= 600000:
+                usage_error("--timeout-ms requires an integer from 1 to 600000")
+            run_timeout_ms = int(args[i])
+        elif arg.startswith("--profile="):
+            optimization_profile = arg.split("=", 1)[1]
+            if optimization_profile not in ("dev", "release", "size"):
+                usage_error("--profile must be dev, release, or size")
         elif arg in ("--version", "-v"):
             print(f"Wysna Language Compiler v{WYSNA_VERSION} (Wysna Seed + Wysna Compiler Self-Hosted C99)")
             sys.exit(0)
@@ -329,6 +348,8 @@ def main(argv=None) -> None:
                 usage_error("-o requires an output path")
             if subcmd == "emit-c":
                 emit_c_path = args[i]
+            elif subcmd == "emit-llvm":
+                emit_llvm_path = args[i]
             elif subcmd == "build":
                 build_bin_path = args[i]
             else:
@@ -355,6 +376,19 @@ def main(argv=None) -> None:
 
     prog_cmd = "wysna"
 
+    if subcmd == "emit-llvm" and backend != "llvm-experimental":
+        usage_error("emit-llvm requires --backend=llvm-experimental")
+    if optimization_profile is not None and backend != "llvm-experimental" and subcmd != "build":
+        usage_error("--profile is supported by native builds and LLVM source commands")
+    if run_timeout_ms is not None and (subcmd not in (None, "run") or backend != "llvm-experimental"):
+        usage_error("--timeout-ms is supported by run --backend=llvm-experimental")
+    if backend == "llvm-experimental":
+        if subcmd not in (None, "run", "check", "emit-llvm", "build"):
+            usage_error("llvm-experimental supports run, check, emit-llvm, and build")
+        if (show_tokens or show_ast or show_mir or fmt_only or fmt_write
+                or emit_c_path is not None or json_diagnostics):
+            usage_error("llvm-experimental does not support these diagnostic, C generation, or build options")
+
     if requested_invocation_id is not None and report_json_path is None:
         usage_error("--invocation-id requires --report-json")
 
@@ -370,9 +404,9 @@ def main(argv=None) -> None:
             usage_error("--invocation-id must not be empty")
 
     if json_v1:
-        supported_commands = ("check", "fmt", "emit-c", "build")
+        supported_commands = ("check", "fmt", "emit-c", "emit-llvm", "build")
         if subcmd not in supported_commands:
-            usage_error("--output-format=json-v1 is supported only by check, fmt, emit-c, and build")
+            usage_error("--output-format=json-v1 is supported only by check, fmt, emit-c, emit-llvm, and build")
         if json_diagnostics or show_stats or show_ast or show_tokens or show_mir:
             usage_error("--output-format=json-v1 cannot be combined with legacy JSON, stats, or diagnostic output modes")
         if subcmd == "check":
@@ -391,6 +425,9 @@ def main(argv=None) -> None:
                 usage_error("emit-c --output-format=json-v1 supports C generation only")
             if sanitize or link_libraries:
                 usage_error("emit-c --output-format=json-v1 does not accept build options")
+        elif subcmd == "emit-llvm":
+            if check_only or fmt_only or fmt_write or build_bin_path is not None:
+                usage_error("emit-llvm supports LLVM generation only")
         elif subcmd == "build":
             if check_only or fmt_only or fmt_write or emit_c_path is not None:
                 usage_error("build --output-format=json-v1 supports native compilation only")
@@ -413,6 +450,8 @@ def main(argv=None) -> None:
 
         if subcmd == "emit-c" and emit_c_path is None:
             emit_c_path = _strip_src_ext(file_to_run) + ".c"
+        elif subcmd == "emit-llvm" and emit_llvm_path is None:
+            emit_llvm_path = _strip_src_ext(file_to_run) + ".ll"
         elif subcmd == "build" and build_bin_path is None:
             build_bin_path = _strip_src_ext(file_to_run) if file_to_run.endswith(".wysna") else file_to_run + ".bin"
 
@@ -445,8 +484,8 @@ def main(argv=None) -> None:
                 "diagnostics": [],
             }
 
-        if json_v1 and subcmd in ("emit-c", "build"):
-            output_path = emit_c_path if subcmd == "emit-c" else build_bin_path
+        if json_v1 and subcmd in ("emit-c", "emit-llvm", "build"):
+            output_path = {"emit-c": emit_c_path, "emit-llvm": emit_llvm_path, "build": build_bin_path}[subcmd]
             canonical_output = os.path.normcase(os.path.realpath(output_path))
             canonical_source = os.path.normcase(os.path.realpath(file_to_run))
             try:
@@ -501,6 +540,9 @@ def main(argv=None) -> None:
             fmt_write=fmt_write,
             emit_c_path=emit_c_path,
             build_bin_path=build_bin_path,
+            emit_llvm_path=emit_llvm_path,
+            optimization_profile=optimization_profile,
+            run_timeout_ms=run_timeout_ms,
             backend=backend,
             use_selfhost=use_selfhost,
             use_hir=use_hir,

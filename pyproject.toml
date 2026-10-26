@@ -16,6 +16,7 @@ keywords = ["compiler", "programming-language", "self-hosting", "c99", "static-t
 dependencies = []
 
 [project.optional-dependencies]
+llvm = ["llvmlite==0.46.0"]
 wasi = ["wasmtime==50.0.1"]
 http = ["pycurl>=7.48,<8"]
 service = ["aiohttp>=3.14.5,<4"]
@@ -28,7 +29,7 @@ py-modules = ["main", "run_conformance"]
 packages = ["lexer", "parser", "checker", "formatter", "runtime", "codegen", "common", "error", "node", "tokens", "hir", "mir", "compiler", "tooling", "common._vendor", "common._vendor.tomli", "stdlib", "project"]
 
 [tool.setuptools.package-data]
-runtime = ["*.h"]
+runtime = ["*.h", "wysna_llvm_runtime.c", "wysna_llvm_operations.def"]
 stdlib = ["*.wysna"]
 "common._vendor.tomli" = ["LICENSE", "py.typed"]
 

@@ -6,6 +6,7 @@
 #endif
 #if !defined(__wasi__)
 #include <signal.h>
+#include "wysna_process_tree.h"
 typedef struct {
 #ifdef _WIN32
     volatile LONG requested;
@@ -310,7 +311,7 @@ static int64_t wysna_host_process_run_cancellable(void* executable_handle, void*
     do { received = read(error_pipe[0], &exec_error, sizeof(exec_error)); } while (received < 0 && errno == EINTR);
     close(error_pipe[0]);
     if (received < 0) {
-        int error = errno; (void)kill(-child, SIGKILL);
+        int error = errno; wysna_process_terminate_tree(child);
         int status; while (waitpid(child, &status, 0) < 0 && errno == EINTR) { }
         for (int index = 1; index < argc; index++) free(argv[index]);
         free(argv); free(executable); return wysna_host_process_error(error);
@@ -332,7 +333,7 @@ static int64_t wysna_host_process_run_cancellable(void* executable_handle, void*
             free(argv); free(executable); return wysna_host_process_error(error);
         }
         if (clock_gettime(CLOCK_MONOTONIC, &current) != 0) {
-            int error = errno; (void)kill(-child, SIGKILL);
+            int error = errno; wysna_process_terminate_tree(child);
             while (waitpid(child, &status, 0) < 0 && errno == EINTR) { }
             for (int index = 1; index < argc; index++) free(argv[index]);
             free(argv); free(executable); return wysna_host_process_error(error);
@@ -342,43 +343,8 @@ static int64_t wysna_host_process_run_cancellable(void* executable_handle, void*
         int64_t elapsed_ms = elapsed_ns / 1000000LL;
         int cancelled = wysna_host_process_cancelled(cancellation);
         if (cancelled || elapsed_ms >= timeout_ms) {
-            (void)kill(-child, SIGTERM);
-            struct timespec grace_start, grace_now;
-            if (clock_gettime(CLOCK_MONOTONIC, &grace_start) != 0) {
-                int error = errno;
-                (void)kill(-child, SIGKILL);
-                while (waitpid(child, &status, 0) < 0 && errno == EINTR) { }
-                for (int index = 1; index < argc; index++) free(argv[index]);
-                free(argv); free(executable); return wysna_host_process_error(error);
-            }
-            int leader_stopped = 0;
-            for (;;) {
-                if (!leader_stopped) {
-                    pid_t stopped = waitpid(child, &status, WNOHANG);
-                    if (stopped == child) leader_stopped = 1;
-                    else if (stopped < 0 && errno != EINTR) {
-                        int error = errno; (void)kill(-child, SIGKILL);
-                        for (int index = 1; index < argc; index++) free(argv[index]);
-                        free(argv); free(executable); return wysna_host_process_error(error);
-                    }
-                }
-                if (clock_gettime(CLOCK_MONOTONIC, &grace_now) != 0) {
-                    int error = errno;
-                    (void)kill(-child, SIGKILL);
-                    if (!leader_stopped) while (waitpid(child, &status, 0) < 0 && errno == EINTR) { }
-                    for (int index = 1; index < argc; index++) free(argv[index]);
-                    free(argv); free(executable); return wysna_host_process_error(error);
-                }
-                int64_t grace_ns = ((int64_t)grace_now.tv_sec - grace_start.tv_sec) * 1000000000LL
-                                 + ((int64_t)grace_now.tv_nsec - grace_start.tv_nsec);
-                int64_t grace_ms = grace_ns / 1000000LL;
-                if (grace_ms >= 100) {
-                    (void)kill(-child, SIGKILL);
-                    if (!leader_stopped) while (waitpid(child, &status, 0) < 0 && errno == EINTR) { }
-                    break;
-                }
-                struct timeval delay = {0, 10000}; (void)select(0, NULL, NULL, NULL, &delay);
-            }
+            wysna_process_terminate_tree(child);
+            while (waitpid(child, &status, 0) < 0 && errno == EINTR) { }
             for (int index = 1; index < argc; index++) free(argv[index]);
             free(argv); free(executable); return wysna_host_process_error(cancelled ? EINTR : ETIMEDOUT);
         }
