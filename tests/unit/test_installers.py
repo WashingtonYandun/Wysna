@@ -1,5 +1,6 @@
 """Installer ownership and archive boundaries must fail before destructive changes."""
 import importlib.util
+from contextlib import redirect_stdout
 import io
 import json
 import os
@@ -11,6 +12,7 @@ from unittest.mock import patch
 
 from tools.package_distribution import extract_python
 from tools.package_installers import build_installers, inno_compiler, verify_bundle
+from tooling.ApiIndex import run_capabilities_command
 
 ROOT = Path(__file__).resolve().parents[2]
 SPEC = importlib.util.spec_from_file_location('macos_lifecycle', ROOT / 'packaging/install/macos_lifecycle.py')
@@ -171,6 +173,21 @@ class InstallerTests(unittest.TestCase):
         note.unlink()
         lifecycle.uninstall(self.base,self.command,self.application)
         self.assertFalse(self.base.exists())
+
+    def test_installed_command_discovery_does_not_advertise_unbundled_http_extras(self):
+        with patch('tooling.ApiIndex._STDLIB_ROOT', self.root / 'stdlib'):
+            output = io.StringIO()
+            with redirect_stdout(output):
+                self.assertEqual(run_capabilities_command(['--output-format=json-v1']), 0)
+            self.assertNotIn('doctor', json.loads(output.getvalue())['result']['commands'])
+            (self.root / 'installation.json').write_text('{}')
+            (self.root / 'wysna_entry.py').write_text('# Synthetic installed-context marker\n')
+            output = io.StringIO()
+            with redirect_stdout(output):
+                self.assertEqual(run_capabilities_command(['--output-format=json-v1']), 0)
+            result = json.loads(output.getvalue())['result']
+            self.assertIn('doctor', result['machine_output']['commands'])
+            self.assertIn('not bundled', result['requirements']['std/http']['interpreter'])
 
 
 if __name__ == '__main__':

@@ -6,6 +6,7 @@ import shlex
 import shutil
 import subprocess
 import sys
+import sysconfig
 import tempfile
 import time
 
@@ -176,6 +177,21 @@ class NativeToolchain:
                                              'The selected macOS SDK has no libcurl headers', 127)
             compiler_flags += ['-isysroot', sdk, '-idirafter', str(Path(sdk) / 'usr/include')]
             linker_flags += ['-L' + str(Path(sdk) / 'usr/lib')]
+        if sys.platform.startswith('linux'):
+            # System curl-config may omit GCC's implicit host search paths. Zig
+            # ships its own libc headers, so append only declared host dependency
+            # roots after those headers rather than replacing the private libc.
+            multiarch = sysconfig.get_config_var('MULTIARCH')
+            include_roots = ([Path('/usr/include') / multiarch] if multiarch else []) + [Path('/usr/include')]
+            for directory in include_roots:
+                if (directory / 'curl/curl.h').is_file():
+                    compiler_flags += ['-idirafter', str(directory)]
+                    break
+            library_roots = ([Path('/usr/lib') / multiarch, Path('/lib') / multiarch] if multiarch else []) + [Path('/usr/lib'), Path('/lib')]
+            for directory in library_roots:
+                if (directory / 'libcurl.so').is_file():
+                    linker_flags += ['-L' + str(directory)]
+                    break
         return compiler_flags, linker_flags
 
     def emit_selfhost(self, compiler_path, file):

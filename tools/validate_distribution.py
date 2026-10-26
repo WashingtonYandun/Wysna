@@ -57,6 +57,8 @@ def validate(installation, report, expected_commit=None):
         assert health['result']['root'] == str(installation), health
         capabilities = json.loads(run('capabilities', ['capabilities', '--output-format=json-v1']).stdout)
         assert 'explain' in capabilities['result']['commands'], capabilities
+        assert 'doctor' in capabilities['result']['commands'], capabilities
+        assert 'doctor' in capabilities['result']['machine_output']['commands'], capabilities
         run('api-discovery', ['api', 'std/json', '--output-format=json-v1'])
         source = work / 'JSON á & spaces.wysna'
         source.write_text('import "std/json" as json\n'

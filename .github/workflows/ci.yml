@@ -711,7 +711,7 @@ jobs:
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           $compiler = "${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe"
           if (!(Test-Path $compiler)) { throw "Inno Setup 6 is required on the Windows packaging runner" }
-          & $compiler /Q "/DBundleDir=$((Resolve-Path dist/windows-bundle).Path)" "/DWysnaVersion=0.4.99" "/DOutputDir=$env:GITHUB_WORKSPACE\dist\upgrade-fixture" packaging/windows/wysna.iss
+          & $compiler /Q "/DBundleDir=$((Resolve-Path dist/windows-bundle).Path)" "/DWysnaVersion=0.4.99" /DWysnaCompression=none "/DOutputDir=$env:GITHUB_WORKSPACE\dist\upgrade-fixture" packaging/windows/wysna.iss
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
       - name: Test install, native build, repair and uninstall without host dependencies
         run: |

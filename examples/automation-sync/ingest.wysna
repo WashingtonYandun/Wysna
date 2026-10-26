@@ -63,6 +63,9 @@ fn populate(database: opaque, source: str, input_bytes: int) -> int ! InputError
         let inserted = pilot_insert(database, id, value)
         if inserted != 0 { return Err(DatabaseError { code: inserted }) }
     }
+    let total = pilot_total(database)
+    let total_status = pilot_status(database)
+    if total_status != 0 { return Err(DatabaseError { code: total_status }) }
     let recorded = pilot_record_import(database, len(rows), input_bytes)
     if recorded != 0 { return Err(DatabaseError { code: recorded }) }
     let committed = pilot_commit(database)

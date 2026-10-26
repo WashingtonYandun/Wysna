@@ -348,6 +348,12 @@ def run_capabilities_command(argv):
                             "project dependencies are local paths only",
                             "project lockfiles do not claim bit-for-bit binary reproducibility"],
         }
+        root = _STDLIB_ROOT.parent
+        if (root / 'installation.json').is_file() and (root / 'wysna_entry.py').is_file():
+            payload['commands'].append('doctor')
+            payload['machine_output']['commands'].append('doctor')
+            payload['requirements']['std/http']['interpreter'] = (
+                'PycURL is not bundled in the private runtime; use a native HTTP build with declared libcurl inputs')
         return _emit("capabilities", payload=payload)
     except (ValueError, ManifestError) as error:
         return _emit("capabilities", error=error)

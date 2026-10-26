@@ -106,6 +106,20 @@ def test_apple_libcurl_accepts_explicit_sdk_and_rejects_missing_headers():
                 NativeToolchain._curl_flags()
 
 
+def test_linux_libcurl_exposes_implicit_host_dependency_paths_to_private_compilers():
+    paths = {'/usr/include/x86_64-linux-gnu/curl/curl.h', '/usr/lib/x86_64-linux-gnu/libcurl.so'}
+    def config(command, **options):
+        return subprocess.CompletedProcess(command,0,stdout='-lcurl' if command[1]=='--libs' else '',stderr='')
+    with patch('compiler.NativeToolchain.sys.platform','linux'), \
+            patch('compiler.NativeToolchain.sysconfig.get_config_var',return_value='x86_64-linux-gnu'), \
+            patch('compiler.NativeToolchain.shutil.which',return_value='/usr/bin/curl-config'), \
+            patch.object(Path,'is_file',lambda path: path.as_posix() in paths), \
+            patch('compiler.NativeToolchain.subprocess.run',side_effect=config):
+        cflags, libraries = NativeToolchain._curl_flags()
+    assert '-idirafter' in cflags and str(Path('/usr/include/x86_64-linux-gnu')) in cflags
+    assert '-L' + str(Path('/usr/lib/x86_64-linux-gnu')) in libraries
+
+
 def _check_native_failure_cleanup(failure_stage):
     commands = []
     owned_directories = set()
@@ -222,6 +236,7 @@ def run_native_toolchain_tests():
     test_http_native_build_resolves_and_links_libcurl_only_on_demand()
     test_http_native_build_rejects_old_libcurl()
     test_apple_libcurl_accepts_explicit_sdk_and_rejects_missing_headers()
+    test_linux_libcurl_exposes_implicit_host_dependency_paths_to_private_compilers()
     test_native_failure_cleans_only_owned_temporary_files()
     test_unavailable_native_compiler_keeps_structured_error()
     test_selfhost_emission_preserves_input_cwd_and_cleans_output()

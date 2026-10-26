@@ -83,6 +83,7 @@ def validate(installation, report, *, http=False, archive=None):
             ('duplicate-rollback', '[{"id":3,"value":5},{"id":1,"value":9}]', 3),
             ('invalid-row-rollback', '[{"id":3,"value":5},{"id":4,"value":-1}]', 3),
             ('int64-overflow-rollback', '[{"id":3,"value":9223372036854775808}]', 3),
+            ('aggregate-overflow-rollback', '[{"id":3,"value":9223372036854775807}]', 3),
             ('invalid-json', '{', 3), ('empty-array', '[]', 3),
             ('row-limit', json.dumps([{'id':3,'value':5}] * 1001), 3),
             ('input-byte-limit', ' ' * 65537, 2), ('invalid-UTF8', b'\xff', 2),
@@ -101,8 +102,13 @@ def validate(installation, report, *, http=False, archive=None):
             if not config:
                 raise ValueError('--http requires declared libcurl development inputs and curl-config')
             discovery = empty / 'curl-config'
-            discovery.write_text('#!/bin/sh\nexec ' + shlex.quote(config) + ' "$@"\n')
-            discovery.chmod(0o755)
+            if sys.platform == 'darwin' and os.path.realpath(config) == '/usr/bin/curl-config':
+                # Preserve Apple's identity so the compiler selects its SDK inputs.
+                discovery.symlink_to(config)
+            else:
+                # Preserve relocatable curl-config scripts' original argv[0].
+                discovery.write_text('#!/bin/sh\nexec ' + shlex.quote(config) + ' "$@"\n')
+                discovery.chmod(0o755)
             for name in ('cut', 'sed', 'dirname', 'uname', 'tr', 'awk', 'grep', 'expr', 'head', 'cat'):
                 utility = shutil.which(name)
                 if utility:
