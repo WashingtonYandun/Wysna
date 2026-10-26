@@ -1,4 +1,4 @@
-/* Fixed runtime bridge for llvm-scalar-v1; program logic is emitted as LLVM IR. */
+/* Fixed runtime bridge for llvm-native-v1; program logic is emitted as LLVM IR. */
 #include "wysna_runtime.h"
 #include "wysna_llvm_abi.h"
 #include <stddef.h>
@@ -9,6 +9,10 @@ typedef char WysnaLlvmAbiVersion[(WYSNA_LLVM_RUNTIME_ABI == WYSNA_LLVM_EXPECTED_
 typedef char WysnaLlvmValueSize[(sizeof(WVal) == WYSNA_LLVM_VALUE_BYTES) ? 1 : -1];
 typedef char WysnaLlvmLiteralSize[(sizeof(WStringLiteral) == WYSNA_LLVM_LITERAL_BYTES) ? 1 : -1];
 typedef char WysnaLlvmValueAlignment[(offsetof(struct { char prefix; WVal value; }, value) == WYSNA_LLVM_ALIGNMENT) ? 1 : -1];
+typedef char WysnaLlvmPayloadOffset[(offsetof(WVal, as) == 8) ? 1 : -1];
+typedef char WysnaLlvmVTableSize[(sizeof(WClassVTable) == 16) ? 1 : -1];
+typedef char WysnaLlvmVTableMethods[(offsetof(WClassVTable, methods) == 8) ? 1 : -1];
+typedef char WysnaLlvmInvokeSize[(sizeof(WInvoke) == sizeof(void*)) ? 1 : -1];
 typedef char WysnaLlvmPointerSize[(sizeof(void*) == 8) ? 1 : -1];
 
 void wysna_llvm_init(int32_t argc, char** argv) { wysna_init_args(argc, argv); }
@@ -68,3 +72,82 @@ void wysna_llvm_fail(const char* code, const char* message, const char* file, in
     wysna_runtime_set_position(file, line, col); wysna_runtime_fail(code, message);
 }
 void wysna_llvm_exit(int64_t status) { wysna_builtin_exit(wysna_int(status)); }
+
+void wysna_llvm_none(void* out) { wysna_assign(out, wysna_none()); }
+#define WYSNA_LLVM_OPERATION(name, code, ...) \
+void wysna_llvm_rt_##name(void* out, int32_t count, const void* arguments, \
+                          const char* first, const char* second, int32_t flag, \
+                          const char* file, int32_t line, int32_t col) { \
+    const WVal* a = arguments; WVal result = (__VA_ARGS__); wysna_assign(out, result); \
+}
+#include "wysna_llvm_operations.def"
+#undef WYSNA_LLVM_OPERATION
+void wysna_llvm_construct(void* out, int32_t kind, const char* name, int32_t count,
+                          const char** keys, const void* arguments) {
+    const WVal* values = arguments;
+    WVal result = wysna_unit();
+    switch (kind) {
+    case 0: result = wysna_make_list(count, values); break;
+    case 1: result = wysna_make_tuple(count, values); break;
+    case 2: result = wysna_make_dict(count / 2, values, values + count / 2); break;
+    case 3: result = wysna_make_struct(name, count, keys, values); break;
+    case 4: result = wysna_make_object(name, count, keys, values); break;
+    default: wysna_runtime_fail("W9999", "Invalid LLVM construction kind");
+    }
+    wysna_assign(out, result);
+}
+void wysna_llvm_field(void* out, const void* value, int32_t index) {
+    wysna_assign(out, wysna_clone(wysna_field_get_at(*(const WVal*)value, index)));
+}
+void* wysna_llvm_field_ref(void* value, int32_t index) { return wysna_field_ref_at(value, index); }
+void* wysna_llvm_index_ref(void* value, const void* index, const char* file, int32_t line, int32_t col) {
+    return wysna_index_ref_at(value, *(const WVal*)index, file, line, col);
+}
+void wysna_llvm_tuple_get(void* out, const void* value, int32_t index, const char* file, int32_t line, int32_t col) {
+    wysna_assign(out, wysna_tuple_get_owned_at(*(const WVal*)value, index, file, line, col));
+}
+void wysna_llvm_mutate(void* out, void* value, const void* argument, int32_t operation, const char* file, int32_t line, int32_t col) {
+    WVal result = wysna_unit();
+    switch (operation) {
+    case 0: result = wysna_list_append(value, *(const WVal*)argument); break;
+    case 1: result = wysna_list_pop_at(value, file, line, col); break;
+    case 2: result = wysna_list_clear(value); break;
+    default: wysna_runtime_fail("W9999", "Invalid LLVM mutation kind");
+    }
+    wysna_assign(out, result);
+}
+int32_t wysna_llvm_test(const void* input, int32_t kind, const char* first, const char* second, int32_t count) {
+    WVal value = *(const WVal*)input;
+    switch (kind) {
+    case 0: return wysna_is_none(value);
+    case 1: return value.tag == W_ERR;
+    case 2: return value.tag == W_ERR || wysna_is_none(value);
+    case 3: return value.tag == W_TUPLE && value.as.tuple->len == count;
+    case 4: return wysna_value_is_error_type(value, first, second);
+    case 5: return wysna_is_enum_variant(value, first, second);
+    case 6: return !wysna_is_none(value);
+    case 7: return value.tag == W_OK;
+    default: wysna_runtime_fail("W9999", "Invalid LLVM predicate kind"); return 0;
+    }
+}
+int32_t wysna_llvm_iteration_length(const void* value, const char* file, int32_t line, int32_t col) {
+    return wysna_list_iteration_length_at(*(const WVal*)value, file, line, col);
+}
+void wysna_llvm_iteration_get(void* out, const void* value, int32_t index, const char* file, int32_t line, int32_t col) {
+    wysna_assign(out, wysna_list_iteration_get_owned_at(*(const WVal*)value, index, file, line, col));
+}
+void wysna_llvm_function(void* out, void* invoke, void* environment) {
+    wysna_assign(out, wysna_function_new((WInvoke)invoke, environment ? wysna_move(environment) : wysna_unit()));
+}
+void wysna_llvm_invoke(void* out, const void* function, int32_t count, const void* arguments) {
+    wysna_assign(out, wysna_call(*(const WVal*)function, count, arguments));
+}
+void wysna_llvm_virtual(void* out, const void* receiver, int32_t slot, int32_t count, const void* arguments) {
+    wysna_assign(out, wysna_virtual_call(*(const WVal*)receiver, slot, count, arguments));
+}
+void wysna_llvm_set_vtable(void* value, const void* table) { ((WVal*)value)->as.st->vtable = table; }
+int32_t wysna_llvm_entry_status(const void* input) {
+    WVal value = *(const WVal*)input;
+    if (value.tag == W_ERR) { wysna_report_entrypoint_error(value.as.box->val); return 1; }
+    return 0;
+}

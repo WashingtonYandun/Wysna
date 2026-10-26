@@ -192,7 +192,7 @@ class CompilerService:
                               tuple(getattr(generator, 'abi_exports', ())))
 
     def emit_llvm(self, checked, *, profile='dev'):
-        """Emit the opt-in scalar LLVM profile from the same resolved HIR/MIR boundary."""
+        """Emit the verified native-command LLVM profile from the same resolved HIR/MIR boundary."""
         self._validate(checked)
         from compiler.LlvmToolchain import LlvmToolchain, LlvmEmission
         from mir.LlvmCodeGen import LlvmCodeGen
@@ -200,13 +200,15 @@ class CompilerService:
         started = time.perf_counter()
         hir = self.lower_hir(checked)
         lowered_hir = time.perf_counter()
-        module = Lowering(checked._interner, checked.source.file).lower(hir)
+        from mir.Debug import DebugModule
+        debug = DebugModule()
+        module = Lowering(checked._interner, checked.source.file, debug=debug).lower(hir)
         lowered_mir = time.perf_counter()
         toolchain = LlvmToolchain(profile=profile)
         configured = time.perf_counter()
         generator = LlvmCodeGen(checked._interner)
         source = generator.generate(module, triple=toolchain.target.triple,
-                                    data_layout=toolchain.target.data_layout, profile=profile)
+                                    data_layout=toolchain.target.data_layout, profile=profile, debug_info=debug)
         emitted = time.perf_counter()
         verified = toolchain.verify(source)
         timings = {'hir': (lowered_hir - started) * 1000, 'mir': (lowered_mir - lowered_hir) * 1000,
@@ -214,7 +216,10 @@ class CompilerService:
                    'llvm_emit': (emitted - configured) * 1000, 'llvm_verify': verified,
                    'codegen': (time.perf_counter() - started) * 1000}
         files = tuple(self.source_texts()) or (checked.source.file,)
-        return LlvmEmission(source, toolchain.target, files, timings)
+        from compiler.LlvmForeign import runtime_adapters
+        adapters = runtime_adapters(module)
+        return LlvmEmission(source, toolchain.target, files, timings, adapters,
+                            any(item['native'].startswith('wysna_host_http_') for item in module.externs.values()))
 
     @staticmethod
     def _enable_http_runtime(source):

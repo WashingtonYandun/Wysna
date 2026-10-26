@@ -153,7 +153,9 @@ class ArchitectureContractTests(unittest.TestCase):
         self.assertTrue(internal)
         for name in internal:
             self.assertEqual(source.count('#include "' + name + '"'), 1, name)
-        self.assertIn('runtime = ["*.h", "wysna_llvm_runtime.c"]', (ROOT / 'pyproject.toml').read_text())
+        from common._vendor import tomli
+        data = tomli.loads((ROOT / 'pyproject.toml').read_text())
+        self.assertTrue({'*.h', 'wysna_llvm_runtime.c', 'wysna_llvm_operations.def'} <= set(data['tool']['setuptools']['package-data']['runtime']))
 
     def test_dispatchers_preserve_stack_depth_and_instantiation_owns_algorithms(self):
         import sys

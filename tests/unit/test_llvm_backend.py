@@ -80,7 +80,7 @@ print()
 }
 
 
-@unittest.skipUnless(importlib.util.find_spec('llvmlite') is not None and
+@unittest.skipUnless((importlib.util.find_spec('llvmlite') is not None or os.environ.get('WYSNA_LLVM_SDK')) and
                      ((platform.system() == 'Darwin' and platform.machine().lower() in ('arm64', 'aarch64'))
                       or (platform.system() == 'Linux' and platform.machine().lower() in ('x86_64', 'amd64'))),
                      'Optional LLVM tools and a supported host are required; run this module explicitly to validate setup')
@@ -126,7 +126,8 @@ class LlvmBackendTests(unittest.TestCase):
                     actual = self.execute(result.output_path)
                     self.assertEqual((actual.returncode, actual.stdout, actual.stderr),
                                      (reference.returncode, reference.stdout, reference.stderr))
-                    self.assertGreater(result.timing_ms['object_emit'], 0)
+                    self.assertGreaterEqual(result.timing_ms['object_emit'], 0)
+                    self.assertEqual(result.timing_ms['object_emit'] == 0, result.cache_hits['program'])
                     self.assertTrue(result.c_compiler_version)
 
     def test_explicit_application_exit_matches_c99(self):
@@ -177,7 +178,7 @@ class LlvmBackendTests(unittest.TestCase):
         runtime = ROOT / 'runtime/wysna_llvm_runtime.c'
         compiler = compiler_command()
         common = self.toolchain.host_flags + ['-std=c99', '-O1', '-g', '-I' + str(ROOT),
-                                              '-DWYSNA_LLVM_EXPECTED_ABI=1', '-DWYSNA_LLVM_LITERAL_BYTES=48', '-DWYSNA_LLVM_ALIGNMENT=8']
+                                              '-DWYSNA_LLVM_EXPECTED_ABI=2', '-DWYSNA_LLVM_LITERAL_BYTES=48', '-DWYSNA_LLVM_ALIGNMENT=8']
         invalid = subprocess.run(compiler + common + ['-DWYSNA_LLVM_VALUE_BYTES=8', '-c', str(runtime),
                                                        '-o', str(self.directory / 'bad.o')],
                                  capture_output=True, text=True, timeout=60)
@@ -248,14 +249,19 @@ class LlvmBackendTests(unittest.TestCase):
             self.assertEqual(caught.exception.code, 'W5002')
         self.assertEqual(library.read_bytes(), original)
 
-    def test_unsupported_profile_never_falls_back(self):
+    def test_complete_mir_profile_never_falls_back(self):
         for source in ('print([1, 2])', 'class Box { value: int }\nprint(1)',
                        'print([1, 2, 3][0])'):
             service, checked = self.checked(source)
             with patch.object(service, 'emit_c', side_effect=AssertionError('C fallback')):
-                with self.assertRaises(WysnaError) as caught:
-                    service.emit_llvm(checked)
-            self.assertEqual(caught.exception.code, 'W2013')
+                emission = service.emit_llvm(checked)
+            self.toolchain.verify(emission.source)
+        module = service.lower_mir(checked)
+        module.library_mode = True
+        with self.assertRaises(WysnaError) as caught:
+            LlvmCodeGen(checked._interner).generate(module, triple=self.toolchain.target.triple,
+                                                   data_layout=self.toolchain.target.data_layout)
+        self.assertEqual(caught.exception.code, 'W2013')
 
     def test_malformed_mir_and_llvm_are_controlled_errors(self):
         service, checked = self.checked('print(1 + 2)')
@@ -352,7 +358,7 @@ class LlvmBackendTests(unittest.TestCase):
                 result = self.cli(*args)
                 self.assertEqual(result.returncode, 0, result.stderr + result.stdout)
                 envelope = json.loads(result.stdout)
-                self.assertEqual(envelope['target']['profile'], 'llvm-scalar-v1')
+                self.assertEqual(envelope['target']['profile'], 'llvm-native-v1')
                 self.assertEqual(envelope['status'], 'ok')
                 self.assertEqual(result.stderr, '')
                 if command == 'build':
@@ -361,9 +367,9 @@ class LlvmBackendTests(unittest.TestCase):
                     self.toolchain.verify(output.read_text())
         for args in ([ 'run', '--backend=llvm-experimental'],
                      ['emit-c', '--backend=llvm-experimental'],
-                     ['build', '--backend=llvm-experimental', '--sanitize'],
-                     ['build', '--backend=llvm-experimental', '--link-lib', 'foreign'],
-                     ['build', '--profile=release'], ['emit-llvm', '--backend=hir'],
+                     ['check', '--backend=llvm-experimental', '--sanitize'],
+                     ['check', '--backend=llvm-experimental', '--link-lib', 'foreign'],
+                     ['check', '--profile=release'], ['emit-llvm', '--backend=hir'],
                      ['build', '--backend=llvm-experimental', '--profile=fast']):
             with self.subTest(args=args):
                 result = self.cli(*args, source, '--output-format=json-v1')
@@ -374,6 +380,215 @@ class LlvmBackendTests(unittest.TestCase):
         self.assertEqual(json.loads(result.stdout)['target']['llvm_version'], [20, 1, 8])
         with redirect_stderr(io.StringIO()):
             self.assertEqual(run_pipeline('print(1)', backend='llvm-experimental', use_selfhost=True), 1)
+
+    def test_optional_arguments_use_callee_representation(self):
+        source = '''fn add(first: int?, second: int?) -> int {
+    (first ?? 0) + (second ?? 0)
+}
+print(add(20, 22), add(none, 42), add(42, none))
+'''
+        service, checked = self.checked(source)
+        expected = self.c99(service, checked)
+        for profile in ('dev', 'release', 'size'):
+            emission = service.emit_llvm(checked, profile=profile)
+            build = LlvmToolchain(profile=profile).build(emission, self.directory / 'optional', sanitize=True)
+            actual = self.execute(build.output_path)
+            self.assertEqual((actual.returncode, actual.stdout, actual.stderr),
+                             (expected.returncode, expected.stdout, expected.stderr))
+        self.assertEqual(expected.stdout, b'42 42 42\n')
+
+    def test_foreign_resources_and_scalar_abi(self):
+        for name, libraries in (('scalars', ()), ('resources', (ROOT / 'tests/ffi/resource_adapter.c',))):
+            service = CompilerService()
+            checked = service.check_file(ROOT / 'tests/ffi' / (name + '.wysna'))
+            reference = NativeToolchain(ROOT).build(service.emit_c(checked).source, self.directory / 'reference',
+                                                   link_libraries=libraries, sanitize=True)
+            emission = service.emit_llvm(checked)
+            with patch.object(service, 'emit_c', side_effect=AssertionError('Program C fallback')):
+                build = self.toolchain.build(emission, self.directory / 'foreign', link_libraries=libraries, sanitize=True)
+            expected, actual = self.execute(reference.output_path), self.execute(build.output_path)
+            self.assertEqual((actual.returncode, actual.stdout, actual.stderr),
+                             (expected.returncode, expected.stdout, expected.stderr))
+            self.assertEqual(actual.returncode, 0, actual.stderr)
+
+    def test_sanitizer_detects_errors_in_llvm_program_instructions(self):
+        service, checked = self.checked('print(42)')
+        emission = service.emit_llvm(checked)
+        source = '\n'.join(['target triple = "' + emission.target.triple + '"',
+                            'target datalayout = "' + emission.target.data_layout + '"',
+                            'define i32 @main() {',
+                            '  %buffer = alloca [8 x i8], align 8',
+                            '  %outside = getelementptr i8, ptr %buffer, i64 16',
+                            '  store volatile i8 42, ptr %outside', '  ret i32 0', '}'])
+        probe = replace(emission, source=source)
+        build = self.toolchain.build(probe, self.directory / 'sanitizer-probe', sanitize=True)
+        actual = self.execute(build.output_path)
+        self.assertNotEqual(actual.returncode, 0)
+        self.assertIn(b'AddressSanitizer', actual.stderr)
+        self.assertIn(b'stack-buffer-overflow', actual.stderr)
+
+    def test_cache_hits_and_corruption_rebuild(self):
+        from compiler.ArtifactCache import ArtifactCache
+        cache = ArtifactCache('test', root=self.directory / 'cache')
+        header = self.directory / 'dependency.h'
+        header.write_text('first')
+        calls = []
+        def produce(pending):
+            calls.append(True)
+            return header.read_bytes(), (header,)
+        first = cache.obtain('objects', {'profile': 'dev'}, produce)
+        second = cache.obtain('objects', {'profile': 'dev'}, produce)
+        self.assertEqual((first[0], first[1], second[1], len(calls)), (b'first', False, True, 1))
+        header.write_text('second')
+        rebuilt = cache.obtain('objects', {'profile': 'dev'}, produce)
+        self.assertEqual((rebuilt[0], rebuilt[1], len(calls)), (b'second', False, 2))
+        object_path = next(cache.root.glob('objects/*/artifact.o'))
+        object_path.write_bytes(b'corrupted')
+        rebuilt = cache.obtain('objects', {'profile': 'dev'}, produce)
+        self.assertEqual((rebuilt[0], rebuilt[1], len(calls)), (b'second', False, 3))
+        with patch.dict(os.environ, WYSNA_COMPILER_CACHE='off'):
+            self.assertFalse(cache.obtain('objects', {'profile': 'dev'}, produce)[1])
+            self.assertFalse(cache.obtain('objects', {'profile': 'dev'}, produce)[1])
+        self.assertEqual(len(calls), 5)
+
+    def test_c_cache_tracks_real_header_changes(self):
+        from compiler.ArtifactCache import ArtifactCache
+        from compiler.CObjectCache import compiler_identity, compile_cached_c
+        header = self.directory / 'answer.h'
+        header.write_text('#define ANSWER 42\n')
+        source = self.directory / 'probe.c'
+        source.write_text('#include "answer.h"\nint main(void) { return ANSWER; }\n')
+        output = self.directory / 'probe.o'
+        command = compiler_command()
+        identity = compiler_identity(command)
+        cache = ArtifactCache('test-c', root=self.directory / 'cache')
+        calls = []
+        def compile_(arguments, phase):
+            calls.append(phase)
+            return subprocess.run(command + arguments, capture_output=True, text=True, check=True, timeout=60)
+        flags = self.toolchain.host_flags + ['-std=c99', '-I' + str(self.directory)]
+        first = compile_cached_c(cache, source, output, flags, identity, compile_)
+        second = compile_cached_c(cache, source, output, flags, identity, compile_)
+        self.assertFalse(first[0])
+        self.assertTrue(second[0])
+        header.write_text('#define ANSWER 43\n')
+        third = compile_cached_c(cache, source, output, flags, identity, compile_)
+        self.assertFalse(third[0])
+        binary = self.directory / 'cached-c'
+        subprocess.run(command + self.toolchain.host_flags + [str(output), '-o', str(binary)], check=True, timeout=60)
+        self.assertEqual(self.execute(binary).returncode, 43)
+        self.assertEqual(calls.count('c_compile'), 2)
+        sibling = self.directory / 'other source'
+        sibling.mkdir()
+        (sibling / 'answer.h').write_text('#define ANSWER 44\n')
+        relocated = sibling / source.name
+        relocated.write_bytes(source.read_bytes())
+        fourth = compile_cached_c(cache, relocated, output, flags, identity, compile_)
+        self.assertFalse(fourth[0])
+        subprocess.run(command + self.toolchain.host_flags + [str(output), '-o', str(binary)], check=True, timeout=60)
+        self.assertEqual(self.execute(binary).returncode, 44)
+
+
+    def test_debug_variables_and_shadowing_with_live_breakpoints(self):
+        source = '''fn inspect(value: int) -> int {
+    let current = value + 1
+    if true {
+        let current = 99
+        print(current)
+    }
+    print(current)
+    current
+}
+print(inspect(41))
+'''
+        service, checked = self.checked(source)
+        emission = service.emit_llvm(checked)
+        self.assertIn('!DILocalVariable(name: "value"', emission.source)
+        self.assertIn('!DILexicalBlock(', emission.source)
+        build = self.toolchain.build(emission, self.directory / 'debug-values')
+        arguments = ['lldb', '--batch', '-o', 'settings set target.disable-aslr false',
+                     '-o', 'target create "' + build.output_path + '"',
+                     '-o', 'breakpoint set --file main.wysna --line 5',
+                     '-o', 'breakpoint set --file main.wysna --line 7', '-o', 'run',
+                     '-o', 'frame variable value current', '-o', 'continue',
+                     '-o', 'frame variable value current', '-o', 'bt']
+        result = subprocess.run(arguments, capture_output=True, text=True, timeout=60)
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertIn('value = 41', result.stdout)
+        self.assertIn('current = 99', result.stdout)
+        self.assertIn('current = 42', result.stdout)
+        self.assertIn('main.wysna:7', result.stdout)
+        self.assertNotIn('optimized out', result.stdout)
+
+    def test_debug_sidecar_cannot_cross_mir_modules(self):
+        from mir.Debug import DebugModule
+        from mir.Lowering import Lowering
+        service, checked = self.checked('let answer = 42\nprint(answer)')
+        debug = DebugModule()
+        module = Lowering(checked._interner, checked.source.file, debug=debug).lower(service.lower_hir(checked))
+        other = service.lower_mir(checked)
+        with self.assertRaises(WysnaError) as caught:
+            LlvmCodeGen(checked._interner).generate(other, triple=self.toolchain.target.triple,
+                                                   data_layout=self.toolchain.target.data_layout, debug_info=debug)
+        self.assertEqual(caught.exception.code, 'W9999')
+        source = LlvmCodeGen(checked._interner).generate(module, triple=self.toolchain.target.triple,
+                                                        data_layout=self.toolchain.target.data_layout, debug_info=debug)
+        self.toolchain.verify(source)
+
+    def test_cli_native_run_arguments_reports_and_timeout(self):
+        service, checked = self.checked('print(args()[1])\nexit(7)\n')
+        report = self.directory / 'run.json'
+        result = self.cli('run', '--backend=llvm-experimental', checked.source.file,
+                          '--report-json', report, '--', 'argument with spaces')
+        self.assertEqual((result.returncode, result.stdout, result.stderr), (7, 'argument with spaces\n', ''))
+        payload = json.loads(report.read_text())
+        self.assertEqual(payload['process_exit_code'], 7)
+        self.assertEqual(payload['tool_exit_code'], 0)
+        self.assertEqual(payload['target']['profile'], 'llvm-native-v1')
+        service, checked = self.checked('while true {}')
+        result = self.cli('run', '--backend=llvm-experimental', checked.source.file,
+                          '--timeout-ms', '50', '--report-json', report)
+        self.assertEqual(result.returncode, 5, result.stdout + result.stderr)
+        payload = json.loads(report.read_text())
+        self.assertEqual(payload['execution']['kind'], 'timeout')
+        self.assertEqual(payload['status'], 'execution_error')
+
+    def test_cancellation_includes_descendants_with_separate_process_groups(self):
+        import time
+        import io
+        from compiler.NativeExecution import run_native
+        from runtime.ExecutionContext import ExecutionContext
+        worker = self.directory / 'worker.py'
+        marker = self.directory / 'orphan'
+        ready = self.directory / 'ready'
+        grandchild = ('import time; from pathlib import Path; '
+                      + 'Path(' + repr(str(ready)) + ').write_text("ready"); time.sleep(1.5); '
+                      + 'Path(' + repr(str(marker)) + ').write_text("orphan")')
+        worker.write_text('import subprocess,sys,time\nsubprocess.Popen([sys.executable,"-c",'
+                          + repr(grandchild) + '],start_new_session=True)\ntime.sleep(10)\n')
+        for backend, outer_timeout in (('llvm', True), ('llvm', False), ('c99', False)):
+            with self.subTest(backend=backend, outer_timeout=outer_timeout):
+                for path in (ready, marker):
+                    path.unlink(missing_ok=True)
+                limit = 5000 if outer_timeout else 500
+                source = ('import "std/process" as process\nprocess.run(' + json.dumps(sys.executable)
+                          + ', [' + json.dumps(str(worker), ensure_ascii=False) + '], ' + str(limit)
+                          + ') else error { print("timed out"); -1 }\n')
+                service, checked = self.checked(source)
+                if backend == 'llvm':
+                    build = self.toolchain.build(service.emit_llvm(checked), self.directory / 'tree')
+                else:
+                    build = NativeToolchain(ROOT).build(service.emit_c(checked).source, self.directory / 'tree')
+                context = ExecutionContext.for_program('wysna', stdin=io.StringIO(),
+                                                       stdout=io.StringIO(), stderr=io.StringIO())
+                result = run_native(build.output_path, context, 500 if outer_timeout else 5000)
+                self.assertEqual(result.timed_out, outer_timeout)
+                self.assertTrue(ready.exists(), 'The detached descendant must have started before cancellation')
+                time.sleep(1.6)
+                self.assertFalse(marker.exists(), 'A detached worker survived cancellation')
+                if not outer_timeout:
+                    self.assertEqual(context.stdout.getvalue(), 'timed out\n')
+
 
 
 if __name__ == '__main__':

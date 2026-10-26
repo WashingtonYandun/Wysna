@@ -1,0 +1,22 @@
+{
+  "schema": "wysna.llvm-policy/1",
+  "baseline": "c99",
+  "candidate": "llvm-experimental",
+  "required_parity_failures": 0,
+  "limits": {
+    "runtime_median_ratio": 1.1,
+    "cold_compile_median_ratio": 1.1,
+    "warm_compile_median_ratio": 1.1,
+    "executable_bytes_ratio": 1.25,
+    "compiler_parent_peak_bytes_ratio": 1.25,
+    "runtime_peak_bytes_ratio": 1.25,
+    "steady_work_median_ratio": 1.1
+  },
+  "automatic_default_change": false,
+  "promotion_requires": [
+    "Complete source-profile qualification at the measured source digest",
+    "Accepted regression budgets across every announced host",
+    "Equivalent installed distribution and dependency contracts",
+    "An explicit recorded backend-default decision"
+  ]
+}

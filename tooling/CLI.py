@@ -87,7 +87,8 @@ def print_help(prog: Optional[str] = None) -> None:
     print(f"  {prog} mir <file.wysna>                        # Emit verified MIR as JSON")
     print(f"  {prog} emit-mir [--implementation=seed|compiler] <file.wysna> [-o <out.json>] # Emit portable MIR")
     print(f"  {prog} tokens <file.wysna>                     # Emit lexical token stream")
-    print(f"  {prog} emit-llvm <file.wysna> [-o <out.ll>] # Experimental scalar/string LLVM IR (Seed only)")
+    print(f"  {prog} emit-llvm <file.wysna> [-o <out.ll>] # Native-command LLVM IR (Seed)")
+    print(f"  {prog} run --backend=llvm-experimental [--sanitize] [--timeout-ms <N>] <file.wysna> [-- args...]")
     print(f"  {prog} build --backend=llvm-experimental --profile=dev|release|size <file.wysna> [-o <bin>]")
     print(f"  {prog} emit-c [--backend=hir|ast|selfhost] [--output-format=json-v1] <file.wysna> [-o <out.c>] # Transpile to C99")
     print(f"  {prog} build [--backend=hir|ast|selfhost] [--output-format=json-v1] <file.wysna> [-o <bin>] # Compile native binary")
@@ -155,6 +156,7 @@ def main(argv=None) -> None:
     build_bin_path: Optional[str] = None
     emit_llvm_path: Optional[str] = None
     optimization_profile = None
+    run_timeout_ms = None
     show_mir = False
     subcmd: Optional[str] = None
     file_to_run: Optional[str] = None
@@ -312,12 +314,17 @@ def main(argv=None) -> None:
             use_hir = False
         elif arg.startswith("--backend="):
             b_val = arg.split("=", 1)[1]
-            if b_val in ("hir", "ast", "selfhost", "llvm-experimental"):
-                backend = b_val
+            if b_val in ("c99", "hir", "ast", "selfhost", "llvm-experimental"):
+                backend = "hir" if b_val == "c99" else b_val
                 use_selfhost = False
                 use_hir = None
             else:
-                usage_error(f"Unknown backend '{b_val}'. Valid backends: hir, ast, selfhost, llvm-experimental")
+                usage_error(f"Unknown backend '{b_val}'. Valid backends: c99, hir, ast, selfhost, llvm-experimental")
+        elif arg == "--timeout-ms":
+            i += 1
+            if i >= len(args) or not args[i].isdigit() or not 1 <= int(args[i]) <= 600000:
+                usage_error("--timeout-ms requires an integer from 1 to 600000")
+            run_timeout_ms = int(args[i])
         elif arg.startswith("--profile="):
             optimization_profile = arg.split("=", 1)[1]
             if optimization_profile not in ("dev", "release", "size"):
@@ -371,13 +378,15 @@ def main(argv=None) -> None:
 
     if subcmd == "emit-llvm" and backend != "llvm-experimental":
         usage_error("emit-llvm requires --backend=llvm-experimental")
-    if optimization_profile is not None and backend != "llvm-experimental":
-        usage_error("--profile requires --backend=llvm-experimental")
+    if optimization_profile is not None and backend != "llvm-experimental" and subcmd != "build":
+        usage_error("--profile is supported by native builds and LLVM source commands")
+    if run_timeout_ms is not None and (subcmd not in (None, "run") or backend != "llvm-experimental"):
+        usage_error("--timeout-ms is supported by run --backend=llvm-experimental")
     if backend == "llvm-experimental":
-        if subcmd not in ("check", "emit-llvm", "build"):
-            usage_error("llvm-experimental supports check, emit-llvm, and build; execute the built binary directly")
-        if (show_tokens or show_ast or show_mir or fmt_only or fmt_write or sanitize
-                or link_libraries or emit_c_path is not None or json_diagnostics):
+        if subcmd not in (None, "run", "check", "emit-llvm", "build"):
+            usage_error("llvm-experimental supports run, check, emit-llvm, and build")
+        if (show_tokens or show_ast or show_mir or fmt_only or fmt_write
+                or emit_c_path is not None or json_diagnostics):
             usage_error("llvm-experimental does not support these diagnostic, C generation, or build options")
 
     if requested_invocation_id is not None and report_json_path is None:
@@ -532,7 +541,8 @@ def main(argv=None) -> None:
             emit_c_path=emit_c_path,
             build_bin_path=build_bin_path,
             emit_llvm_path=emit_llvm_path,
-            optimization_profile=optimization_profile or "dev",
+            optimization_profile=optimization_profile,
+            run_timeout_ms=run_timeout_ms,
             backend=backend,
             use_selfhost=use_selfhost,
             use_hir=use_hir,

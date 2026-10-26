@@ -28,10 +28,10 @@ env:
 
 jobs:
   llvm-experimental:
-    name: Experimental LLVM (${{ matrix.os }})
+    name: Native LLVM qualification (${{ matrix.os }})
     needs: wheel-build
     runs-on: ${{ matrix.os }}
-    timeout-minutes: 10
+    timeout-minutes: 45
     strategy:
       fail-fast: false
       matrix:
@@ -52,12 +52,22 @@ jobs:
           wheel=$(find llvm-wheel -name '*.whl' -print -quit)
           python -m pip install "${wheel}[llvm]"
           python -m pip freeze > llvm-tools.txt
-      - name: Verify scalar parity, ownership, errors, IR rejection and debug symbols
+      - name: Install Linux debugger and external library headers
+        if: runner.os == 'Linux'
+        run: sudo apt-get update && sudo apt-get install -y lldb libcurl4-openssl-dev libsqlite3-dev
+      - name: Verify managed MIR, native execution, sanitizers, caches and source debugging
         run: |
           set -o pipefail
+          python -m tests.unit.test_llvm_evidence -v
           python -m tests.unit.test_llvm_backend -v 2>&1 | tee llvm-tests.log
       - name: Verify LLVM compilation outside the source checkout
         run: python tools/validate_llvm_install.py
+      - name: Qualify every native corpus case at every optimization profile
+        run: python tools/qualify_llvm.py --output .wysna_cache/llvm-qualification
+      - name: Repeat the full corpus with program and runtime sanitizers
+        run: python tools/qualify_llvm.py --sanitize --output .wysna_cache/llvm-sanitized
+      - name: Verify SQLite resources and error recovery through LLVM FFI
+        run: python tools/validate_sqlite_ffi.py --llvm --sanitize --rows 1000 --samples 1 --report .wysna_cache/llvm-sqlite.json
       - uses: actions/upload-artifact@v4
         if: always()
         with:
@@ -65,6 +75,94 @@ jobs:
           path: |
             llvm-tests.log
             llvm-tools.txt
+            .wysna_cache/llvm-qualification/
+            .wysna_cache/llvm-sanitized/
+            .wysna_cache/llvm-sqlite.json
+          include-hidden-files: true
+          if-no-files-found: error
+
+  llvm-sdk-build:
+    name: Build and measure LLVM SDK (${{ matrix.os }})
+    needs: wheel-build
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 60
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+    env:
+      CC: clang
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - uses: actions/download-artifact@v4
+        with:
+          name: wysna-wheel
+          path: .wysna_cache/llvm-wheel
+      - name: Package pinned native LLVM tools, Zig, Seed and licenses
+        run: |
+          wheel=$(find .wysna_cache/llvm-wheel -name '*.whl' -print -quit)
+          python tools/package_llvm_sdk.py --wheel "$wheel" --output .wysna_cache/llvm-sdk --source-commit "$GITHUB_SHA" --archive
+          cp tools/validate_llvm_sdk.py .wysna_cache/validate_llvm_sdk.py
+      - name: Qualify the native opt and llc provider on the complete corpus
+        env:
+          WYSNA_LLVM_SDK: ${{ github.workspace }}/.wysna_cache/llvm-sdk
+        run: python tools/qualify_llvm.py --output .wysna_cache/llvm-sdk-qualification
+      - name: Measure all workloads and profiles against C99 with the same bundled C toolchain
+        env:
+          WYSNA_LLVM_SDK: ${{ github.workspace }}/.wysna_cache/llvm-sdk
+        run: python tools/benchmark_llvm.py --qualification .wysna_cache/llvm-sdk-qualification/summary.json --output .wysna_cache/llvm-comparison
+      - uses: actions/upload-artifact@v4
+        with:
+          name: llvm-sdk-${{ matrix.os }}
+          path: |
+            .wysna_cache/llvm-sdk.tar.gz
+            .wysna_cache/validate_llvm_sdk.py
+          include-hidden-files: true
+          compression-level: 0
+          if-no-files-found: error
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: llvm-measurements-${{ matrix.os }}
+          path: |
+            .wysna_cache/llvm-sdk-qualification/
+            .wysna_cache/llvm-comparison/**/*.json
+            .wysna_cache/llvm-sdk/llvm-sdk.json
+          include-hidden-files: true
+          if-no-files-found: error
+
+  installed-llvm-sdk:
+    name: Installed LLVM SDK (${{ matrix.os }})
+    needs: llvm-sdk-build
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 15
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+    steps:
+      # Consumer acceptance deliberately has no source checkout or LLVM Python extra.
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - uses: actions/download-artifact@v4
+        with:
+          name: llvm-sdk-${{ matrix.os }}
+          path: llvm-artifact
+      - name: Accept the read-only SDK with no host compiler or LLVM on PATH
+        run: |
+          consumer="$RUNNER_TEMP/installed LLVM ü"
+          mkdir -p "$consumer"
+          tar -xzf llvm-artifact/llvm-sdk.tar.gz -C "$consumer"
+          python llvm-artifact/validate_llvm_sdk.py --sdk "$consumer/llvm-sdk" --source-commit "$GITHUB_SHA" --forbid-source "$GITHUB_WORKSPACE" --report installed-llvm-sdk.json
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: installed-llvm-sdk-${{ matrix.os }}
+          path: installed-llvm-sdk.json
           if-no-files-found: error
 
   wheel-build:
@@ -303,7 +401,7 @@ jobs:
             tests/fuzz/failures/
 
   conformance:
-    needs: [compiler-contracts, runtime-conformance, integration-conformance, llvm-experimental]
+    needs: [compiler-contracts, runtime-conformance, integration-conformance, llvm-experimental, installed-llvm-sdk]
     if: always()
     name: Conformance (${{ matrix.os }}, ${{ matrix.cc }})
     runs-on: ubuntu-latest
@@ -322,9 +420,10 @@ jobs:
           RUNTIME_RESULT: ${{ needs.runtime-conformance.result }}
           INTEGRATION_RESULT: ${{ needs.integration-conformance.result }}
           LLVM_RESULT: ${{ needs.llvm-experimental.result }}
+          LLVM_SDK_RESULT: ${{ needs.installed-llvm-sdk.result }}
         run: |
-          if [ "$CONTRACT_RESULT" != "success" ] || [ "$RUNTIME_RESULT" != "success" ] || [ "$INTEGRATION_RESULT" != "success" ] || [ "$LLVM_RESULT" != "success" ]; then
-            echo "Prerequisites did not pass: compiler=$CONTRACT_RESULT runtime=$RUNTIME_RESULT integration=$INTEGRATION_RESULT llvm=$LLVM_RESULT" >&2
+          if [ "$CONTRACT_RESULT" != "success" ] || [ "$RUNTIME_RESULT" != "success" ] || [ "$INTEGRATION_RESULT" != "success" ] || [ "$LLVM_RESULT" != "success" ] || [ "$LLVM_SDK_RESULT" != "success" ]; then
+            echo "Prerequisites did not pass: compiler=$CONTRACT_RESULT runtime=$RUNTIME_RESULT integration=$INTEGRATION_RESULT llvm=$LLVM_RESULT sdk=$LLVM_SDK_RESULT" >&2
             exit 1
           fi
 

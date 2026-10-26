@@ -64,7 +64,7 @@ def assemble(output, cache, *, source_commit=None):
         if not zig.is_file() or not (stage / "toolchain/zig/LICENSE").is_file():
             raise ValueError("Toolchain is missing its compiler or license")
         (stage / "runtime").mkdir()
-        for header in (ROOT / "runtime").glob("*.h"):
+        for header in sorted(path for path in (ROOT / "runtime").iterdir() if path.suffix in (".h", ".def")):
             shutil.copy2(header, stage / "runtime" / header.name)
         (stage / "stdlib").mkdir()
         for source in (ROOT / "stdlib").glob("*.wysna"):

@@ -1,0 +1,17 @@
+# Time useful work inside one long-lived process, independently of process launch.
+extern "C" fn wysna_benchmark_nanoseconds() -> int64
+
+fn main() -> unit {
+    let base = [10, 20, 30, 40]
+    let started = wysna_benchmark_nanoseconds()
+    let mut total = 0
+    for index in 0..500000 {
+        let mut branch = base
+        branch[0] = index
+        branch.append(index + 1)
+        total = total + branch[0] + branch[len(branch) - 1] + base[0]
+    }
+    let elapsed = wysna_benchmark_nanoseconds() - started
+    print(total, base[0], len(base))
+    eprint("WYSNA_BENCHMARK_NS", elapsed)
+}

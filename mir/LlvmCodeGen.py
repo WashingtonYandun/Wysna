@@ -1,12 +1,16 @@
 """Textual LLVM IR from verified MIR; no syntax traversal or C program emission."""
 import struct
-from pathlib import Path
 from checker.TypeInterner import TYPE_UNIT, TYPE_BOOL, TYPE_INT, TYPE_FLOAT, TYPE_STR
+from mir.LlvmDebug import DebugInfo
+from mir.LlvmText import quote_bytes
+from mir.LlvmManaged import ManagedEmission, DECLARATIONS as MANAGED_DECLARATIONS
+from mir.LlvmAbi import SCALAR_TYPES, is_managed
 from mir.LlvmProfile import (verify_profile, CONVERSIONS, ABI_VERSION, VALUE_BYTES,
                              LITERAL_BYTES, ALIGNMENT, PROFILE)
 
 TYPES = {TYPE_INT: 'i64', TYPE_FLOAT: 'double', TYPE_BOOL: 'i1', TYPE_UNIT: 'void', TYPE_STR: 'ptr'}
-DECLARATIONS = '''declare void @wysna_llvm_init(i32, ptr)
+DECLARATIONS = '''declare void @llvm.dbg.declare(metadata, metadata, metadata)
+declare void @wysna_llvm_init(i32, ptr)
 declare void @wysna_llvm_cleanup()
 declare void @wysna_llvm_box_int(ptr, i64)
 declare void @wysna_llvm_box_float(ptr, double)
@@ -29,69 +33,21 @@ declare void @wysna_llvm_exit(i64) noreturn
 '''
 
 
-def quote_bytes(data):
-    return '"' + ''.join(chr(byte) if 32 <= byte < 127 and byte not in (34, 92)
-                         else '\\' + format(byte, '02X') for byte in data) + '"'
-
-
-class DebugInfo:
-    """Source lines and function identities; local-variable tracking is a later cut."""
-    def __init__(self, file, optimized):
-        self.nodes = []
-        self.files = {}
-        self.locations = {}
-        root = self.file(file)
-        self.types = self.add('!DISubroutineType(types: !{})')
-        self.unit = self.add('distinct !DICompileUnit(language: DW_LANG_C, file: !' + str(root) +
-                             ', producer: "Wysna ' + PROFILE + '", isOptimized: ' +
-                             str(optimized).lower() + ', runtimeVersion: 0, emissionKind: FullDebug)')
-        self.version = self.add('!{i32 2, !"Debug Info Version", i32 3}')
-        self.dwarf = self.add('!{i32 2, !"Dwarf Version", i32 4}')
-
-    def add(self, value):
-        self.nodes.append(value)
-        return len(self.nodes) - 1
-
-    def file(self, path):
-        if path not in self.files:
-            p = Path(path)
-            self.files[path] = self.add('!DIFile(filename: ' + quote_bytes(p.name.encode()) +
-                                        ', directory: ' + quote_bytes(str(p.parent).encode()) + ')')
-        return self.files[path]
-
-    def function(self, function):
-        file = self.file(function.source.file)
-        name = function.name.removeprefix('wysna_fn_')
-        return self.add('distinct !DISubprogram(name: ' + quote_bytes(name.encode()) +
-                        ', linkageName: ' + quote_bytes(function.name.encode()) + ', scope: !' + str(file) +
-                        ', file: !' + str(file) + ', line: ' + str(function.source.line) +
-                        ', type: !' + str(self.types) + ', scopeLine: ' + str(function.source.line) +
-                        ', spFlags: DISPFlagDefinition, unit: !' + str(self.unit) + ')')
-
-    def location(self, source, scope, scope_file):
-        key = (source.file, source.line, source.col, scope)
-        if key not in self.locations:
-            actual = scope
-            if source.file != scope_file:
-                actual = self.add('!DILexicalBlockFile(scope: !' + str(scope) + ', file: !' +
-                                  str(self.file(source.file)) + ', discriminator: 0)')
-            self.locations[key] = self.add('!DILocation(line: ' + str(source.line) + ', column: ' +
-                                           str(source.col) + ', scope: !' + str(actual) + ')')
-        return ', !dbg !' + str(self.locations[key])
-
-    def render(self):
-        return ['!llvm.dbg.cu = !{!' + str(self.unit) + '}',
-                '!llvm.module.flags = !{!' + str(self.version) + ', !' + str(self.dwarf) + '}'] + [
-                    '!' + str(index) + ' = ' + value for index, value in enumerate(self.nodes)]
 
 
 class LlvmCodeGen:
     def __init__(self, interner):
         self.interner = interner
 
-    def generate(self, module, *, triple, data_layout, profile='dev'):
+    def generate(self, module, *, triple, data_layout, profile='dev', debug_info=None):
         verify_profile(module, self.interner)
+        if debug_info is not None:
+            debug_info.require_owner(module)
+        self.debug_info = debug_info
         self.module = module
+        self.triple = triple
+        self.managed = ManagedEmission(self)
+        self.metadata = set()
         self.functions = {function.name: function for function in module.functions}
         self.pool = []
         self.strings = {}
@@ -101,28 +57,35 @@ class LlvmCodeGen:
         bodies = []
         for function in module.functions:
             bodies.extend(self.function(function))
+        bodies.extend(self.managed.metadata_and_adapters())
         entry = self.functions['wysna_program']
-        returned = TYPES[entry.return_type]
+        returned = TYPES.get(entry.return_type, 'ptr')
         bodies.extend(['define i32 @main(i32 %argc, ptr %argv) {', 'entry:',
                        '  call void @wysna_llvm_init(i32 %argc, ptr %argv)'])
-        if entry.return_type == TYPE_STR:
+        if is_managed(entry.return_type):
             bodies.extend(['  %result = alloca %WysnaValue, align ' + str(ALIGNMENT),
                            '  store %WysnaValue zeroinitializer, ptr %result',
                            '  call void @wysna_program(ptr %result)',
+                           '  %status = call i32 @wysna_llvm_entry_status(ptr %result)',
                            '  call void @wysna_llvm_release(ptr %result)'])
         else:
             bodies.append('  ' + ('' if returned == 'void' else '%result = ') +
                           'call ' + returned + ' @wysna_program()')
         for slot in reversed(module.globals):
             bodies.append('  call void @wysna_llvm_release(ptr ' + self.pointer(slot.id) + ')')
-        bodies.extend(['  call void @wysna_llvm_cleanup()', '  ret i32 0', '}', ''])
-        globals_ = [self.pointer(slot.id) + ' = internal global %WysnaValue zeroinitializer, align ' +
-                    str(ALIGNMENT) for slot in module.globals]
+        bodies.extend(['  call void @wysna_llvm_cleanup()', '  ret i32 ' + ('%status' if is_managed(entry.return_type) else '0'), '}', ''])
+        global_debug = {binding.slot: binding for binding in debug_info.globals} if debug_info is not None else {}
+        globals_ = []
+        for slot in module.globals:
+            metadata = ''
+            if slot.id in global_debug:
+                metadata = ', !dbg !' + str(self.debug.global_binding(global_debug[slot.id], slot, self.interner))
+            globals_.append(self.pointer(slot.id) + ' = internal global %WysnaValue zeroinitializer, align ' + str(ALIGNMENT) + metadata)
         return '\n'.join(['; Wysna ' + PROFILE + ', runtime ABI ' + str(ABI_VERSION),
                           'source_filename = ' + quote_bytes(module.file.encode()),
                           'target triple = "' + triple + '"', 'target datalayout = "' + data_layout + '"',
                           '%WysnaValue = type { [' + str(VALUE_BYTES) + ' x i8] }',
-                          DECLARATIONS] + globals_ + self.pool + [''] + bodies + self.debug.render()) + '\n'
+                          DECLARATIONS, MANAGED_DECLARATIONS] + ['declare void @wysna_llvm_ffi_' + name + '(ptr, ptr)' for name in module.externs] + globals_ + self.pool + [''] + bodies + self.debug.render()) + '\n'
 
     def string(self, text):
         data = text.encode('utf-8')
@@ -162,14 +125,14 @@ class LlvmCodeGen:
             name = {TYPE_INT: 'int', TYPE_BOOL: 'bool', TYPE_FLOAT: 'float'}.get(slot.type_id)
             if name is None:
                 return pointer
-            type_ = 'i32' if slot.type_id == TYPE_BOOL else TYPES[slot.type_id]
+            type_ = 'i32' if slot.type_id == TYPE_BOOL else TYPES.get(slot.type_id, 'ptr')
             value = self.result('call ' + type_ + ' @wysna_llvm_' + name + '(ptr ' + pointer + ')')
             return self.result('icmp ne i32 ' + value + ', 0') if slot.type_id == TYPE_BOOL else value
         return self.result('load ' + self.physical(index) + ', ptr ' + pointer)
 
     def write(self, index, value, type_=None):
         slot = self.slots[index]
-        type_ = type_ or TYPES[slot.type_id]
+        type_ = type_ or TYPES.get(slot.type_id, 'ptr')
         if slot.storage == 'value':
             name = {TYPE_INT: 'int', TYPE_FLOAT: 'float', TYPE_BOOL: 'bool'}[slot.type_id]
             if slot.type_id == TYPE_BOOL:
@@ -197,7 +160,7 @@ class LlvmCodeGen:
         else:
             self.emit('store %WysnaValue zeroinitializer, ptr ' + pointer)
             value = self.load(index)
-            type_ = TYPES[slot.type_id]
+            type_ = TYPES.get(slot.type_id, 'ptr')
             name = {TYPE_INT: 'int', TYPE_FLOAT: 'float', TYPE_BOOL: 'bool'}[slot.type_id]
             if slot.type_id == TYPE_BOOL:
                 value = self.result('zext i1 ' + value + ' to i32')
@@ -210,14 +173,16 @@ class LlvmCodeGen:
         self.slots.update({slot.id: slot for slot in function.slots})
         self.scope = self.debug.function(function)
         self.scope_file = function.source.file
+        function_debug = self.debug_info.functions.get(function.name) if self.debug_info is not None else None
+        scopes = self.debug.scopes(function_debug, self.scope)
         self.location = ''
         parameters = []
-        if function.return_type == TYPE_STR:
+        if is_managed(function.return_type):
             parameters.append('ptr %out')
         for index in function.params:
-            type_ = 'ptr' if function.slots[index].type_id in (TYPE_STR, TYPE_UNIT) else TYPES[function.slots[index].type_id]
+            type_ = SCALAR_TYPES.get(function.slots[index].type_id, 'ptr')
             parameters.append(type_ + ' %arg' + str(index))
-        returned = 'void' if function.return_type == TYPE_STR else TYPES[function.return_type]
+        returned = SCALAR_TYPES.get(function.return_type, 'void')
         self.lines = ['define internal ' + returned + ' @' + function.name + '(' + ', '.join(parameters) +
                       ') !dbg !' + str(self.scope) + ' {', 'entry:']
         for slot in function.slots:
@@ -228,23 +193,28 @@ class LlvmCodeGen:
                 self.lines.append('  ' + self.pointer(slot.id) + ' = alloca ' + type_ + ', align ' + str(ALIGNMENT))
                 initial = '%arg' + str(slot.id) if slot.parameter else 'zeroinitializer'
                 self.lines.append('  store ' + type_ + ' ' + initial + ', ptr ' + self.pointer(slot.id))
+        if function_debug is not None:
+            for binding in function_debug.bindings:
+                variable = self.debug.binding(binding, self.slots[binding.slot], scopes, self.interner)
+                location = self.debug.location(binding.source, scopes[binding.scope], self.scope_file)
+                self.lines.append('  call void @llvm.dbg.declare(metadata ptr ' + self.pointer(binding.slot) + ', metadata !' + str(variable) + ', metadata !DIExpression())' + location)
         self.scratch = max([2] + [len(operation.args) + 1 for block in function.blocks for operation in block.operations])
         self.lines.append('  %scratch = alloca [' + str(self.scratch) + ' x %WysnaValue], align ' + str(ALIGNMENT))
         self.lines.append('  br label %bb0')
         for block in function.blocks:
             self.lines.append('bb' + str(block.id) + ':')
             for operation in block.operations:
-                self.location = self.debug.location(operation.source, self.scope, self.scope_file)
+                self.location = self.debug.location(operation.source, scopes[function_debug.scope_for(operation)] if function_debug else self.scope, self.scope_file)
                 self.operation(operation)
             term = block.terminator
-            self.location = self.debug.location(term.source, self.scope, self.scope_file)
+            self.location = self.debug.location(term.source, scopes[function_debug.scope_for(term)] if function_debug else self.scope, self.scope_file)
             if term.kind == 'goto':
                 self.emit('br label %bb' + str(term.targets[0]))
             elif term.kind == 'branch':
                 value = self.load(term.value)
                 self.emit('br i1 ' + value + ', label %bb' + str(term.targets[0]) + ', label %bb' + str(term.targets[1]))
             elif term.kind == 'return':
-                if function.return_type == TYPE_STR:
+                if is_managed(function.return_type):
                     self.emit('call void @wysna_llvm_move(ptr %out, ptr ' + self.pointer(term.value) + ')')
                     self.emit('ret void')
                 elif function.return_type == TYPE_UNIT:
@@ -273,6 +243,8 @@ class LlvmCodeGen:
                     self.pool.append(cache + ' = internal global [' + str(LITERAL_BYTES) + ' x i8] zeroinitializer, align ' + str(ALIGNMENT))
                 self.emit('call void @wysna_llvm_literal(ptr ' + self.pointer(result) + ', ptr ' + cache +
                           ', ptr ' + self.string(value) + ', i64 ' + str(len(value.encode('utf-8'))) + ')')
+            elif value is None and type_ != TYPE_UNIT and not data.get('placeholder'):
+                self.emit('call void @wysna_llvm_none(ptr ' + self.pointer(result) + ')')
             elif type_ == TYPE_UNIT or value is None:
                 if self.slots[result].storage == 'value':
                     self.emit('call void @wysna_llvm_release(ptr ' + self.pointer(result) + ')')
@@ -283,30 +255,51 @@ class LlvmCodeGen:
                 if isinstance(value, float):
                     literal = '0x' + format(struct.unpack('>Q', struct.pack('>d', value))[0], '016X')
                 self.write(result, literal)
-        elif kind in ('clone', 'store'):
-            if self.slots[result].type_id in (TYPE_STR, TYPE_UNIT):
+        elif kind in ('clone', 'narrow', 'store'):
+            if self.slots[result].storage == 'value':
                 method = 'move' if operation.moves else 'clone'
-                self.emit('call void @wysna_llvm_' + method + '(ptr ' + self.pointer(result) + ', ptr ' + self.pointer(args[0]) + ')')
+                self.emit('call void @wysna_llvm_' + method + '(ptr ' + self.pointer(result) + ', ptr ' + self.boxed(args[0]) + ')')
             else:
+                if self.slots[args[0]].storage == 'value' and self.slots[args[0]].type_id != self.slots[result].type_id:
+                    self.managed.complete(result, self.pointer(args[0]))
+                    return
                 source_type = self.physical(args[0]) if self.slots[args[0]].storage != 'value' else TYPES[self.slots[args[0]].type_id]
                 self.write(result, self.load(args[0]), source_type)
         elif kind == 'release':
             self.emit('call void @wysna_llvm_release(ptr ' + self.pointer(args[0]) + ')')
         elif kind == 'store_place':
             destination = data['place'].root
-            if self.slots[destination].type_id in (TYPE_STR, TYPE_UNIT):
-                self.emit('call void @wysna_llvm_move(ptr ' + self.pointer(destination) + ', ptr ' + self.pointer(args[0]) + ')')
-            else:
+            if not data['place'].projections and self.slots[destination].storage != 'value':
                 self.write(destination, self.load(args[0]))
+            else:
+                reference = self.managed.place(data['place'])
+                self.emit('call void @wysna_llvm_move(ptr ' + reference + ', ptr ' + self.boxed(args[0]) + ')')
         elif kind == 'call':
+            if data['name'] in self.module.externs:
+                values = self.managed.arguments(args)
+                output = self.managed.output(result)
+                self.emit('call void @wysna_llvm_ffi_' + data['name'] + '(ptr ' + output + ', ptr ' + values + ')')
+                self.managed.complete(result, output)
+                return
             function = self.functions[data['name']]
             parameters = []
-            if function.return_type == TYPE_STR:
+            if is_managed(function.return_type):
                 parameters.append('ptr ' + self.pointer(result))
-            for index in args:
-                type_ = self.slots[index].type_id
-                parameters.append(('ptr' if type_ in (TYPE_STR, TYPE_UNIT) else TYPES[type_]) + ' ' + self.load(index))
-            returned = 'void' if function.return_type == TYPE_STR else TYPES[function.return_type]
+            for position, (index, parameter) in enumerate(zip(args, function.params)):
+                type_ = function.slots[parameter].type_id
+                if type_ in SCALAR_TYPES:
+                    if self.slots[index].type_id == type_:
+                        value = self.load(index)
+                    else:
+                        method = {TYPE_INT: 'int', TYPE_FLOAT: 'float', TYPE_BOOL: 'bool'}[type_]
+                        loaded_type = 'i32' if type_ == TYPE_BOOL else SCALAR_TYPES[type_]
+                        value = self.result('call ' + loaded_type + ' @wysna_llvm_' + method + '(ptr ' + self.boxed(index, position) + ')')
+                        if type_ == TYPE_BOOL:
+                            value = self.result('icmp ne i32 ' + value + ', 0')
+                else:
+                    value = self.boxed(index, position)
+                parameters.append(SCALAR_TYPES.get(type_, 'ptr') + ' ' + value)
+            returned = SCALAR_TYPES.get(function.return_type, 'void')
             call = 'call ' + returned + ' @' + function.name + '(' + ', '.join(parameters) + ')'
             if returned == 'void':
                 self.emit(call)
@@ -317,8 +310,10 @@ class LlvmCodeGen:
         elif kind == 'test':
             if data['kind'] == 'truth':
                 self.write(result, self.load(args[0]))
-            else:
+            elif data['kind'] == 'equal':
                 self.compare(operation, 'wysna_equal')
+            else:
+                self.managed.operation(operation)
         elif kind == 'counter':
             self.write(result, '0', 'i32')
         elif kind == 'increment':
@@ -330,18 +325,21 @@ class LlvmCodeGen:
                                 ', i32 ' + str(int(data['inclusive'])) + ')')
             self.write(result, value, 'i32')
         elif kind == 'iterate_test':
-            left, right = self.load(args[0]), self.load(args[1])
+            left = self.load(args[0])
+            right = self.load(args[1]) if data['range'] else self.result('call i32 @wysna_llvm_iteration_length(ptr ' + self.boxed(args[1]) + ', ' + self.managed.location(operation.source) + ')')
             self.write(result, self.result('icmp slt i32 ' + left + ', ' + right))
-        elif kind == 'iterate_value':
+        elif kind == 'iterate_value' and data['range']:
             start = self.load(args[0])
             counter = self.result('sext i32 ' + self.load(args[1]) + ' to i64')
             self.write(result, self.result('add i64 ' + start + ', ' + counter))
+        else:
+            self.managed.operation(operation)
 
     def compare(self, operation, name):
         args = operation.args
         type_ = self.slots[args[0]].type_id
         codes = {'wysna_equal': 0, 'wysna_not_equal': 1, 'wysna_lt': 2, 'wysna_le': 3, 'wysna_gt': 4, 'wysna_ge': 5}
-        if type_ in (TYPE_STR, TYPE_UNIT):
+        if type_ not in SCALAR_TYPES or type_ != self.slots[args[1]].type_id:
             left, right = self.boxed(args[0], 0), self.boxed(args[1], 1)
             value = self.result('call i32 @wysna_llvm_compare(ptr ' + left + ', ptr ' + right + ', i32 ' + str(codes[name]) + ')')
             compared = self.result('icmp ne i32 ' + value + ', 0')
@@ -384,6 +382,8 @@ class LlvmCodeGen:
         elif name == 'wysna_neg':
             value = self.load(args[0])
             self.write(result, self.result(('fneg double ' + value) if type_ == TYPE_FLOAT else ('sub i64 0, ' + value)))
+        elif name not in ('wysna_add', 'wysna_sub', 'wysna_mul', 'wysna_div_at', 'wysna_mod_at'):
+            self.managed.runtime(operation)
         else:
             left, right = self.load(args[0]), self.load(args[1])
             if name in ('wysna_div_at', 'wysna_mod_at'):

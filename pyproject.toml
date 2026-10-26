@@ -29,7 +29,7 @@ py-modules = ["main", "run_conformance"]
 packages = ["lexer", "parser", "checker", "formatter", "runtime", "codegen", "common", "error", "node", "tokens", "hir", "mir", "compiler", "tooling", "common._vendor", "common._vendor.tomli", "stdlib", "project"]
 
 [tool.setuptools.package-data]
-runtime = ["*.h", "wysna_llvm_runtime.c"]
+runtime = ["*.h", "wysna_llvm_runtime.c", "wysna_llvm_operations.def"]
 stdlib = ["*.wysna"]
 "common._vendor.tomli" = ["LICENSE", "py.typed"]
 

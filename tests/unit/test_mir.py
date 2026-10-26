@@ -102,6 +102,16 @@ def test_physical_layout_and_runtime_rejections():
     rejects(broken, interner)
 
 
+def test_default_constants_cannot_change_the_physical_slot_representation():
+    original, interner = lower('print(42, true, 1.5, "hello")')
+    for value in (None, 'wrong', False, 1.5):
+        broken = deepcopy(original)
+        constant = next(operation for operation in operations(broken)
+                        if operation.opcode == 'const' and type(operation.data.get('value')) is int)
+        constant.data.update(default=True, value=value)
+        rejects(broken, interner)
+
+
 def test_error_narrowing_requires_successful_type_test():
     source = '''struct A { value: int }
 struct B { text: str }
@@ -248,6 +258,7 @@ def test_result_payload_requires_a_current_channel_proof():
 def run_mir_tests():
     test_cfg_and_ownership_rejections()
     test_physical_layout_and_runtime_rejections()
+    test_default_constants_cannot_change_the_physical_slot_representation()
     test_error_narrowing_requires_successful_type_test()
     test_result_payload_requires_a_current_channel_proof()
     test_range_iteration_and_limits_across_engines()

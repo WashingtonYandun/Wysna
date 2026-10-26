@@ -85,7 +85,8 @@ def run_pipeline(
     project_root=None,
     project_resolver=None,
     emit_llvm_path=None,
-    optimization_profile="dev",
+    optimization_profile=None,
+    run_timeout_ms=None,
 ) -> int:
     if tool_command is None:
         if check_only:
@@ -103,11 +104,11 @@ def run_pipeline(
     try:
         if backend == "llvm-experimental":
             if (use_selfhost or use_hir is not None or show_tokens or show_ast or show_mir
-                    or fmt_only or fmt_write or emit_c_path is not None or sanitize
-                    or link_libraries or json_diagnostics or report_state is not None
-                    or tool_command not in ("check", "emit-llvm", "build")):
+                    or fmt_only or fmt_write or emit_c_path is not None
+                    or json_diagnostics
+                    or tool_command not in ("run", "check", "emit-llvm", "build")):
                 raise WysnaError("Unsupported option for llvm-experimental", code="W5002", stage="options")
-        elif emit_llvm_path is not None or optimization_profile != "dev":
+        elif emit_llvm_path is not None or run_timeout_ms is not None or (optimization_profile is not None and build_bin_path is None):
             raise WysnaError("LLVM options require llvm-experimental", code="W5002", stage="options")
         # Resolve legacy flags if passed explicitly
         if use_selfhost:
@@ -182,7 +183,10 @@ def run_pipeline(
         if backend == "llvm-experimental":
             from tooling.LlvmCommand import run_llvm_command
             return run_llvm_command(service, checked, tool_command, emit_llvm_path,
-                                    build_bin_path, optimization_profile, json_v1, show_stats)
+                                    build_bin_path, optimization_profile or "dev", json_v1, show_stats,
+                                    link_libraries=link_libraries, sanitize=sanitize,
+                                    execution_context=execution_context, run_timeout_ms=run_timeout_ms,
+                                    report_state=report_state)
 
         if show_mir:
             from mir.Nodes import dump
@@ -241,6 +245,9 @@ def run_pipeline(
                 stat_obj = {
                     "status": "ok",
                     "file": file_name,
+                    "backend": "c99",
+                    "implementation": "compiler" if backend == "selfhost" else "seed",
+                    "optimization": optimization_profile or "release",
                     "telemetry": {
                         "monomorphization": dict(checked.telemetry) if checked is not None else None,
                         "codegen": codegen_telemetry,
@@ -279,7 +286,7 @@ def run_pipeline(
 
             if build_bin_path is not None:
                 built = toolchain.build(c_code, build_bin_path, sanitize=sanitize,
-                                        link_libraries=link_libraries)
+                                        link_libraries=link_libraries, profile=optimization_profile)
                 c_compile_ms, link_ms = built.c_compile_ms, built.link_ms
                 if json_v1:
                     artifact = artifact_file(

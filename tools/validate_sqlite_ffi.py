@@ -25,7 +25,7 @@ def execute(command, environment=None):
     return result
 
 
-def validate(rows=1000, samples=3, sanitize=False):
+def validate(rows=1000, samples=3, sanitize=False, llvm=False):
     compiler = shlex.split(os.environ.get('CC', 'cc'))
     flags = ['-std=c99', '-O1' if sanitize else '-O2', '-g']
     if sanitize:
@@ -39,17 +39,23 @@ def validate(rows=1000, samples=3, sanitize=False):
         directory = Path(temporary)
         adapter = directory / 'adapter.o'
         execute(compiler + flags + ['-Wall', '-Wextra', '-Werror', '-c', str(PILOT / 'adapter.c'), '-o', str(adapter)])
-        for backend in ('c', 'ast', 'hir'):
+        for backend in (('c', 'ast', 'hir', 'llvm-experimental') if llvm else ('c', 'ast', 'hir')):
             binary = directory / backend
             started = time.perf_counter()
-            if backend == 'c':
+            if backend == 'llvm-experimental':
+                command = [sys.executable, str(ROOT / 'main.py'), 'build', '--backend=llvm-experimental',
+                           str(PILOT / 'measurements.wysna'), '-o', str(binary),
+                           '--link-lib', str(adapter), '--link-lib', 'sqlite3'] + (['--sanitize'] if sanitize else [])
+                execute(command)
+            elif backend == 'c':
                 source = PILOT / 'reference.c'
             else:
                 source = directory / (backend + '.c')
                 execute([sys.executable, str(ROOT / 'main.py'), 'emit-c', '--backend=' + backend,
                          str(PILOT / 'measurements.wysna'), '-o', str(source)])
-            command = compiler + flags + [str(source), str(adapter), '-lsqlite3', '-o', str(binary)]
-            execute(command)
+            if backend != 'llvm-experimental':
+                command = compiler + flags + [str(source), str(adapter), '-lsqlite3', '-o', str(binary)]
+                execute(command)
             build_seconds = time.perf_counter() - started
             environment = dict(os.environ, WYSNA_MEM_CHECK='1', WYSNA_SQLITE_ROWS=str(rows))
             if sanitize:
@@ -100,14 +106,15 @@ def main():
     parser.add_argument('--rows', type=int, default=1000)
     parser.add_argument('--samples', type=int, default=3)
     parser.add_argument('--sanitize', action='store_true')
+    parser.add_argument('--llvm', action='store_true', help='Also qualify the optional LLVM backend')
     parser.add_argument('--report', type=Path, default=ROOT / '.wysna_cache/sqlite-ffi/report.json')
     args = parser.parse_args()
     if not 1 <= args.rows <= 100000 or not 1 <= args.samples <= 100:
         parser.error('rows must be 1..100000 and samples must be 1..100')
-    report = validate(args.rows, args.samples, args.sanitize)
+    report = validate(args.rows, args.samples, args.sanitize, args.llvm)
     args.report.parent.mkdir(parents=True, exist_ok=True)
     args.report.write_text(json.dumps(report, indent=2))
-    print(f'SQLite FFI: C/AST/HIR passed; {args.rows} persisted rows, recoverable errors and zero live adapter resources')
+    print(f'SQLite FFI: {"/".join(report["engines"])} passed; {args.rows} persisted rows, recoverable errors and zero live adapter resources')
     print(f'Report: {args.report}')
 
 
