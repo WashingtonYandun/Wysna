@@ -133,7 +133,7 @@ def ensure_selfhost_compiler_binary(repo_root: str) -> str:
                 indexed = json.loads(index_path.read_text(encoding="utf-8"))["directory"]
                 if isinstance(indexed, str) and indexed not in ("", ".", "..") and Path(indexed).name == indexed:
                     destination = cache / indexed
-            except (ValueError, KeyError, OSError):
+            except (ValueError, KeyError, OSError, TypeError):
                 pass
         binary = destination / executable_name("stage2")
         manifest_path = destination / "bootstrap.json"

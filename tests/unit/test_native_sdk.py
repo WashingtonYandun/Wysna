@@ -49,6 +49,13 @@ class NativeSdkContractTests(unittest.TestCase):
                     first = Path(ensure_selfhost_compiler_binary(str(root)))
                     self.assertEqual(ensure_selfhost_compiler_binary(str(root)), str(first))
                     self.assertEqual(builder.call_count, 1)
+                    index = root / '.wysna_cache/bootstrap' / (fingerprint + '.json')
+                    original_index = index.read_bytes()
+                    for invalid_index in ('null', '[]', '0', '"invalid"', '{"directory": ".."}'):
+                        index.write_text(invalid_index)
+                        self.assertEqual(ensure_selfhost_compiler_binary(str(root)), str(first))
+                        self.assertEqual(builder.call_count, 1)
+                    index.write_bytes(original_index)
                     damaged = first.parent / name
                     damaged.write_bytes(b'corrupted')
                     repaired = Path(ensure_selfhost_compiler_binary(str(root)))
