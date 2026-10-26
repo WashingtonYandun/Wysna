@@ -5,7 +5,7 @@
 The Seed pipeline is:
 
 ```text
-SourceSnapshot -> AST -> CheckedProgram -> typed HIR -> verified MIR -> C99
+SourceSnapshot -> AST -> CheckedProgram -> typed HIR -> verified MIR -> C99 | LLVM (explicit)
 ```
 
 `CompilationSession` owns source snapshots, dependency identity, declarations and
@@ -56,7 +56,7 @@ an AST C99 receiver marker consumed by method-call emission; standalone emission
 is explicitly rejected. Missing checked superclass targets also raise `W9999`.
 Valid statement-position control flow can still produce `unit` by language design.
 
-HIR and MIR retain independent verifiers. Native Wysna Compiler is an independent implementation with one checked-node → verified MIR → C99 pipeline for `native-core-v1`. Expanded source tokens and C-specific semantic metadata are not lowering inputs. Native and Python consumers enforce the same interchange contract through independent verifiers. See [MIR design](MIR_DESIGN.md) for ownership and the declared profile, and [native SDK](NATIVE_SDK.md) for distribution without Python. This does not introduce a direct LLVM backend.
+HIR and MIR retain independent verifiers. Native Wysna Compiler is an independent implementation with one checked-node → verified MIR → C99 pipeline for `native-core-v1`. Expanded source tokens and C-specific semantic metadata are not lowering inputs. Native and Python consumers enforce the same interchange contract through independent verifiers. See [MIR design](MIR_DESIGN.md) for ownership and the declared profile, and [native SDK](NATIVE_SDK.md) for distribution without Python. Seed also has a direct MIR-to-LLVM consumer, selected explicitly; see [LLVM contracts](LLVM_EXPERIMENTAL.md). Native Wysna Compiler keeps its independent C99 route.
 
 ## Tool and target boundaries
 
@@ -102,5 +102,6 @@ run independently. A final gate preserves the existing required conformance chec
 names and rejects failed, cancelled or skipped prerequisite groups explicitly.
 These small status checks run on Linux and require no checkout or macOS runner.
 The split preserves every test, release fixture, bootstrap stage and sanitizer
-check. Workflow contracts enforce coverage and all 64 prerequisite status
-combinations without extending the execution time limit for any test suite.
+check. Workflow contracts enforce coverage and every prerequisite status combination. LLVM
+qualification, sanitizer coverage and installed SDK acceptance have separate budgets
+and must also succeed before the final gate passes.

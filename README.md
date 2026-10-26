@@ -8,7 +8,7 @@
 
 Wysna is an experimental, statically typed, general-purpose language designed for AI agents to write, inspect, and validate programs with predictable semantics. Its current validated workflows include native CLI tools, scripting, C interoperability, a bounded local backend pilot, and shared native/browser logic through WebAssembly. Memory management uses deterministic reference counting (ARC) and copy-on-write (CoW); classes retain reference identity and errors use explicit typed channels.
 
-The source version is `0.5.0`. Wysna Seed is the reference implementation and default compiler; Wysna Compiler is implemented in Wysna and ships as a [standalone native SDK](docs/NATIVE_SDK.md) for the declared `native-core-v1` profile. Both produce native executables through verified MIR and C99. Python is required by Seed and build-time bootstrap tools; installed native SDK commands run without Python or a separately installed C compiler.
+The source version is `0.5.0`. Wysna Seed is the reference implementation and default compiler; Wysna Compiler is implemented in Wysna and ships as a [standalone native SDK](docs/NATIVE_SDK.md) for the declared `native-core-v1` profile. Both produce native executables through verified MIR and C99. Seed also provides an opt-in [native LLVM backend](docs/LLVM_EXPERIMENTAL.md). The separate [Seed LLVM SDK](docs/LLVM_SDK.md) bundles LLVM/Zig and requires host Python. Python is required by Seed and build-time bootstrap tools; installed native SDK commands run without Python or a separately installed C compiler.
 
 `develop` carries the current integration line. Development artifacts are available from [successful CI runs](https://github.com/WashingtonYandun/Wysna/actions/workflows/ci.yml?query=branch%3Adevelop). Release promotion is separate: the existing published `v0.4.0a1-pilot.2` assets predate this SDK and use the earlier command/file naming. Do not use those older assets as installation instructions for the current `0.5.0` development line.
 
@@ -330,10 +330,11 @@ Arguments after `--` are available through `args()`. The interpreter uses `"wysn
 
 The verified compiler snapshot in PR #114 passed 796/796 full conformance checks and 7/7 examples on Linux/Clang, Linux/GCC, and macOS. Separate gates cover the 812-row four-engine corpus, differential tests, deterministic fuzzing, invalid checked/MIR rejection, ASan/UBSan, CoW allocation/scaling, installed wheels, Windows installer lifecycle, and native SDK acceptance outside the checkout. Installed SDK acceptance includes compiler selfbuild without Python on all three validated platforms.
 
-The service pilot passed three sustained ten-minute load/RSS repetitions with saturation checks. This is a bounded loopback workload, not a production deployment qualification or a general performance comparison. Wysna remains experimental; direct LLVM code generation, a mobile platform, a public package registry, and full native tooling parity remain future work. Current compilation still goes through C99, including when Zig supplies the native SDK toolchain.
+The service pilot passed three sustained ten-minute load/RSS repetitions with saturation checks. This is a bounded loopback workload, not a production deployment qualification or a general performance comparison. Wysna remains experimental. Seed offers a separate `llvm-scalar-v1` experiment with LLVM 20.1.8; broader LLVM coverage, a mobile platform, a public package registry, and full native tooling parity remain future work. Default compilation still goes through C99, including when Zig supplies the native SDK toolchain.
 
 ## Documentation
 
+- [Experimental LLVM](docs/LLVM_EXPERIMENTAL.md): opt-in Seed profile, tools, semantics, debug symbols, and limits.
 - [Native SDK](docs/NATIVE_SDK.md): Python-free installation, commands, dependency boundaries, and provenance.
 
 - [Language specification](SPEC.md): syntax, expressions, and semantics.

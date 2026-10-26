@@ -7,9 +7,10 @@ from mir.Nodes import (Source, Slot, Projection, Place, Operation, Terminator,
 
 
 class Lowering:
-    def __init__(self, interner, file='<stdin>'):
+    def __init__(self, interner, file='<stdin>', *, debug=None):
         self.interner = interner
         self.file = file
+        self.debug = debug
 
     def source(self, node):
         span = getattr(node, 'span', None)
@@ -26,6 +27,8 @@ class Lowering:
         from codegen.VirtualDispatch import hir_virtual_method_slots
         HirVerifier(self.interner, self.file).verify(hir)
         self.module = Module(hir.file_path, self.interner.arena_id)
+        if self.debug is not None:
+            self.debug.module = self.module
         self.module.virtual_slots = hir_virtual_method_slots(hir, self.interner)
         self.module.enum_count = len(hir.enums)
         self.classes = {declaration.name: declaration for declaration in hir.classes}
@@ -111,6 +114,11 @@ class Lowering:
 
     def begin(self, name, returned, source):
         self.function = Function(name, returned, source=source)
+        self.debug_scopes = [0]
+        if self.debug is not None:
+            from mir.Debug import FunctionDebug, DebugScope
+            self.debug_function = FunctionDebug([DebugScope(None, source)])
+            self.debug.functions[name] = self.debug_function
         self.slot_by_id = {slot.id: slot for slot in self.module.globals}
         self.bindings = [dict(self.global_bindings), {}]
         self.scopes = [[]]
@@ -149,11 +157,15 @@ class Lowering:
         if self.current is not None:
             self.current.operations.append(Operation(opcode, result, tuple(args), data or {},
                                                      tuple(moves), self.source(node)))
+            if self.debug is not None:
+                self.debug_function.mark(self.current.operations[-1], self.debug_scopes[-1])
         return result
 
     def terminate(self, kind, targets=(), value=None, node=None):
         if self.current is not None:
             self.current.terminator = Terminator(kind, tuple(block.id for block in targets), value, self.source(node))
+            if self.debug is not None:
+                self.debug_function.mark(self.current.terminator, self.debug_scopes[-1])
             self.current = None
 
     def jump(self, block):
@@ -170,6 +182,11 @@ class Lowering:
         return any(item.terminator and block.id in item.terminator.targets for item in self.function.blocks)
 
     def push(self):
+        if self.debug is not None:
+            from mir.Debug import DebugScope
+            scope = len(self.debug_function.scopes)
+            self.debug_function.scopes.append(DebugScope(self.debug_scopes[-1], self.function.source))
+            self.debug_scopes.append(scope)
         self.scopes.append([])
         self.bindings.append({})
 
@@ -182,12 +199,19 @@ class Lowering:
         self.cleanup(len(self.scopes) - 1)
         self.scopes.pop()
         self.bindings.pop()
+        if self.debug is not None:
+            self.debug_scopes.pop()
 
     def bind(self, node, slot):
         self.bindings[-1][self.key(node)] = self.slot_by_id[slot]
         # Synthetic handlers have no SymbolId in older checked HIR.
         name = getattr(node, 'name', getattr(node, 'temp_name', ''))
         self.bindings[-1][('name', name)] = self.slot_by_id[slot]
+        if self.debug is not None and name:
+            from mir.Debug import DebugBinding
+            argument = self.function.params.index(slot) + 1 if slot in self.function.params else 0
+            display_name = getattr(getattr(node, 'symbol_id', None), 'name', name)
+            self.debug_function.bindings.append(DebugBinding(slot, display_name, self.debug_scopes[-1], self.source(node), argument))
 
     def lookup(self, node):
         key = self.key(node)
@@ -243,6 +267,9 @@ class Lowering:
             })
         if owner:
             self.receiver = self.slot(owner.type_id, 'v_self', ownership='borrowed', parameter=True)
+            if self.debug is not None:
+                from mir.Debug import DebugBinding
+                self.debug_function.bindings.append(DebugBinding(self.receiver, 'this', 0, self.source(declaration), 1))
         for index, parameter in enumerate(declaration.params):
             slot = self.slot(parameter.type_id, 'v_arg' + str(index), ownership='borrowed', parameter=True)
             self.bind(parameter, slot)
@@ -303,6 +330,9 @@ class Lowering:
             value = self.expr(node.init_expr)
             if top:
                 slot = self.global_bindings[self.key(node)].id
+                if self.debug is not None:
+                    from mir.Debug import DebugBinding
+                    self.debug.globals.append(DebugBinding(slot, node.name, 0, self.source(node)))
             else:
                 slot = self.slot(node.type_id, getattr(node, 'name', getattr(node, 'temp_name', 'local')))
                 self.bind(node, slot)

@@ -5,6 +5,7 @@ from pathlib import Path
 import shlex
 import shutil
 import subprocess
+import sys
 import tempfile
 import time
 
@@ -16,6 +17,8 @@ class NativeBuildResult:
     output_path: str
     c_compile_ms: float
     link_ms: float
+    cache_hits: dict | None = None
+    toolchain_identity: dict | None = None
 
 
 @dataclass(frozen=True)
@@ -39,7 +42,7 @@ class NativeToolchain:
     def __init__(self, repo_root):
         self.repo_root = os.fspath(repo_root)
 
-    def build(self, c_source, output, sanitize=False, link_libraries=()):
+    def build(self, c_source, output, sanitize=False, link_libraries=(), *, profile=None):
         """Compile C and explicit adapters, then link without owning caller inputs."""
         uses_http = 'wysna_host_http_request' in c_source
         if uses_http and 'WYSNA_HAS_HTTP' not in c_source:
@@ -53,7 +56,11 @@ class NativeToolchain:
             ['-fsanitize=address,undefined', '-fno-omit-frame-pointer'] if sanitize else []
         )
         command = compiler_command()
-        base = (command + ['-std=c99', '-O2', f'-I{self.repo_root}']
+        if profile not in (None, 'dev', 'release', 'size'):
+            raise ValueError('Unknown C99 optimization profile: ' + str(profile))
+        optimization = {'dev': '-O0', 'release': '-O2', 'size': '-Os'}.get(profile, '-O2')
+        profile_flags = ['-g', '-ffunction-sections', '-fdata-sections'] if profile else []
+        base = (command + ['-std=c99', optimization, f'-I{self.repo_root}'] + profile_flags
                 + curl_cflags + sanitizer_flags)
         output_path = executable_name(os.fspath(output))
         libraries = tuple(os.fspath(library) for library in link_libraries)
@@ -67,16 +74,26 @@ class NativeToolchain:
                 for index, library in enumerate(libraries)
                 if library.lower().endswith('.c') and os.path.isfile(library)
             }
+            cache_hits = {}
+            identity = None
+            cache = None
+            if profile and os.name != 'nt':
+                from compiler.ArtifactCache import ArtifactCache
+                from compiler.CObjectCache import compiler_identity, compile_cached_c
+                identity = compiler_identity(command)
+                cache = ArtifactCache('c99')
+            def compile_step(arguments, phase):
+                result = subprocess.run(command + arguments, capture_output=True, text=True, timeout=120)
+                if result.returncode:
+                    raise NativeCompilationError(phase, 'C Compiler Error', result.stderr, result.returncode)
+                return result
             started = time.perf_counter()
             for source, compiled in [(str(source_path), object_path)] + list(source_objects.items()):
-                result = subprocess.run(
-                    base + ['-c', source, '-o', compiled],
-                    capture_output=True, text=True, timeout=120,
-                )
-                if result.returncode != 0:
-                    raise NativeCompilationError(
-                        'c_compile', 'C Compiler Error', result.stderr, result.returncode,
-                    )
+                if cache is not None:
+                    hit, _ = compile_cached_c(cache, source, compiled, base[len(command):], identity, compile_step)
+                    cache_hits['program' if source == str(source_path) else source] = hit
+                else:
+                    compile_step(base[len(command):] + ['-c', source, '-o', compiled], 'c_compile')
             c_compile_ms = (time.perf_counter() - started) * 1000.0
             linker_inputs = [
                 source_objects[library] if library in source_objects else
@@ -84,16 +101,17 @@ class NativeToolchain:
                 for library in libraries
             ] + curl_libs
             started = time.perf_counter()
-            result = subprocess.run(
-                base + [object_path, '-o', output_path] + linker_inputs + native_stack_link_args(command),
-                capture_output=True, text=True, timeout=120,
-            )
+            section_flags = []
+            if profile and os.name != 'nt':
+                section_flags = ['-Wl,-dead_strip'] if sys.platform == 'darwin' else ['-Wl,--gc-sections']
+            link_command = base + [object_path, '-o', output_path] + linker_inputs + native_stack_link_args(command) + section_flags
+            result = subprocess.run(link_command, capture_output=True, text=True, timeout=120)
             link_ms = (time.perf_counter() - started) * 1000.0
             if result.returncode != 0:
                 raise NativeCompilationError(
                     'link', 'C Linker Error', result.stderr, result.returncode,
                 )
-        return NativeBuildResult(output_path, c_compile_ms, link_ms)
+        return NativeBuildResult(output_path, c_compile_ms, link_ms, cache_hits, identity)
 
     @staticmethod
     def _curl_flags():

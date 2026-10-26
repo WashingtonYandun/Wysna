@@ -37,6 +37,7 @@ def _write_run_report(path, invocation_id, report_state):
         report_state["tool_exit_code"],
         process_exit_code=report_state["process_exit_code"],
         execution=report_state["execution"],
+        target=report_state.get("target"),
         diagnostics=report_state["diagnostics"],
         invocation_id=invocation_id,
     )

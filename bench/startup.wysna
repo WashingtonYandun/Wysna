@@ -1,0 +1,2 @@
+# A minimal executable for process-startup measurements.
+print("ready")

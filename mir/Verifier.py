@@ -270,7 +270,8 @@ class Verifier:
             if data.get('placeholder'):
                 valid = value is None
             elif data.get('default'):
-                valid = value is None or type(value) in (bool, int, float, str)
+                valid = (result.type_id not in (TYPE_BOOL, TYPE_INT, TYPE_FLOAT, TYPE_STR) if value is None
+                         else {bool: TYPE_BOOL, int: TYPE_INT, float: TYPE_FLOAT, str: TYPE_STR}.get(type(value)) == result.type_id)
             elif value is None:
                 valid = result.type_id in (TYPE_UNIT, TYPE_NONE) or self.interner.get_entry(result.type_id).tag == 'optional'
             else:
