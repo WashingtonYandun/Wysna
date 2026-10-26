@@ -1,5 +1,6 @@
 """Native SDK packaging boundaries and private filesystem ABI contracts."""
 import io
+import hashlib
 import json
 import os
 import subprocess
@@ -9,6 +10,7 @@ import tempfile
 import unittest
 from unittest.mock import patch
 
+from compiler.Bootstrap import BootstrapArtifacts, ensure_selfhost_compiler_binary
 from common.Platform import compiler_command, executable_name, native_stack_link_args
 from runtime import HostAbi
 from tools.package_components import extract
@@ -17,6 +19,45 @@ from tools.validate_native_sdk import isolated_environment, terminal_bytes
 
 
 class NativeSdkContractTests(unittest.TestCase):
+    def test_bootstrap_cache_repairs_every_reused_artifact_without_overwriting_it(self):
+        fingerprint = 'a' * 64
+
+        def build(root, destination):
+            directory = Path(destination)
+            contents = {'bootstrap.c': b'seed', 'compiler0.c': b'native',
+                        'compiler1.c': b'native', 'compiler2.c': b'native',
+                        executable_name('stage1'): b'stage1', executable_name('stage2'): b'stage2'}
+            for name, content in contents.items():
+                (directory / name).write_bytes(content)
+            digest = {name: hashlib.sha256(content).hexdigest() for name, content in contents.items()}
+            hashes = [digest['compiler0.c']] * 3
+            manifest = {'fingerprint': fingerprint, 'seed_c_sha256': digest['bootstrap.c'],
+                        'native_c_sha256': hashes, 'stage1_sha256': digest[executable_name('stage1')],
+                        'stage2_sha256': digest[executable_name('stage2')]}
+            (directory / 'bootstrap.json').write_text(json.dumps(manifest))
+            return BootstrapArtifacts(directory, fingerprint, tuple(hashes))
+
+        artifacts = ['bootstrap.c', 'compiler0.c', 'compiler1.c', 'compiler2.c',
+                     executable_name('stage1'), executable_name('stage2'), 'bootstrap.json']
+        for name in artifacts:
+            with self.subTest(artifact=name), tempfile.TemporaryDirectory() as temporary:
+                root = Path(temporary)
+                (root / 'selfhost').mkdir()
+                (root / 'selfhost/compiler.wysna').write_text('print(1)')
+                with patch('compiler.Bootstrap.bootstrap_fingerprint', return_value=(fingerprint, {})), \
+                     patch('compiler.Bootstrap.bootstrap_compiler', side_effect=build) as builder:
+                    first = Path(ensure_selfhost_compiler_binary(str(root)))
+                    self.assertEqual(ensure_selfhost_compiler_binary(str(root)), str(first))
+                    self.assertEqual(builder.call_count, 1)
+                    damaged = first.parent / name
+                    damaged.write_bytes(b'corrupted')
+                    repaired = Path(ensure_selfhost_compiler_binary(str(root)))
+                    self.assertNotEqual(repaired, first)
+                    self.assertEqual(builder.call_count, 2)
+                    self.assertEqual(damaged.read_bytes(), b'corrupted')
+                    self.assertEqual(ensure_selfhost_compiler_binary(str(root)), str(repaired))
+                    self.assertEqual(builder.call_count, 2)
+
     def test_expected_terminal_bytes_preserve_NUL_and_C_text_mode(self):
         with patch('tools.validate_native_sdk.os.name', 'nt'):
             self.assertEqual(terminal_bytes(b'a\0\n'), b'a\0\r\n')

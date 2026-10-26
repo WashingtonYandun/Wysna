@@ -97,9 +97,22 @@ def bootstrap_compiler(repo_root, output_directory):
     manifest = {"format": 1, "fingerprint": fingerprint, "provenance": provenance,
                 "seed_backend": "ast", "seed_c_sha256": _sha256(bootstrap_c),
                 "native_backend": "verified-mir-c99", "native_c_sha256": hashes,
+                "stage1_sha256": _sha256(directory / executable_name("stage1")),
                 "stage2_sha256": _sha256(directory / executable_name("stage2"))}
     (directory / "bootstrap.json").write_text(json.dumps(manifest, indent=2) + "\n", encoding="utf-8")
     return BootstrapArtifacts(directory, fingerprint, hashes)
+
+
+def _cached_bootstrap_matches(directory, manifest, fingerprint):
+    hashes = manifest["native_c_sha256"]
+    if not isinstance(hashes, list) or len(hashes) != 3 or not all(isinstance(value, str) for value in hashes):
+        return False
+    return (manifest["fingerprint"] == fingerprint and len(set(hashes)) == 1
+            and manifest["seed_c_sha256"] == _sha256(directory / "bootstrap.c")
+            and all(hashes[stage] == _sha256(directory / ("compiler" + str(stage) + ".c"))
+                    for stage in range(3))
+            and all(manifest["stage" + str(stage) + "_sha256"] ==
+                    _sha256(directory / executable_name("stage" + str(stage))) for stage in (1, 2)))
 
 
 def ensure_selfhost_compiler_binary(repo_root: str) -> str:
@@ -107,8 +120,8 @@ def ensure_selfhost_compiler_binary(repo_root: str) -> str:
     root = Path(repo_root).resolve()
     source = root / "selfhost/compiler.wysna"
     if not source.is_file():
-        from error.Error import TypeError
-        raise TypeError("Wysna Compiler bootstrap requires a source checkout", file=str(source), code="W2013")
+        from error.Error import TypeError as WysnaTypeError
+        raise WysnaTypeError("Wysna Compiler bootstrap requires a source checkout", file=str(source), code="W2013")
     cache = root / ".wysna_cache/bootstrap"
     cache.mkdir(parents=True, exist_ok=True)
     with cache_lock(str(cache / "bootstrap.lock")):
@@ -127,9 +140,9 @@ def ensure_selfhost_compiler_binary(repo_root: str) -> str:
         if binary.is_file() and manifest_path.is_file():
             try:
                 manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
-                if manifest["fingerprint"] == fingerprint and manifest["stage2_sha256"] == _sha256(binary):
+                if _cached_bootstrap_matches(destination, manifest, fingerprint):
                     return str(binary)
-            except (ValueError, KeyError, OSError):
+            except (ValueError, KeyError, OSError, TypeError):
                 pass
         if destination.exists():
             # A damaged cache is never used or overwritten while a binary may be open.

@@ -18,6 +18,8 @@ MATRIX = {'ubuntu-latest,clang', 'ubuntu-latest,gcc', 'macos-latest,clang'}
 
 def test_ci_workflow_contracts():
     source = (ROOT / '.github/workflows/ci.yml').read_text(encoding='utf-8')
+    assert 'group: ${{ github.workflow }}-${{ github.ref }}' in source
+    assert 'cancel-in-progress: true' in source
     for event in ('push', 'pull_request'):
         trigger = re.search(r'^  ' + event + r':\n    branches: \[([^\]]+)\]',
                             source, re.MULTILINE)
