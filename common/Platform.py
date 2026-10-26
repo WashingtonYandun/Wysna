@@ -28,6 +28,20 @@ def compiler_command():
     return command
 
 
+WINDOWS_NATIVE_STACK_BYTES = 8 * 1024 * 1024
+
+
+def native_stack_link_args(command):
+    """Keep native compiler/application stack reserves consistent across Windows linkers."""
+    if os.name != 'nt':
+        return []
+    compiler = command[0].replace('\\', '/').rsplit('/', 1)[-1].lower()
+    gnu = (compiler in ('zig', 'zig.exe', 'gcc', 'gcc.exe') or 'mingw' in compiler
+           or any('windows-gnu' in argument.lower() or 'mingw' in argument.lower() for argument in command))
+    prefix = '-Wl,--stack,' if gnu else '-Wl,/STACK:'
+    return [prefix + str(WINDOWS_NATIVE_STACK_BYTES)]
+
+
 def executable_name(name):
     return name + '.exe' if os.name == 'nt' and not name.lower().endswith('.exe') else name
 

@@ -87,12 +87,9 @@ the listed fixtures does not guarantee equivalent behaviour for every Wysna prog
 
 Wysna Compiler has modular source files under `selfhost/src/`, bundled into
 `selfhost/compiler.wysna`. It parses and checks source using its own implementation and
-emits C99 directly for its normal route. Its experimental `emit-mir` managed CFG and basic Result profile
-constructs typed MIR independently and serializes the shared, verified interchange;
-see [MIR design](MIR_DESIGN.md) for its feature boundaries. Compiler does not share
-Seed's typed compilation sessions and canonical declaration arena. The bootstrap
-fixed point demonstrates deterministic self-hosting, not universal language parity or
-semantic correctness outside the tested programs.
+uses one checked-node → verified MIR → C99 pipeline under `native-core-v1`. Parameterized classes/interfaces, unresolved generic nominal values, library-mode exports and WASM targets remain explicit profile limits; see [MIR design](MIR_DESIGN.md). Compiler does not share Seed's compilation session or type arena. Deterministic bootstrap and corpus tests are evidence for their measured inputs, not universal semantic equivalence.
+
+The [native SDK](NATIVE_SDK.md) packages the native engine, runtime, stdlib and pinned C toolchain. Its commands run without Python. The SDK is a portable development artifact; platform acceptance, signing and release publication are distinct gates. HTTP and other external C dependencies are not included in the offline core.
 
 Installed wheels contain Wysna Seed, its C runtime header and the standard library;
 Python remains a prerequisite. Wysna Compiler bootstrap, `wysna test` and `wysna bench`

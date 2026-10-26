@@ -6,7 +6,7 @@ import tempfile
 import time
 
 from project.Manifest import WasiPreopen
-from tooling.WasmModule import inspect_wasm, validate_wasi_command
+from common.WasmModule import inspect_wasm, validate_wasi_command
 
 
 WASMTIME_VERSION = "50.0.1"

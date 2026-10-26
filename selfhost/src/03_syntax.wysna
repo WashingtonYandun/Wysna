@@ -1,0 +1,46 @@
+# Pure source syntax policy shared by module binding and semantic parsing.
+fn expression_starter(kind: str) -> bool {
+    return kind == "INT" or kind == "FLOAT" or kind == "STR" or kind == "TRUE" or kind == "FALSE" or kind == "NONE" or kind == "IDENT" or kind == "THIS" or kind == "SUPER" or kind == "NEW" or kind == "MINUS" or kind == "NOT" or kind == "LPAREN" or kind == "LBRACKET" or kind == "LBRACE" or kind == "PIPE" or kind == "IF" or kind == "MATCH"
+}
+
+fn op_precedence(k: str) -> int {
+    if k == "ASSIGN" {
+        return 1
+    }
+    if k == "QQ" {
+        return 2
+    }
+    if k == "OR" {
+        return 3
+    }
+    if k == "AND" {
+        return 4
+    }
+    if k == "EQ" or k == "NEQ" or k == "LT" or k == "LTE" or k == "GT" or k == "GTE" {
+        return 6
+    }
+    if k == "DOT_DOT" or k == "DOT_DOT_EQ" {
+        return 7
+    }
+    if k == "PLUS" or k == "MINUS" {
+        return 8
+    }
+    if k == "STAR" or k == "SLASH" or k == "PERCENT" {
+        return 9
+    }
+    return 0
+}
+
+fn extract_module_ns(path: str) -> str {
+    let n = len(path)
+    let mut slash = -1
+    let mut dot = n
+    for i in 0..n {
+        if path[i] == "/" {
+            slash = i
+        } elif path[i] == "." {
+            dot = i
+        }
+    }
+    return slice(path, slash + 1, dot)
+}

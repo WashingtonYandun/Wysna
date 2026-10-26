@@ -25,12 +25,12 @@ wysna = "main:main"
 
 [tool.setuptools]
 py-modules = ["main", "run_conformance"]
-packages = ["lexer", "parser", "checker", "formatter", "runtime", "codegen", "common", "error", "node", "tokens", "hir", "mir", "compiler", "tooling", "tooling._vendor", "tooling._vendor.tomli", "stdlib", "project"]
+packages = ["lexer", "parser", "checker", "formatter", "runtime", "codegen", "common", "error", "node", "tokens", "hir", "mir", "compiler", "tooling", "common._vendor", "common._vendor.tomli", "stdlib", "project"]
 
 [tool.setuptools.package-data]
 runtime = ["*.h"]
 stdlib = ["*.wysna"]
-"tooling._vendor.tomli" = ["LICENSE", "py.typed"]
+"common._vendor.tomli" = ["LICENSE", "py.typed"]
 
 [tool.setuptools.dynamic]
 version = {attr = "common.Version.WYSNA_VERSION"}

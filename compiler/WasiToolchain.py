@@ -6,7 +6,7 @@ import subprocess
 import tempfile
 import time
 
-from tooling.WasmModule import inspect_wasm, validate_wasi_command
+from common.WasmModule import inspect_wasm, validate_wasi_command
 
 
 WASI_STACK_SIZE_BYTES = 1_048_576

@@ -17,7 +17,7 @@ import time
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
-from main import ensure_selfhost_compiler_binary
+from compiler.Bootstrap import ensure_selfhost_compiler_binary
 from tools.validate_sqlite_ffi import execute
 
 PILOT = ROOT / 'examples/ffi/sqlite'

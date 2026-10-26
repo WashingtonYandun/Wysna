@@ -32,18 +32,29 @@ def convert_lambda(checker, expression):
         scope.define_symbol(Symbol(parameter.name, type_, kind='param'), file=checker.file)
     previous_expected = checker.expected_type
     previous_ret, previous_depth = checker.current_fn_ret_type, checker.loop_depth
+    previous_inference = checker._lambda_return_inference
+    checker._lambda_return_inference = [] if returned is None else None
     checker.current_scope, checker.current_fn_ret_type, checker.loop_depth = scope, returned, 0
     checker.expected_type = returned
     try:
         discard = returned == UnitType or isinstance(returned, ResultType) and returned.ok == UnitType
         inferred = checker._check_block(expression.body, is_statement_context=discard)
-        returned = returned or inferred
+        if returned is None:
+            candidates = list(checker._lambda_return_inference)
+            if not checker._block_diverges(expression.body):
+                candidates.append(inferred)
+            returned = candidates[0] if candidates else inferred
+            for candidate in candidates:
+                if not checker.type_relations.is_assignable(candidate, returned):
+                    raise TypeError("Lambda returns have incompatible types", file=checker.file,
+                                    line=expression.line, col=expression.col, code="W2004")
         if returned is None:
             raise TypeError('Block lambda needs an explicit return type', file=checker.file,
                             line=expression.line, col=expression.col, code='W2001')
     finally:
         checker.current_scope, checker.current_fn_ret_type, checker.loop_depth = outer, previous_ret, previous_depth
         checker.expected_type = previous_expected
+        checker._lambda_return_inference = previous_inference
     signature = FunctionType(parameter_types, returned)
     if expected and signature != expected:
         raise TypeError('Lambda signature must match exactly', file=checker.file,

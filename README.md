@@ -1,53 +1,68 @@
 # Wysna Programming Language
 
-[![CI](https://github.com/WashingtonYandun/Wysna/actions/workflows/ci.yml/badge.svg)](https://github.com/WashingtonYandun/Wysna/actions/workflows/ci.yml)
+[![CI](https://github.com/WashingtonYandun/Wysna/actions/workflows/ci.yml/badge.svg?branch=develop)](https://github.com/WashingtonYandun/Wysna/actions/workflows/ci.yml)
 
 <p align="center">
   <img src="assets/wawi.jpg" alt="Wysna language mascot" width="160">
 </p>
 
-Wysna is an experimental statically typed language for native programming, CLI tools, and high-performance applications. Wysna Seed compiles to portable C99 and combines deterministic reference counting (ARC), copy-on-write (CoW) value semantics, explicit error unions, and controlled C interoperability.
+Wysna is an experimental, statically typed, general-purpose language designed for AI agents to write, inspect, and validate programs with predictable semantics. Its current validated workflows include native CLI tools, scripting, C interoperability, a bounded local backend pilot, and shared native/browser logic through WebAssembly. Memory management uses deterministic reference counting (ARC) and copy-on-write (CoW); classes retain reference identity and errors use explicit typed channels.
 
-This branch prepares Wysna `0.5.0`. Wysna Seed is the reference compiler and primary production implementation. Wysna Compiler is a modular self-hosted compiler for bootstrap; its supported subset is measured by the four-engine matrix.
+The source version is `0.5.0`. Wysna Seed is the reference implementation and default compiler; Wysna Compiler is implemented in Wysna and ships as a [standalone native SDK](docs/NATIVE_SDK.md) for the declared `native-core-v1` profile. Both produce native executables through verified MIR and C99. Python is required by Seed and build-time bootstrap tools; installed native SDK commands run without Python or a separately installed C compiler.
+
+`develop` carries the current integration line. Development artifacts are available from [successful CI runs](https://github.com/WashingtonYandun/Wysna/actions/workflows/ci.yml?query=branch%3Adevelop). Release promotion is separate: the existing published `v0.4.0a1-pilot.2` assets predate this SDK and use the earlier command/file naming. Do not use those older assets as installation instructions for the current `0.5.0` development line.
 
 ---
 
 ## Compiler Architecture and Naming
 
-Wysna distinguishes the language from its two compiler implementations. The self-hosted compiler is not yet the default production pipeline.
+Wysna distinguishes the language from its two compiler implementations. Seed remains the default compiler and provides the broader project and editor tooling. The native SDK has an explicit source/command profile; neither self-hosting nor a green corpus establishes universal parity.
 
 | Component | Public name | Internal identifier | Implementation language | Role |
 | :--- | :--- | :---: | :--- | :--- |
 | **Language** | **Wysna** | `wysna` | — | Specification and grammar (`.wysna`) |
 | **Reference compiler** | **Wysna Seed** | `seed` | Python | Reference semantics, type interner, HIR/MIR, and default C99 pipeline |
-| **Self-hosted compiler** | **Wysna Compiler** | `selfhost` | Wysna | Independent bootstrap compiler with a narrower, measured feature profile |
-| **Bootstrap stage 1** | **Stage 1** | `stage1` | Native C99 (compiled by Seed) | First self-hosted compiler binary (`compiler0.c` &rarr; `stage1`) |
-| **Bootstrap stage 2** | **Stage 2** | `stage2` | Native C99 (recompiled by Stage 1) | Compiler binary at the deterministic fixed point (`compiler1.c` &rarr; `stage2`) |
+| **Self-hosted compiler** | **Wysna Compiler** | `selfhost` | Wysna | Independent native compiler and SDK with the measured `native-core-v1` profile |
+| **Bootstrap oracle** | **Bootstrap engine** | `bootstrap` | Seed AST C99 | Initial engine; its emission hash is recorded separately from the native fixed point |
+| **Bootstrap stage 1** | **Stage 1** | `stage1` | Native C99 (native C0) | First self-hosted compiler binary (`compiler0.c` &rarr; `stage1`) |
+| **Bootstrap stage 2** | **Stage 2** | `stage2` | Native C99 (native C1) | Compiler binary at the deterministic fixed point (`compiler1.c` &rarr; `stage2`) |
 
-### Wysna Seed Compiler Pipeline
+See [compiler responsibilities and enforced boundaries](docs/COMPILER_ARCHITECTURE.md)
+for session ownership, semantic rule domains, target tooling and runtime headers.
 
-Wysna Seed uses multiple stages for type analysis and portable native code generation. Wysna Compiler owns compilation state per invocation and has a direct C99 route plus an experimental MIR producer over checked nodes, with scalar, string and basic result support. `wysna emit-mir --implementation=seed|compiler` exports versioned IR; see the [supported profile](docs/MIR_DESIGN.md#interchange-and-the-compiler-profile).
+### Verified compilation pipelines
+
+Wysna Seed uses `SourceSnapshot → AST → CheckedProgram → typed HIR → verified MIR → C99`. Wysna Compiler uses its own frontend and `CheckedProgram → verified MIR → C99`. Its checked nodes own resolved bindings, types, patterns, and signatures; the emitter does not reparse source tokens or consult a live checker. The former parallel parser-to-C route has been removed.
+
+`wysna emit-mir --implementation=seed|compiler` is a Seed tooling command for either producer. The native SDK exposes `wysna emit-mir` directly. Both use a versioned interchange contract with independent verifiers; see the [native profile and MIR contract](docs/MIR_DESIGN.md#interchange-and-native-core-v1).
 
 | Stage | Component | Responsibility | Output representation |
 | :--- | :--- | :--- | :--- |
 | **Seed frontend** | Lexer and Pratt parser | UTF-8 scanning, operator precedence, and syntax diagnostics | Abstract syntax tree (`AST`) |
-| **Seed semantics** | Type checker and scopes | Symbol resolution, nominal typing, and monomorphization | Typed high-level IR (`HIR`) |
+| **Seed semantics** | Type checker and scopes | Symbol resolution, nominal typing, and monomorphization | Checked program and canonical type arena |
+| **Seed lowering** | HIR builder and verifier | Resolved operations and explicit semantic contracts | Typed high-level IR (`HIR`) |
 | **Seed middle end** | Control-flow graph and MIR | Basic blocks, projections, ownership verification, and CoW operations | Verified middle-level IR (`MIR`) |
 | **Seed backend** | C99 generator | MIR-to-C99 translation, ARC, and literal pooling | C99 translation unit (`.c`) |
 | **Native compilation** | C toolchain (`clang` / `gcc`) | Compilation and linking against `wysna_runtime.h` and `wysna_host.h` | Standalone executable (`.exe` / ELF / Mach-O) |
-| **Self-hosting** | Wysna Compiler | Direct C99 emission; the fixed point validates deterministic output, not IR parity | Native self-hosted binary (`stage2`) |
+| **Native pipeline** | Wysna Compiler | Checked nodes → verified MIR → C99; the SDK compiles and links with pinned Zig | Native self-hosted compiler and user executables |
+
+The native profile includes scalars, UTF-8 strings, globals/imports, lists/dictionaries/tuples and CoW mutation, ranges, optional/Result/error-union channels, structs/enums, classes/inheritance/interfaces, guarded patterns, snapshot closures/function values, concrete generic functions/structs/enums, and the scalar/opaque C ABI.
+
+Parameterized classes/interfaces, unresolved generic nominal values without a concrete context, native library exports, and native WASM targets are outside this SDK profile. Project/package commands, formatter, LSP, and structured agent-tooling commands remain in Seed. Seed's WASI and browser-library targets remain available.
+
+Seed AST constructs the initial bootstrap engine. Three subsequent native MIR emissions must satisfy `C0 == C1 == C2`; the Seed AST emission is recorded separately. Cached C sources and both stage binaries are checked before reuse. This proves the recorded fixed point; behavioral parity is tested independently.
 
 ---
 
 ## Engine Parity and Conformance
 
-Every core and standard-library function is continuously checked across four engines:
+The declared 203-case corpus is checked across four engines. The following snapshot is verified by [PR #114 CI](https://github.com/WashingtonYandun/Wysna/actions/runs/40253640492) on compiler commit `1db66ba`, with unchanged source inputs and zero unsupported exclusions. It is a measured corpus, not proof of every language or standard-library combination:
 
 | Engine | Role | Implementation | Status |
 | :--- | :--- | :--- | :--- |
 | **`interpreter`** | Reference behavior | Direct AST interpretation in Python (Wysna Seed) | 203/203 (100.0%) |
 | **`ast`** | Secondary oracle | Direct C99 generation from AST (Wysna Seed) | 203/203 (100.0%) |
-| **`hir`** | Primary production pipeline | Typed HIR &rarr; verified MIR &rarr; C99 backend (Wysna Seed) | 203/203 (100.0%) |
+| **`hir`** | Default Seed pipeline | Typed HIR &rarr; verified MIR &rarr; C99 backend (Wysna Seed) | 203/203 (100.0%) |
 | **`selfhost`** | Self-hosted compiler | Native Wysna Compiler executable (`stage2`) | 203/203 (100.0%) |
 
 See [docs/ENGINE_PARITY_MATRIX.md](docs/ENGINE_PARITY_MATRIX.md) for details and function categories.
@@ -56,52 +71,60 @@ See [docs/ENGINE_PARITY_MATRIX.md](docs/ENGINE_PARITY_MATRIX.md) for details and
 
 ## Quick Start
 
-### Windows: Standalone Installer
+### Native SDK: Linux, macOS, and Windows
 
-Download `wysna-<version>-windows-x64-setup.exe` from [Wysna Releases](https://github.com/WashingtonYandun/Wysna/releases):
+From a successful CI run for this development line, download the matching `native-sdk-ubuntu-latest`, `native-sdk-macos-latest`, or `native-sdk-windows-latest` artifact. Extract the SDK archive inside the downloaded artifact, preserving its directory layout. CI validates Linux x64, macOS arm64, and Windows x64 independently.
 
-1. Run the `-setup.exe` installer.
-2. Keep the default option to add Wysna to your system `PATH`.
-3. Open a new terminal (PowerShell or CMD) and verify the installation:
+On macOS/Linux, invoke `bin/wysna` or add its directory to your terminal's `PATH`. On Windows, open `open-terminal.cmd` or invoke `bin\wysna.exe`; the launcher changes `PATH` only for that terminal session. Inside the SDK directory on macOS/Linux:
 
-```powershell
-wysna version
+```sh
+./bin/wysna --version
 ```
 
-Create a simple `hello.wysna` file:
+Create `hello.wysna`:
 
 ```wysna
 print("Hello from Wysna!")
 ```
 
-Run directly via the interpreter or compile to a native standalone executable:
-
-```powershell
-wysna run hello.wysna
-wysna build hello.wysna -o hello.exe
-.\hello.exe
-```
-
-The standalone installer bundles a private Python runtime and a portable C toolchain: it works fully offline, requires no administrator privileges, and has no dependency on Visual Studio or MSVC build tools.
-
-### macOS & Linux: Source Checkout
-
-Requirements: Python 3.10 or higher and a C99 compiler (`clang` or `gcc`).
+With the SDK's `bin` directory on `PATH`:
 
 ```sh
-git clone https://github.com/WashingtonYandun/Wysna.git
+wysna check hello.wysna
+wysna emit-mir hello.wysna -o hello.mir.json
+wysna emit-c hello.wysna -o hello.c
+wysna build hello.wysna -o hello --profile release
+wysna run hello.wysna -- "two words"
+```
+
+Windows build outputs receive an `.exe` suffix. Profiles `dev`, `release`, and `size` select `-O0 -g`, `-O2`, and `-Os`, retaining runtime checks in every profile. The SDK bundles Zig 0.15.2, runtime headers, standard library, licenses, checksums, and bootstrap provenance. No Python runtime is packaged. See [Native SDK](docs/NATIVE_SDK.md) for installation, updates, caches, deadlines, external libraries, and profile boundaries.
+
+### Wysna Seed: Source checkout and full tooling
+
+Requirements: Python 3.10 or newer. Native builds additionally need a C99 compiler such as `clang` or `gcc`; interpretation, checking, formatting, and LSP do not require native compilation. Seed has no mandatory third-party Python packages.
+
+```sh
+git clone --branch develop https://github.com/WashingtonYandun/Wysna.git
 cd Wysna
 ./wysna --version
 ./wysna run examples/01_hello_world.wysna
-./wysna test
-```
-
-Compiling to a native executable:
-
-```sh
 ./wysna build examples/01_hello_world.wysna -o build/hello
 ./build/hello
 ```
+
+On Windows, run the source CLI with `py -3 main.py` instead of `./wysna`. The separate `wysna-windows-x64-installer` CI artifact packages the Seed installer with private Python and a C toolchain, including install/repair/uninstall checks. It is a different distribution from the Python-free native SDK. Current development artifacts should not be confused with older binaries on the [Releases page](https://github.com/WashingtonYandun/Wysna/releases).
+
+### Dependency boundaries
+
+- **Native SDK users:** bundled Wysna Compiler, Zig 0.15.2, runtime, and stdlib. No host Python or C compiler is required for the offline core profile.
+- **Seed/source contributors:** Python >=3.10 and a host C99 toolchain for native builds and bootstrap. Building the SDK also downloads and verifies the pinned toolchain; the installed SDK works offline.
+- **HTTP/HTTPS:** libcurl >=8.3.0 and development/link inputs for native programs. Seed interpretation additionally uses `wysna[http]` (`pycurl>=7.48,<8`). Libcurl is not bundled in the native core SDK.
+- **Backend pilot:** `wysna[service]` (`aiohttp>=3.14.5,<4`) for the Python supervisor. The SQLite examples also need SQLite headers, `libsqlite3`, and their explicit C adapter.
+- **WASI through Seed:** a `wasi-sdk` toolchain (CI uses version 34) and `wysna[wasi]` (`wasmtime==50.0.1`) for execution.
+- **Browser libraries through Seed:** Emscripten 5.0.1 and a JavaScript/browser host for the generated module.
+- **Project dependencies:** explicit local paths and a hash-checked lockfile; a remote package registry is not implemented.
+
+External libraries remain explicit. For example, the SDK uses `--include-dir`, `--link`, and `--library`; Seed's build tooling uses its own documented link options. A native executable still depends on its target OS/ABI and any external libraries it links.
 
 ---
 
@@ -173,7 +196,7 @@ inspect_file("README.md") else error { print(error.operation, error.code) }
 
 ## Standard Library Modules
 
-Wysna provides a focused, high-performance standard library:
+Wysna provides a focused standard library:
 
 | Module | Description | Key Functions & Types |
 | :--- | :--- | :--- |
@@ -197,13 +220,13 @@ See [docs/STDLIB.md](docs/STDLIB.md) for full API reference and examples.
 The HTTP example is [examples/http_json_client.wysna](examples/http_json_client.wysna).
 
 The local service pilot is experimental and listens on loopback only. Install its optional
-host adapter with `pip install 'wysna[service]'`. Build the SQLite worker from a source
+host adapter from the checkout with `python3 -m pip install '.[service]'`. Build the SQLite worker from a source
 checkout and start it with:
 
 ```sh
-wysna build examples/service/sqlite_worker.wysna -o build/sqlite_worker \
+./wysna build examples/service/sqlite_worker.wysna -o build/sqlite_worker \
   --link-lib examples/service/sqlite_adapter.c --link-lib sqlite3
-wysna service serve --worker build/sqlite_worker --database build/measurements.sqlite
+./wysna service serve --worker build/sqlite_worker --database build/measurements.sqlite
 ```
 
 The worker accepts one JSON request envelope from a unique temporary file and writes one
@@ -240,6 +263,8 @@ Wysna business-logic module from a native CLI and a WebAssembly browser interfac
 ---
 
 ## CLI & Tooling
+
+The following commands describe **Wysna Seed**. The standalone native SDK exposes the five source commands shown above; it does not provide the project, formatter, LSP, service supervisor, or introspection commands below.
 
 ```text
 wysna run <file.wysna> [-- args...]    # Execute with program arguments
@@ -301,7 +326,15 @@ Arguments after `--` are available through `args()`. The interpreter uses `"wysn
 
 ---
 
+## Validation and maturity
+
+The verified compiler snapshot in PR #114 passed 796/796 full conformance checks and 7/7 examples on Linux/Clang, Linux/GCC, and macOS. Separate gates cover the 812-row four-engine corpus, differential tests, deterministic fuzzing, invalid checked/MIR rejection, ASan/UBSan, CoW allocation/scaling, installed wheels, Windows installer lifecycle, and native SDK acceptance outside the checkout. Installed SDK acceptance includes compiler selfbuild without Python on all three validated platforms.
+
+The service pilot passed three sustained ten-minute load/RSS repetitions with saturation checks. This is a bounded loopback workload, not a production deployment qualification or a general performance comparison. Wysna remains experimental; direct LLVM code generation, a mobile platform, a public package registry, and full native tooling parity remain future work. Current compilation still goes through C99, including when Zig supplies the native SDK toolchain.
+
 ## Documentation
+
+- [Native SDK](docs/NATIVE_SDK.md): Python-free installation, commands, dependency boundaries, and provenance.
 
 - [Language specification](SPEC.md): syntax, expressions, and semantics.
 - [Type system design](docs/TYPE_SYSTEM_DESIGN.md): nominal checking, inference, and monomorphization.
@@ -330,6 +363,7 @@ Arguments after `--` are available through `args()`. The interpreter uses `"wysn
 ├── lexer/         # UTF-8 scanner, token definitions, and string escapes
 ├── mir/           # Mid-Level IR, CFG, place projections, and drop elaboration
 ├── node/          # AST node definitions
+├── packaging/     # Native SDK and reference Windows distribution
 ├── parser/        # Pratt parser and grammar rules
 ├── runtime/       # C99 runtime headers (wysna_runtime.h, wysna_host.h)
 ├── selfhost/      # Self-hosted compiler source code (compiler.wysna)

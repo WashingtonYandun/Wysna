@@ -8,8 +8,8 @@ import subprocess
 import tempfile
 import time
 
-from tooling.BrowserBindings import generate_browser_bindings
-from tooling.WasmModule import inspect_wasm
+from codegen.BrowserBindings import generate_browser_bindings
+from common.WasmModule import inspect_wasm
 
 
 EMSCRIPTEN_VERSION = "5.0.1"

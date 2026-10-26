@@ -21,7 +21,7 @@ class Lowering:
         raise WysnaError(message, file=source.file, line=source.line, col=source.col,
                      code='W9999', stage='mir-lowering')
 
-    def lower(self, hir, optimize=True):
+    def lower(self, hir, optimize=True, *, call_entrypoint=None):
         from hir.HirVerifier import HirVerifier
         from codegen.VirtualDispatch import hir_virtual_method_slots
         HirVerifier(self.interner, self.file).verify(hir)
@@ -68,7 +68,9 @@ class Lowering:
                 entry_value = self.expr(statement.expr)
             else:
                 self.stmt(statement, top=True)
-        if not explicit and getattr(hir, 'call_entrypoint', not hir.top_level_stmts):
+        invoke_entrypoint = (getattr(hir, 'call_entrypoint', not hir.top_level_stmts)
+                             if call_entrypoint is None else call_entrypoint)
+        if not explicit and invoke_entrypoint:
             entry = next((fn for fn in hir.functions if fn.name == 'main'), None)
             if entry:
                 entry_value = self.call('wysna_fn_main', [], entry.return_type_id, entry)
@@ -252,6 +254,9 @@ class Lowering:
         self.finish()
 
     def default(self, type_id):
+        kind = self.interner.get_entry(type_id).tag
+        if kind in ('list', 'dict'):
+            return self.op('construct', self.slot(type_id), data={'kind': kind})
         if self.interner.get_entry(type_id).tag == 'weak':
             return self.runtime('wysna_empty_weak', [], type_id)
         value = '' if type_id == TYPE_STR else False if type_id == TYPE_BOOL else 0 if type_id == TYPE_INT else 0.0 if self.interner.get_entry(type_id).data == 'float' else None
@@ -338,7 +343,7 @@ class Lowering:
         self.push()
         if is_for:
             condition = self.slot(TYPE_BOOL, storage='predicate')
-            self.op('iterate_test', condition, [counter, count if direct_range else iterable], {'range': direct_range})
+            self.op('iterate_test', condition, [counter, count if direct_range else iterable], {'range': direct_range}, node=node)
         else:
             condition = self.expr(node.cond_expr)
         # Condition temporaries belong to this iteration, not to the whole loop.
@@ -358,7 +363,7 @@ class Lowering:
         if is_for:
             element_type = TYPE_INT if direct_range else self.interner.get_entry(node.list_expr.type_id).data
             item = self.slot(element_type)
-            self.op('iterate_value', item, [iterable, counter], {'range': direct_range})
+            self.op('iterate_value', item, [iterable, counter], {'range': direct_range}, node=node)
             self.bind_pattern(node.pattern, item)
         self.block(node.body)
         self.loops.pop()
@@ -637,7 +642,7 @@ class Lowering:
                 value = self.runtime('wysna_enum_payload_owned', [value], self.interner.mk_tuple(
                     tuple(part.type_id for _, _, part in self.pattern_children_cache)), child)
                 self.current.operations[-1].data['variant'] = pattern.variant_name
-            return self.op('tuple_get', self.slot(child.type_id), [value], {'index': index})
+            return self.op('tuple_get', self.slot(child.type_id), [value], {'index': index}, node=child)
         helper = {'optional': 'wysna_unwrap_optional', 'ok': 'wysna_unwrap_ok', 'err': 'wysna_unwrap_err', 'enum': 'wysna_enum_payload_owned'}[channel]
         result = self.runtime(helper, [value], child.type_id, child)
         if channel == 'enum':

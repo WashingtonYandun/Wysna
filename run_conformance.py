@@ -13,7 +13,7 @@ from codegen.CCodeGen import CCodeGen
 from hir.HirBuilder import HirBuilder
 from hir.HirNodes import HirModule
 from hir.HirCCodeGen import HirCCodeGen
-from tests.engine_harness import panic_expectation, unsupported_reason
+from tests.engine_harness import PROFILES, panic_expectation, unsupported_reason
 from tests.unit.test_selfhost_split_conformance import test_split_conformance
 from tests.unit.test_generic_hardening import run_generic_hardening_tests
 from tests.unit.test_cow_telemetry import run_cow_telemetry_suite
@@ -362,6 +362,12 @@ def _run_suite_in_repo(repo_root: str) -> None:
     c99_targets = [f for f in runtime_files if os.path.exists(os.path.join(runtime_dir, f[:-6] + ".expected"))]
     c99_passed = 0
     bootstrap_ok = False
+    selfhost_suite_ok = False
+    examples_dir = "examples"
+    support_files = PROFILES.get('support_files', {})
+    example_files = sorted(f for f in os.listdir(examples_dir)
+                           if f.endswith(".wysna") and "examples/" + f not in support_files)
+    examples_passed = 0
 
     use_sanitize = os.environ.get("WYSNA_SANITIZE") == "1" or "--sanitize" in sys.argv
     extra_cc_flags = ["-fsanitize=address,undefined", "-fno-omit-frame-pointer"] if use_sanitize else []
@@ -400,30 +406,11 @@ def _run_suite_in_repo(repo_root: str) -> None:
         # 8. Self-Hosting Bootstrap Fixed-Point (Wysna Seed -> Wysna Compiler Stage 1 -> Wysna Compiler Stage 2)
         compiler_src_path = os.path.join(repo_root, "selfhost", "compiler.wysna")
         try:
-            with open(compiler_src_path, "r", encoding="utf-8") as wf:
-                compiler_src = wf.read()
-            compiler_ast = Parser(file=compiler_src_path).parse(compiler_src)
-            TypeChecker(file=compiler_src_path).check(compiler_ast)
-            c0_code = CCodeGen(file=compiler_src_path).generate(compiler_ast)
-
-            c0_path = os.path.join(tmpdir, "compiler0.c")
-            c1_path = os.path.join(tmpdir, "compiler1.c")
-            c2_path = os.path.join(tmpdir, "compiler2.c")
-            s1_bin = os.path.join(tmpdir, "stage1")
-            s2_bin = os.path.join(tmpdir, "stage2")
-
-            with open(c0_path, "w", encoding="utf-8") as cf:
-                cf.write(c0_code)
-
-            subprocess.run([os.environ.get("CC", "cc"), "-std=c99", "-O2", f"-I{repo_root}", c0_path, "-o", s1_bin], check=True, timeout=120, capture_output=True)
-            subprocess.run([s1_bin, compiler_src_path, c1_path], check=True, timeout=120, capture_output=True)
-            subprocess.run([os.environ.get("CC", "cc"), "-std=c99", "-O2", f"-I{repo_root}", c1_path, "-o", s2_bin], check=True, timeout=120, capture_output=True)
-            subprocess.run([s2_bin, compiler_src_path, c2_path], check=True, timeout=120, capture_output=True)
-
-            h0 = sha256_file(c0_path)
-            h1 = sha256_file(c1_path)
-            h2 = sha256_file(c2_path)
-            assert h0 == h1 == h2, f"Hash mismatch: {h0} vs {h1} vs {h2}"
+            from compiler.Bootstrap import bootstrap_compiler
+            artifacts = bootstrap_compiler(repo_root, os.path.join(tmpdir, "bootstrap"))
+            s2_bin = str(artifacts.compiler)
+            h0, h1, h2 = artifacts.hashes
+            assert h0 == h1 == h2, f"Native MIR hash mismatch: {h0} vs {h1} vs {h2}"
             bootstrap_ok = True
 
             # 9. Verify Wysna Compiler Stage 2 Native Compiler on Core Runtime Conformance Programs
@@ -442,9 +429,6 @@ def _run_suite_in_repo(repo_root: str) -> None:
                 selfhost_runtime_passed += 1
 
             # 10. Verify Showcase Examples (examples/*.wysna) on Wysna Seed Interpreter, Wysna Seed C99, and Wysna Compiler Stage-2 Native
-            examples_dir = "examples"
-            example_files = sorted([f for f in os.listdir(examples_dir) if f.endswith(".wysna")]) if os.path.exists(examples_dir) else []
-            examples_passed = 0
             for f in example_files:
                 ex_path = os.path.join(examples_dir, f)
                 ex_stem = f[:-6]
@@ -468,10 +452,9 @@ def _run_suite_in_repo(repo_root: str) -> None:
                 assert ex_res.returncode == 0, ex_res.stderr
                 assert ex_res.stdout == ex_expected, f"Wysna Compiler native mismatch on {f}"
                 examples_passed += 1
+            selfhost_suite_ok = True
         except Exception as e:
             print(f"  [BOOTSTRAP/SELFHOST FAIL] {e}")
-            example_files = []
-            examples_passed = 0
 
     # 11. Typed HIR -> C99 Native Backend (HirCCodeGen)
     hir_c99_passed = 0
@@ -611,6 +594,7 @@ def _run_suite_in_repo(repo_root: str) -> None:
         and toolkit_ok
         and examples_passed == len(example_files)
         and bootstrap_ok
+        and selfhost_suite_ok
     )
 
     if all_ok:

@@ -1,0 +1,164 @@
+# Pattern tests dominate all payload reads and refinements.
+fn mir_test(context: MirBuilder, value: int, kind: str, labels: list[str], owner: int, index: int, source: Token) -> int {
+    let result = mir_op(context, "test", 2, [value], kind, mir_literal_int(index), source)
+    context.slots[result].predicate = true
+    let block = context.current
+    let operation = len(context.blocks[block].operations) - 1
+    context.blocks[block].operations[operation].labels = labels
+    context.blocks[block].operations[operation].owner_type = owner
+    return result
+}
+fn mir_pattern_branch(context: MirBuilder, condition: int, failure: int, positive: bool, source: Token) {
+    let matched = mir_new_block(context, source)
+    mir_terminate(context, "branch", if positive { [matched, failure] } else { [failure, matched] }, condition, source)
+    context.current = matched
+}
+fn mir_pattern_literal(context: MirBuilder, pattern: SemPattern) -> int {
+    let type_id = mir_type(context, pattern.type_id, pattern.source)
+    let text = slice(pattern.name, 8, len(pattern.name))
+    if type_id == 3 {
+        let negative = len(text) > 0 and text[0] == "-"
+        return mir_integer(context, if negative { slice(text, 1, len(text)) } else { text }, negative, pattern.source)
+    }
+    if type_id == 4 { return mir_constant(context, mir_literal_float(float(text)), 4, pattern.source) }
+    if type_id == 5 { return mir_constant(context, mir_literal_str(text), 5, pattern.source) }
+    return mir_constant(context, mir_literal_bool(text == "true" or text == "TRUE"), 2, pattern.source)
+}
+fn mir_pattern(context: MirBuilder, value: int, id: int, failure: int) {
+    let pattern = context.program.patterns[id]
+    let source = pattern.source
+    let type_id = context.slots[value].type_id
+    let type_ = context.types[type_id]
+    if pattern.name == "*" {
+        if pattern.binding >= 0 { context.bindings.append(MirBinding { symbol: pattern.binding, slot: value }) }
+        return
+    }
+    if len(pattern.name) >= 8 and slice(pattern.name, 0, 8) == "literal:" {
+        let literal = mir_pattern_literal(context, pattern)
+        let test = mir_op(context, "test", 2, [value, literal], "equal", mir_literal_unit(), source)
+        context.slots[test].predicate = true
+        mir_pattern_branch(context, test, failure, true, source)
+        return
+    }
+    if pattern.name == "None" and type_.kind == "optional" { mir_pattern_branch(context, mir_error_test(context, value, source), failure, true, source) return }
+    if type_.kind == "error_union" {
+        let child = context.program.patterns[pattern.children[0]]
+        let narrowed = mir_type(context, child.type_id, source)
+        let descriptor = context.types[narrowed]
+        let name = if narrowed <= 5 { descriptor.kind } else { descriptor.name }
+        let witness = mir_test(context, value, "error_type", [descriptor.kind, name], narrowed, 0, source)
+        mir_pattern_branch(context, witness, failure, true, source)
+        let result = mir_op(context, "narrow", narrowed, [value], "", mir_literal_int(witness), source)
+        mir_pattern(context, result, pattern.children[0], failure)
+        return
+    }
+    if type_.kind == "tuple" {
+        let count = len(type_.args)
+        let test = mir_test(context, value, "tuple", mir_empty_labels(), type_id, count, source)
+        mir_pattern_branch(context, test, failure, true, source)
+        for i in 0..len(pattern.children) {
+            let item = mir_op(context, "tuple_get", type_.args[i], [value], "", mir_literal_int(i), source)
+            mir_pattern(context, item, pattern.children[i], failure)
+        }
+        return
+    }
+    if type_.kind == "optional" or type_.kind == "result" {
+        let condition = mir_error_test(context, value, source)
+        let error = pattern.name == "Err"
+        mir_pattern_branch(context, condition, failure, error, source)
+        if len(pattern.children) == 1 {
+            let payload = if error { type_.args[1] } else { type_.args[0] }
+            let helper = if type_.kind == "optional" { "wysna_unwrap_optional" } elif error { "wysna_unwrap_err" } else { "wysna_unwrap_ok" }
+            let item = mir_op(context, "runtime", payload, [value], helper, mir_literal_unit(), source)
+            mir_pattern(context, item, pattern.children[0], failure)
+        }
+        return
+    }
+    if type_.kind == "enum" {
+        let condition = mir_test(context, value, "variant", [type_.name, pattern.name], type_id, 0, source)
+        mir_pattern_branch(context, condition, failure, true, source)
+        if len(pattern.children) > 0 {
+            let mut payloads: list[int] = []
+            for child in pattern.children { payloads.append(mir_type(context, context.program.patterns[child].type_id, source)) }
+            let payload = if len(payloads) == 1 { payloads[0] } else { mir_intern(context, "tuple", "", payloads) }
+            let item = mir_op(context, "runtime", payload, [value], "wysna_enum_payload_owned", mir_literal_unit(), source)
+            let block = context.current
+            context.blocks[block].operations[len(context.blocks[block].operations) - 1].labels = [type_.name, pattern.name]
+            for i in 0..len(pattern.children) {
+                let part = if len(payloads) == 1 { item } else { mir_op(context, "tuple_get", payloads[i], [item], "", mir_literal_int(i), source) }
+                mir_pattern(context, part, pattern.children[i], failure)
+            }
+        }
+        return
+    }
+    report_error_at("W9999", source, "checked pattern has no MIR policy")
+}
+fn mir_match(context: MirBuilder, node: CheckedNode) -> int {
+    let source = node.source
+    let subject = mir_expression(context, node.children[0])
+    if context.current < 0 { return -1 }
+    let returned = mir_type(context, node.type_id, source)
+    let result = mir_slot(context, returned, "", false)
+    let join = mir_new_block(context, source)
+    let mut live = false
+    for id in node.arms {
+        let arm = context.program.arms[id]
+        let bindings = context.bindings
+        mir_push_scope(context)
+        let failure = mir_new_block(context, arm.source)
+        let next = mir_new_block(context, arm.source)
+        mir_pattern(context, subject, arm.pattern, failure)
+        if arm.guard >= 0 {
+            let condition = mir_expression(context, arm.guard)
+            if context.current >= 0 { mir_pattern_branch(context, condition, failure, true, arm.source) }
+        }
+        let value = mir_expression(context, arm.body)
+        if context.current >= 0 {
+            mir_store(context, result, mir_coerce(context, value, returned, false, arm.source), arm.source)
+            mir_cleanup(context, len(context.scopes) - 1, arm.source)
+            mir_jump(context, join, arm.source)
+            live = true
+        }
+        context.current = failure
+        mir_cleanup(context, len(context.scopes) - 1, arm.source)
+        mir_jump(context, next, arm.source)
+        context.scopes.pop()
+        context.bindings = bindings
+        context.current = next
+    }
+    if node.total {
+        let targets: list[int] = []
+        mir_terminate(context, "unreachable", targets, -1, source)
+    } else {
+        mir_store(context, result, mir_constant(context, mir_literal_unit(), 1, source), source)
+        mir_jump(context, join, source)
+        live = true
+    }
+    context.current = if live { join } else { -1 }
+    return if live { result } else { -1 }
+}
+
+fn mir_verify_test(module: MirModule, operation: MirOperation, slots: list[MirSlot]) -> bool {
+    if slots[operation.result].type_id != 2 or not slots[operation.result].predicate { return false }
+    if operation.name == "equal" { return len(operation.args) == 2 and mir_equality(module, slots[operation.args[0]].type_id, slots[operation.args[1]].type_id) }
+    if len(operation.args) != 1 { return false }
+    let value = slots[operation.args[0]].type_id
+    let type_ = module.types[value]
+    if operation.name == "err" { return type_.kind == "result" }
+    if operation.name == "none" { return type_.kind == "optional" }
+    if operation.name == "tuple" { return type_.kind == "tuple" and len(type_.args) == operation.value.integer }
+    if operation.name == "variant" {
+        if type_.kind != "enum" or len(operation.labels) != 2 or operation.labels[0] != type_.name { return false }
+        let record = mir_find_record(module.records, value, operation.source)
+        for variant in record.variants { if variant.name == operation.labels[1] { return true } }
+        return false
+    }
+    if operation.name == "error_type" {
+        if type_.kind != "error_union" or len(operation.labels) != 2 or not mir_valid_type(module.types, operation.owner_type) { return false }
+        let narrowed = module.types[operation.owner_type]
+        let expected = if operation.owner_type <= 5 { narrowed.kind } else { narrowed.name }
+        if operation.labels != [narrowed.kind, expected] { return false }
+        for member in type_.args { if member == operation.owner_type { return true } }
+    }
+    return false
+}

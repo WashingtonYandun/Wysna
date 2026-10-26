@@ -1,16 +1,28 @@
 # Backend-independent typed CFG and ownership data.
 struct MirLiteral { type_id: int, integer: int, floating: float, boolean: bool, text: str }
-struct MirSlot { type_id: int, name: str, parameter: bool, origin: int, predicate: bool }
-struct MirOperation { opcode: str, result: int, args: list[int], name: str, value: MirLiteral, source: Token }
+struct MirSlot { type_id: int, name: str, parameter: bool, origin: int, predicate: bool, counter: bool }
+struct MirProjection { kind: str, index: int, owner_type: int, type_id: int, source: Token }
+struct MirPlace { root: int, projections: list[MirProjection] }
+struct MirOperation { owner_type: int, labels: list[str], place: MirPlace, opcode: str, result: int, args: list[int], name: str, value: MirLiteral, source: Token }
 struct MirTerminator { kind: str, targets: list[int], value: int, source: Token }
 struct MirBlock { operations: list[MirOperation], terminator: MirTerminator }
 struct MirFunction { name: str, return_type: int, slots: list[MirSlot], blocks: list[MirBlock], params: list[int], source: Token }
+struct MirExtern { name: str, native: str, params: list[int], return_type: int, abi_params: list[str], abi_return: str }
+struct MirVirtualSlot { name: str, arity: int }
+struct MirGlobal { symbol: int, type_id: int, name: str }
 struct MirBinding { symbol: int, slot: int }
 struct MirScope { slots: list[int] }
 struct MirLoop { after: int, header: int, depth: int }
 struct MirState { seen: bool, defined: list[bool], live: list[bool], facts: list[int] }
-struct MirResultType { ok: int, error: int }
+struct MirField { name: str, type_id: int, visible: bool }
+struct MirVariant { name: str, payloads: list[int] }
+struct MirMethod { name: str, type_id: int, target: str, owner: int, visible: bool }
+struct MirRecord { type_id: int, fields: list[MirField], variants: list[MirVariant], parent: int, interfaces: list[int], methods: list[MirMethod] }
+struct MirType { kind: str, name: str, args: list[int] }
 
+
+fn mir_empty_labels() -> list[str] { let labels: list[str] = [] return labels }
+fn mir_empty_place() -> MirPlace { let projections: list[MirProjection] = [] return MirPlace { root: -1, projections: projections } }
 
 fn mir_literal_unit() -> MirLiteral { return MirLiteral { type_id: 1, integer: 0, floating: 0.0, boolean: false, text: "" } }
 fn mir_literal_bool(value: bool) -> MirLiteral { return MirLiteral { type_id: 2, integer: 0, floating: 0.0, boolean: value, text: "" } }
@@ -21,40 +33,68 @@ fn mir_literal_str(value: str) -> MirLiteral {
     return MirLiteral { type_id: 5, integer: 0, floating: 0.0, boolean: false, text: value }
 }
 
-fn mir_value_storage(type_id: int) -> bool { return type_id == 1 or type_id == 5 or type_id >= 7 }
+fn mir_value_storage(type_id: int) -> bool { return type_id == 1 or type_id >= 5 }
 
 fn mir_unsupported(token: Token, feature: str) {
-    report_error_at("W2013", token, "Compiler MIR result-cfg-v1 does not support " + feature)
+    report_error_at("W2013", token, "Compiler MIR native-core-v1 does not support " + feature)
 }
 
+fn mir_intern(context: MirBuilder, kind: str, name: str, args_: list[int]) -> int {
+    for i in 0..len(context.types) { let type_ = context.types[i] if type_.kind == kind and type_.name == name and type_.args == args_ { return i } }
+    context.types.append(MirType { kind: kind, name: name, args: args_ })
+    return len(context.types) - 1
+}
 fn mir_type(context: MirBuilder, type_id: int, source: Token) -> int {
-    let kind = context.program.types[type_id].kind
-    if kind == "unit" { return 1 }
-    if kind == "bool" { return 2 }
-    if kind == "int" { return 3 }
-    if kind == "float" { return 4 }
-    if kind == "str" { return 5 }
-    if kind == "result" {
-        let args_ = context.program.types[type_id].args
-        let ok = mir_type(context, args_[0], source)
-        let error = mir_type(context, args_[1], source)
-        if ok > 5 or error != 5 { mir_unsupported(source, "nested results or non-string error channels") }
-        for i in 0..len(context.result_types) { if context.result_types[i].ok == ok and context.result_types[i].error == error { return i + 7 } }
-        context.result_types.append(MirResultType { ok: ok, error: error })
-        return len(context.result_types) + 6
+    let type_ = context.program.types[type_id]
+    let names: list[str] = ["error", "unit", "bool", "int", "float", "str", "none"]
+    for i in 0..len(names) { if type_.kind == names[i] { return i } }
+    if type_.kind == "struct" or type_.kind == "enum" or type_.kind == "class" or type_.kind == "interface" {
+        if not checked_type_concrete(context.program.types, context.program.templates, type_id) { mir_unsupported(source, "nominal values with unresolved type arguments; add an explicit type context") }
+        let mut name = type_.name
+        if len(type_.args) > 0 {
+            name = "_WYSNA_G_" + str(len(type_.name)) + "_" + type_.name
+            for child in type_.args { name = name + "__" + str(child) }
+        }
+        for i in 0..len(context.types) { if context.types[i].kind == type_.kind and context.types[i].name == name { return i } }
+        let id = mir_intern(context, type_.kind, name, [])
+        mir_complete_record(context, type_id, id)
+        return id
     }
-    mir_unsupported(source, "type " + kind)
+    if type_.kind == "ok" or type_.kind == "err" {
+        let any = mir_intern(context, "any", "", [])
+        let payload = mir_type(context, type_.args[0], source)
+        return mir_intern(context, "result", "", if type_.kind == "ok" { [payload, any] } else { [any, payload] })
+    }
+    if type_.kind == "any" { return mir_intern(context, "any", "", []) }
+    if type_.kind == "opaque" { return mir_intern(context, "opaque", "", []) }
+    let supported: list[str] = ["result", "optional", "weak", "list", "dict", "tuple", "error_union", "function"]
+    for kind in supported {
+        if type_.kind == kind {
+            let mut args_: list[int] = []
+            for child in type_.args { args_.append(mir_type(context, child, source)) }
+            if kind == "error_union" {
+                let mut sorted: list[int] = []
+                let mut previous = -1
+                while len(sorted) < len(args_) {
+                    let mut next = -1
+                    for arg in args_ { if arg > previous and (next < 0 or arg < next) { next = arg } }
+                    if next < 0 { report_error_at("W9999", source, "noncanonical checked error union") }
+                    sorted.append(next) previous = next
+                }
+                args_ = sorted
+            }
+            return mir_intern(context, kind, "", args_)
+        }
+    }
+    mir_unsupported(source, "type " + type_.kind)
     return 0
 }
-
-fn mir_valid_type(types: list[MirResultType], type_id: int) -> bool {
-    return type_id >= 1 and type_id <= 5 or type_id >= 7 and type_id < len(types) + 7
-}
-
-fn mir_is_result(types: list[MirResultType], type_id: int) -> bool { return type_id >= 7 and type_id < len(types) + 7 }
+fn mir_valid_type(types: list[MirType], type_id: int) -> bool { return type_id > 0 and type_id < len(types) }
+fn mir_is_result(types: list[MirType], type_id: int) -> bool { return mir_valid_type(types, type_id) and types[type_id].kind == "result" }
+fn mir_is_optional(types: list[MirType], type_id: int) -> bool { return mir_valid_type(types, type_id) and types[type_id].kind == "optional" }
 
 fn mir_consumes(operation: MirOperation) -> bool {
-    return operation.opcode == "store" or operation.opcode == "runtime" and (operation.name == "wysna_ok" or operation.name == "wysna_err")
+    return operation.opcode == "function" and len(operation.args) > 0 or operation.opcode == "store" or operation.opcode == "store_place" or operation.opcode == "global_store" or operation.opcode == "runtime" and (operation.name == "wysna_ok" or operation.name == "wysna_err" or operation.name == "wysna_enum_payload" or operation.name == "wysna_builtin_weak_owned")
 }
 
 fn mir_new_block(context: MirBuilder, source: Token) -> int {
@@ -91,7 +131,7 @@ fn mir_begin(context: MirBuilder, source: Token, returned: int) {
 
 fn mir_raw_slot(context: MirBuilder, type_id: int, name: str, parameter: bool) -> int {
     let id = len(context.slots)
-    context.slots.append(MirSlot { type_id: type_id, name: name, parameter: parameter, origin: -1, predicate: false })
+    context.slots.append(MirSlot { type_id: type_id, name: name, parameter: parameter, origin: -1, predicate: false, counter: false })
     if parameter { context.params.append(id) }
     return id
 }
@@ -115,12 +155,12 @@ fn mir_append(context: MirBuilder, operation: MirOperation) {
 
 fn mir_op(context: MirBuilder, opcode: str, type_id: int, args_: list[int], name: str, value: MirLiteral, source: Token) -> int {
     let id = mir_slot(context, type_id, "", false)
-    mir_append(context, MirOperation { opcode: opcode, result: id, args: args_, name: name, value: value, source: source })
+    mir_append(context, MirOperation { owner_type: 0, labels: mir_empty_labels(), place: mir_empty_place(), opcode: opcode, result: id, args: args_, name: name, value: value, source: source })
     return id
 }
 
 fn mir_store(context: MirBuilder, destination: int, value: int, source: Token) {
-    mir_append(context, MirOperation { opcode: "store", result: destination, args: [value], name: "", value: mir_literal_unit(), source: source })
+    mir_append(context, MirOperation { owner_type: 0, labels: mir_empty_labels(), place: mir_empty_place(), opcode: "store", result: destination, args: [value], name: "", value: mir_literal_unit(), source: source })
 }
 
 fn mir_constant(context: MirBuilder, value: MirLiteral, type_id: int, source: Token) -> int {
@@ -130,7 +170,7 @@ fn mir_constant(context: MirBuilder, value: MirLiteral, type_id: int, source: To
 
 fn mir_release(context: MirBuilder, id: int, source: Token) {
     if mir_value_storage(context.slots[id].type_id) and not context.slots[id].parameter {
-        mir_append(context, MirOperation { opcode: "release", result: -1, args: [id], name: "", value: mir_literal_unit(), source: source })
+        mir_append(context, MirOperation { owner_type: 0, labels: mir_empty_labels(), place: mir_empty_place(), opcode: "release", result: -1, args: [id], name: "", value: mir_literal_unit(), source: source })
     }
 }
 
@@ -216,7 +256,7 @@ fn mir_ids(ids: list[int], tuple_: bool) -> str {
 }
 
 fn mir_literal_json(value: MirLiteral) -> str {
-    if value.type_id == 1 { return "null" }
+    if value.type_id == 1 or value.type_id == 6 { return "null" }
     if value.type_id == 2 { return str(value.boolean) }
     if value.type_id == 3 { return str(value.integer) }
     if value.type_id == 5 { return mir_quote(value.text) }
@@ -228,18 +268,59 @@ fn mir_operation_json(operation: MirOperation) -> str {
     let mut effect = "call"
     let mut result = str(operation.result)
     let mut moves: list[int] = []
-    if operation.opcode == "const" { effect = "pure" data = "{\"value\":" + mir_literal_json(operation.value) + "}" }
+    if operation.opcode == "default" { effect = "pure" data = "{\"value\":" + mir_literal_json(operation.value) + ",\"default\":true}" }
+    elif operation.opcode == "function" {
+        effect = "allocate"
+        data = "{\"name\":" + mir_quote(operation.name) + ",\"arity\":" + str(operation.value.integer) + ",\"captured\":" + str(operation.value.boolean) + "}"
+        if operation.value.boolean { moves = [0] }
+    }
+    elif operation.opcode == "virtual" { data = "{\"slot\":" + str(operation.value.integer) + "}" }
+    elif operation.opcode == "set_vtable" { effect = "write" result = "null" data = "{\"class\":" + mir_quote(operation.name) + "}" }
+    elif operation.opcode == "const" { effect = "pure" data = "{\"value\":" + mir_literal_json(operation.value) + "}" }
     elif operation.opcode == "clone" { effect = "retain" }
+    elif operation.opcode == "narrow" { effect = "retain" data = "{\"witness\":" + str(operation.value.integer) + "}" }
     elif operation.opcode == "store" { effect = "move" moves = [0] }
     elif operation.opcode == "release" { effect = "release" result = "null" }
-    elif operation.opcode == "test" { effect = "read" data = "{\"kind\":\"err\"}" }
+    elif operation.opcode == "test" {
+        effect = "read" data = "{\"kind\":" + mir_quote(operation.name)
+        if operation.name == "tuple" { data = data + ",\"length\":" + str(operation.value.integer) }
+        elif operation.name == "variant" { data = data + ",\"enum\":" + mir_quote(operation.labels[0]) + ",\"variant\":" + mir_quote(operation.labels[1]) }
+        elif operation.name == "error_type" { data = data + ",\"type_kind\":" + mir_quote(operation.labels[0]) + ",\"name\":" + mir_quote(operation.labels[1]) }
+        data = data + "}"
+    }
+    elif operation.opcode == "construct" {
+        effect = "allocate" data = "{\"kind\":" + mir_quote(operation.name)
+        if operation.name == "struct" or operation.name == "object" { data = data + ",\"layout\":" + str(operation.value.integer) }
+        data = data + "}"
+    }
+    elif operation.opcode == "load_field" { effect = "retain" data = "{\"index\":" + str(operation.value.integer) + ",\"layout\":" + str(operation.owner_type) + "}" }
+    elif operation.opcode == "counter" or operation.opcode == "increment" { effect = "pure" }
+    elif operation.opcode == "range_count" { effect = "check" data = "{\"inclusive\":" + str(operation.value.boolean) + "}" }
+    elif operation.opcode == "iterate_test" or operation.opcode == "iterate_value" { effect = if operation.opcode == "iterate_test" { "read" } else { "retain" } data = "{\"range\":" + str(operation.value.boolean) + "}" }
+    elif operation.opcode == "tuple_get" { effect = "retain" data = "{\"index\":" + str(operation.value.integer) + "}" }
     else {
         if mir_consumes(operation) { moves = [0] }
-        data = "{\"name\":" + mir_quote(operation.name)
+        data = "{\"name\":" + mir_quote(if operation.name == "wysna_make_range_inclusive" { "wysna_make_range" } else { operation.name })
+        if operation.name == "wysna_enum" or operation.name == "wysna_enum_payload" {
+            let labels = if len(operation.labels) == 2 { operation.labels } else { ["Option", "Some"] }
+            data = data + ",\"enum\":" + mir_quote(labels[0]) + ",\"variant\":" + mir_quote(labels[1])
+        }
+        if operation.name == "wysna_enum_payload_owned" { data = data + ",\"variant\":" + mir_quote(operation.labels[1]) }
+        if operation.name == "wysna_make_range" or operation.name == "wysna_make_range_inclusive" { data = data + ",\"inclusive\":" + str(operation.name == "wysna_make_range_inclusive") }
         if operation.name == "wysna_div_at" or operation.name == "wysna_mod_at" or operation.name == "wysna_index_get_owned_at" { data = data + ",\"source\":true" }
         data = data + "}"
     }
-    return "{\"$type\":\"Operation\",\"opcode\":" + mir_quote(operation.opcode) + ",\"result\":" + result + ",\"args\":" + mir_ids(operation.args, true) + ",\"data\":" + data + ",\"moves\":" + mir_ids(moves, true) + ",\"effect\":" + mir_quote(effect) + ",\"source\":" + mir_source_json(operation.source) + "}"
+    if operation.opcode == "store_place" or operation.opcode == "mutate" {
+        data = "{\"place\":" + mir_place_json(operation.place)
+        if operation.opcode == "store_place" { effect = "write" result = "null" moves = [0] }
+        else { effect = "write" data = data + ",\"method\":" + mir_quote(operation.name) }
+        data = data + "}"
+    }
+    let mut opcode = if operation.opcode == "default" { "const" } else { operation.opcode }
+    let mut args_ = operation.args
+    if opcode == "global_load" { opcode = "clone" effect = "retain" args_ = [-operation.value.integer - 1] data = "{}" }
+    elif opcode == "global_store" { opcode = "store" effect = "move" moves = [0] result = str(-operation.value.integer - 1) data = "{}" }
+    return "{\"$type\":\"Operation\",\"opcode\":" + mir_quote(opcode) + ",\"result\":" + result + ",\"args\":" + mir_ids(args_, true) + ",\"data\":" + data + ",\"moves\":" + mir_ids(moves, true) + ",\"effect\":" + mir_quote(effect) + ",\"source\":" + mir_source_json(operation.source) + "}"
 }
 
 fn mir_function_json(function: MirFunction) -> str {
@@ -249,7 +330,7 @@ fn mir_function_json(function: MirFunction) -> str {
         let slot = function.slots[i]
         let mut storage = "value"
         if slot.type_id == 2 { storage = if slot.predicate { "predicate" } else { "boolean" } }
-        elif slot.type_id == 3 { storage = "integer" }
+        elif slot.type_id == 3 { storage = if slot.counter { "counter" } else { "integer" } }
         elif slot.type_id == 4 { storage = "float" }
         let ownership = if slot.parameter { "borrowed" } else { "owned" }
         slots = slots + "{\"$type\":\"Slot\",\"id\":" + str(i) + ",\"type_id\":" + str(slot.type_id) + ",\"name\":" + mir_quote(slot.name) + ",\"storage\":" + mir_quote(storage) + ",\"ownership\":" + mir_quote(ownership) + ",\"parameter\":" + str(slot.parameter) + "}"
@@ -273,32 +354,45 @@ fn mir_function_json(function: MirFunction) -> str {
     return "{\"$type\":\"Function\",\"name\":" + mir_quote(function.name) + ",\"return_type\":" + str(function.return_type) + ",\"slots\":" + slots + ",\"blocks\":" + blocks + "],\"params\":" + mir_ids(function.params, false) + ",\"source\":" + mir_source_json(function.source) + "}"
 }
 
-fn mir_arena_json(types: list[MirResultType]) -> str {
-    # Reserved TypeIds and capabilities are the wysna.mir/1 contract.
-    let names: list[str] = ["", "unit", "bool", "int", "float", "str", "none"]
-    let mut entries = "[{\"tag\":\"error\",\"data\":null}"
+fn mir_arena_json(module: MirModule) -> str {
+    let types = module.types
+    let mut entries = "["
     let mut capabilities = "["
-    for i in 0..len(names) {
-        if i > 0 {
-            entries = entries + ",{\"tag\":\"primitive\",\"data\":" + mir_quote(names[i]) + "}"
-            capabilities = capabilities + ","
+    for i in 0..len(types) {
+        if i > 0 { entries = entries + "," capabilities = capabilities + "," }
+        let type_ = types[i]
+        let mut tag = type_.kind
+        let mut data = "null"
+        if (i > 0 and i < 7) or tag == "opaque" { tag = "primitive" data = mir_quote(type_.kind) }
+        elif tag == "optional" or tag == "weak" or tag == "list" { data = str(type_.args[0]) }
+        elif tag == "struct" or tag == "enum" or tag == "class" or tag == "interface" { data = mir_quote(type_.name) }
+        elif tag == "function" {
+            let mut params: list[int] = []
+            for j in 0..len(type_.args) - 1 { params.append(type_.args[j]) }
+            data = "[" + mir_ids(params, false) + "," + str(type_.args[len(type_.args) - 1]) + ",false]"
         }
-        let retain = str(i == 5)
-        let key = str(i == 2 or i == 3 or i == 5)
-        capabilities = capabilities + "{\"needs_retain\":" + retain + ",\"needs_release\":" + retain + ",\"is_value\":true,\"is_reference\":false,\"is_copyable\":true,\"has_identity\":false,\"is_comparable\":true,\"is_valid_dict_key\":" + key + "}"
+        elif tag != "error" and tag != "any" { data = mir_ids(type_.args, false) }
+        entries = entries + "{\"tag\":" + mir_quote(tag) + ",\"data\":" + data + "}"
+        let retain = str(i == 5 or i >= 7)
+        let key = str(i == 2 or i == 3 or i == 5 or tag == "enum")
+        let comparable = str(tag != "result" and tag != "error_union" and tag != "function")
+        let reference = str(mir_reference_type(types, i))
+        let identity = str(mir_identity_type(types, i))
+        let value = str(mir_value_type(types, i))
+        capabilities = capabilities + "{\"needs_retain\":" + retain + ",\"needs_release\":" + retain + ",\"is_value\":" + value + ",\"is_reference\":" + reference + ",\"is_copyable\":true,\"has_identity\":" + identity + ",\"is_comparable\":" + comparable + ",\"is_valid_dict_key\":" + key + "}"
     }
-    for type_ in types {
-        entries = entries + ",{\"tag\":\"result\",\"data\":[" + str(type_.ok) + "," + str(type_.error) + "]}"
-        capabilities = capabilities + ",{\"needs_retain\":true,\"needs_release\":true,\"is_value\":true,\"is_reference\":false,\"is_copyable\":true,\"has_identity\":false,\"is_comparable\":false,\"is_valid_dict_key\":false}"
-    }
-    return "{\"version\":1,\"entries\":" + entries + "],\"capabilities\":" + capabilities + "],\"structs\":{},\"enums\":{},\"interfaces\":{},\"classes\":{}}"
+    return "{\"version\":1,\"entries\":" + entries + "],\"capabilities\":" + capabilities + "],\"structs\":" + mir_nominal_definitions(module, "struct") + ",\"enums\":" + mir_nominal_definitions(module, "enum") + ",\"interfaces\":" + mir_nominal_definitions(module, "interface") + ",\"classes\":" + mir_nominal_definitions(module, "class") + "}"
 }
 
-struct MirModule { file: str, functions: list[MirFunction], result_types: list[MirResultType], source: Token }
+struct MirModule { file: str, functions: list[MirFunction], globals: list[MirGlobal], records: list[MirRecord], virtual_slots: list[MirVirtualSlot], externs: list[MirExtern], types: list[MirType], source: Token }
 class MirBuilder {
     program: CheckedProgram
-    result_types: list[MirResultType]
+    types: list[MirType]
     functions: list[MirFunction]
+    globals: list[MirGlobal]
+    records: list[MirRecord]
+    virtual_slots: list[MirVirtualSlot]
+    externs: list[MirExtern]
     slots: list[MirSlot]
     blocks: list[MirBlock]
     params: list[int]
@@ -309,10 +403,21 @@ class MirBuilder {
     return_type: int
     fn init(program: CheckedProgram) {
         this.program = program
-        let initial_result_types: list[MirResultType] = []
-        this.result_types = initial_result_types
+        let empty_type_args: list[int] = []
+        let mut initial_types: list[MirType] = []
+        let primitive_names: list[str] = ["error", "unit", "bool", "int", "float", "str", "none"]
+        for name in primitive_names { initial_types.append(MirType { kind: name, name: "", args: empty_type_args }) }
+        this.types = initial_types
         let initial_functions: list[MirFunction] = []
         this.functions = initial_functions
+        let initial_globals: list[MirGlobal] = []
+        this.globals = initial_globals
+        let initial_records: list[MirRecord] = []
+        this.records = initial_records
+        let initial_virtual_slots: list[MirVirtualSlot] = []
+        this.virtual_slots = initial_virtual_slots
+        let initial_externs: list[MirExtern] = []
+        this.externs = initial_externs
         let initial_slots: list[MirSlot] = []
         this.slots = initial_slots
         let initial_blocks: list[MirBlock] = []
@@ -328,4 +433,65 @@ class MirBuilder {
         this.current = -1
         this.return_type = 1
     }
+}
+
+
+fn mir_compatible(types: list[MirType], records: list[MirRecord], source: int, target: int) -> bool {
+    if source == target { return true }
+    let s = types[source]
+    let t = types[target]
+    if s.kind == "any" { return true }
+    if s.kind == "class" and (t.kind == "class" or t.kind == "interface") {
+        let mut current = source
+        let mut visits = 0
+        while current >= 0 and visits <= len(records) {
+            if current == target { return true }
+            let mut next = -1
+            for record in records { if record.type_id == current { next = record.parent for interface_ in record.interfaces { if interface_ == target { return true } } } }
+            current = next visits = visits + 1
+        }
+        return false
+    }
+    if t.kind == "error_union" {
+        let alternatives = if s.kind == "error_union" { s.args } else { [source] }
+        for alternative in alternatives {
+            let mut found = false
+            for member in t.args { if member == alternative { found = true } }
+            if not found { return false }
+        }
+        return true
+    }
+    if s.kind == "result" and t.kind == "result" { return s.args[0] == t.args[0] and mir_error_compatible(types, s.args[1], t.args[1]) }
+    if t.kind == "optional" {
+        if source == 6 { return true }
+        if s.kind == "optional" {
+            if (types[s.args[0]].kind == "optional") != (types[t.args[0]].kind == "optional") { return false }
+            return mir_compatible(types, records, s.args[0], t.args[0])
+        }
+        return mir_compatible(types, records, source, t.args[0])
+    }
+    return false
+}
+
+fn mir_error_compatible(types: list[MirType], source: int, target: int) -> bool {
+    let sources = if types[source].kind == "error_union" { types[source].args } else { [source] }
+    let targets = if types[target].kind == "error_union" { types[target].args } else { [target] }
+    for id in sources { let mut found = false for other in targets { if id == other { found = true } } if not found { return false } }
+    return true
+}
+
+fn mir_reference_type(types: list[MirType], id: int) -> bool {
+    let type_ = types[id]
+    if type_.kind == "optional" { return mir_reference_type(types, type_.args[0]) }
+    return type_.kind == "class" or type_.kind == "interface" or type_.kind == "any"
+}
+fn mir_identity_type(types: list[MirType], id: int) -> bool {
+    let type_ = types[id]
+    if type_.kind == "optional" { return mir_identity_type(types, type_.args[0]) }
+    return type_.kind == "class" or type_.kind == "interface" or type_.kind == "weak"
+}
+fn mir_value_type(types: list[MirType], id: int) -> bool {
+    let type_ = types[id]
+    if type_.kind == "optional" { return mir_value_type(types, type_.args[0]) }
+    return type_.kind != "class" and type_.kind != "interface"
 }

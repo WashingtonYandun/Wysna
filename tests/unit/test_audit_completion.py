@@ -138,8 +138,9 @@ int main(void) {
 
 def test_formatter_preserves_guards_and_production_sources():
     paths = formatter_paths()
-    required = ['selfhost/compiler.wysna', 'selfhost/src/07_parser_decl.wysna',
-                'examples/ffi/sqlite/import_csv.wysna', 'stdlib/text.wysna']
+    from tools.bundle_selfhost import MODULE_ORDER
+    required = ['selfhost/compiler.wysna', 'examples/ffi/sqlite/import_csv.wysna', 'stdlib/text.wysna']
+    required += ['selfhost/src/' + name for name in MODULE_ORDER]
     assert all(ROOT / name in paths for name in required)
     for path in paths:
         verify_formatting(path.read_text(), str(path))

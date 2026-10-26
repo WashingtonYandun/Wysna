@@ -390,9 +390,8 @@ class CCodeGen:
                 value = f'wysna_clone({value})'
             return [self.write(result, value)]
         if kind == 'tuple_get':
-            value = f'{args[0]}.as.tuple->items[{data["index"]}]'
-            if self.slots[result].storage == 'value':
-                value = f'wysna_clone({value})'
+            value = (f'wysna_tuple_get_owned_at({args[0]}, {data["index"]}, '
+                     f'{quote(source.file)}, {source.line}, {source.col})')
             return [self.write(result, value)]
         if kind == 'store_place':
             place = data['place']
@@ -417,13 +416,13 @@ class CCodeGen:
         if kind == 'range_count':
             return [self.write(result, f'wysna_range_count({args[0]}, {args[1]}, {str(data["inclusive"]).lower()})', boxed=False)]
         if kind == 'iterate_test':
-            bound = self.name(operation.args[1]) if data['range'] else args[1] + '.as.list->len'
+            bound = self.name(operation.args[1]) if data['range'] else (
+                f'wysna_list_iteration_length_at({args[1]}, {quote(source.file)}, {source.line}, {source.col})')
             return [self.write(result, self.name(operation.args[0]) + ' < ' + bound, boxed=False)]
         if kind == 'iterate_value':
             index = self.name(operation.args[1])
-            value = f'wysna_int(({args[0]}).as.i + (int64_t){index})' if data['range'] else f'{args[0]}.as.list->data[{index}]'
-            if not data['range'] and self.slots[result].storage == 'value':
-                value = f'wysna_clone({value})'
+            value = f'wysna_int(({args[0]}).as.i + (int64_t){index})' if data['range'] else (f'wysna_list_iteration_get_owned_at({args[0]}, {index}, '
+                        f'{quote(source.file)}, {source.line}, {source.col})')
             return [self.write(result, value)]
         if kind == 'test':
             test = data['kind']

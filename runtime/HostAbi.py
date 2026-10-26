@@ -145,6 +145,24 @@ def filesystem(first, second, operation):
         return failure(error)
 
 
+def canonical_path(path_handle, output_handle):
+    global _error_code, _error_domain
+    _error_code = 0
+    _error_domain = 0
+    path = path_text(path_handle)
+    output = find(output_handle, 'buffer')
+    if path is None or output is None or len(output):
+        return failure(OSError(errno.EINVAL, 'invalid canonical path buffers'))
+    try:
+        encoded = str(Path(path).resolve(strict=True)).encode('utf-8')
+        output.extend(encoded)
+        return len(encoded)
+    except UnicodeError:
+        return failure(OSError(errno.EILSEQ, 'canonical path is not UTF-8'))
+    except (OSError, ValueError) as error:
+        return failure(error)
+
+
 def claim(raw):
     if any(kind == 'claim' and value == raw for kind, value in _entries.values()):
         return 0
@@ -524,6 +542,7 @@ FUNCTIONS = {
     'wysna_host_file_write': file_write,
     'wysna_host_is_open': lambda handle: int(find(handle, 'file') is not None),
     'wysna_host_fs': filesystem,
+    'wysna_host_fs_canonical': canonical_path,
     'wysna_host_process_run': process_run,
     'wysna_host_http_request': http_request,
 }
