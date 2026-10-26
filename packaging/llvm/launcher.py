@@ -15,11 +15,12 @@ def main():
     from compiler.NativeToolchain import NativeCompilationError
     from tooling.ToolResult import diagnostic_record, tool_result, write_tool_result
     args = sys.argv[1:]
+    options = args[:args.index('--')] if '--' in args else args
     command = args[0] if args and not args[0].startswith('-') else 'run'
     try:
         sdk = LlvmSdk(ROOT)
     except NativeCompilationError as error:
-        if '--output-format=json-v1' in args:
+        if '--output-format=json-v1' in options:
             write_tool_result(tool_result(command, 'toolchain_error', 3,
                               diagnostics=[diagnostic_record('W5001', 'llvm-sdk', error.stderr)]), sys.stdout)
         else:
@@ -38,7 +39,7 @@ def main():
     if command not in ('check', 'emit-llvm', 'build', 'run'):
         print('[W5002] Unsupported LLVM SDK command: ' + command, file=sys.stderr)
         return 2
-    if any(arg.startswith('--backend=') and arg != '--backend=llvm-experimental' for arg in args):
+    if any(arg.startswith('--backend=') and arg != '--backend=llvm-experimental' for arg in options):
         print('[W5002] The LLVM SDK uses llvm-experimental; select the separate Seed or native SDK for C99', file=sys.stderr)
         return 2
     args.insert(1, '--backend=llvm-experimental')

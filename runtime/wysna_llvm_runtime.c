@@ -89,7 +89,7 @@ void wysna_llvm_construct(void* out, int32_t kind, const char* name, int32_t cou
     switch (kind) {
     case 0: result = wysna_make_list(count, values); break;
     case 1: result = wysna_make_tuple(count, values); break;
-    case 2: result = wysna_make_dict(count / 2, values, values + count / 2); break;
+    case 2: result = wysna_make_dict(count / 2, values, count ? values + count / 2 : NULL); break;
     case 3: result = wysna_make_struct(name, count, keys, values); break;
     case 4: result = wysna_make_object(name, count, keys, values); break;
     default: wysna_runtime_fail("W9999", "Invalid LLVM construction kind");

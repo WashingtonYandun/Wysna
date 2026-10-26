@@ -23,6 +23,7 @@ let point = Point { x: optional(20), y: add(21) }
 let number = json.number(str(point.x + point.y)) else error { json.null() }
 let encoded = json.stringify(json.object({"answer": number})) else error { "error" }
 print(original[1], changed[2], encoded)
+if len(args()) > 1 { print(args()[1], args()[2]) }
 '''
 
 
@@ -97,6 +98,8 @@ def validate(sdk, report, source_commit=None, forbid_source=None):
             sidecar = root / 'run.json'
             assert run(['run', source, '--report-json', sidecar]).stdout == '21 42 {"answer":42}\n'
             assert json.loads(sidecar.read_text())['status'] == 'ok'
+            forwarded = run(['run', source, '--', '--backend=c99', '--output-format=json-v1'])
+            assert forwarded.stdout == '21 42 {"answer":42}\n--backend=c99 --output-format=json-v1\n'
             protected = run(['emit-llvm', source, '-o', sdk / 'seed/main.py'], expected=1)
             assert 'W5002' in protected.stderr
             # Missing and corrupt components must fail before even the version command succeeds.
