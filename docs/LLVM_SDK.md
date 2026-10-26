@@ -31,7 +31,8 @@ Wasm and browser-library exports use other Wysna routes.
 
 The SDK command explicitly selects LLVM and supports `check`, `emit-llvm`, `build`,
 `run`, `version` and help. Full package/project/editor tooling remains in Seed's
-normal installation. Commands do not acquire missing tools or fall back to C99.
+normal installation. Effect reports (`wysna explain`) are a Seed command and are not
+exposed by this restricted SDK. Commands do not acquire missing tools or fall back to C99.
 
 ## Dependencies and installed state
 

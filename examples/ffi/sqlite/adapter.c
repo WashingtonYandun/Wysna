@@ -2,6 +2,13 @@
 #include <errno.h>
 #include <sqlite3.h>
 #include <stdlib.h>
+#ifdef _WIN32
+#ifndef WIN32_LEAN_AND_MEAN
+#define WIN32_LEAN_AND_MEAN
+#endif
+#include <windows.h>
+#include <wchar.h>
+#endif
 
 typedef struct {
     sqlite3 *database;
@@ -16,8 +23,26 @@ void *pilot_open(void) {
     PilotDatabase *handle = calloc(1, sizeof(*handle));
     if (!handle) return NULL;
     live_resources++;
+    char *encoded_path = NULL;
+#ifdef _WIN32
+    const wchar_t *wide_path = _wgetenv(L"WYSNA_SQLITE_DB");
+    if (wide_path) {
+        int bytes = WideCharToMultiByte(CP_UTF8, WC_ERR_INVALID_CHARS, wide_path, -1, NULL, 0, NULL, NULL);
+        if (!bytes) { handle->status = SQLITE_CANTOPEN; return handle; }
+        encoded_path = malloc((size_t)bytes);
+        if (!encoded_path) { handle->status = SQLITE_NOMEM; return handle; }
+        if (!WideCharToMultiByte(CP_UTF8, WC_ERR_INVALID_CHARS, wide_path, -1, encoded_path, bytes, NULL, NULL)) {
+            free(encoded_path);
+            handle->status = SQLITE_CANTOPEN;
+            return handle;
+        }
+    }
+    const char *path = encoded_path;
+#else
     const char *path = getenv("WYSNA_SQLITE_DB");
+#endif
     handle->status = sqlite3_open(path ? path : ":memory:", &handle->database);
+    free(encoded_path);
     if (handle->database) live_resources++;
     if (handle->status == SQLITE_OK) {
         handle->status = sqlite3_exec(handle->database,

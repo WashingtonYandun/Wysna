@@ -520,6 +520,11 @@ def _run_tests(resolver, filter_text, report_path, frozen=False):
         return 2
 
     script = Path(__file__).resolve().parents[1] / "main.py"
+    installed_entry = script.parent / "wysna_entry.py"
+    if installed_entry.is_file() and (script.parent / "installation.json").is_file():
+        runner = [sys.executable, "-I", "-B", "-X", "utf8", str(installed_entry)]
+    else:
+        runner = [sys.executable, "-B", str(script)]
     records = []
     lock_path = resolver.lock_path()
     lock_hash = hashlib.sha256(lock_path.read_bytes()).hexdigest() if lock_path.is_file() else None
@@ -529,8 +534,7 @@ def _run_tests(resolver, filter_text, report_path, frozen=False):
         entry_hash = hashlib.sha256(entry_bytes).hexdigest()
         started = time.perf_counter()
         deadline = started + case.timeout_ms / 1000
-        command = [sys.executable, str(script), "project", "run", "--manifest",
-                   str(manifest.path), "--entry", case.entry]
+        command = runner + ["project", "run", "--manifest", str(manifest.path), "--entry", case.entry]
         if frozen:
             command.append("--frozen")
         process = subprocess.Popen(

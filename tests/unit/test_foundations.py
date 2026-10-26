@@ -13,11 +13,15 @@ ROOT = Path(__file__).resolve().parents[2]
 def test_readme_examples_execute_in_all_engines():
     text = (ROOT / 'README.md').read_text(encoding='utf-8')
     blocks = re.findall(r'```wysna\n(.*?)```', text, re.S)
-    assert len(blocks) == 5
+    assert blocks, 'The public quick start needs an executable Wysna example'
+    tutorial = sorted((ROOT / 'examples/language').glob('*.wysna'))
+    assert len(tutorial) == 5, 'Preserve the five original language-tour regressions'
+    examples = [(f'readme_{index}.wysna', source) for index, source in enumerate(blocks)]
+    examples.extend((path.name, path.read_text(encoding='utf-8')) for path in tutorial)
     selfhost_bin = ensure_selfhost_compiler_binary(str(ROOT))
     with tempfile.TemporaryDirectory(prefix='wysna-doc-contract-') as temporary:
-        for index, source in enumerate(blocks):
-            ok, detail = verify(source, f'readme_{index}.wysna', selfhost_bin, temporary, strict=True,
+        for name, source in examples:
+            ok, detail = verify(source, name, selfhost_bin, temporary, strict=True,
                                 sanitize=os.environ.get('WYSNA_SANITIZE') == '1')
             assert ok, detail
 

@@ -74,7 +74,7 @@ Before emission, an ownership pass removes copies of immutable `str` parameters 
 
 Local variables, parameters, and returns of type `int`, `float`, and `bool` use `int64_t`, `double`, and `bool`. Internal counters and predicates are scalars as well. Globals, strings, lists, tuples, structs, objects, optionals, and results still use `WVal`. Adapters convert at function-value, closure, and virtual-dispatch boundaries; runtime helpers use `WVal`; the external scalar/opaque C ABI uses its declared C widths.
 
-There are no specialized lists or unboxed payload layouts. Runtime ABI v2 stores string metadata inside its variant. The tagged value occupies 32 bytes in the measured arm64 ABI; converting a scalar to a collection element boxes it again. This is a known memory-density cost retained by the current runtime ABI. Effect classification is conservative and does not perform interprocedural purity analysis.
+There are no specialized lists or unboxed payload layouts. Runtime ABI v2 stores string metadata inside its variant. The tagged value occupies 32 bytes in the measured arm64 ABI; converting a scalar to a collection element boxes it again. This is a known memory-density cost retained by the current runtime ABI. MIR operation classification is conservative and does not prove purity. A separate read-only pass, exposed as [`wysna explain`](EFFECTS.md), computes a versioned interprocedural overapproximation over direct calls; it remains conditional on explicit runtime and bundled-host contracts, and reports indirect calls, uncontrolled FFI and missing contracts as `unknown`.
 
 ## Ranges
 

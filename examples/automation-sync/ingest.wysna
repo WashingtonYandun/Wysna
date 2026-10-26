@@ -1,0 +1,120 @@
+import "std/bytes" as utf8
+import "std/files"
+import "std/json"
+import "std/parse"
+
+extern "C" fn pilot_open() -> opaque
+extern "C" fn pilot_is_open(handle: opaque) -> bool
+extern "C" fn pilot_status(handle: opaque) -> int32
+extern "C" fn pilot_begin(handle: opaque) -> int32
+extern "C" fn pilot_insert(handle: opaque, id: int64, value: int64) -> int32
+extern "C" fn pilot_commit(handle: opaque) -> int32
+extern "C" fn pilot_rollback(handle: opaque) -> int32
+extern "C" fn pilot_record_import(handle: opaque, rows: int64, input_bytes: int64) -> int32
+extern "C" fn pilot_count(handle: opaque) -> int64
+extern "C" fn pilot_total(handle: opaque) -> int64
+extern "C" fn pilot_import_count(handle: opaque) -> int64
+extern "C" fn pilot_dispose(handle: opaque) -> int32
+extern "C" fn pilot_live_resources() -> int32
+
+struct InputError { reason: str }
+struct Input { source: str, bytes: int }
+struct DatabaseError { code: int }
+
+fn read_input(path: str) -> Input ! InputError {
+    let file = files.open(path, 0) else error { return Err(InputError { reason: "input unavailable" }) }
+    let data = file.read(65537) else error {
+        let closed = file.close()
+        return Err(InputError { reason: "input read failed" })
+    }
+    let closed = file.close()
+    let size = data.size()
+    if closed != 0 or size > 65536 {
+        data.close()
+        return Err(InputError { reason: "input exceeds 65536 bytes or close failed" })
+    }
+    let mut values: list[int] = []
+    for index in 0..size {
+        let value = data.get(index) else error {
+            data.close()
+            return Err(InputError { reason: "input buffer unavailable" })
+        }
+        values.append(value)
+    }
+    data.close()
+    let text = utf8.decode(values) else error { return Err(InputError { reason: "input is not UTF-8" }) }
+    return Input { source: text, bytes: size }
+}
+
+fn populate(database: opaque, source: str, input_bytes: int) -> int ! InputError | DatabaseError {
+    let document = json.parse_with_limits(source, 65536, 16, 10000) else error {
+        return Err(InputError { reason: "invalid JSON" })
+    }
+    let rows = json.as_array(document) else { return Err(InputError { reason: "expected an array" }) }
+    if len(rows) < 1 or len(rows) > 1000 { return Err(InputError { reason: "expected 1..1000 measurements" }) }
+    let started = pilot_begin(database)
+    if started != 0 { return Err(DatabaseError { code: started }) }
+    for row in rows {
+        let id_text = json.as_number(json.get(row, "id") ?? json.null()) ?? ""
+        let value_text = json.as_number(json.get(row, "value") ?? json.null()) ?? ""
+        let id = parse.parse_int(id_text) else error { return Err(InputError { reason: "id must be an int64" }) }
+        let value = parse.parse_int(value_text) else error { return Err(InputError { reason: "value must be an int64" }) }
+        if id < 1 or value < 0 { return Err(InputError { reason: "id must be positive and value non-negative" }) }
+        let inserted = pilot_insert(database, id, value)
+        if inserted != 0 { return Err(DatabaseError { code: inserted }) }
+    }
+    let total = pilot_total(database)
+    let total_status = pilot_status(database)
+    if total_status != 0 { return Err(DatabaseError { code: total_status }) }
+    let recorded = pilot_record_import(database, len(rows), input_bytes)
+    if recorded != 0 { return Err(DatabaseError { code: recorded }) }
+    let committed = pilot_commit(database)
+    if committed != 0 { return Err(DatabaseError { code: committed }) }
+    return len(rows)
+}
+
+fn number(value: int) -> json.Value {
+    return json.number(str(value)) else error { json.null() }
+}
+
+fn run() -> int {
+    let arguments = args()
+    if len(arguments) != 2 { eprint("usage: measurement-sync measurements.json (WYSNA_SQLITE_DB selects database)") return 2 }
+    let input = read_input(arguments[1]) else error { eprint(error.reason) return 2 }
+    let database = pilot_open()
+    if not pilot_is_open(database) {
+        eprint("database open failed", pilot_status(database))
+        let closed = pilot_dispose(database)
+        return 3
+    }
+    let imported = populate(database, input.source, input.bytes) else error {
+        match error {
+            InputError(detail) => { eprint(detail.reason) },
+            DatabaseError(detail) => { eprint("database transaction failed", detail.code) },
+        }
+        let rolled_back = pilot_rollback(database)
+        if rolled_back != 0 { eprint("rollback failed", rolled_back) }
+        -1
+    }
+    let count = pilot_count(database)
+    let count_status = pilot_status(database)
+    let total = pilot_total(database)
+    let total_status = pilot_status(database)
+    let imports = pilot_import_count(database)
+    let status = pilot_status(database)
+    let closed = pilot_dispose(database)
+    if closed != 0 or pilot_live_resources() != 0 { eprint("database cleanup failed") return 3 }
+    if imported < 0 { return 3 }
+    if count_status != 0 or total_status != 0 or status != 0 {
+        eprint("database summary or cleanup failed")
+        return 3
+    }
+    let summary = json.object({"imported": number(imported), "count": number(count),
+                              "total": number(total), "imports": number(imports),
+                              "live_resources": number(pilot_live_resources())})
+    let output = json.stringify(summary) else error { eprint("summary encoding failed") return 4 }
+    print(output)
+    return 0
+}
+
+exit(run())

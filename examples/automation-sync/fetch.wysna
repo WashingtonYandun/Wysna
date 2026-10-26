@@ -1,0 +1,32 @@
+import "std/buffer"
+import "std/http"
+import "std/json"
+
+fn run() -> int {
+    let arguments = args()
+    if len(arguments) != 3 { eprint("usage: measurement-fetch URL measurements.json") return 2 }
+    let body = new buffer.Bytes()
+    let response = http.request(arguments[1], "GET", [], body, 5000, 65536) else error {
+        body.close()
+        eprint("HTTP request failed", error.code)
+        return 3
+    }
+    body.close()
+    let text = http.response_text(response) else error {
+        response.body.close()
+        eprint("HTTP body is not UTF-8")
+        return 3
+    }
+    response.body.close()
+    if response.status != 200 { eprint("HTTP status rejected", response.status) return 3 }
+    let document = json.parse_with_limits(text, 65536, 16, 10000) else error {
+        eprint("HTTP body is not valid bounded JSON")
+        return 4
+    }
+    let rows = json.as_array(document) else { eprint("HTTP body must be an array") return 4 }
+    if len(rows) < 1 or len(rows) > 1000 { eprint("expected 1..1000 measurements") return 4 }
+    write_file(arguments[2], text) else error { eprint("output file unavailable", error) return 5 }
+    return 0
+}
+
+exit(run())

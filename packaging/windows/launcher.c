@@ -4,6 +4,9 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <wchar.h>
+#ifndef WYSNA_ENTRYPOINT
+#define WYSNA_ENTRYPOINT L"main.py"
+#endif
 
 static int report_error(const wchar_t *operation) {
     DWORD error = GetLastError();
@@ -46,8 +49,8 @@ int wmain(void) {
         return 1;
     }
     swprintf(python, wcslen(root) + 32, L"%ls\\python\\python.exe", root);
-    swprintf(command, capacity, L"\"%ls\" -I -B -X utf8 \"%ls\\main.py\" %ls",
-             python, root, tail);
+    swprintf(command, capacity, L"\"%ls\" -I -B -X utf8 \"%ls\\%ls\" %ls",
+             python, root, WYSNA_ENTRYPOINT, tail);
     STARTUPINFOW startup = {0};
     PROCESS_INFORMATION process = {0};
     startup.cb = sizeof(startup);

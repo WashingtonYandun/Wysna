@@ -93,12 +93,15 @@ The [native SDK](NATIVE_SDK.md) packages the native engine, runtime, stdlib and 
 
 Installed wheels contain Wysna Seed, its C runtime header and the standard library;
 Python remains a prerequisite. Wysna Compiler bootstrap, `wysna test` and `wysna bench`
-require a source checkout. The standalone Windows installer includes a private Python
-runtime and Zig as the C99 toolchain for Wysna Seed; it needs no virtual environment or
-host C SDK. It is tested separately from the wheel, including installation, repair, and
-uninstallation. Its initial scope is Windows 10/11 x64; external FFI libraries are not
-included. CI generation does not by itself establish a published, signed, or manually
-validated release.
+require a source checkout. The [standalone Seed distribution](SEED_DISTRIBUTION.md)
+builds a portable installation with a private CPython and Zig as the C99 toolchain for
+macOS arm64, Linux x64 and Windows x64; it needs no virtual environment or host C SDK.
+Its launcher verifies the required components before importing Seed, and
+`wysna doctor` verifies the complete installed file index. External FFI libraries are
+not included. The Windows bundle also has an Inno Setup lifecycle test covering
+installation, repair and uninstallation. macOS and Linux distribution assembly is not
+yet a separate CI acceptance gate, and CI generation does not by itself establish a
+published, signed, or manually validated release.
 Missing Wysna Compiler sources produce `W2013` before any bootstrap-cache write. Wysna
 Seed native builds require a host C99 toolchain; an unavailable or invalid compiler command produces
 `W5001` with stage `toolchain`, rather than an internal compiler error. This checks
@@ -206,7 +209,7 @@ limits remain part of the published scope:
 
 | Finding | Status in 0.5.0 | Remaining work |
 | :--- | :--- | :--- |
-| W01 · Compiler architecture | Seed uses AST/HIR/MIR; Compiler isolates state per compilation and lowers checked nodes for its experimental MIR profile. Its broader direct C99 route still consumes expanded tokens and checked metadata. | Extend Compiler MIR through nominal/error-union payloads, collections, resources and modules, then provide a native consumer and distribution. |
+| W01 · Compiler architecture | Seed uses AST/HIR/MIR; Compiler uses one checked-node → verified MIR → C99 pipeline under `native-core-v1` and ships a native SDK. Parameterized classes/interfaces, unresolved generic nominal values, library-mode exports and WASM targets remain explicit profile limits. | Extend the Compiler MIR/profile to those constructs and keep independent parity and installed-acceptance gates. |
 | W03 · Value size | On a 64-bit ABI, `WVal` occupies 32 bytes; list slots store full tagged values. | Measure a compact representation with explicit runtime and FFI compatibility. |
 | W04 · CoW cost | Mutating a shared buffer can copy all of its elements. No uniqueness analysis proves that it can be mutated in place. | Measure memory pressure and design a verifiable uniqueness rule before changing ownership or the ABI. |
 | W05 · Generics | A generic function body is checked when a specialization is created. A generic function that is never instantiated may not receive the same body checking. | Separate generic body checking from type substitution without losing concrete diagnostics. |

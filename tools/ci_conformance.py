@@ -18,7 +18,7 @@ def source_fingerprint(root=ROOT):
     """Bind evidence to the commit and exact source, fixture and harness bytes."""
     roots = ('checker', 'codegen', 'common', 'compiler', 'error', 'formatter', 'hir',
              'lexer', 'mir', 'node', 'parser', 'runtime', 'selfhost/src', 'stdlib',
-             'tooling', 'tools', 'tests', 'examples', 'tokens', 'bench', 'packaging')
+             'tooling', 'tools', 'tests', 'examples', 'tokens', 'bench', 'packaging', 'project')
     suffixes = {'.py', '.wysna', '.c', '.h', '.def', '.expected', '.json', '.txt'}
     paths = {path for name in roots for path in (root / name).rglob('*')
              if path.is_file() and path.suffix in suffixes
@@ -27,7 +27,7 @@ def source_fingerprint(root=ROOT):
     paths.update(root / name for name in ('main.py', 'wysna', 'run_conformance.py', 'selfhost/compiler.wysna',
                                          'SPEC.md', 'README.md', 'docs/STDLIB.md', 'docs/OWNERSHIP_LIFETIME.md',
                                          'docs/KNOWN_LIMITS.md', 'docs/SERVICE_FOUNDATIONS.md',
-                                         'pyproject.toml', '.github/workflows/ci.yml',
+                                         'pyproject.toml', '.gitattributes', '.github/workflows/ci.yml',
                                          'runtime/wysna_host.h', 'runtime/wysna_runtime.h')
                  if (root / name).is_file())
     inputs = {path.relative_to(root).as_posix(): hashlib.sha256(path.read_bytes()).hexdigest()

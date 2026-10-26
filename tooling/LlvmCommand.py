@@ -19,17 +19,18 @@ def run_llvm_command(service, checked, command, ir_path, binary_path, profile,
         raise WysnaError("Conflicting LLVM command outputs", code="W5002", stage="options")
     if command in ('check', 'emit-llvm') and (sanitize or link_libraries):
         raise WysnaError('Link inputs and sanitizers are build/run options', code='W5002', stage='options')
+    toolchain = LlvmToolchain(profile=profile)
     if command == 'run':
         if ir_path is not None or binary_path is not None or json_v1:
             raise WysnaError('LLVM run does not accept output artifacts or JSON stdout', code='W5002', stage='options')
         from compiler.NativeExecution import run_native
         from runtime.ExecutionContext import ExecutionContext
         from tooling.RunReport import _set_run_report
-        emission = service.emit_llvm(checked, profile=profile)
+        emission = service.emit_llvm(checked, profile=profile, toolchain=toolchain)
         if report_state is not None:
             report_state['target'] = {'profile': emission.target.source_profile, 'triple': emission.target.triple}
         with tempfile.TemporaryDirectory(prefix='wysna-llvm-run-') as temporary:
-            build = LlvmToolchain(profile=profile).build(emission, Path(temporary) / 'program',
+            build = toolchain.build(emission, Path(temporary) / 'program',
                                                        sanitize=sanitize, link_libraries=link_libraries)
             execution = run_native(build.output_path, execution_context or ExecutionContext.for_program('wysna'), run_timeout_ms)
         if execution.exit_code is not None:
@@ -42,13 +43,12 @@ def run_llvm_command(service, checked, command, ir_path, binary_path, profile,
                         execution={'kind': kind, 'exit_code': None, 'signal': execution.signal,
                                    'data': {'timeout_ms': run_timeout_ms}})
         return 5 if report_state is not None else code
-    emission = service.emit_llvm(checked, profile=profile)
+    emission = service.emit_llvm(checked, profile=profile, toolchain=toolchain)
     timings = dict(emission.timing_ms)
     artifacts = []
     build = None
     target = {"profile": emission.target.source_profile, "triple": emission.target.triple}
     if command != "check":
-        toolchain = LlvmToolchain(profile=profile)
         if command == "emit-llvm":
             output = toolchain.write_ir(emission, ir_path)
             artifacts.append(artifact_file("llvm_ir", "text/x-llvm", output))
