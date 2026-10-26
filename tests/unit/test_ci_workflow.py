@@ -1,5 +1,6 @@
 """Preserve CI coverage while assigning contracts and conformance separate budgets."""
 import os
+from itertools import product
 from pathlib import Path
 import re
 import subprocess
@@ -31,6 +32,12 @@ def test_ci_workflow_contracts():
     jobs = {heading.group(1): body[heading.end():headings[index + 1].start()
                                   if index + 1 < len(headings) else len(body)]
             for index, heading in enumerate(headings)}
+    llvm = jobs['llvm-experimental']
+    assert 'os: [ubuntu-latest, macos-latest]' in llvm
+    assert 'needs: wheel-build' in llvm
+    assert 'python -m tests.unit.test_llvm_backend -v' in llvm
+    assert 'python tools/validate_llvm_install.py' in llvm
+    assert '${wheel}[llvm]' in llvm
     native_build, native_consumer = jobs['native-sdk-build'], jobs['installed-native-sdk']
     for job in (native_build, native_consumer):
         assert 'os: [ubuntu-latest, macos-latest, windows-latest]' in job
@@ -78,22 +85,21 @@ def test_ci_workflow_contracts():
     assert {os_name + ',' + compiler for os_name, compiler in rows} == MATRIX
     assert len(rows) == len(MATRIX)
     assert 'name: Conformance (${{ matrix.os }}, ${{ matrix.cc }})' in conformance
-    assert re.search(r'^    needs: \[compiler-contracts, runtime-conformance, integration-conformance\]$', conformance, re.MULTILINE)
+    assert re.search(r'^    needs: \[compiler-contracts, runtime-conformance, integration-conformance, llvm-experimental\]$', conformance, re.MULTILINE)
     assert re.search(r'^    if: always\(\)$', conformance, re.MULTILINE)
     match = re.search(r'- name: Require compiler, runtime and integration conformance success\n[\s\S]*?        run: \|\n'
                       r'((?:          [^\n]*\n)+)', conformance)
     assert match, 'Required conformance statuses must reject failed or skipped contracts'
     script = '\n'.join(line[10:] for line in match.group(1).splitlines())
     statuses = ('success', 'failure', 'cancelled', 'skipped')
-    for contract_status in statuses:
-        for runtime_status in statuses:
-            for integration_status in statuses:
-                result = subprocess.run(
-                    ['bash', '-c', script], capture_output=True, text=True,
-                    env=dict(os.environ, CONTRACT_RESULT=contract_status, RUNTIME_RESULT=runtime_status,
-                             INTEGRATION_RESULT=integration_status), timeout=10)
-                assert (result.returncode == 0) == (contract_status == runtime_status == integration_status == 'success'), (
-                    contract_status, runtime_status, integration_status, result)
+    for results in product(statuses, repeat=4):
+        contract_status, runtime_status, integration_status, llvm_status = results
+        result = subprocess.run(
+            ['bash', '-c', script], capture_output=True, text=True,
+            env=dict(os.environ, CONTRACT_RESULT=contract_status, RUNTIME_RESULT=runtime_status,
+                     INTEGRATION_RESULT=integration_status, LLVM_RESULT=llvm_status), timeout=10)
+        assert (result.returncode == 0) == all(status == 'success' for status in results), (results, result)
+
 
 
 

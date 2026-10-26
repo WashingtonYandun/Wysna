@@ -1,0 +1,375 @@
+"""Executable parity and failure contracts for the optional LLVM source profile.
+
+Run explicitly with the pinned LLVM extra; missing LLVM is a test failure.
+"""
+import builtins
+from contextlib import redirect_stdout, redirect_stderr
+from dataclasses import replace
+import io
+import json
+import os
+import platform
+from pathlib import Path
+import subprocess
+import sys
+import tempfile
+import unittest
+from unittest.mock import patch
+
+from common.Platform import compiler_command
+from compiler.CompilerService import CompilerService
+from compiler.LlvmToolchain import LlvmToolchain, protect_output
+from compiler.NativeToolchain import NativeCompilationError, NativeToolchain
+from error.Error import WysnaError
+from mir.LlvmCodeGen import LlvmCodeGen
+from mir.Nodes import dump
+from tooling.SourceCommand import run_pipeline
+
+ROOT = Path(__file__).resolve().parents[2]
+PROGRAMS = {
+    'control': '''
+let mut count = 0
+fn tick() -> bool { count = count + 1; true }
+fn fib(n: int) -> int { if n < 2 { n } else { fib(n - 1) + fib(n - 2) } }
+let a = false and tick()
+let b = true or tick()
+print(a, b, count, fib(10))
+let mut total = 0
+for x in -3..=3 { if x == 0 { continue }; total = total + x; if x == 2 { break } }
+let mut n = 0
+while n < 3 { n = n + 1; total = total + n }
+print(total)
+''',
+    'integers': '''
+let max = 9223372036854775807
+let min = -9223372036854775808
+print(max + 1, min - 1, max * 2, -min)
+print(min / -1, min % -1, -7 / 3, -7 % 3)
+print(7 < 8, 7 <= 7, 8 > 7, 8 >= 8, 7 == 7, 7 != 8)
+''',
+    'strings': '''
+fn decorate(value: str) -> str { "[" + value + "]" }
+fn recurse(n: int, value: str) -> str {
+    if n == 0 { value } else { recurse(n - 1, value + "x") }
+}
+let mut n = 0
+let mut text = ""
+while n < 30 {
+    text = if n % 2 == 0 { decorate(str(n)) } else { recurse(3, "hé") }
+    n = n + 1
+}
+print(text, len(text), chr(233), ord("é"))
+print("a\0b", len("a\0b"), "é" == "é", "same" == "same", "a" != "b")
+print(int("42"), int(3.9), float("2.5"), str(true))
+eprint("stderr", decorate("ok"))
+''',
+    'floats': '''
+let x = float("nan")
+let inf = float("inf")
+print(x == x, x != x, x < 0.0, x <= 0.0, x > 0.0, x >= 0.0)
+print(inf > 0.0, -inf < 0.0, -0.0 == 0.0)
+print(2.5 + 1.5, 2.5 - 1.0, 2.5 * 2.0, 5.0 / 2.0, -2.5)
+''',
+    'unit': '''
+fn nothing(value: unit) -> unit { value }
+let value = nothing(print())
+print(value, value == nothing(print()), not false, true == false)
+print()
+''',
+}
+
+
+class LlvmBackendTests(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls):
+        cls.toolchain = LlvmToolchain()
+
+    def setUp(self):
+        self.temporary = tempfile.TemporaryDirectory(prefix='wysna llvm ü ')
+        self.addCleanup(self.temporary.cleanup)
+        self.directory = Path(self.temporary.name).resolve()
+
+    def checked(self, source):
+        file = self.directory / 'main.wysna'
+        file.write_text(source, encoding='utf-8')
+        service = CompilerService(project_root=str(self.directory))
+        return service, service.check_file(file)
+
+    def execute(self, path):
+        return subprocess.run([str(path)], capture_output=True, timeout=20,
+                              env={**os.environ, 'WYSNA_MEM_CHECK': '1'})
+
+    def c99(self, service, checked):
+        result = NativeToolchain(ROOT).build(service.emit_c(checked).source, self.directory / 'c99')
+        return self.execute(result.output_path)
+
+    def test_executable_parity_at_every_optimization_level(self):
+        for name, source in PROGRAMS.items():
+            service, checked = self.checked(source)
+            reference = self.c99(service, checked)
+            self.assertEqual(reference.returncode, 0, (name, reference.stderr))
+            output = io.StringIO()
+            error = io.StringIO()
+            with redirect_stderr(error):
+                service.interpret(checked, stdout=output)
+            self.assertEqual(reference.stdout.decode(), output.getvalue(), name)
+            for profile in ('dev', 'release', 'size'):
+                with self.subTest(program=name, profile=profile):
+                    emission = service.emit_llvm(checked, profile=profile)
+                    toolchain = LlvmToolchain(profile=profile)
+                    result = toolchain.build(emission, self.directory / ('llvm-' + profile))
+                    actual = self.execute(result.output_path)
+                    self.assertEqual((actual.returncode, actual.stdout, actual.stderr),
+                                     (reference.returncode, reference.stdout, reference.stderr))
+                    self.assertGreater(result.timing_ms['object_emit'], 0)
+                    self.assertTrue(result.c_compiler_version)
+
+    def test_explicit_application_exit_matches_c99(self):
+        for code in (0, 7):
+            service, checked = self.checked('print("before")\nexit(' + str(code) + ')\nprint("unreachable")\n')
+            reference = self.c99(service, checked)
+            self.assertEqual((reference.returncode, reference.stdout), (code, b'before\n'))
+            emission = service.emit_llvm(checked)
+            build = self.toolchain.build(emission, self.directory / 'exit-program')
+            actual = self.execute(build.output_path)
+            self.assertEqual((actual.returncode, actual.stdout, actual.stderr),
+                             (reference.returncode, reference.stdout, reference.stderr))
+
+    def test_runtime_faults_match_c99_including_source_locations(self):
+        for expression in ('4 / 0', '4 % 0', '4.0 / -0.0', 'chr(1 / 1 + 1114112)'):
+            service, checked = self.checked('fn fail() -> unit { print(' + expression + ') }\nfail()\n')
+            reference = self.c99(service, checked)
+            self.assertNotEqual(reference.returncode, 0)
+            self.assertIn(b'W4', reference.stderr)
+            for profile in ('dev', 'release', 'size'):
+                with self.subTest(expression=expression, profile=profile):
+                    emission = service.emit_llvm(checked, profile=profile)
+                    build = LlvmToolchain(profile=profile).build(emission, self.directory / 'fault')
+                    actual = self.execute(build.output_path)
+                    self.assertEqual((actual.returncode, actual.stdout, actual.stderr),
+                                     (reference.returncode, reference.stdout, reference.stderr))
+
+    def test_existing_scalar_corpus_and_range_limits(self):
+        for name in ('arithmetic', 'comparisons', 'recursion', 'generic_function',
+                     'audit_bool_conversion', 'range_loop', 'range_inclusive',
+                     'mir_range_overflow', 'mir_range_limit'):
+            with self.subTest(fixture=name):
+                service = CompilerService()
+                checked = service.check_file(ROOT / 'tests/runtime' / (name + '.wysna'))
+                reference = self.c99(service, checked)
+                emission = service.emit_llvm(checked, profile='release')
+                build = LlvmToolchain(profile='release').build(emission, self.directory / 'corpus')
+                actual = self.execute(build.output_path)
+                self.assertEqual((actual.returncode, actual.stdout, actual.stderr),
+                                 (reference.returncode, reference.stdout, reference.stderr))
+
+    def test_runtime_bridge_layout_and_sanitizer_contract(self):
+        service, checked = self.checked(PROGRAMS['strings'])
+        emission = service.emit_llvm(checked)
+        object_bytes, _ = self.toolchain.object(emission.source)
+        program = self.directory / 'program.o'
+        program.write_bytes(object_bytes)
+        runtime = ROOT / 'runtime/wysna_llvm_runtime.c'
+        compiler = compiler_command()
+        common = self.toolchain.host_flags + ['-std=c99', '-O1', '-g', '-I' + str(ROOT),
+                                              '-DWYSNA_LLVM_EXPECTED_ABI=1', '-DWYSNA_LLVM_LITERAL_BYTES=48', '-DWYSNA_LLVM_ALIGNMENT=8']
+        invalid = subprocess.run(compiler + common + ['-DWYSNA_LLVM_VALUE_BYTES=8', '-c', str(runtime),
+                                                       '-o', str(self.directory / 'bad.o')],
+                                 capture_output=True, text=True, timeout=60)
+        self.assertNotEqual(invalid.returncode, 0)
+        self.assertIn('WysnaLlvmValueSize', invalid.stderr)
+        output = self.directory / 'sanitized'
+        result = subprocess.run(compiler + common + ['-DWYSNA_LLVM_VALUE_BYTES=32',
+                                '-fsanitize=address,undefined', '-fno-sanitize-recover=all',
+                                str(runtime), str(program), '-lm', '-o', str(output)],
+                                capture_output=True, text=True, timeout=60)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        expected = self.c99(service, checked)
+        actual = self.execute(output)
+        self.assertEqual((actual.returncode, actual.stdout, actual.stderr),
+                         (expected.returncode, expected.stdout, expected.stderr))
+
+    def test_debug_symbols_survive_temporary_object_cleanup(self):
+        service, checked = self.checked('fn twice(value: int) -> int { value * 2 }\nprint(twice(21))\n')
+        emission = service.emit_llvm(checked)
+        build = self.toolchain.build(emission, self.directory / 'debug-program')
+        self.assertFalse(list(self.directory.glob('.wysna-llvm-*')))
+        if platform.system() == 'Darwin':
+            self.assertTrue(Path(build.debug_symbols).is_file())
+            verified = subprocess.run(['xcrun', 'dwarfdump', '--verify', build.debug_symbols],
+                                      capture_output=True, text=True, timeout=30)
+            self.assertEqual(verified.returncode, 0, verified.stderr + verified.stdout)
+            lookup = subprocess.run(['lldb', '--batch', '-o', 'target create "' + build.output_path + '"',
+                                     '-o', 'breakpoint set --file main.wysna --line 1'],
+                                    capture_output=True, text=True, timeout=30)
+            self.assertEqual(lookup.returncode, 0, lookup.stderr + lookup.stdout)
+            self.assertNotIn('no locations', lookup.stdout)
+            self.assertNotIn('pending', lookup.stdout)
+            self.assertIn('Breakpoint 1:', lookup.stdout)
+        else:
+            lines = subprocess.run(['readelf', '--debug-dump=decodedline', build.output_path],
+                                   capture_output=True, text=True, timeout=30)
+            self.assertEqual(lines.returncode, 0, lines.stderr)
+            self.assertIn('main.wysna', lines.stdout)
+        # Rebuilding replaces the matching bundle together with the binary.
+        self.toolchain.build(emission, self.directory / 'debug-program')
+        self.assertEqual(self.execute(build.output_path).stdout, b'42\n')
+
+    def test_import_snapshot_and_ir_consumer_isolation(self):
+        library = self.directory / 'library.wysna'
+        library.write_text('pub fn wrap(value: str) -> str { "<" + value + ">" }\n')
+        service, checked = self.checked('import "library.wysna"\nprint(library.wrap("ok"))\n')
+        module = service.lower_mir(checked)
+        before = dump(module)
+        generator = LlvmCodeGen(checked._interner)
+        options = {'triple': self.toolchain.target.triple, 'data_layout': self.toolchain.target.data_layout}
+        first = generator.generate(module, **options)
+        self.assertEqual(first, generator.generate(module, **options))
+        self.assertEqual(dump(module), before)
+        self.assertIn('!DIFile(filename: "library.wysna"', first)
+        self.assertIn('!DILocation(line:', first)
+        self.assertNotIn('nsw ', first)
+        self.assertNotIn('nuw ', first)
+        emission = service.emit_llvm(checked)
+        self.assertIn(str(library), emission.source_files)
+        binary = self.toolchain.build(emission, self.directory / 'import')
+        self.assertEqual(self.execute(binary.output_path).stdout, b'<ok>\n')
+        alias = self.directory / 'dependency-output'
+        alias.hardlink_to(library)
+        original = library.read_bytes()
+        for output in (library, alias):
+            with self.assertRaises(WysnaError) as caught:
+                self.toolchain.build(emission, output)
+            self.assertEqual(caught.exception.code, 'W5002')
+        self.assertEqual(library.read_bytes(), original)
+
+    def test_unsupported_profile_never_falls_back(self):
+        for source in ('print([1, 2])', 'class Box { value: int }\nprint(1)',
+                       'print([1, 2, 3][0])'):
+            service, checked = self.checked(source)
+            with patch.object(service, 'emit_c', side_effect=AssertionError('C fallback')):
+                with self.assertRaises(WysnaError) as caught:
+                    service.emit_llvm(checked)
+            self.assertEqual(caught.exception.code, 'W2013')
+
+    def test_malformed_mir_and_llvm_are_controlled_errors(self):
+        service, checked = self.checked('print(1 + 2)')
+        module = service.lower_mir(checked)
+        module.functions[0].blocks[0].operations[0].opcode = 'invalid'
+        with self.assertRaises(WysnaError) as caught:
+            LlvmCodeGen(checked._interner).generate(module, triple=self.toolchain.target.triple,
+                                                   data_layout=self.toolchain.target.data_layout)
+        self.assertEqual(caught.exception.code, 'W9999')
+        with self.assertRaises(NativeCompilationError):
+            self.toolchain.verify('define void @broken( {')
+        emission = service.emit_llvm(checked)
+        with self.assertRaises(NativeCompilationError):
+            self.toolchain.verify(emission.source.replace(self.toolchain.target.triple, 'wasm32-unknown-unknown'))
+
+    def test_failed_build_preserves_existing_output(self):
+        service, checked = self.checked('print(42)')
+        emission = service.emit_llvm(checked)
+        output = self.directory / 'existing'
+        output.write_bytes(b'previous artifact')
+        with patch('compiler.LlvmToolchain.compiler_command', return_value=['/missing/wysna-cc']):
+            with self.assertRaises(NativeCompilationError):
+                self.toolchain.build(emission, output)
+        self.assertEqual(output.read_bytes(), b'previous artifact')
+        self.assertFalse(list(self.directory.glob('.wysna-llvm-*')))
+        with self.assertRaises(WysnaError):
+            protect_output(checked.source.file, emission.source_files)
+        with self.assertRaises(NativeCompilationError):
+            self.toolchain.write_ir(replace(emission, source='invalid'), output)
+        self.assertEqual(output.read_bytes(), b'previous artifact')
+
+    def test_debug_publication_failure_preserves_previous_artifacts(self):
+        if platform.system() != 'Darwin':
+            with patch('compiler.LlvmToolchain.platform.system', return_value='Windows'):
+                with self.assertRaises(WysnaError) as caught:
+                    LlvmToolchain()
+            self.assertEqual(caught.exception.code, 'W2013')
+            return
+        service, checked = self.checked('print(42)')
+        emission = service.emit_llvm(checked)
+        output = self.directory / 'published'
+        first = self.toolchain.build(emission, output)
+        executable = output.read_bytes()
+        symbols = Path(first.debug_symbols).read_bytes()
+        run = subprocess.run
+        def reject_symbols(command, **options):
+            if command[0] == 'xcrun':
+                return subprocess.CompletedProcess(command, 1, stdout='', stderr='debug tool unavailable')
+            return run(command, **options)
+        with patch('compiler.LlvmToolchain.subprocess.run', side_effect=reject_symbols):
+            with self.assertRaises(NativeCompilationError):
+                self.toolchain.build(emission, output)
+        self.assertEqual(output.read_bytes(), executable)
+        self.assertEqual(Path(first.debug_symbols).read_bytes(), symbols)
+        collision = self.directory / 'collision'
+        bundle = Path(str(collision) + '.dSYM')
+        bundle.mkdir()
+        note = bundle / 'user-file'
+        note.write_text('preserve this directory')
+        with self.assertRaises(WysnaError):
+            self.toolchain.build(emission, collision)
+        self.assertEqual(note.read_text(), 'preserve this directory')
+        self.assertFalse(collision.exists())
+
+    def test_optional_dependency_and_version_are_explicit(self):
+        original = builtins.__import__
+        def without_llvm(name, *args, **kwargs):
+            if name.startswith('llvmlite'):
+                raise ImportError('LLVM intentionally unavailable')
+            return original(name, *args, **kwargs)
+        with patch('builtins.__import__', side_effect=without_llvm):
+            service, checked = self.checked('print(1)')
+            self.assertIn('wysna_program', service.emit_c(checked).source)
+            with self.assertRaises(NativeCompilationError) as caught:
+                service.emit_llvm(checked)
+            self.assertIn('optional LLVM', caught.exception.stderr)
+        with patch('llvmlite.__version__', '0.0.0'):
+            with self.assertRaises(NativeCompilationError):
+                LlvmToolchain()
+
+    def cli(self, *args):
+        return subprocess.run([sys.executable, str(ROOT / 'main.py'), *map(str, args)],
+                              capture_output=True, text=True, timeout=60, cwd=ROOT)
+
+    def test_cli_outputs_and_rejected_combinations(self):
+        service, checked = self.checked('print("CLI", 42)')
+        source = checked.source.file
+        for command in ('check', 'emit-llvm', 'build'):
+            with self.subTest(command=command):
+                output = self.directory / ('artifact.ll' if command == 'emit-llvm' else 'artifact')
+                args = [command, '--backend=llvm-experimental', '--output-format=json-v1', source]
+                if command != 'check':
+                    args.extend(['-o', output])
+                result = self.cli(*args)
+                self.assertEqual(result.returncode, 0, result.stderr + result.stdout)
+                envelope = json.loads(result.stdout)
+                self.assertEqual(envelope['target']['profile'], 'llvm-scalar-v1')
+                self.assertEqual(envelope['status'], 'ok')
+                self.assertEqual(result.stderr, '')
+                if command == 'build':
+                    self.assertEqual(self.execute(output).stdout, b'CLI 42\n')
+                if command == 'emit-llvm':
+                    self.toolchain.verify(output.read_text())
+        for args in ([ 'run', '--backend=llvm-experimental'],
+                     ['emit-c', '--backend=llvm-experimental'],
+                     ['build', '--backend=llvm-experimental', '--sanitize'],
+                     ['build', '--backend=llvm-experimental', '--link-lib', 'foreign'],
+                     ['build', '--profile=release'], ['emit-llvm', '--backend=hir'],
+                     ['build', '--backend=llvm-experimental', '--profile=fast']):
+            with self.subTest(args=args):
+                result = self.cli(*args, source, '--output-format=json-v1')
+                self.assertEqual(result.returncode, 2, result.stderr + result.stdout)
+                self.assertEqual(json.loads(result.stdout)['diagnostics'][0]['code'], 'W5002')
+        result = self.cli('check', '--backend=llvm-experimental', '--stats', source)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(json.loads(result.stdout)['target']['llvm_version'], [20, 1, 8])
+        with redirect_stderr(io.StringIO()):
+            self.assertEqual(run_pipeline('print(1)', backend='llvm-experimental', use_selfhost=True), 1)
+
+
+if __name__ == '__main__':
+    unittest.main()

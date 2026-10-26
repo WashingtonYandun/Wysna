@@ -153,7 +153,7 @@ class ArchitectureContractTests(unittest.TestCase):
         self.assertTrue(internal)
         for name in internal:
             self.assertEqual(source.count('#include "' + name + '"'), 1, name)
-        self.assertIn('runtime = ["*.h"]', (ROOT / 'pyproject.toml').read_text())
+        self.assertIn('runtime = ["*.h", "wysna_llvm_runtime.c"]', (ROOT / 'pyproject.toml').read_text())
 
     def test_dispatchers_preserve_stack_depth_and_instantiation_owns_algorithms(self):
         import sys

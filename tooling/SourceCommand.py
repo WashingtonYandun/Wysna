@@ -84,12 +84,16 @@ def run_pipeline(
     report_state=None,
     project_root=None,
     project_resolver=None,
+    emit_llvm_path=None,
+    optimization_profile="dev",
 ) -> int:
     if tool_command is None:
         if check_only:
             tool_command = "check"
         elif fmt_only:
             tool_command = "fmt"
+        elif emit_llvm_path is not None:
+            tool_command = "emit-llvm"
         elif emit_c_path is not None:
             tool_command = "emit-c"
         elif build_bin_path is not None:
@@ -97,6 +101,14 @@ def run_pipeline(
         else:
             tool_command = "run"
     try:
+        if backend == "llvm-experimental":
+            if (use_selfhost or use_hir is not None or show_tokens or show_ast or show_mir
+                    or fmt_only or fmt_write or emit_c_path is not None or sanitize
+                    or link_libraries or json_diagnostics or report_state is not None
+                    or tool_command not in ("check", "emit-llvm", "build")):
+                raise WysnaError("Unsupported option for llvm-experimental", code="W5002", stage="options")
+        elif emit_llvm_path is not None or optimization_profile != "dev":
+            raise WysnaError("LLVM options require llvm-experimental", code="W5002", stage="options")
         # Resolve legacy flags if passed explicitly
         if use_selfhost:
             backend = "selfhost"
@@ -166,6 +178,11 @@ def run_pipeline(
             t_check0 = time.perf_counter()
             checked = service.check_parsed(parsed)
             check_ms = (time.perf_counter() - t_check0) * 1000.0
+
+        if backend == "llvm-experimental":
+            from tooling.LlvmCommand import run_llvm_command
+            return run_llvm_command(service, checked, tool_command, emit_llvm_path,
+                                    build_bin_path, optimization_profile, json_v1, show_stats)
 
         if show_mir:
             from mir.Nodes import dump
