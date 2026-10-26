@@ -29,7 +29,7 @@ fn checked_records(context: SemanticContext) -> list[CheckedRecord] {
             }
             let mut names: list[str] = []
             let generic = sem_generic_type(context, type_.name)
-            if generic >= 0 { names = context.generic_types[generic].params }
+            if generic >= 0 { sem_require_nominal_budget(context, id) names = context.generic_types[generic].params }
             let mut owner_index = len(lineage) - 1
             while owner_index >= 0 {
                 let owner_name = lineage[owner_index]

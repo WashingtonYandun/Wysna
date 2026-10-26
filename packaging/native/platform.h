@@ -24,10 +24,17 @@ static int sdk_join(char* output, const char* directory, const char* name) {
 static int sdk_parent(char* output, const char* path) {
     if (!sdk_copy(output, path)) return 0;
     char* boundary = NULL;
-    for (char* current = output; *current; current++)
-        if (*current == '/' || *current == '\\') boundary = current;
+    for (char* current = output; *current; current++) {
+        if (*current == '/') boundary = current;
+#ifdef _WIN32
+        if (*current == '\\') boundary = current;
+#endif
+    }
     if (!boundary) return sdk_copy(output, ".");
     if (boundary == output) boundary[1] = 0;
+#ifdef _WIN32
+    else if (boundary == output + 2 && output[1] == ':') boundary[1] = 0;
+#endif
     else *boundary = 0;
     return 1;
 }

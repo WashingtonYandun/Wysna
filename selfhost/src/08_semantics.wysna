@@ -130,6 +130,42 @@ fn sem_error_channel_assignable(context: SemanticContext, source: int, target: i
     }
     return true
 }
+# Equality follows stored payloads; class and weak identity remain comparable.
+fn sem_equality_value(context: SemanticContext, root: int) -> bool {
+    let mut pending: list[int] = [root]
+    let mut seen: list[int] = []
+    while len(pending) > 0 {
+        let id = pending.pop()
+        let mut visited = false
+        for previous in seen { if previous == id { visited = true } }
+        if not visited {
+            seen.append(id)
+            let type_ = context.types[id]
+            if type_.kind == "function" { return false }
+            if type_.kind == "struct" or type_.kind == "enum" {
+                let mut names: list[str] = []
+                let generic = sem_generic_type(context, type_.name)
+                if generic >= 0 {
+                    sem_require_nominal_budget(context, id)
+                    names = context.generic_types[generic].params
+                    if len(type_.args) != len(names) { sem_error(context, "W2013", "nominal equality requires an explicit type context") }
+                }
+                for field in context.fields {
+                    if field.owner == type_.name { pending.append(sem_substitute_type(context, field.type_id, names, type_.args)) }
+                }
+                for i in 0..len(context.variants) {
+                    if context.types[context.variant_types[i]].name == type_.name {
+                        for payload in context.variant_payloads[i] { pending.append(sem_substitute_type(context, payload, names, type_.args)) }
+                    }
+                }
+            } elif type_.kind == "list" or type_.kind == "optional" or type_.kind == "tuple" or type_.kind == "result" or type_.kind == "error_union" or type_.kind == "dict" or type_.kind == "ok" or type_.kind == "err" {
+                for child in type_.args { pending.append(child) }
+            }
+        }
+    }
+    return true
+}
+
 fn sem_assignable(context: SemanticContext, source: int, target: int) -> bool {
     if source == target { return true }
     if sem_defer(context, "assignable", [source, target]) { return true }
@@ -1227,6 +1263,7 @@ fn sem_expression(context: SemanticContext, minimum: int, allow_struct: bool) ->
             } elif operator == "EQ" or operator == "NEQ" {
                 let left_kind = sem_kind(context, left.type_id)
                 let right_kind = sem_kind(context, right.type_id)
+                if not sem_defer(context, "equality", [left.type_id, right.type_id]) and (not sem_equality_value(context, left.type_id) or not sem_equality_value(context, right.type_id)) { sem_error(context, "W2001", "function payloads do not support value equality") }
                 let result_pair = (left_kind == "ok" or left_kind == "err") and (right_kind == "ok" or right_kind == "err")
                 if not result_pair and not sem_assignable(context, left.type_id, right.type_id) and not sem_assignable(context, right.type_id, left.type_id) { sem_error(context, "W2001", "equality types") }
                 left = sem_value(context.boolean_type)

@@ -96,8 +96,10 @@ three-stage bootstrap, four-engine differential tests, ownership sanitizers and
 installed-wheel checks remain necessary; structural checks do not replace them.
 
 
-CI gives compiler/tooling contracts and executable conformance separate job budgets
-on the same platform/compiler matrix. Required conformance statuses reject failed,
-cancelled or skipped contract jobs explicitly; the split preserves every test,
-release fixture, bootstrap stage and sanitizer check. Workflow contracts enforce
-coverage and failure propagation without extending the execution time limit.
+CI gives compiler/tooling contracts, full runtime conformance and integration
+conformance separate job budgets on the same platform/compiler matrix. Compiler
+contracts and full runtime conformance run independently; integration conformance
+rejects failed, cancelled or skipped prerequisite jobs explicitly. The split
+preserves every test, release fixture, bootstrap stage and sanitizer check.
+Workflow contracts enforce coverage and all prerequisite status combinations
+without extending the execution time limit.

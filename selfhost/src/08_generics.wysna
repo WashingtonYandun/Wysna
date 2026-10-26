@@ -23,6 +23,9 @@ fn sem_type_complexity(context: SemanticContext, id: int) -> int {
     for child in context.types[id].args { size = size + sem_type_complexity(context, child) if size > 256 { return size } }
     return size
 }
+fn sem_require_nominal_budget(context: SemanticContext, type_id: int) {
+    if sem_type_complexity(context, type_id) > 256 { sem_error(context, "W2011", "generic nominal expansion complexity exceeded") }
+}
 fn sem_specialize(context: SemanticContext, template_id: int, selected: int, actual: list[int], source: Token) -> int {
     let unification = new SemUnification()
     let template = context.functions[template_id]

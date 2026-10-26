@@ -26,6 +26,8 @@ The `native-core-v1` source profile contains:
 
 Parameterized classes/interfaces, generic nominal values with unresolved type arguments, library-mode exports and WebAssembly targets are outside this native profile. An unresolved nominal value requires an explicit concrete type context. Seed's formatter, package/project and LSP commands remain outside the SDK. Unsupported source features report `W2013`; there is no Python fallback. This is a declared, tested profile, not universal Seed parity.
 
+Value equality rejects function payloads in structs, enums and collections during checking (`W2001`); classes retain identity equality. Generic function arguments and materialized nominal types share a structural complexity limit of 256, with expanding nominal recursion rejected as `W2011`. Ordinary recursive enums remain supported.
+
 ## Phase ownership and verification
 
 `ModuleLoader` owns import expansion. `SemanticContext` owns checking and generic specialization; each call/initializer owns a separate `SemUnification` so nested expressions cannot replace outer substitutions. `CheckedProgram` contains typed nodes, bindings, resolved signatures/records, declarative generic templates and function bodies. It contains no expanded token stream, emitter context or source-position lookup tables. `MirBuilder` lowers that detached value; the emitter only accepts verified `MirModule` values. Mutable compiler state belongs to each invocation.

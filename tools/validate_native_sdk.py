@@ -101,6 +101,10 @@ def validate(sdk, report, strict_source=False, compiler_source=None):
         generated = project / 'hello.c'
         run('emit-c', ['emit-c', source, '-o', generated], stdout=b'')
         require('#include "runtime/wysna_runtime.h"' in generated.read_text(), 'Missing runtime include')
+        if os.name != 'nt':
+            literal_path = project / r'literal\name.c'
+            run('literal-backslash-output', ['emit-c', source, '-o', literal_path], stdout=b'')
+            require(literal_path.read_bytes() == generated.read_bytes(), 'POSIX filename was treated as a separator')
         output = project / ('application á' + suffix)
         run('build-without-host-tools', ['build', source, '-o', output], stdout=b'')
         result = subprocess.run([str(output)], cwd=project, env=environment, capture_output=True, timeout=10)

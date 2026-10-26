@@ -162,6 +162,8 @@ CASES.extend([
     ('nested_generic_initializer_literal', 'struct Pair[T] { first: T, second: T }\nstruct Box[T] { value: T }\nlet value = Pair { first: Box { value: 1 }, second: Box { value: 2 } }\nprint(value.first.value, value.second.value)'),
     ('assignment_result_snapshot', 'let mut values = [[1]]\nlet snapshot = (values[0] = [2])\nvalues[0].append(3)\nprint(values, snapshot)'),
     ('imported_generic_display', 'import "generic.wysna" as generic\nprint(generic.make())'),
+    ('recursive_generic_equality', 'enum Tree[T] { None, Next(Tree[T]) }\nlet value: Tree[int] = Tree.None\nprint(value == value)'),
+    ('class_function_identity', 'class Holder { callback: fn() -> int fn init(callback: fn() -> int) { this.callback = callback } }\nlet value = new Holder(|| => 1)\nprint(value == value)'),
     ('generic_nominal_display', 'struct Box[T] { value: T }\nlet value: Box[int] = Box { value: 3 }\nprint(value)'),
     ('generic_nominal_name_collision', 'struct Box[T] { value: T }\nstruct Box__0 { text: str }\nlet value: Box[int] = Box { value: 3 }\nlet ordinary = Box__0 { text: "distinct" }\nprint(value.value, ordinary.text)'),
 ])
@@ -263,11 +265,38 @@ class NativeMirPipelineTests(unittest.TestCase):
                             self.assertIn(b"[W4003]", error)
                             self.assertIn(str(source).encode("utf-8"), error)
 
+    def test_phantom_function_argument_does_not_preclude_value_equality(self):
+        code = ('struct Phantom[T] { value: int }\n'
+                'let value: Phantom[fn() -> int] = Phantom { value: 3 }\n'
+                'print(value == value)\n')
+        with tempfile.TemporaryDirectory() as temporary:
+            directory = Path(temporary).resolve()
+            source = directory / "phantom.wysna"
+            source.write_text(code, encoding="utf-8")
+            module, arena = import_module(self.invoke("--emit-mir", source))
+            for engine, emission in (
+                ("exchange", CCodeGen(arena).generate(module)),
+                ("native", self.invoke("--emit-c-mir", source)),
+            ):
+                with self.subTest(engine=engine):
+                    status, output, error = self.execute(emission, directory, engine)
+                    self.assertEqual(status, 0, error)
+                    self.assertEqual(output, b"true\n")
+
     def test_native_phase_rejects_invalid_source(self):
         cases = [
             ('class Box[T] { value: T }', 'W2013'),
             ('interface Action[T] { fn apply(value: T) -> T }', 'W2013'),
             ('enum Maybe[T] { None, Value(T) }\nprint(Maybe.None)', 'W2013'),
+            ('enum Maybe[T] { None, Value(T) }\nprint(Maybe.None == Maybe.None)', 'W2013'),
+            ('enum Tree[T] { None, Next(Tree[list[T]]) }\nlet value: Tree[int] = Tree.None\nprint(value)', 'W2011'),
+            ('enum Tree[T] { None, Next(Tree[list[T]]) }\nlet value: Tree[int] = Tree.None\nprint(value == value)', 'W2011'),
+            ('let value = || => 1\nprint(value == value)', 'W2001'),
+            ('let value = || => 1\nprint([value] == [value])', 'W2001'),
+            ('struct Holder { callback: fn() -> int }\nlet value = Holder { callback: || => 1 }\nprint(value == value)', 'W2001'),
+            ('enum Holder { Value(fn() -> int) }\nlet value = Holder.Value(|| => 1)\nprint(value == value)', 'W2001'),
+            ('struct Holder[T] { value: T }\nlet value = Holder { value: || => 1 }\nprint(value == value)', 'W2001'),
+            ('fn same[T](value: T) -> bool { value == value }\nprint(same(|| => 1))', 'W2001'),
             ('let values = [1, "bad"]', "W2001"),
             ('let values = []', "W2001"),
             ('fn bad[T](value: T) -> T { missing }', "W1001"),

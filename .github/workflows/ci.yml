@@ -18,6 +18,7 @@ defaults:
     shell: bash
 
 env:
+  PYTHONUNBUFFERED: "1"
   PYTHONUTF8: "1"
   PYTHONIOENCODING: "utf-8"
 
@@ -140,8 +141,59 @@ jobs:
             tests/differential/failures/
             tests/fuzz/failures/
 
+  runtime-conformance:
+    name: Full runtime conformance (${{ matrix.os }}, ${{ matrix.cc }})
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - {os: ubuntu-latest, cc: clang}
+          - {os: ubuntu-latest, cc: gcc}
+          - {os: macos-latest, cc: clang}
+    env:
+      CC: ${{ matrix.cc }}
+      WYSNA_CI_ARTIFACTS: ${{ github.workspace }}/.wysna_cache/ci-artifacts
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: Install libcurl development files on Linux
+        if: runner.os == 'Linux'
+        run: sudo apt-get update && sudo apt-get install -y libcurl4-openssl-dev
+      - name: Install libcurl development files on macOS
+        if: runner.os == 'macOS'
+        run: |
+          brew install curl
+          echo "$(brew --prefix curl)/bin" >> "$GITHUB_PATH"
+      - name: Install the optional interpreter HTTP adapter
+        run: python -m pip install -e '.[http,service]'
+      - name: Verify full conformance and SHA256 bootstrap
+        run: |
+          mkdir -p .wysna_cache/ci-artifacts
+          ./wysna test 2>&1 | tee .wysna_cache/ci-artifacts/conformance.log
+      - name: Upload coverage reports
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: runtime-coverage-${{ matrix.os }}-${{ matrix.cc }}
+          path: .wysna_cache/ci-artifacts/
+          if-no-files-found: ignore
+      - name: Preserve failure reproductions and bootstrap C
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: runtime-failures-${{ matrix.os }}-${{ matrix.cc }}
+          path: |
+            .wysna_cache/ci-artifacts/
+            .wysna_cache/compiler*.c
+            tests/differential/failures/
+            tests/fuzz/failures/
+
   conformance:
-    needs: compiler-contracts
+    needs: [compiler-contracts, runtime-conformance]
     if: always()
     name: Conformance (${{ matrix.os }}, ${{ matrix.cc }})
     runs-on: ${{ matrix.os }}
@@ -157,12 +209,13 @@ jobs:
       CC: ${{ matrix.cc }}
       WYSNA_CI_ARTIFACTS: ${{ github.workspace }}/.wysna_cache/ci-artifacts
     steps:
-      - name: Require compiler contract success
+      - name: Require compiler and runtime conformance success
         env:
           CONTRACT_RESULT: ${{ needs.compiler-contracts.result }}
+          RUNTIME_RESULT: ${{ needs.runtime-conformance.result }}
         run: |
-          if [ "$CONTRACT_RESULT" != "success" ]; then
-            echo "Compiler contracts did not pass: $CONTRACT_RESULT" >&2
+          if [ "$CONTRACT_RESULT" != "success" ] || [ "$RUNTIME_RESULT" != "success" ]; then
+            echo "Prerequisites did not pass: compiler=$CONTRACT_RESULT runtime=$RUNTIME_RESULT" >&2
             exit 1
           fi
       - uses: actions/checkout@v4
@@ -181,8 +234,6 @@ jobs:
         run: python -m pip install -e '.[http,service]'
       - name: Verify runtime, examples and direct selfhost negatives across four engines
         run: python3 tools/ci_conformance.py --profile=${{ inputs.profile || 'release' }}
-      - name: Verify full conformance and SHA256 bootstrap
-        run: ./wysna test 2>&1 | tee .wysna_cache/ci-artifacts/conformance.log
       - name: Verify four-engine differential and deterministic fuzz corpus
         run: |
           ./wysna test --differential 20 2>&1 | tee .wysna_cache/ci-artifacts/differential.log

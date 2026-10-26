@@ -90,6 +90,42 @@ class NativeSdkContractTests(unittest.TestCase):
             expected = str(Path(temporary) / 'System32') if os.name == 'nt' else ''
             self.assertEqual(environment['PATH'], expected)
 
+    def test_platform_parent_preserves_filename_and_drive_root_contracts(self):
+        code = r'''#ifndef _WIN32
+#define _XOPEN_SOURCE 700
+#ifdef __APPLE__
+#define _DARWIN_C_SOURCE 1
+#endif
+#endif
+#include "runtime/wysna_runtime.h"
+#include "packaging/native/platform.h"
+#include <assert.h>
+int main(void) {
+    char parent[SDK_PATH_CAP];
+    assert(sdk_parent(parent, "dir/name\\value"));
+#ifdef _WIN32
+    assert(strcmp(parent, "dir/name") == 0);
+    assert(sdk_parent(parent, "C:\\program.exe"));
+    assert(strcmp(parent, "C:\\") == 0);
+#else
+    assert(strcmp(parent, "dir") == 0);
+#endif
+    return 0;
+}
+'''
+        root = Path(__file__).resolve().parents[2]
+        with tempfile.TemporaryDirectory() as temporary:
+            directory = Path(temporary)
+            source = directory / 'paths.c'
+            source.write_text(code)
+            binary = directory / executable_name('paths')
+            math_flags = [] if os.name == 'nt' else ['-lm']
+            built = subprocess.run(compiler_command() + ['-std=c99', '-I' + str(root), str(source)] +
+                                   math_flags + ['-o', str(binary)], capture_output=True, text=True, timeout=120)
+            self.assertEqual(built.returncode, 0, built.stderr)
+            result = subprocess.run([str(binary)], capture_output=True, text=True, timeout=10)
+            self.assertEqual(result.returncode, 0, result.stderr)
+
     def test_canonical_path_and_precancelled_process_C_contract(self):
         code = r'''#ifndef _WIN32
 #define _POSIX_C_SOURCE 200809L
