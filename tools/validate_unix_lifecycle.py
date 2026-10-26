@@ -36,14 +36,14 @@ def validate(bundle, installer, report, *, application_http=False):
                                 capture_output=True, text=True, timeout=900)
         report['checks'].append({'name':name,'exit_code':result.returncode,
                                  'stdout':result.stdout,'stderr':result.stderr})
-        if result.returncode != code:
+        if code is not None and result.returncode != code:
             raise AssertionError(report['checks'][-1])
         return result
 
-    def install(path, name):
+    def install(path, name, *, code=0):
         args = ['/usr/sbin/installer','-pkg',path,'-target','/'] if macos else (
             ['dpkg','--install',path] if package_format == 'deb' else ['rpm','--upgrade','--replacepkgs',path])
-        run(name, args, privileged=True)
+        return run(name, args, privileged=True, code=code)
 
     def remove():
         if macos:
@@ -66,6 +66,16 @@ def validate(bundle, installer, report, *, application_http=False):
         project = work / 'user project.wysna'
         project.write_text('print("preserved project")\n')
         try:
+            foreign = work / 'foreign-command'
+            foreign.write_text('unmanaged command must survive\n')
+            run('prepare-command-directory', ['mkdir','-p',command.parent], privileged=True)
+            run('create-foreign-command', ['cp',foreign,command], privileged=True)
+            try:
+                denied = install(installer, 'reject-unmanaged-command', code=None)
+                assert denied.returncode != 0 and 'unmanaged' in (denied.stdout + denied.stderr).lower(), denied
+                assert command.read_text() == foreign.read_text(), 'Installer replaced an unmanaged command'
+            finally:
+                run('remove-foreign-fixture', ['rm',command], privileged=True)
             install(fixture_output / files[0]['name'], 'install-previous-build-fixture')
             installed = True
             run('previous-build-doctor', [command,'doctor','--output-format=json-v1'])

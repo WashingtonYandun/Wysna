@@ -161,6 +161,12 @@ def package_linux(bundle, output, record, temporary, formats):
             'Description: Wysna programming language and private toolchain\n'
             ' Static typing, native builds, project and editor tools.\n'
             ' Private Python and Zig are included; no host development setup is needed.\n')
+        preinstall = metadata / 'preinst'
+        preinstall.write_text('#!/bin/sh\nset -eu\n'
+            'if [ -e /usr/bin/wysna ] || [ -L /usr/bin/wysna ]; then\n'
+            '  owner="$(dpkg-query -S /usr/bin/wysna 2>/dev/null || true)"\n'
+            '  case "$owner" in wysna:*) ;; *) echo "An unmanaged wysna command exists; it was preserved." >&2; exit 1 ;; esac\nfi\n')
+        preinstall.chmod(0o755)
         postinstall = metadata / 'postinst'
         postinstall.write_text('#!/bin/sh\nset -eu\nif [ "$1" = configure ]; then\n  ' +
                                shlex.join([prefix + '/bin/wysna', 'doctor']) + '\nfi\n')
@@ -181,6 +187,9 @@ def package_linux(bundle, output, record, temporary, formats):
             'Recommends: libcurl-devel >= 8.3\nRecommends: sqlite-devel\n'
             '%description\nWysna compiler, project and editor tools with private Python and Zig.\n'
             '%prep\n%build\n%install\nmkdir -p "%{buildroot}"\ncp -a ' + shlex.quote(str(payload) + '/.') + ' "%{buildroot}/"\n'
+            '%pre\nif [ -e /usr/bin/wysna ] || [ -L /usr/bin/wysna ]; then\n'
+            '  owner="$(rpm -qf --qf \'%%{NAME}\' /usr/bin/wysna 2>/dev/null || true)"\n'
+            '  if [ "$owner" != wysna ]; then echo "An unmanaged wysna command exists; it was preserved." >&2; exit 1; fi\nfi\n'
             '%post\n' + shlex.join([prefix + '/bin/wysna', 'doctor']) + '\n'
             '%files\n' + prefix + '\n/usr/bin/wysna\n/usr/share/applications/wysna.desktop\n')
         run(['rpmbuild', '-bb', '--define', '_topdir ' + str(rpm), spec])
