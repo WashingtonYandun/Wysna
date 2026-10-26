@@ -122,7 +122,7 @@ def uninstall(base=BASE, command=COMMAND, application=APPLICATION):
             raise ValueError('Unknown application ownership receipt')
         actions, retained = plan_removal(application, record['application_files'])
         preserved.extend(retained)
-        plans.append((application, actions, receipt))
+        plans.append((application, actions, None))
     elif application.exists() or application.is_symlink():
         preserved.append(str(application))
     # A malformed receipt must leave even the current command untouched.
@@ -137,9 +137,15 @@ def uninstall(base=BASE, command=COMMAND, application=APPLICATION):
         preserved.append(str(current))
     for root, actions, manifest in plans:
         remove_planned(actions)
-        manifest.unlink()
+        if manifest is not None:
+            manifest.unlink()
         remove_empty_directories(root)
     remove_empty_directories(base)
+    # Retain the managed-root receipt when user files remain, allowing a later
+    # reinstall without treating preserved files as a foreign installation.
+    if receipt.is_file() and set(base.iterdir()) == {receipt}:
+        receipt.unlink()
+        remove_empty_directories(base)
     try:
         application.parent.rmdir()
     except OSError:

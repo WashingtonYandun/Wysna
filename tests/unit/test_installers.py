@@ -158,6 +158,20 @@ class InstallerTests(unittest.TestCase):
             with patch.dict(os.environ, {'ProgramFiles(x86)': str(self.root)}):
                 self.assertEqual(inno_compiler(), str(compiler))
 
+    def test_managed_receipt_survives_only_when_user_files_require_reinstallation(self):
+        version = self.version('first')
+        receipt = self.base / 'installer.json'
+        receipt.write_text(json.dumps({'schema':'wysna.macos-installer/1','application_files':{}}))
+        note = version / 'user-notes.txt'
+        note.write_text('preserved')
+        lifecycle.activate(version,self.base,self.command)
+        lifecycle.uninstall(self.base,self.command,self.application)
+        self.assertTrue(receipt.is_file())
+        self.assertEqual(note.read_text(),'preserved')
+        note.unlink()
+        lifecycle.uninstall(self.base,self.command,self.application)
+        self.assertFalse(self.base.exists())
+
 
 if __name__ == '__main__':
     unittest.main()

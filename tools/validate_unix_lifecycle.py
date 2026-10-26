@@ -105,6 +105,13 @@ def validate(bundle, installer, report, *, application_http=False):
             installed = False
             assert not command.exists() and not command.is_symlink(), 'Installed command remains after uninstall'
             assert note.is_file() and project.read_text() == 'print("preserved project")\n'
+            install(installer, 'reinstall-after-uninstall-with-preserved-files')
+            installed = True
+            run('reinstalled-doctor', [command,'doctor','--output-format=json-v1'])
+            assert note.is_file() and project.is_file()
+            remove()
+            installed = False
+            assert not command.exists() and not command.is_symlink() and note.is_file()
             report.update(passed=True, format=package_format, source_commit=record['source_commit'],
                           synthetic_previous_build=True, graphical_package_built=True,
                           graphical_clicks_automated=False, user_files_preserved=True)
