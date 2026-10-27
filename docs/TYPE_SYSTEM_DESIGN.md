@@ -138,7 +138,8 @@ Concretely, even if `Dog <: Animal`:
 
 ### 4.6 Dictionary Key Validity (`is_valid_dict_key`)
 For `Dict(key: TypeId, val: TypeId)`:
-- `key` must be one of `int`, `str`, `bool`, or `NominalEnum(def_id, [])` (or a `tuple` composed recursively of valid key types once tuple hashing is enabled).
+- `key` must be one of `int`, `str`, `bool`, or a `NominalEnum` whose payload types are recursively valid keys (or a `tuple` composed recursively of valid key types once tuple hashing is enabled).
+- Generic enum arguments are substituted before validation, and forward declarations are supported; cyclic key graphs are rejected because they cannot establish finite validity.
 - `float` (and any composite containing `float`), `list`, `dict`, `struct`, and `class` are statically rejected with **`W2010` (`INVALID_DICT_KEY_TYPE`)**. Excluding `float` is an explicit language predictability design choice to avoid IEEE-754 `NaN` key-lookup anomalies (`NaN != NaN`) and `-0.0` vs. `+0.0` hashing ambiguities.
 
 ---

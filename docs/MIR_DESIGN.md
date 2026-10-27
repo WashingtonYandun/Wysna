@@ -11,7 +11,7 @@ wysna emit-mir --implementation=seed program.wysna -o seed.mir.json
 wysna emit-mir --implementation=compiler program.wysna -o compiler.mir.json
 ```
 
-Both producers emit `wysna.mir` schema 1, semantic revision `0.5.0`, runtime ABI 2 and a self-contained type arena. `mir/Exchange.py` reconstructs an independent arena and verifies it before the Python MIR consumer can emit C99. Producer IDs and operation sequences are local implementation details; behavior, ownership and diagnostics are the compatibility contract.
+Both producers emit `wysna.mir` schema 1, semantic revision `0.5.0`, runtime ABI 2 and a self-contained type arena. Both materialize every declared enum, including unused ones, so dictionary-key capabilities can be inspected without a value of that type. `mir/Exchange.py` reconstructs an independent arena and verifies it before the Python MIR consumer can emit C99. Producer IDs and operation sequences are local implementation details; behavior, ownership and diagnostics are the compatibility contract.
 
 The standalone [native SDK](NATIVE_SDK.md) supplies `check`, `emit-mir`, `emit-c`, `build` and `run` without Python. Its native engine checks MIR before serialization or C emission. The Python wrapper remains available for Seed and independent interchange validation; it is not required by the SDK.
 

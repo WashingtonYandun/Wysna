@@ -47,8 +47,8 @@ before they run.
 
 | Principle | What it gives you |
 | :--- | :--- |
-| **Errors are values** | `T ! E` puts failure in the signature. `else error`, `?` and exhaustive `match` make every failure path explicit; there is no hidden exception-based control flow. |
-| **Memory you can reason about** | Single-threaded ARC and copy-on-write provide deterministic cleanup and cheap snapshots. Strong cycles are not collected automatically; `Weak` is the escape hatch. |
+| **Errors are values** | `T ! E` puts declared errors in the signature. `else error`, `?` and exhaustive `match` make those errors explicit; runtime failures remain possible. |
+| **Memory you can reason about** | Single-threaded ARC and copy-on-write provide predictable lifetime management and cheap snapshots. Strong cycles are not collected automatically, and abnormal termination can bypass cleanup; `Weak` helps break cycles. |
 | **A verified pipeline** | Source → typed HIR or checked nodes → verified MIR → C99. Independent oracles, a self-hosted compiler and conformance tests check the same language from different angles. |
 | **One install for the core** | The Seed distribution carries private CPython and Zig, so core CLI, projects, formatter and LSP work without host Python, a virtual environment or a C SDK. |
 | **Tools for humans and agents** | Scriptable commands and versioned `json-v1` envelopes let editors, scripts and agents inspect programs before execution. |

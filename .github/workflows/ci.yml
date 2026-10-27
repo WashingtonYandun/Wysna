@@ -294,6 +294,7 @@ jobs:
           python3 -m tests.unit.test_audit_remediation
           python3 -m tests.unit.test_mir
           python3 -m tests.unit.test_selfhost_mir
+          python3 -m tests.unit.test_dictionary_key_parity
           python3 -m tests.unit.test_native_mir_pipeline
           python3 -m tests.unit.test_selfhost_compilation_context
           python3 -m tests.unit.test_distribution_contract
@@ -638,6 +639,10 @@ jobs:
       - name: Verify persistent resources and executable documentation
         run: |
           python -m tests.unit.test_foundations
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+      - name: Verify dictionary key semantics across compiler engines
+        run: |
+          python -m tests.unit.test_dictionary_key_parity
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
       - name: Verify standard toolkit and native LSP paths
         run: |

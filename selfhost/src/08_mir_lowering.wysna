@@ -299,6 +299,11 @@ fn mir_lower_function(context: MirBuilder, function: CheckedFunction) {
 fn mir_build(program: CheckedProgram) -> MirModule {
     checked_verify(program)
     let context = new MirBuilder(program)
+    # Export every declared enum so the arena carries its dictionary-key
+    # capability even when the program never uses that enum value.
+    for record in program.records {
+        if program.types[record.type_id].kind == "enum" { mir_type(context, record.type_id, program.source) }
+    }
     for i in 0..len(program.bindings) {
         let binding = program.bindings[i]
         if binding.global { context.globals.append(MirGlobal { symbol: i, type_id: mir_type(context, binding.type_id, binding.source), name: "wysna_global_" + str(i) }) }

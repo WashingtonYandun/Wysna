@@ -855,6 +855,10 @@ struct SemanticScope { variables: int, depth: int }
 class SemanticContext {
     capture_nodes: bool
     checking_definition: bool
+    collecting_declarations: bool
+    pending_key_types: list[int]
+    pending_key_sources: list[Token]
+    completed_enums: list[str]
     obligations: list[SemObligation]
     specializations: list[SemSpecialization]
     specialization_ancestry: list[int]
@@ -951,6 +955,13 @@ class SemanticContext {
         this.last_pattern = -1
         this.expected_type = -1
         this.checking_definition = false
+        this.collecting_declarations = false
+        let pending_key_types: list[int] = []
+        this.pending_key_types = pending_key_types
+        let pending_key_sources: list[Token] = []
+        this.pending_key_sources = pending_key_sources
+        let completed_enums: list[str] = []
+        this.completed_enums = completed_enums
         let obligations: list[SemObligation] = []
         this.obligations = obligations
         let specializations: list[SemSpecialization] = []
@@ -1565,6 +1576,7 @@ fn sem_require(context: SemanticContext, source: int, target: int, code: str) {
     if not sem_assignable(context, source, target) { sem_error(context, code, "incompatible types") }
 }
 fn sem_type(context: SemanticContext) -> int {
+    let source = sem_at(context)
     let mut result = context.unit_type
     if sem_match(context, "FN") {
         sem_expect(context, "LPAREN")
@@ -1606,7 +1618,12 @@ fn sem_type(context: SemanticContext) -> int {
             if name == "Weak" { kind = "weak" }
             if (kind == "list" or kind == "optional" or kind == "weak") and len(args) != 1 { sem_error(context, "W2001", "type arity") }
             if (kind == "dict" or kind == "result") and len(args) != 2 { sem_error(context, "W2001", "type arity") }
-            if kind == "dict" and not sem_key(context, args[0]) { sem_error(context, "W2010", "invalid dictionary key") }
+            if kind == "dict" {
+                if context.collecting_declarations {
+                    context.pending_key_types.append(args[0])
+                    context.pending_key_sources.append(source)
+                } elif not sem_key(context, args[0]) { report_error_at("W2010", source, "invalid dictionary key") }
+            }
             result = sem_intern(context, kind, "", args)
         } else {
             let base = sem_named(context, name)
@@ -1629,7 +1646,44 @@ fn sem_type(context: SemanticContext) -> int {
     return result
 }
 fn sem_key(context: SemanticContext, type_id: int) -> bool {
-    return type_id == context.integer_type or type_id == context.string_type or type_id == context.boolean_type or sem_kind(context, type_id) == "enum"
+    let mut pending: list[int] = [type_id]
+    let mut seen: list[int] = []
+    let mut active: list[int] = []
+    while len(pending) > 0 {
+        let current = pending.pop()
+        if current < 0 {
+            active.pop()
+            seen.append(-current - 1)
+        } elif current != context.integer_type and current != context.string_type and current != context.boolean_type {
+            let type_ = context.types[current]
+            if type_.kind != "enum" { return false }
+            let mut visited = false
+            for previous in seen { if previous == current { visited = true } }
+            if not visited {
+                for previous in active { if previous == current { return false } }
+                let mut complete = false
+                for name in context.completed_enums { if name == type_.name { complete = true } }
+                if not complete { return false }
+                active.append(current)
+                pending.append(-current - 1)
+                let mut names: list[str] = []
+                let generic = sem_generic_type(context, type_.name)
+                if generic >= 0 {
+                    names = context.generic_types[generic].params
+                    if len(type_.args) != len(names) { return false }
+                    sem_require_nominal_budget(context, current)
+                }
+                for i in 0..len(context.variants) {
+                    if context.types[context.variant_types[i]].name == type_.name {
+                        for payload in context.variant_payloads[i] {
+                            pending.append(sem_substitute_type(context, payload, names, type_.args))
+                        }
+                    }
+                }
+            }
+        }
+    }
+    return true
 }
 fn sem_lookup(context: SemanticContext, name: str) -> int {
     let mut i = len(context.variables) - 1
@@ -1782,6 +1836,7 @@ fn sem_collect_record(context: SemanticContext, kind: str) {
         }
     }
     sem_expect(context, "RBRACE")
+    if kind == "enum" { context.completed_enums.append(name) }
     context.type_params = previous_type_params
 }
 fn sem_builtin(name: str) -> bool {
@@ -3269,6 +3324,7 @@ fn sem_validate(context: SemanticContext, tokens: list[Token]) {
     surrounded.append(Token { kind: "EOF", val: "", line: 1, col: 1, file: tokens[len(tokens) - 1].file })
     sem_initialize(context, surrounded)
     context.pos = 1
+    context.collecting_declarations = true
     while true {
         sem_skip_separators(context)
         if sem_is(context, "EOF") { break }
@@ -3289,8 +3345,14 @@ fn sem_validate(context: SemanticContext, tokens: list[Token]) {
         elif sem_is(context, "ENUM") { sem_collect_record(context, "enum") }
         else { sem_take(context) }
     }
+    context.collecting_declarations = false
     sem_validate_inheritance(context)
     sem_validate_layout_cycles(context)
+    for i in 0..len(context.pending_key_types) {
+        if not sem_key(context, context.pending_key_types[i]) {
+            report_error_at("W2010", context.pending_key_sources[i], "invalid dictionary key")
+        }
+    }
     context.pos = 1
     while true {
         sem_skip_separators(context)
@@ -3973,6 +4035,37 @@ fn mir_function_json(function: MirFunction) -> str {
     return "{\"$type\":\"Function\",\"name\":" + mir_quote(function.name) + ",\"return_type\":" + str(function.return_type) + ",\"slots\":" + slots + ",\"blocks\":" + blocks + "],\"params\":" + mir_ids(function.params, false) + ",\"source\":" + mir_source_json(function.source) + "}"
 }
 
+fn mir_dictionary_key(module: MirModule, root: int) -> bool {
+    let mut pending: list[int] = [root]
+    let mut seen: list[int] = []
+    let mut active: list[int] = []
+    while len(pending) > 0 {
+        let id = pending.pop()
+        if id < 0 {
+            active.pop()
+            seen.append(-id - 1)
+        } elif id != 2 and id != 3 and id != 5 {
+            if id < 0 or id >= len(module.types) or module.types[id].kind != "enum" { return false }
+            let mut visited = false
+            for previous in seen { if previous == id { visited = true } }
+            if not visited {
+                for previous in active { if previous == id { return false } }
+                active.append(id)
+                pending.append(-id - 1)
+                let mut found = false
+                for record in module.records {
+                    if record.type_id == id {
+                        found = true
+                        for variant in record.variants { for payload in variant.payloads { pending.append(payload) } }
+                    }
+                }
+                if not found { return false }
+            }
+        }
+    }
+    return true
+}
+
 fn mir_arena_json(module: MirModule) -> str {
     let types = module.types
     let mut entries = "["
@@ -3993,7 +4086,7 @@ fn mir_arena_json(module: MirModule) -> str {
         elif tag != "error" and tag != "any" { data = mir_ids(type_.args, false) }
         entries = entries + "{\"tag\":" + mir_quote(tag) + ",\"data\":" + data + "}"
         let retain = str(i == 5 or i >= 7)
-        let key = str(i == 2 or i == 3 or i == 5 or tag == "enum")
+        let key = str(mir_dictionary_key(module, i))
         let comparable = str(tag != "result" and tag != "error_union" and tag != "function")
         let reference = str(mir_reference_type(types, i))
         let identity = str(mir_identity_type(types, i))
@@ -5480,6 +5573,11 @@ fn mir_lower_function(context: MirBuilder, function: CheckedFunction) {
 fn mir_build(program: CheckedProgram) -> MirModule {
     checked_verify(program)
     let context = new MirBuilder(program)
+    # Export every declared enum so the arena carries its dictionary-key
+    # capability even when the program never uses that enum value.
+    for record in program.records {
+        if program.types[record.type_id].kind == "enum" { mir_type(context, record.type_id, program.source) }
+    }
     for i in 0..len(program.bindings) {
         let binding = program.bindings[i]
         if binding.global { context.globals.append(MirGlobal { symbol: i, type_id: mir_type(context, binding.type_id, binding.source), name: "wysna_global_" + str(i) }) }

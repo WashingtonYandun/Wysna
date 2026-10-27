@@ -211,6 +211,7 @@ fn sem_require(context: SemanticContext, source: int, target: int, code: str) {
     if not sem_assignable(context, source, target) { sem_error(context, code, "incompatible types") }
 }
 fn sem_type(context: SemanticContext) -> int {
+    let source = sem_at(context)
     let mut result = context.unit_type
     if sem_match(context, "FN") {
         sem_expect(context, "LPAREN")
@@ -252,7 +253,12 @@ fn sem_type(context: SemanticContext) -> int {
             if name == "Weak" { kind = "weak" }
             if (kind == "list" or kind == "optional" or kind == "weak") and len(args) != 1 { sem_error(context, "W2001", "type arity") }
             if (kind == "dict" or kind == "result") and len(args) != 2 { sem_error(context, "W2001", "type arity") }
-            if kind == "dict" and not sem_key(context, args[0]) { sem_error(context, "W2010", "invalid dictionary key") }
+            if kind == "dict" {
+                if context.collecting_declarations {
+                    context.pending_key_types.append(args[0])
+                    context.pending_key_sources.append(source)
+                } elif not sem_key(context, args[0]) { report_error_at("W2010", source, "invalid dictionary key") }
+            }
             result = sem_intern(context, kind, "", args)
         } else {
             let base = sem_named(context, name)
@@ -275,7 +281,44 @@ fn sem_type(context: SemanticContext) -> int {
     return result
 }
 fn sem_key(context: SemanticContext, type_id: int) -> bool {
-    return type_id == context.integer_type or type_id == context.string_type or type_id == context.boolean_type or sem_kind(context, type_id) == "enum"
+    let mut pending: list[int] = [type_id]
+    let mut seen: list[int] = []
+    let mut active: list[int] = []
+    while len(pending) > 0 {
+        let current = pending.pop()
+        if current < 0 {
+            active.pop()
+            seen.append(-current - 1)
+        } elif current != context.integer_type and current != context.string_type and current != context.boolean_type {
+            let type_ = context.types[current]
+            if type_.kind != "enum" { return false }
+            let mut visited = false
+            for previous in seen { if previous == current { visited = true } }
+            if not visited {
+                for previous in active { if previous == current { return false } }
+                let mut complete = false
+                for name in context.completed_enums { if name == type_.name { complete = true } }
+                if not complete { return false }
+                active.append(current)
+                pending.append(-current - 1)
+                let mut names: list[str] = []
+                let generic = sem_generic_type(context, type_.name)
+                if generic >= 0 {
+                    names = context.generic_types[generic].params
+                    if len(type_.args) != len(names) { return false }
+                    sem_require_nominal_budget(context, current)
+                }
+                for i in 0..len(context.variants) {
+                    if context.types[context.variant_types[i]].name == type_.name {
+                        for payload in context.variant_payloads[i] {
+                            pending.append(sem_substitute_type(context, payload, names, type_.args))
+                        }
+                    }
+                }
+            }
+        }
+    }
+    return true
 }
 fn sem_lookup(context: SemanticContext, name: str) -> int {
     let mut i = len(context.variables) - 1
@@ -428,6 +471,7 @@ fn sem_collect_record(context: SemanticContext, kind: str) {
         }
     }
     sem_expect(context, "RBRACE")
+    if kind == "enum" { context.completed_enums.append(name) }
     context.type_params = previous_type_params
 }
 fn sem_builtin(name: str) -> bool {
@@ -1915,6 +1959,7 @@ fn sem_validate(context: SemanticContext, tokens: list[Token]) {
     surrounded.append(Token { kind: "EOF", val: "", line: 1, col: 1, file: tokens[len(tokens) - 1].file })
     sem_initialize(context, surrounded)
     context.pos = 1
+    context.collecting_declarations = true
     while true {
         sem_skip_separators(context)
         if sem_is(context, "EOF") { break }
@@ -1935,8 +1980,14 @@ fn sem_validate(context: SemanticContext, tokens: list[Token]) {
         elif sem_is(context, "ENUM") { sem_collect_record(context, "enum") }
         else { sem_take(context) }
     }
+    context.collecting_declarations = false
     sem_validate_inheritance(context)
     sem_validate_layout_cycles(context)
+    for i in 0..len(context.pending_key_types) {
+        if not sem_key(context, context.pending_key_types[i]) {
+            report_error_at("W2010", context.pending_key_sources[i], "invalid dictionary key")
+        }
+    }
     context.pos = 1
     while true {
         sem_skip_separators(context)

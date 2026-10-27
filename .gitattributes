@@ -1,5 +1,6 @@
 # Wheels and checkout validation use the same source bytes on every host.
 *.py text eol=lf
+LICENSE text eol=lf
 stdlib/*.wysna text eol=lf
 runtime/*.h text eol=lf
 runtime/*.c text eol=lf
