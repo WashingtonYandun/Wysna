@@ -225,6 +225,8 @@ def run_generic_hardening_tests() -> bool:
         test_run_stats_preserves_execution()
         from tests.unit.test_compiler_boundaries import test_compiler_boundaries
         test_compiler_boundaries()
+        from tests.unit.test_dictionary_key_semantics import run_dictionary_key_tests
+        run_dictionary_key_tests()
         from tests.unit.test_f03_error_unions import run_error_union_tests
         run_error_union_tests()
         from tests.unit.test_phase_a import run_phase_a_tests

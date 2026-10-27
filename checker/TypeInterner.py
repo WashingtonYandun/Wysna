@@ -540,8 +540,51 @@ class TypeInterner:
 
     def get_capabilities(self, type_id: int) -> TypeCapabilities:
         if 0 <= type_id < len(self._capabilities):
-            return self._capabilities[type_id]
+            capabilities = self._capabilities[type_id]
+            if self._entries[type_id].tag == "enum":
+                capabilities = TypeCapabilities(**capabilities.to_dict())
+                capabilities.is_valid_dict_key = self.is_valid_dictionary_key(type_id)
+            return capabilities
         return TypeCapabilities()
+
+    def is_valid_dictionary_key(self, type_id: int, *, allow_any: bool = False) -> bool:
+        """Check the canonical key type against the completed nominal graph."""
+        if allow_any and self.get_entry(type_id).tag == "any":
+            return True
+        return self._dictionary_key_valid(type_id, {})
+
+    def _dictionary_key_valid(self, type_id: int, results: Dict[int, bool]) -> bool:
+        """Evaluate the nominal graph iteratively, sharing completed results."""
+        active = set()
+        pending = [(type_id, False)]
+        while pending:
+            current, expanded = pending.pop()
+            if expanded:
+                active.remove(current)
+                definition = self.enum_defs[self.get_entry(current).data]
+                results[current] = results.get(current, True) and all(
+                    results[payload] for values in definition.variant_payloads.values()
+                    for payload in values
+                )
+                continue
+            if current in results:
+                continue
+            if current in (TYPE_INT, TYPE_BOOL, TYPE_STR):
+                results[current] = True
+                continue
+            if current in active:
+                results[current] = False
+                continue
+            entry = self.get_entry(current)
+            definition = self.enum_defs.get(entry.data) if entry.tag == "enum" else None
+            if definition is None:
+                results[current] = False
+                continue
+            active.add(current)
+            pending.append((current, True))
+            for values in definition.variant_payloads.values():
+                pending.extend((payload, False) for payload in values)
+        return results[type_id]
 
     def is_class_subclass_of(self, sub_id: int, sup_name: str) -> bool:
         sub_entry = self.get_entry(sub_id)
@@ -958,10 +1001,18 @@ class TypeInterner:
                 return {str(key): encode(item) for key, item in value.items()}
             return value
 
+        key_results: Dict[int, bool] = {}
+        capabilities = []
+        for type_id, caps in enumerate(self._capabilities):
+            encoded_caps = caps.to_dict()
+            if self._entries[type_id].tag == "enum":
+                encoded_caps["is_valid_dict_key"] = self._dictionary_key_valid(type_id, key_results)
+            capabilities.append(encoded_caps)
+
         return {
             "version": 1,
             "entries": [{"tag": entry.tag, "data": encode(entry.data)} for entry in self._entries],
-            "capabilities": [caps.to_dict() for caps in self._capabilities],
+            "capabilities": capabilities,
             "structs": {
                 name: {"def_id": definition.def_id, "fields": dict(definition.fields)}
                 for name, definition in self.struct_defs.items()
@@ -1191,4 +1242,11 @@ class TypeInterner:
         }
         if any(nominal_ids[kind] != definitions[kind] for kind in nominal_ids):
             raise ValueError("Type arena has incomplete nominal definitions")
+        # Version 1 producers historically marked every enum as a valid key.
+        # Derive this capability from validated nominal definitions on import,
+        # so older snapshots remain readable without trusting the stale bit.
+        key_results: Dict[int, bool] = {}
+        for type_id, entry in enumerate(interner._entries):
+            if entry.tag == "enum":
+                interner._capabilities[type_id].is_valid_dict_key = interner._dictionary_key_valid(type_id, key_results)
         return interner

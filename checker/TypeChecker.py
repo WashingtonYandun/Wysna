@@ -83,6 +83,8 @@ class TypeChecker:
         self.monomorphized_enum_decls: List[EnumDecl] = []
         self._monomorphize_depth: int = 0
         self._instantiation_stack: List[InstantiationFrame] = []
+        self._collecting_declarations = False
+        self._pending_dictionary_keys = []
         # Type-parameter substitution in effect while a specialization is being
         # resolved. Unbound parameters keep their own name, so the resolver has to
         # consult this binding before treating a name as a declared type.
@@ -228,7 +230,12 @@ class TypeChecker:
         return self.session.import_module(stmt, self.file)
 
     def _pass1_collect_declarations(self, program: Program) -> None:
-        collect_declarations(self, program)
+        self._collecting_declarations = True
+        try:
+            collect_declarations(self, program)
+        finally:
+            self._collecting_declarations = False
+        self._validate_pending_dictionary_keys()
 
 
     # ==========================================
@@ -1325,14 +1332,20 @@ class TypeChecker:
     # ==========================================
 
     def _is_valid_dict_key_type(self, t: WysnaType) -> bool:
-        if isinstance(t, AnyType):
-            return True
-        if t in (IntType, StrType, BoolType):
-            return True
-        if isinstance(t, EnumType):
-            return all(self._is_valid_dict_key_type(payload)
-                       for payloads in t.variant_payloads.values() for payload in payloads)
-        return False
+        return self.interner.is_valid_dictionary_key(self.interner.from_type(t), allow_any=True)
+
+    def _validate_dictionary_key(self, key_type: WysnaType, node: TypeNode) -> None:
+        if not self._is_valid_dict_key_type(key_type):
+            raise TypeError(
+                message=f"Invalid dictionary key type '{key_type}'; allowed key types are int, str, bool, or enum",
+                line=node.line, col=node.col, file=self.file, code="W2010"
+            )
+
+    def _validate_pending_dictionary_keys(self) -> None:
+        pending = self._pending_dictionary_keys
+        self._pending_dictionary_keys = []
+        for key_type, node in pending:
+            self._validate_dictionary_key(key_type, node)
 
     def _resolve_type_node(self, node: TypeNode) -> WysnaType:
         if hasattr(node, 'session_resolved_type'):
@@ -1353,6 +1366,8 @@ class TypeChecker:
         if node is not None:
             node.resolved_type_id = self.interner.from_type(resolved)
             node.session_arena_id = self.interner.arena_id
+        if not self._collecting_declarations and not self._monomorphize_depth:
+            self._validate_pending_dictionary_keys()
         return resolved
 
     def _lookup_type_name(self, name):
@@ -1454,14 +1469,10 @@ class TypeChecker:
 
         if isinstance(node, AstDictType):
             key_t = self._resolve_type_node(node.key_type)
-            if not self._is_valid_dict_key_type(key_t):
-                raise TypeError(
-                    message=f"Invalid dictionary key type '{key_t}'; allowed key types are int, str, bool, or enum",
-                    line=node.key_type.line,
-                    col=node.key_type.col,
-                    file=self.file,
-                    code="W2010"
-                )
+            if self._collecting_declarations or self._monomorphize_depth:
+                self._pending_dictionary_keys.append((key_t, node.key_type))
+            else:
+                self._validate_dictionary_key(key_t, node.key_type)
             val_t = self._resolve_type_node(node.value_type)
             return DictType(key_t, val_t)
 
