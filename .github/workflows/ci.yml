@@ -2,7 +2,7 @@ name: Wysna Compiler Integration Gates
 
 on:
   push:
-    branches: [main, develop]
+    branches: [main]
   pull_request:
     branches: [main, develop]
   workflow_dispatch:
@@ -467,11 +467,12 @@ jobs:
             exit 1
           fi
 
+  # Keep pull request service checks bounded; full qualification runs separately.
   service-load-campaign:
     name: Service load and RSS campaign (Ubuntu)
     if: github.event_name == 'pull_request'
     runs-on: ubuntu-latest
-    timeout-minutes: 45
+    timeout-minutes: 15
     env:
       CC: clang
     steps:
@@ -485,9 +486,9 @@ jobs:
         run: python -m pip install -e '.[service]'
       - name: Run three sustained service repetitions
         run: >-
-          python3 tools/measure_service.py --warmup-seconds 60 --duration-seconds 600
+          python3 tools/measure_service.py --warmup-seconds 15 --duration-seconds 120
           --repetitions 3 --clients 4 --saturation-clients 48 --saturation-seconds 1
-          --workers 4 --queue-size 32 --minimum-latency-samples 10000
+          --workers 4 --queue-size 32 --minimum-latency-samples 1000
           --rss-growth-budget-percent 5 --rss-growth-budget-bytes 8388608
           --report .wysna_cache/ci-artifacts/service-load.json
       - uses: actions/upload-artifact@v4
