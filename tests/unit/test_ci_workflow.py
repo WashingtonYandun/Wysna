@@ -45,16 +45,31 @@ def test_ci_workflow_contracts():
     assert 'tags:' in performance_source and '- "v*"' in performance_source
     assert '--warmup-seconds 60 --duration-seconds 600' in performance_source
     assert '--repetitions 3' in performance_source
-    llvm = jobs['llvm-experimental']
-    assert 'os: [ubuntu-latest, macos-latest]' in llvm
+    llvm = jobs['llvm-smoke']
+    assert 'runs-on: ubuntu-latest' in llvm
     assert 'needs: wheel-build' in llvm
     assert 'python -m tests.unit.test_llvm_backend -v' in llvm
     assert 'python tools/validate_llvm_install.py' in llvm
     assert '${wheel}[llvm]' in llvm
-    assert '--sanitize --output .wysna_cache/llvm-sanitized' in llvm
-    sdk_build, sdk_consumer = jobs['llvm-sdk-build'], jobs['installed-llvm-sdk']
+    assert 'qualify_llvm.py' not in llvm
+    full_llvm_source = (ROOT / '.github/workflows/llvm-qualification.yml').read_text(encoding='utf-8')
+    assert 'schedule:' in full_llvm_source and '- cron: "0 8 * * 3"' in full_llvm_source
+    assert 'workflow_dispatch:' in full_llvm_source
+    assert 'tags:' in full_llvm_source and '- "v*"' in full_llvm_source
+    full_body = full_llvm_source.split('\njobs:\n', 1)[1]
+    full_headings = list(re.finditer(r'^  ([a-z][a-z0-9-]*):\n', full_body, re.MULTILINE))
+    full_jobs = {heading.group(1): full_body[heading.end():full_headings[index + 1].start()
+                                              if index + 1 < len(full_headings) else len(full_body)]
+                 for index, heading in enumerate(full_headings)}
+    full_llvm = full_jobs['llvm-experimental']
+    assert 'os: [ubuntu-latest, macos-latest]' in full_llvm
+    assert 'python -m tests.unit.test_llvm_backend -v' in full_llvm
+    assert 'python tools/validate_llvm_install.py' in full_llvm
+    assert '${wheel}[llvm]' in full_llvm
+    assert '--sanitize --output .wysna_cache/llvm-sanitized' in full_llvm
+    sdk_build, sdk_consumer = full_jobs['llvm-sdk-build'], full_jobs['installed-llvm-sdk']
     assert 'package_llvm_sdk.py' in sdk_build and 'benchmark_llvm.py' not in sdk_build
-    comparison = jobs['llvm-comparison']
+    comparison = full_jobs['llvm-comparison']
     assert 'needs: llvm-sdk-build' in comparison and 'profile: [dev, release, size]' in comparison
     assert 'benchmark_llvm.py' in comparison and '--profiles ${{ matrix.profile }}' in comparison
     assert 'llvm-sdk-qualification-${{ matrix.os }}' in comparison
@@ -108,7 +123,112 @@ def test_ci_workflow_contracts():
     assert {os_name + ',' + compiler for os_name, compiler in rows} == MATRIX
     assert len(rows) == len(MATRIX)
     assert 'name: Conformance (${{ matrix.os }}, ${{ matrix.cc }})' in conformance
-    assert re.search(r'^    needs: \[compiler-contracts, runtime-conformance, integration-conformance, llvm-experimental, installed-llvm-sdk, llvm-comparison, seed-installers, windows-installer\]$', conformance, re.MULTILINE)
+    assert re.search(r'^    needs: \[compiler-contracts, runtime-conformance, integration-conformance, llvm-smoke, seed-installers, windows-installer\]
+    assert 'package_distribution.py' in jobs['seed-installers']
+    assert 'validate_unix_lifecycle.py' in jobs['seed-installers']
+    assert 'fedora:44' in jobs['seed-installers']
+    assert 'package_distribution.py' in jobs['windows-installer']
+    assert '-UpgradeFrom' in jobs['windows-installer']
+    assert 'path: .wysna_cache/installation-wheel' in jobs['installed-wheel']
+    assert 'python .wysna_cache/installation-wheel/validate_wheel.py --wheel .wysna_cache/installation-wheel/*.whl' in jobs['installed-wheel']
+    assert re.search(r'^    if: always\(\)$', conformance, re.MULTILINE)
+    match = re.search(r'- name: Require compiler, runtime, integration and LLVM smoke success\n[\s\S]*?        run: \|\n'
+                      r'((?:          [^\n]*\n)+)', conformance)
+    assert match, 'Required conformance statuses must reject failed or skipped contracts'
+    script = '\n'.join(line[10:] for line in match.group(1).splitlines())
+    variables = ('CONTRACT_RESULT','RUNTIME_RESULT','INTEGRATION_RESULT','LLVM_SMOKE_RESULT',
+                 'SEED_INSTALLER_RESULT','WINDOWS_INSTALLER_RESULT')
+    # Exercise every required gate failing independently, including absent results.
+    # A Cartesian product repeats the same conjunction thousands of times.
+    cases = [('success',) * len(variables)]
+    for index in range(len(variables)):
+        for status in ('failure','cancelled','skipped',''):
+            row = ['success'] * len(variables)
+            row[index] = status
+            cases.append(tuple(row))
+    for results in cases:
+        result = subprocess.run(
+            ['bash', '-c', script], capture_output=True, text=True,
+            env=dict(os.environ, **dict(zip(variables,results))), timeout=10)
+        assert (result.returncode == 0) == all(status == 'success' for status in results), (results, result)
+
+
+
+
+if __name__ == '__main__':
+    test_ci_workflow_contracts()
+    print('CI workflow: coverage, matrices, budgets and failure propagation contracts passed')
+, conformance, re.MULTILINE)
+    assert 'package_distribution.py' in jobs['seed-installers']
+    assert 'validate_unix_lifecycle.py' in jobs['seed-installers']
+    assert 'fedora:44' in jobs['seed-installers']
+    assert 'package_distribution.py' in jobs['windows-installer']
+    assert '-UpgradeFrom' in jobs['windows-installer']
+    assert 'path: .wysna_cache/installation-wheel' in jobs['installed-wheel']
+    assert 'python .wysna_cache/installation-wheel/validate_wheel.py --wheel .wysna_cache/installation-wheel/*.whl' in jobs['installed-wheel']
+    assert re.search(r'^    if: always\(\)$', conformance, re.MULTILINE)
+    match = re.search(r'- name: Require compiler, runtime and integration conformance success\n[\s\S]*?        run: \|\n'
+                      r'((?:          [^\n]*\n)+)', conformance)
+    assert match, 'Required conformance statuses must reject failed or skipped contracts'
+    script = '\n'.join(line[10:] for line in match.group(1).splitlines())
+    variables = ('CONTRACT_RESULT','RUNTIME_RESULT','INTEGRATION_RESULT','LLVM_RESULT',
+                 'LLVM_SDK_RESULT','LLVM_COMPARISON_RESULT','SEED_INSTALLER_RESULT','WINDOWS_INSTALLER_RESULT')
+    # Exercise every required gate failing independently, including absent results.
+    # A Cartesian product repeats the same conjunction thousands of times.
+    cases = [('success',) * len(variables)]
+    for index in range(len(variables)):
+        for status in ('failure','cancelled','skipped',''):
+            row = ['success'] * len(variables)
+            row[index] = status
+            cases.append(tuple(row))
+    for results in cases:
+        result = subprocess.run(
+            ['bash', '-c', script], capture_output=True, text=True,
+            env=dict(os.environ, **dict(zip(variables,results))), timeout=10)
+        assert (result.returncode == 0) == all(status == 'success' for status in results), (results, result)
+
+
+
+
+if __name__ == '__main__':
+    test_ci_workflow_contracts()
+    print('CI workflow: coverage, matrices, budgets and failure propagation contracts passed')
+, conformance, re.MULTILINE)
+    assert 'package_distribution.py' in jobs['seed-installers']
+    assert 'validate_unix_lifecycle.py' in jobs['seed-installers']
+    assert 'fedora:44' in jobs['seed-installers']
+    assert 'package_distribution.py' in jobs['windows-installer']
+    assert '-UpgradeFrom' in jobs['windows-installer']
+    assert 'path: .wysna_cache/installation-wheel' in jobs['installed-wheel']
+    assert 'python .wysna_cache/installation-wheel/validate_wheel.py --wheel .wysna_cache/installation-wheel/*.whl' in jobs['installed-wheel']
+    assert re.search(r'^    if: always\(\)$', conformance, re.MULTILINE)
+    match = re.search(r'- name: Require compiler, runtime, integration and LLVM smoke success\n[\s\S]*?        run: \|\n'
+                      r'((?:          [^\n]*\n)+)', conformance)
+    assert match, 'Required conformance statuses must reject failed or skipped contracts'
+    script = '\n'.join(line[10:] for line in match.group(1).splitlines())
+    variables = ('CONTRACT_RESULT','RUNTIME_RESULT','INTEGRATION_RESULT','LLVM_SMOKE_RESULT',
+                 'SEED_INSTALLER_RESULT','WINDOWS_INSTALLER_RESULT')
+    # Exercise every required gate failing independently, including absent results.
+    # A Cartesian product repeats the same conjunction thousands of times.
+    cases = [('success',) * len(variables)]
+    for index in range(len(variables)):
+        for status in ('failure','cancelled','skipped',''):
+            row = ['success'] * len(variables)
+            row[index] = status
+            cases.append(tuple(row))
+    for results in cases:
+        result = subprocess.run(
+            ['bash', '-c', script], capture_output=True, text=True,
+            env=dict(os.environ, **dict(zip(variables,results))), timeout=10)
+        assert (result.returncode == 0) == all(status == 'success' for status in results), (results, result)
+
+
+
+
+if __name__ == '__main__':
+    test_ci_workflow_contracts()
+    print('CI workflow: coverage, matrices, budgets and failure propagation contracts passed')
+, conformance, re.MULTILINE)
     assert 'package_distribution.py' in jobs['seed-installers']
     assert 'validate_unix_lifecycle.py' in jobs['seed-installers']
     assert 'fedora:44' in jobs['seed-installers']
