@@ -20,17 +20,31 @@ def test_ci_workflow_contracts():
     source = (ROOT / '.github/workflows/ci.yml').read_text(encoding='utf-8')
     assert 'group: ${{ github.workflow }}-${{ github.ref }}' in source
     assert 'cancel-in-progress: true' in source
-    for event in ('push', 'pull_request'):
+    expected_branches = {
+        'push': {'main'},
+        'pull_request': {'main', 'develop'},
+    }
+    for event, expected in expected_branches.items():
         trigger = re.search(r'^  ' + event + r':\n    branches: \[([^\]]+)\]',
                             source, re.MULTILINE)
         assert trigger, event + ' branch filters must declare the integration path'
         branches = {branch.strip().strip('"') for branch in trigger.group(1).split(',')}
-        assert {'main', 'develop'} <= branches, (event, branches)
+        assert branches == expected, (event, branches)
     body = source.split('\njobs:\n', 1)[1]
     headings = list(re.finditer(r'^  ([a-z][a-z0-9-]*):\n', body, re.MULTILINE))
     jobs = {heading.group(1): body[heading.end():headings[index + 1].start()
                                   if index + 1 < len(headings) else len(body)]
             for index, heading in enumerate(headings)}
+    service_campaign = jobs['service-load-campaign']
+    assert 'timeout-minutes: 15' in service_campaign
+    assert '--warmup-seconds 15 --duration-seconds 120' in service_campaign
+    assert '--repetitions 3' in service_campaign
+    assert '--minimum-latency-samples 1000' in service_campaign
+    performance_source = (ROOT / '.github/workflows/service-performance.yml').read_text(encoding='utf-8')
+    assert 'workflow_dispatch:' in performance_source and 'schedule:' in performance_source
+    assert 'tags:' in performance_source and '- "v*"' in performance_source
+    assert '--warmup-seconds 60 --duration-seconds 600' in performance_source
+    assert '--repetitions 3' in performance_source
     llvm = jobs['llvm-experimental']
     assert 'os: [ubuntu-latest, macos-latest]' in llvm
     assert 'needs: wheel-build' in llvm
