@@ -129,15 +129,15 @@ def filesystem(first, second, operation):
         if operation in (0, 1):
             try:
                 status = path.stat()
-            except FileNotFoundError:
-                return 0 if operation == 0 else -1
+            except FileNotFoundError as error:
+                return 0 if operation == 0 else failure(error)
             return 1 if operation == 0 else status.st_size
         if operation == 2:
             path.mkdir()
         elif operation == 3:
             path.rmdir() if path.is_dir() else path.unlink()
         elif operation == 4:
-            path.rename(other)
+            os.replace(path, other)
         else:
             return -1
         return 0
