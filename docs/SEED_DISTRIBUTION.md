@@ -110,9 +110,12 @@ the bundled toolchain.
   test installation, repair, upgrade from an explicitly synthetic previous build,
   installed tools/application, and uninstallation. RPM is exercised in Fedora 44;
   Debian packages use the Ubuntu runner. Qualification belongs to each CI commit.
-  These are unsigned development artifacts until a matching release is published.
+  The public [0.5.0 release](https://github.com/WashingtonYandun/Wysna/releases/tag/v0.5.0)
+  attaches the accepted Windows, macOS and Linux installers, SHA-256 manifests and
+  provenance records for its exact source commit. The installers are unsigned; the
+  macOS package is not notarized. Operating systems may display security warnings.
 
-## Graphical installer candidates
+## Graphical installer release packages
 
 `tools/package_installers.py --bundle PATH --output NEW_DIRECTORY` wraps a verified
 distribution in the native package format: Inno Setup `.exe` on Windows, system
@@ -128,10 +131,10 @@ preserves changed and unmanaged files, and leaves user projects outside the
 installation untouched. Linux integrates with the distribution's package manager;
 Windows retains its per-user wizard and registered uninstaller.
 
-`installers.json` and `SHA256SUMS` record the exact candidate artifacts and their
-source provenance. `--signing-identity` signs only the macOS Installer package; it
-does not notarize the package or sign every embedded binary. Without configured
-credentials these are unsigned development candidates.
+`installers.json` and `SHA256SUMS` record the exact package artifacts and source
+provenance. `--signing-identity` signs only the macOS Installer package; it does not
+notarize the package or sign every embedded binary. The 0.5.0 release does not
+include signed or notarized installers.
 
 Run the standalone acceptance tool outside the checkout:
 

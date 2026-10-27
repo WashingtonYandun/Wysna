@@ -1,6 +1,6 @@
 # Changelog
 
-## 0.5.0 — Release Candidate Preparation
+## 0.5.0 — 2026-10-27
 
 ### Language and Compilers
 
@@ -43,6 +43,7 @@
 
 ### Verification
 
-Tag this version only after the `release` gates, conformance suite, deterministic
-bootstrap, Python tests, and sanitizer and distribution checks pass on supported
-systems. This branch does not claim that an official release has been published.
+The official release page records the source commit, CI run, installer acceptance
+reports and SHA-256 manifests for the published Windows, macOS and Linux packages.
+Wysna 0.5.0 is pre-1.0; its installers are unsigned and the macOS package is not
+notarized.

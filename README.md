@@ -12,8 +12,8 @@
   <a href="https://github.com/WashingtonYandun/Wysna/actions/workflows/ci.yml">
     <img src="https://github.com/WashingtonYandun/Wysna/actions/workflows/ci.yml/badge.svg?branch=develop" alt="CI status on develop" />
   </a>
-  <a href="https://github.com/WashingtonYandun/Wysna/tree/v0.5.0-rc.1">
-    <img src="https://img.shields.io/badge/version-0.5.0--rc.1-blue?style=flat-square" alt="Version 0.5.0-rc.1" />
+  <a href="https://github.com/WashingtonYandun/Wysna/releases/tag/v0.5.0">
+    <img src="https://img.shields.io/badge/version-0.5.0-blue?style=flat-square" alt="Version 0.5.0" />
   </a>
   <a href="LICENSE">
     <img src="https://img.shields.io/badge/license-MIT-green?style=flat-square" alt="MIT license" />
@@ -38,9 +38,9 @@ counting and copy-on-write values with tools that inspect and validate programs
 before they run.
 
 > [!WARNING]
-> **0.5.0 is a release candidate, not a production guarantee.** Installer artifacts
-> are unsigned development candidates until a matching release is published. The
-> previous public prerelease, `v0.4.0a1-pilot.2`, predates the current toolchain.
+> **Wysna 0.5.0 is a pre-1.0 release** with documented language, platform and
+> security limits. Its Windows, macOS and Linux installers are unsigned; the macOS
+> package is not notarized, so operating systems may display security warnings.
 > Read [scope and status](docs/SCOPE.md) before relying on Wysna for critical work.
 
 ## Why Wysna
@@ -58,9 +58,9 @@ before they run.
 
 ### Install the Seed distribution
 
-The recommended installation is the **complete Seed distribution**. CI builds
-installer candidates for each source commit; download only an artifact whose version,
-source commit and acceptance report match.
+The recommended installation is the **complete Seed distribution**. Download the
+installer for your host from the [Wysna 0.5.0 release](https://github.com/WashingtonYandun/Wysna/releases/tag/v0.5.0).
+The release includes SHA-256 manifests and per-platform provenance records.
 
 | Host | Package | Launcher |
 | :--- | :--- | :--- |
@@ -68,9 +68,8 @@ source commit and acceptance report match.
 | macOS arm64 | `.pkg` | `/usr/local/bin/wysna` |
 | Linux x64 | `.deb` / `.rpm` | `/usr/bin/wysna` |
 
-Installer candidates are attached to successful
-[develop CI runs](https://github.com/WashingtonYandun/Wysna/actions/workflows/ci.yml?query=branch%3Adevelop).
-They are unsigned release candidates. See
+The 0.5.0 release includes the Windows `.exe`, macOS `.pkg`, and Linux `.deb` and
+`.rpm` installers. They are unsigned, and the macOS package is not notarized. See
 [Seed distribution](docs/SEED_DISTRIBUTION.md) for installation, repair, update,
 uninstall and dependency details. Other hosts can use the source checkout described
 in [Development](#development); the native SDK and WASI profiles have their own limits.
@@ -190,7 +189,7 @@ universal parity.
 | Area | Status |
 | :--- | :--- |
 | Native CLI, scripting, projects, formatter, LSP core, effect reports | **Supported** for the declared profiles; host and package limits are recorded in [scope](docs/SCOPE.md). |
-| Seed distribution with private CPython and Zig | **Release candidate**; unsigned installers are qualified per source commit. |
+| Seed distribution with private CPython and Zig | **0.5.0 release**; unsigned installers are qualified per source commit. |
 | WASI command profile | **Declared target** with a Wasmtime boundary, fuel, memory limits and explicit preopens. |
 | LLVM backend and LLVM SDK | **Experimental**, opt-in and qualification-gated. |
 | Wysna Compiler / native SDK | **Experimental**, bounded by the `native-core-v1` profile. |
