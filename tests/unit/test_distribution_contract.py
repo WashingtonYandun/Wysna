@@ -87,7 +87,7 @@ def test_seed_wheel_validation_is_shared_and_precedes_any_extraction():
         source = directory / 'source'
         source.mkdir()
         (source / 'main.py').write_text('print("current")\n', newline='\n')
-        (source / 'README.md').write_text('current documentation: programación\n', encoding='utf-8', newline='\n')
+        (source / 'README.md').write_text('current documentation: café\n', encoding='utf-8', newline='\n')
         (source / 'LICENSE').write_text('license\n', newline='\n')
         (source / 'pyproject.toml').write_text('''[project]
 name = "wysna"
@@ -126,7 +126,7 @@ packages = []
                     + ('Requires-Dist: malicious==1\n' if kind == 'extra_dependency' else '')
                     + ('Requires-External: unknown\n' if kind == 'unexpected_header' else '')
                     + '\n' + ('stale documentation\n' if kind == 'stale_metadata'
-                               else 'current documentation: programación\n')
+                               else 'current documentation: café\n')
                     + ('\n\n' if kind == 'legacy_metadata' else '')).encode('utf-8'),
                 metadata + 'WHEEL': ('Wheel-Version: 1.0\nGenerator: setuptools (84.0.0)\n'
                     'Root-Is-Purelib: true\nTag: ' + ('cp314-none-any' if kind == 'wheel_tag' else 'py3-none-any')
