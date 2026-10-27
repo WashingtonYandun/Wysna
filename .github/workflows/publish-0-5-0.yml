@@ -1,0 +1,95 @@
+name: Publish Wysna 0.5.0
+
+on:
+  push:
+    tags: [v0.5.0]
+
+permissions: {}
+
+concurrency:
+  group: publish-wysna-0-5-0
+  cancel-in-progress: false
+
+jobs:
+  publish:
+    name: Publish accepted installers
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    permissions:
+      actions: read
+      contents: write
+    steps:
+      - name: Check out the exact release tag
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.sha }}
+          fetch-depth: 0
+
+      - name: Require the tagged commit to be on main and have successful main CI
+        id: source-ci
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          git fetch --no-tags origin main
+          git merge-base --is-ancestor "$GITHUB_SHA" origin/main
+          run_id=$(gh api "repos/${GITHUB_REPOSITORY}/actions/workflows/ci.yml/runs?head_sha=${GITHUB_SHA}&per_page=100" \
+            --jq '[.workflow_runs[] | select(.event == "push" and .head_branch == "main" and .status == "completed" and .conclusion == "success")][0].id // empty')
+          if [ -z "$run_id" ]; then
+            echo "No successful main CI run exists for tagged source $GITHUB_SHA" >&2
+            exit 1
+          fi
+          echo "run_id=$run_id" >> "$GITHUB_OUTPUT"
+          echo "Source commit $GITHUB_SHA passed main CI run $run_id"
+
+      - name: Download the accepted Windows installer artifacts
+        uses: actions/download-artifact@v4
+        with:
+          name: wysna-windows-x64-installer
+          path: artifacts/windows
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          repository: ${{ github.repository }}
+          run-id: ${{ steps.source-ci.outputs.run_id }}
+
+      - name: Download the accepted macOS installer artifacts
+        uses: actions/download-artifact@v4
+        with:
+          name: wysna-seed-installers-macOS-ARM64
+          path: artifacts/macos
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          repository: ${{ github.repository }}
+          run-id: ${{ steps.source-ci.outputs.run_id }}
+
+      - name: Download the accepted Linux installer artifacts
+        uses: actions/download-artifact@v4
+        with:
+          name: wysna-seed-installers-Linux-X64
+          path: artifacts/linux
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          repository: ${{ github.repository }}
+          run-id: ${{ steps.source-ci.outputs.run_id }}
+
+      - name: Validate source, installer manifests and checksums
+        run: |
+          python3 tools/prepare_release_assets.py \
+            --version 0.5.0 \
+            --source-commit "$GITHUB_SHA" \
+            --ci-run-id "${{ steps.source-ci.outputs.run_id }}" \
+            --windows-artifact artifacts/windows \
+            --macos-artifact artifacts/macos \
+            --linux-artifact artifacts/linux \
+            --release-notes release-notes/v0.5.0.md \
+            --output dist/release-assets
+
+      - name: Publish and verify the stable GitHub release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          gh release create v0.5.0 dist/release-assets/* \
+            --title "Wysna 0.5.0" \
+            --notes-file dist/release-notes.md \
+            --target "$GITHUB_SHA" \
+            --verify-tag
+          gh release view v0.5.0 --json isDraft,isPrerelease,tagName,assets \
+            --jq 'if .tagName == "v0.5.0" and (.isDraft | not) and (.isPrerelease | not) and (.assets | length >= 10) then "Published stable Wysna 0.5.0 with \(.assets | length) verified assets" else error("release metadata or asset inventory is incomplete") end'
