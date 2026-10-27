@@ -143,6 +143,12 @@ def resolve_declaration_signatures(checker: "TypeChecker", program: Program) -> 
                         payload_types.append(checker._resolve_type_node(pt))
                 variant_payloads[v_name] = payload_types
             enum_type.variant_payloads = variant_payloads
+            checker.interner.mk_enum(
+                enum_type.name,
+                enum_type.variants,
+                {name: [checker.interner.from_type(payload) for payload in payloads]
+                 for name, payloads in variant_payloads.items()},
+            )
 
         elif isinstance(stmt, StructDecl):
             if stmt.type_params:

@@ -354,6 +354,37 @@ fn mir_function_json(function: MirFunction) -> str {
     return "{\"$type\":\"Function\",\"name\":" + mir_quote(function.name) + ",\"return_type\":" + str(function.return_type) + ",\"slots\":" + slots + ",\"blocks\":" + blocks + "],\"params\":" + mir_ids(function.params, false) + ",\"source\":" + mir_source_json(function.source) + "}"
 }
 
+fn mir_dictionary_key(module: MirModule, root: int) -> bool {
+    let mut pending: list[int] = [root]
+    let mut seen: list[int] = []
+    let mut active: list[int] = []
+    while len(pending) > 0 {
+        let id = pending.pop()
+        if id < 0 {
+            active.pop()
+            seen.append(-id - 1)
+        } elif id != 2 and id != 3 and id != 5 {
+            if id < 0 or id >= len(module.types) or module.types[id].kind != "enum" { return false }
+            let mut visited = false
+            for previous in seen { if previous == id { visited = true } }
+            if not visited {
+                for previous in active { if previous == id { return false } }
+                active.append(id)
+                pending.append(-id - 1)
+                let mut found = false
+                for record in module.records {
+                    if record.type_id == id {
+                        found = true
+                        for variant in record.variants { for payload in variant.payloads { pending.append(payload) } }
+                    }
+                }
+                if not found { return false }
+            }
+        }
+    }
+    return true
+}
+
 fn mir_arena_json(module: MirModule) -> str {
     let types = module.types
     let mut entries = "["
@@ -374,7 +405,7 @@ fn mir_arena_json(module: MirModule) -> str {
         elif tag != "error" and tag != "any" { data = mir_ids(type_.args, false) }
         entries = entries + "{\"tag\":" + mir_quote(tag) + ",\"data\":" + data + "}"
         let retain = str(i == 5 or i >= 7)
-        let key = str(i == 2 or i == 3 or i == 5 or tag == "enum")
+        let key = str(mir_dictionary_key(module, i))
         let comparable = str(tag != "result" and tag != "error_union" and tag != "function")
         let reference = str(mir_reference_type(types, i))
         let identity = str(mir_identity_type(types, i))

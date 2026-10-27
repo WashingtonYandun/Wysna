@@ -125,11 +125,15 @@ class Instantiator:
         frame = InstantiationFrame(template.name, tuple(concrete_args))
         checker._instantiation_stack.append(frame)
         checker._monomorphize_depth += 1
+        pending_keys_start = len(checker._pending_dictionary_keys)
         try:
             checker._check_fn_decl(cloned_fn)
+            if checker._monomorphize_depth == 1 and not checker._collecting_declarations:
+                checker._validate_pending_dictionary_keys()
             entry.state = SpecializationState.COMPLETE
             return fn_sym
         except Exception:
+            del checker._pending_dictionary_keys[pending_keys_start:]
             entry.state = SpecializationState.FAILED
             checker.monomorphized_fns.pop(key, None)
             if cloned_fn in checker.monomorphized_fn_decls:
@@ -218,6 +222,7 @@ class Instantiator:
         previous_subst = checker._active_type_subst
         checker._active_type_subst = subst
         concrete_decl = None
+        pending_keys_start = len(checker._pending_dictionary_keys)
         try:
             new_fields: List[StructField] = []
             fields_dict: Dict[str, WysnaType] = {}
@@ -250,6 +255,8 @@ class Instantiator:
             ctor_sym = Symbol(mangled, ctor_type, is_mut=False, kind="fn", line=template.ast_decl.line, col=template.ast_decl.col)
             checker.global_scope.define_symbol(ctor_sym, file=checker.file)
             checker._check_fn_decl(ctor_fn)
+            if checker._monomorphize_depth == 1 and not checker._collecting_declarations:
+                checker._validate_pending_dictionary_keys()
             checker.monomorphized_fn_decls.append(ctor_fn)
             checker.telemetry.specialized_structs += 1
             entry.state = SpecializationState.COMPLETE
@@ -257,6 +264,7 @@ class Instantiator:
 
             return struct_t
         except Exception:
+            del checker._pending_dictionary_keys[pending_keys_start:]
             entry.state = SpecializationState.FAILED
             checker.monomorphized_structs.pop(key, None)
             if concrete_decl is not None and concrete_decl in checker.monomorphized_struct_decls:
@@ -336,6 +344,7 @@ class Instantiator:
         previous_subst = checker._active_type_subst
         checker._active_type_subst = subst
         concrete_decl = None
+        pending_keys_start = len(checker._pending_dictionary_keys)
         try:
             variant_names: List[str] = []
             variant_payloads: Dict[str, List[WysnaType]] = {}
@@ -362,6 +371,8 @@ class Instantiator:
                  for name, payloads in variant_payloads.items()},
                 type_args=type_ids, template_name=template.name)
 
+            if checker._monomorphize_depth == 1 and not checker._collecting_declarations:
+                checker._validate_pending_dictionary_keys()
             concrete_decl = EnumDecl(name=mangled, variants=new_variants, type_params=[], line=template.ast_decl.line, col=template.ast_decl.col)
             checker.monomorphized_enum_decls.append(concrete_decl)
             checker.telemetry.specialized_enums += 1
@@ -370,6 +381,7 @@ class Instantiator:
 
             return enum_t
         except Exception:
+            del checker._pending_dictionary_keys[pending_keys_start:]
             entry.state = SpecializationState.FAILED
             checker.monomorphized_enums.pop(key, None)
             if concrete_decl is not None and concrete_decl in checker.monomorphized_enum_decls:

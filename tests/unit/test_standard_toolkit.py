@@ -284,6 +284,60 @@ print(path.join("root", "child"), path.basename("C:/é/file.wysna"), path.dirnam
             assert not path.exists() and not moved.exists()
 
 
+def test_filesystem_missing_size_replaces_previous_error_across_four_engines():
+    selfhost_bin = ensure_selfhost_compiler_binary(str(ROOT))
+    with tempfile.TemporaryDirectory(prefix='wysna missing path ') as temporary:
+        directory = Path(temporary)
+        missing = directory / 'missing.txt'
+        source = '''import "std/fs"
+fs.size("") else error { print(error.operation, error.code, error.domain) 0 }
+fs.size(PATH) else error { print(error.operation, error.code, error.domain) 0 }
+'''.replace('PATH', json.dumps(str(missing), ensure_ascii=False))
+        results = []
+        for engine in ('interpreter', 'ast', 'hir', 'selfhost'):
+            result = run_engine(engine, source, 'missing_size', selfhost_bin, directory / engine)
+            assert result.exit_code == 0 and result.stderr == '', (
+                f'{engine} failed: exit={result.exit_code}, stderr={result.stderr!r}'
+            )
+            lines = result.stdout.splitlines()
+            assert len(lines) == 2, f'{engine} produced unexpected output: {result.stdout!r}'
+            first = lines[0].split()
+            second = lines[1].split()
+            assert first[0] == second[0] == 'size'
+            assert int(first[1]) > 0 and int(first[2]) > 0
+            assert int(second[1]) > 0 and int(second[2]) > 0
+            assert second[1:] != first[1:], f'{engine} retained the previous error'
+            results.append((engine, lines))
+        assert all(lines == results[0][1] for _, lines in results), results
+
+
+def test_filesystem_rename_replaces_existing_file_across_four_engines():
+    selfhost_bin = ensure_selfhost_compiler_binary(str(ROOT))
+    with tempfile.TemporaryDirectory(prefix='wysna rename ') as temporary:
+        directory = Path(temporary)
+        for engine in ('interpreter', 'ast', 'hir', 'selfhost'):
+            source_path = directory / f'{engine}-source.txt'
+            destination_path = directory / f'{engine}-destination.txt'
+            target_directory = directory / f'{engine}-directory'
+            source_path.write_text('new contents', encoding='utf-8')
+            destination_path.write_text('old contents', encoding='utf-8')
+            target_directory.mkdir()
+            source = '''import "std/fs"
+fs.rename(SOURCE, DESTINATION) else error { print("unexpected", error.operation) exit(1) }
+fs.rename(SOURCE, DESTINATION) else error { print(error.operation, error.code > 0, error.domain > 0) }
+fs.rename(DESTINATION, DIRECTORY) else error { print(error.operation, error.code > 0, error.domain > 0) }
+'''.replace('SOURCE', json.dumps(str(source_path), ensure_ascii=False))
+            source = source.replace('DESTINATION', json.dumps(str(destination_path), ensure_ascii=False))
+            source = source.replace('DIRECTORY', json.dumps(str(target_directory), ensure_ascii=False))
+            result = run_engine(engine, source, 'rename_replace', selfhost_bin, directory / engine)
+            assert (result.exit_code, result.stdout, result.stderr) == (
+                0, 'rename true true\nrename true true\n', ''
+            ), f'{engine} failed: {result.exit_code}, {result.stdout!r}, {result.stderr!r}'
+            assert not source_path.exists()
+            assert destination_path.read_text(encoding='utf-8') == 'new contents'
+            assert target_directory.is_dir()
+
+
 def test_host_handles_reject_stale_wrong_kind_and_oversized_requests():
     buffer = HostAbi.FUNCTIONS['wysna_host_buffer_new']()
     assert HostAbi.buffer_append(buffer, 256) == -1
@@ -374,6 +428,8 @@ def run_toolkit_tests():
     test_json_parser_and_serializer_across_four_engines()
     test_json_differential_against_python_across_four_engines()
     test_streaming_files_and_filesystem_across_four_engines()
+    test_filesystem_missing_size_replaces_previous_error_across_four_engines()
+    test_filesystem_rename_replaces_existing_file_across_four_engines()
     test_host_handles_reject_stale_wrong_kind_and_oversized_requests()
     test_large_file_processing_keeps_buffer_bounded()
     test_standard_file_cleanup_runs_on_runtime_panic()

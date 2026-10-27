@@ -9,7 +9,7 @@ CONTRACT_MODULES = (
     'test_ci_harness', 'test_execution_context', 'test_hir_return_paths',
     'test_f03_error_unions', 'test_compilation_session', 'test_compiler_service',
     'test_effect_analysis', 'test_architecture_contract', 'test_native_toolchain', 'test_expansion_contracts',
-    'test_audit_remediation', 'test_mir', 'test_selfhost_mir', 'test_native_mir_pipeline',
+    'test_audit_remediation', 'test_mir', 'test_selfhost_mir', 'test_dictionary_key_parity', 'test_native_mir_pipeline',
     'test_selfhost_compilation_context', 'test_distribution_contract', 'test_installers',
     'test_audit_findings', 'test_standard_toolkit', 'test_http_client',
 )

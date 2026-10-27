@@ -19,6 +19,10 @@ struct SemanticScope { variables: int, depth: int }
 class SemanticContext {
     capture_nodes: bool
     checking_definition: bool
+    collecting_declarations: bool
+    pending_key_types: list[int]
+    pending_key_sources: list[Token]
+    completed_enums: list[str]
     obligations: list[SemObligation]
     specializations: list[SemSpecialization]
     specialization_ancestry: list[int]
@@ -115,6 +119,13 @@ class SemanticContext {
         this.last_pattern = -1
         this.expected_type = -1
         this.checking_definition = false
+        this.collecting_declarations = false
+        let pending_key_types: list[int] = []
+        this.pending_key_types = pending_key_types
+        let pending_key_sources: list[Token] = []
+        this.pending_key_sources = pending_key_sources
+        let completed_enums: list[str] = []
+        this.completed_enums = completed_enums
         let obligations: list[SemObligation] = []
         this.obligations = obligations
         let specializations: list[SemSpecialization] = []
