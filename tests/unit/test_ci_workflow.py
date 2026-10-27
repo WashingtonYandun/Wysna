@@ -20,27 +20,56 @@ def test_ci_workflow_contracts():
     source = (ROOT / '.github/workflows/ci.yml').read_text(encoding='utf-8')
     assert 'group: ${{ github.workflow }}-${{ github.ref }}' in source
     assert 'cancel-in-progress: true' in source
-    for event in ('push', 'pull_request'):
+    expected_branches = {
+        'push': {'main'},
+        'pull_request': {'main', 'develop'},
+    }
+    for event, expected in expected_branches.items():
         trigger = re.search(r'^  ' + event + r':\n    branches: \[([^\]]+)\]',
                             source, re.MULTILINE)
         assert trigger, event + ' branch filters must declare the integration path'
         branches = {branch.strip().strip('"') for branch in trigger.group(1).split(',')}
-        assert {'main', 'develop'} <= branches, (event, branches)
+        assert branches == expected, (event, branches)
     body = source.split('\njobs:\n', 1)[1]
     headings = list(re.finditer(r'^  ([a-z][a-z0-9-]*):\n', body, re.MULTILINE))
     jobs = {heading.group(1): body[heading.end():headings[index + 1].start()
                                   if index + 1 < len(headings) else len(body)]
             for index, heading in enumerate(headings)}
-    llvm = jobs['llvm-experimental']
-    assert 'os: [ubuntu-latest, macos-latest]' in llvm
+    service_campaign = jobs['service-load-campaign']
+    assert 'timeout-minutes: 15' in service_campaign
+    assert '--warmup-seconds 15 --duration-seconds 120' in service_campaign
+    assert '--repetitions 3' in service_campaign
+    assert '--minimum-latency-samples 1000' in service_campaign
+    performance_source = (ROOT / '.github/workflows/service-performance.yml').read_text(encoding='utf-8')
+    assert 'workflow_dispatch:' in performance_source and 'schedule:' in performance_source
+    assert 'tags:' in performance_source and '- "v*"' in performance_source
+    assert '--warmup-seconds 60 --duration-seconds 600' in performance_source
+    assert '--repetitions 3' in performance_source
+    llvm = jobs['llvm-smoke']
+    assert 'runs-on: ubuntu-latest' in llvm
     assert 'needs: wheel-build' in llvm
     assert 'python -m tests.unit.test_llvm_backend -v' in llvm
     assert 'python tools/validate_llvm_install.py' in llvm
     assert '${wheel}[llvm]' in llvm
-    assert '--sanitize --output .wysna_cache/llvm-sanitized' in llvm
-    sdk_build, sdk_consumer = jobs['llvm-sdk-build'], jobs['installed-llvm-sdk']
+    assert 'qualify_llvm.py' not in llvm
+    full_llvm_source = (ROOT / '.github/workflows/llvm-qualification.yml').read_text(encoding='utf-8')
+    assert 'schedule:' in full_llvm_source and '- cron: "0 8 * * 3"' in full_llvm_source
+    assert 'workflow_dispatch:' in full_llvm_source
+    assert 'tags:' in full_llvm_source and '- "v*"' in full_llvm_source
+    full_body = full_llvm_source.split('\njobs:\n', 1)[1]
+    full_headings = list(re.finditer(r'^  ([a-z][a-z0-9-]*):\n', full_body, re.MULTILINE))
+    full_jobs = {heading.group(1): full_body[heading.end():full_headings[index + 1].start()
+                                              if index + 1 < len(full_headings) else len(full_body)]
+                 for index, heading in enumerate(full_headings)}
+    full_llvm = full_jobs['llvm-experimental']
+    assert 'os: [ubuntu-latest, macos-latest]' in full_llvm
+    assert 'python -m tests.unit.test_llvm_backend -v' in full_llvm
+    assert 'python tools/validate_llvm_install.py' in full_llvm
+    assert '${wheel}[llvm]' in full_llvm
+    assert '--sanitize --output .wysna_cache/llvm-sanitized' in full_llvm
+    sdk_build, sdk_consumer = full_jobs['llvm-sdk-build'], full_jobs['installed-llvm-sdk']
     assert 'package_llvm_sdk.py' in sdk_build and 'benchmark_llvm.py' not in sdk_build
-    comparison = jobs['llvm-comparison']
+    comparison = full_jobs['llvm-comparison']
     assert 'needs: llvm-sdk-build' in comparison and 'profile: [dev, release, size]' in comparison
     assert 'benchmark_llvm.py' in comparison and '--profiles ${{ matrix.profile }}' in comparison
     assert 'llvm-sdk-qualification-${{ matrix.os }}' in comparison
@@ -94,7 +123,7 @@ def test_ci_workflow_contracts():
     assert {os_name + ',' + compiler for os_name, compiler in rows} == MATRIX
     assert len(rows) == len(MATRIX)
     assert 'name: Conformance (${{ matrix.os }}, ${{ matrix.cc }})' in conformance
-    assert re.search(r'^    needs: \[compiler-contracts, runtime-conformance, integration-conformance, llvm-experimental, installed-llvm-sdk, llvm-comparison, seed-installers, windows-installer\]$', conformance, re.MULTILINE)
+    assert re.search(r'^    needs: \[compiler-contracts, runtime-conformance, integration-conformance, llvm-smoke, seed-installers, windows-installer\]$', conformance, re.MULTILINE)
     assert 'package_distribution.py' in jobs['seed-installers']
     assert 'validate_unix_lifecycle.py' in jobs['seed-installers']
     assert 'fedora:44' in jobs['seed-installers']
@@ -103,12 +132,12 @@ def test_ci_workflow_contracts():
     assert 'path: .wysna_cache/installation-wheel' in jobs['installed-wheel']
     assert 'python .wysna_cache/installation-wheel/validate_wheel.py --wheel .wysna_cache/installation-wheel/*.whl' in jobs['installed-wheel']
     assert re.search(r'^    if: always\(\)$', conformance, re.MULTILINE)
-    match = re.search(r'- name: Require compiler, runtime and integration conformance success\n[\s\S]*?        run: \|\n'
+    match = re.search(r'- name: Require compiler, runtime, integration and LLVM smoke success\n[\s\S]*?        run: \|\n'
                       r'((?:          [^\n]*\n)+)', conformance)
     assert match, 'Required conformance statuses must reject failed or skipped contracts'
     script = '\n'.join(line[10:] for line in match.group(1).splitlines())
-    variables = ('CONTRACT_RESULT','RUNTIME_RESULT','INTEGRATION_RESULT','LLVM_RESULT',
-                 'LLVM_SDK_RESULT','LLVM_COMPARISON_RESULT','SEED_INSTALLER_RESULT','WINDOWS_INSTALLER_RESULT')
+    variables = ('CONTRACT_RESULT','RUNTIME_RESULT','INTEGRATION_RESULT','LLVM_SMOKE_RESULT',
+                 'SEED_INSTALLER_RESULT','WINDOWS_INSTALLER_RESULT')
     # Exercise every required gate failing independently, including absent results.
     # A Cartesian product repeats the same conjunction thousands of times.
     cases = [('success',) * len(variables)]
