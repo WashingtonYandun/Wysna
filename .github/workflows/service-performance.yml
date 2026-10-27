@@ -1,0 +1,47 @@
+name: Wysna Service Performance Qualification
+
+on:
+  schedule:
+    - cron: "0 6 * * 1"
+  workflow_dispatch:
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: service-performance-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  service-load-qualification:
+    name: Full service load and RSS qualification (Ubuntu)
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    env:
+      CC: clang
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: Install SQLite development files
+        run: sudo apt-get update && sudo apt-get install -y libsqlite3-dev
+      - name: Install the optional service adapter
+        run: python -m pip install -e '.[service]'
+      - name: Run three sustained service repetitions
+        run: >-
+          python3 tools/measure_service.py --warmup-seconds 60 --duration-seconds 600
+          --repetitions 3 --clients 4 --saturation-clients 48 --saturation-seconds 1
+          --workers 4 --queue-size 32 --minimum-latency-samples 10000
+          --rss-growth-budget-percent 5 --rss-growth-budget-bytes 8388608
+          --report .wysna_cache/ci-artifacts/service-load.json
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: full-service-load-rss-qualification
+          path: .wysna_cache/ci-artifacts/service-load.json
+          if-no-files-found: error
+          retention-days: 14
