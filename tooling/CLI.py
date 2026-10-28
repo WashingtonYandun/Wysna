@@ -56,7 +56,7 @@ def repl(show_tokens: bool = False, show_ast: bool = False) -> None:
             break
         if not pending and line.strip() == ":help":
             print("Commands: :help, :reload, :reset, exit")
-            print("  :reload  recheck the session against changed imported modules")
+            print("  :reload  reload imports if the session has no declarations")
             print("  :reset   discard all session state")
             continue
         if not pending and line.strip() == ":reload":

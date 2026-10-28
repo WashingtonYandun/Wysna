@@ -16,6 +16,7 @@ from node.NodeType import (Node, IdentExpr, MemberExpr, FnDecl, ExternFnDecl, Le
                            StructDecl, StructField, EnumDecl, VariantDecl, ClassDecl, ClassField,
                            InterfaceDecl, InterfaceMethod, MethodDecl, TypeParam, IdentifierPattern)
 from parser.Parser import Parser
+from tokens.TokenType import TokenType
 
 
 DECLARATIONS = (FnDecl, ExternFnDecl, LetDecl, Param, StructDecl, StructField, EnumDecl,
@@ -305,13 +306,38 @@ class LanguageServer:
     def rename(self, uri, position, new_name):
         if (not isinstance(new_name, str)
                 or not re.fullmatch(r'[A-Za-z_][A-Za-z0-9_]*', new_name)
-                or new_name in KEYWORDS):
+                or new_name in KEYWORDS
+                or new_name.startswith(('__wysna_', '_WYSNA_'))):
             return None
         symbol = self.symbol_at(uri, position)
-        if symbol is None or symbol.kind == 'builtin' or not Path(symbol.file).is_absolute():
+        if (symbol is None or symbol.kind not in ('var', 'param', 'fn')
+                or symbol.file != source_path(uri)):
+            return None
+        unit = self.checked.get(uri)
+        if unit is None:
+            return None
+        declaration = next((node for node in unit.program.body
+                            if getattr(node, 'name', None) == symbol.name
+                            and getattr(node, 'line', None) == symbol.line), None)
+        if getattr(declaration, 'is_exported', False) or (symbol.kind == 'fn' and declaration is None):
             return None
         locations = self.references(uri, position)
-        if not locations:
+        if not locations or any(location['uri'] != uri for location in locations):
+            return None
+        source = self.documents[uri]['text']
+        tokens = Lexer(source).tokenize()
+        if any(token.type == TokenType.IDENTIFIER and token.value == new_name for token in tokens):
+            return None
+        from checker.SymbolTable import create_global_scope
+        builtins = create_global_scope()
+        if builtins.lookup_symbol(new_name) or builtins.lookup_type(new_name):
+            return None
+        # Refuse partial edits: unresolved syntactic uses may otherwise change behavior.
+        original = self._source_name(symbol.name)
+        occurrences = {token.start_offset for token in tokens
+                       if token.type == TokenType.IDENTIFIER and token.value == original}
+        edits = {offset_at(source, location['range']['start']) for location in locations}
+        if occurrences != edits:
             return None
         changes = {}
         for location in locations:

@@ -2,6 +2,9 @@
 
 from compiler.CompilerService import CompilerService
 from error.Error import WysnaError
+from formatter.Formatter import Formatter
+from node.NodeType import ClassDecl, EnumDecl, FnDecl, ImportDecl, InterfaceDecl, LetDecl, StructDecl
+from parser.Parser import Parser
 from runtime.Interpreter import Interpreter
 
 
@@ -67,14 +70,25 @@ class ReplSession:
         return value
 
     def reload(self):
-        """Recheck accepted history and execute changed imported modules again."""
-        if not self.history.strip():
+        """Reload imports in a fresh environment without replaying prior input."""
+        if not self.modules:
             return False
-        modules = self.modules
-        self.modules = {}
-        try:
-            self.execute("")
-        except BaseException:
-            self.modules = modules
-            raise
+        program = Parser(file='<repl>').parse(self.history)
+        declarations = (ClassDecl, EnumDecl, FnDecl, InterfaceDecl, LetDecl, StructDecl)
+        if any(isinstance(statement, declarations) for statement in program.body):
+            raise WysnaError(
+                'Cannot reload imports while session declarations are present; use :reset and re-import',
+                file='<repl>', code='W5002', stage='interactive',
+            )
+        formatter = Formatter()
+        imports = [formatter.format_stmt(statement, 0) for statement in program.body
+                   if isinstance(statement, ImportDecl)]
+        candidate = ReplSession(stdout=self.interpreter.stdout, project_root=self.project_root)
+        candidate.interpreter = Interpreter(stdout=self.interpreter.stdout, file='<repl>',
+                                            execution_context=self.interpreter.execution_context)
+        candidate.execute('\n'.join(imports))
+        self.history = candidate.history
+        self.pending_source = candidate.pending_source
+        self.modules = candidate.modules
+        self.interpreter = candidate.interpreter
         return True

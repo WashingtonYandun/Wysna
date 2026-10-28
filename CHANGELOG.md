@@ -17,11 +17,13 @@
 - Makes `wysna repl` retain definitions and values between inputs, continue across
   open delimiters, recover from failed declarations, and recheck accepted history
   without replaying earlier effects or output.
-- Adds `:help`, `:reload` and `:reset` to the REPL. `:reload` rechecks accepted
-  history and executes changed imported modules again without restarting the session.
+- Adds `:help`, `:reload` and `:reset` to the REPL. `:reload` reinitializes imports
+  in a fresh runtime when no session declarations exist; otherwise use `:reset`.
 - Applies ordered, ranged `didChange` edits in the language server, resolves
-  declarations as well as uses, and adds `references` and `rename` across open
-  modules. Signature help and semantic tokens remain unsupported.
+  declarations as well as uses, and adds references across open modules. Rename
+  is restricted to verified, non-exported symbols in the current document and
+  refuses collisions or incomplete references. Signature help and semantic tokens
+  remain unsupported.
 - Renders human diagnostics with bounded source excerpts and precise spans, including
   an optional `data.help` hint. Terminal control sequences in diagnostic text are
   removed before printing.

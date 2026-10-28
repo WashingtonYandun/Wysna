@@ -131,13 +131,7 @@ class LanguageServerTests(unittest.TestCase):
                   for uri, locations in self._by_uri(member_references).items()}
         self.assertEqual(by_uri, {self.library_uri: ['plus'], self.main_uri: ['plus']})
         member_rename = self.server.rename(self.main_uri, plus_position, 'add')
-        self.assertEqual(set(member_rename['changes']), {self.library_uri, self.main_uri})
-        main_text = self.server.documents[self.main_uri]['text']
-        for uri, edits in member_rename['changes'].items():
-            text = (self.library.read_text(encoding='utf-8')
-                    if uri == self.library_uri else main_text)
-            self.assertEqual(self.slices(text, edits), ['plus'])
-            self.assertTrue(all(edit['newText'] == 'add' for edit in edits))
+        self.assertIsNone(member_rename)
 
         declaration_position = position_at(self.source, self.source.index('use('))
         declaration_references = self.server.references(self.main_uri, declaration_position)
@@ -160,6 +154,27 @@ class LanguageServerTests(unittest.TestCase):
         self.assertIsNone(self.server.rename(self.main_uri, value_position, 'fn'))
         self.assertIsNone(self.server.rename(self.main_uri, value_position, '1value'))
         self.assertIsNone(self.server.rename(self.main_uri, value_position, ''))
+
+    def test_rename_preserves_assignment_targets_and_refuses_capture(self):
+        source = ('let mut value = 1\n'
+                  'value = value + 1\n'
+                  'fn show() { let other = 2; print(value) }\nshow()\n')
+        uri = (self.root / 'rename.wysna').as_uri()
+        self.open(uri, source)
+        position = position_at(source, source.index('value'))
+        self.assertIsNone(self.server.rename(uri, position, 'other'))
+        self.assertIsNone(self.server.rename(uri, position, '__wysna_internal'))
+        self.assertIsNone(self.server.rename(uri, position, 'print'))
+        result = self.server.rename(uri, position, 'amount')
+        self.assertEqual(len(result['changes'][uri]), 4)
+        self.assertEqual(self.slices(source, result['changes'][uri]),
+                         ['value', 'value', 'value', 'value'])
+
+    def test_rename_refuses_public_declarations_without_workspace_index(self):
+        source = 'pub fn value() -> int { return 1 }\n'
+        uri = (self.root / 'public.wysna').as_uri()
+        self.open(uri, source)
+        self.assertIsNone(self.server.rename(uri, position_at(source, source.index('value')), 'other'))
 
     def test_dependency_edits_and_close_publish_diagnostics_for_open_dependents(self):
         library_source = self.library.read_text(encoding='utf-8')

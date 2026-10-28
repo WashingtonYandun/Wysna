@@ -107,8 +107,9 @@ Create a project with `wysna project new example`, then run `wysna project test`
 from its directory. The separate `wysna test` command runs the compiler's own
 maintenance suite and requires a source checkout.
 `wysna repl` keeps definitions and values between inputs and continues while delimiters
-are open. `:help` lists the commands, `:reload` rechecks the session after imported
-modules change, `:reset` discards session state, and `exit` closes the session.
+are open. `:help` lists the commands; `:reload` reloads imports in a fresh runtime
+if the session has no declarations. Otherwise, use `:reset` and import again.
+`exit` closes the session.
 
 ## Language tour
 

@@ -85,6 +85,38 @@ def test_sessions_are_independent():
     assert failure.value.code == 'W1001'
 
 
+def test_reload_refuses_to_retype_existing_session_values(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    module = tmp_path / 'library.wysna'
+    module.write_text('pub fn value() -> int { return 12 }\n', encoding='utf-8')
+    session = ReplSession(stdout=StringIO())
+    session.execute('import "library.wysna" as library')
+    session.execute('let value = library.value()')
+    original = session.interpreter.global_env.lookup('value')
+    module.write_text('pub fn value() -> str { return "changed" }\n', encoding='utf-8')
+    with pytest.raises(WysnaError) as failure:
+        session.reload()
+    assert failure.value.code == 'W5002'
+    assert ':reset' in failure.value.message
+    assert session.interpreter.global_env.lookup('value') is original
+    assert 'let value = library.value()' in session.history
+
+
+def test_reload_reinitializes_only_imports_without_replaying_inputs(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    module = tmp_path / 'library.wysna'
+    module.write_text('pub fn value() -> int { return 12 }\n', encoding='utf-8')
+    output = StringIO()
+    session = ReplSession(stdout=output)
+    session.execute('import "library.wysna" as library')
+    session.execute('print("once")')
+    module.write_text('pub fn value() -> int { return 13 }\n', encoding='utf-8')
+    assert session.reload()
+    session.execute('print(library.value())')
+    assert output.getvalue() == 'once\n13\n'
+    assert 'print("once")' not in session.history
+
+
 def test_enum_variant_shadowing_survives_later_inputs():
     output = StringIO()
     session = ReplSession(stdout=output)

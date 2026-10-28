@@ -9,7 +9,8 @@ sessions can become slower. Open delimiters continue onto subsequent lines; othe
 incomplete expressions are reported immediately. A failed input removes bindings
 it introduced, but completed mutations and external effects
 such as output or file writes are not rolled back. Imported modules cannot be changed
-mid-session; use `:reload` to recheck the session and load their new contents.
+mid-session; `:reload` loads imports into a fresh runtime when no session declarations
+exist. Otherwise, use `:reset` and import again. Module initialization runs again.
 
 ---
 
@@ -190,9 +191,15 @@ a proposed memory model; do not treat this as an implicit promise that ARC is th
 | Parser error recovery | Check and LSP recover up to 100 syntax diagnostics. JSON preserves the first error and adds `diagnostics`; recovered programs never execute. |
 | `wysna fmt` coverage | The gate checks idempotence and AST preservation across fixtures, runtime programs, recursive examples, the standard library, and self-hosted sources. It also runs generated trees before and after formatting. |
 | LSP | `initialize`, `didOpen/didChange/didClose` with ordered ranged edits, `definition`, `hover`, `completion`, `references`, `rename`, document formatting and `publishDiagnostics`. No signature help or semantic tokens. |
+
 | Capability policy | `wysna run --allow` and `--deny` reject modeled capability violations and incomplete effect analyses before interpretation (`W5006`). This is a static gate, not an OS sandbox; native builds, `project run` and trusted runtime/FFI behavior are outside it. |
 | Dictionary keys | `int`, `str`, `bool`, `enum` only; `float` and composites containing it are rejected with `W2010`. |
 | Standard library scope | Includes text, paths, filesystem, file/buffer I/O, resources, algorithms, UTF-8, JSON, process execution and an HTTP client with explicit host dependencies. Cryptography and Unicode normalization are not provided; see [standard library](STDLIB.md) for contracts and platform limits. |
+
+LSP references cover checked open documents only. Rename is limited to non-exported
+variables, parameters and top-level functions in the current document; it refuses
+potential name collisions and unresolved occurrences. Cross-module and exported
+rename require a complete workspace index and are not available.
 
 The CLI has POSIX and Windows adapters for cache locks, compiler processes, executable
 names and RSS telemetry. The Windows smoke job must pass on that host before support
