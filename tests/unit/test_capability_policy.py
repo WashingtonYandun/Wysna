@@ -1,6 +1,8 @@
 """Capability policy refuses modeled and uncertified execution before side effects."""
 
 from pathlib import Path
+import os
+import shutil
 import subprocess
 import sys
 import tempfile
@@ -18,6 +20,55 @@ def invoke(directory, source, *options):
 
 
 class CapabilityPolicyTests(unittest.TestCase):
+    def test_trusted_host_effects_have_interpreter_bindings(self):
+        from compiler.EffectModel import HOST_EFFECTS
+        from runtime.HostAbi import FUNCTIONS
+        self.assertLessEqual(set(HOST_EFFECTS), set(FUNCTIONS))
+
+    def test_unused_foreign_declaration_is_refused_before_binding(self):
+        with tempfile.TemporaryDirectory(prefix='wysna-policy-') as temporary:
+            directory = Path(temporary).resolve()
+            source = directory / 'foreign.wysna'
+            source.write_text('extern "C" fn system(command: opaque) -> int\n'
+                              'print("ran")\n', encoding='utf-8')
+            result = invoke(directory, source, '--deny=filesystem.write')
+            self.assertEqual(result.returncode, 1, result.stderr)
+            self.assertIn('W5006', result.stderr)
+            self.assertIn('untrusted foreign declarations', result.stderr)
+            self.assertEqual(result.stdout, '')
+
+    def test_bundled_host_declarations_are_still_recognized(self):
+        with tempfile.TemporaryDirectory(prefix='wysna-policy-') as temporary:
+            directory = Path(temporary).resolve()
+            source = directory / 'bundled.wysna'
+            source.write_text('import "std/files" as files\nprint("ok")\n', encoding='utf-8')
+            result = invoke(directory, source, '--allow=stdio')
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertEqual(result.stdout, 'ok\n')
+
+    @unittest.skipIf(os.name == 'nt' or shutil.which('clang') is None,
+                     'shared-library constructor test requires a Unix C compiler')
+    def test_explicit_library_cannot_run_a_constructor_before_policy(self):
+        with tempfile.TemporaryDirectory(prefix='wysna-policy-') as temporary:
+            directory = Path(temporary).resolve()
+            source = directory / 'foreign.wysna'
+            source.write_text('extern "C" fn harmless() -> int\nprint("ran")\n', encoding='utf-8')
+            c_source = directory / 'library.c'
+            c_source.write_text(
+                '#include <stdio.h>\n'
+                '__attribute__((constructor)) static void init(void) {'
+                ' FILE *f = fopen("marker.txt", "w"); if (f) fclose(f); }\n'
+                'long harmless(void) { return 1; }\n', encoding='utf-8')
+            library = directory / ('library.dylib' if sys.platform == 'darwin' else 'library.so')
+            flags = ['-dynamiclib'] if sys.platform == 'darwin' else ['-shared', '-fPIC']
+            subprocess.run(['clang', *flags, str(c_source), '-o', str(library)],
+                           check=True, capture_output=True, text=True, timeout=60)
+            result = invoke(directory, source, '--deny=filesystem.write', '--link-lib', str(library))
+            self.assertEqual(result.returncode, 2, result.stderr)
+            self.assertIn('--link-lib cannot be combined', result.stderr)
+            self.assertEqual(result.stdout, '')
+            self.assertFalse((directory / 'marker.txt').exists())
+
     def test_deny_refuses_modeled_write_before_side_effects(self):
         with tempfile.TemporaryDirectory(prefix='wysna-policy-') as temporary:
             directory = Path(temporary).resolve()

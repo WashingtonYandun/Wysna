@@ -440,6 +440,8 @@ def main(argv=None) -> None:
             usage_error("llvm-experimental does not support these diagnostic, C generation, or build options")
 
     if capability_policy is not None:
+        if link_libraries:
+            usage_error("--link-lib cannot be combined with a capability policy")
         if (subcmd not in (None, "run") or backend_explicit
                 or backend != "hir" or use_selfhost or use_hir is not None
                 or check_only or fmt_only or show_tokens or show_ast or show_mir

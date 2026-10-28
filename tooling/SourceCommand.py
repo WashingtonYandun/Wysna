@@ -122,6 +122,9 @@ def run_pipeline(
                 raise WysnaError("Unsupported option for llvm-experimental", code="W5002", stage="options")
         elif emit_llvm_path is not None or run_timeout_ms is not None or (optimization_profile is not None and build_bin_path is None):
             raise WysnaError("LLVM options require llvm-experimental", code="W5002", stage="options")
+        if capability_policy is not None and link_libraries:
+            raise WysnaError("--link-lib cannot be combined with a capability policy",
+                             code="W5002", stage="options")
         if capability_policy is not None and (
                 backend != "hir" or use_selfhost or use_hir is not None
                 or check_only or fmt_only or show_tokens or show_ast or show_mir
@@ -214,8 +217,10 @@ def run_pipeline(
 
         if capability_policy is not None:
             from tooling.CapabilityPolicy import enforce_capability_policy
-            enforce_capability_policy(service.explain(checked), capability_policy[0],
-                                      capability_policy[1], file_name)
+            report, bindings = service.explain_with_foreign_bindings(checked)
+            enforce_capability_policy(report, capability_policy[0],
+                                      capability_policy[1], file_name,
+                                      untrusted_bindings=bindings)
 
         if check_only:
             if json_v1:

@@ -26,8 +26,15 @@ def parse_capabilities(value):
     return frozenset(names)
 
 
-def enforce_capability_policy(report, mode, capabilities, file_name):
+def enforce_capability_policy(report, mode, capabilities, file_name, *, untrusted_bindings=()):
     """Reject execution before interpretation when the static policy cannot pass."""
+    if untrusted_bindings:
+        raise WysnaError(
+            'Capability policy cannot allow untrusted foreign declarations; '
+            'the interpreter may bind them before execution',
+            file=file_name, code='W5006', stage='capability-policy',
+            help='Remove the external declarations or run without a policy.',
+        )
     program = report['program']
     if not program['complete_within_model']:
         unresolved = ', '.join(program['unresolved_functions'])

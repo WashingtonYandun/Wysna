@@ -47,8 +47,11 @@ only covers interpreted Seed execution.
 
 The gate is conservative: it refuses any program whose report is not
 `complete_within_model`, including indirect calls and uncontrolled FFI. This is a
-pre-execution gate over modeled source effects. It is not an operating-system
-sandbox, does not constrain native builds or `wysna project run`, and cannot prove
+pre-execution gate over modeled source effects. It also rejects untrusted external
+declarations even when they are not called, because the interpreter binds them
+before running the program. Explicit `--link-lib` is not accepted with a policy.
+The gate is not an operating-system sandbox, does not constrain native builds or
+`wysna project run`, and cannot prove
 that trusted runtime or FFI code remains inside the policy.
 
 ## Model

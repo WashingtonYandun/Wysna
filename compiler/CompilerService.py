@@ -166,23 +166,37 @@ class CompilerService:
         from mir.Exchange import export_module
         return export_module(self.lower_mir(checked), checked._interner)
 
-    def explain(self, checked):
-        """Analyze verified resolved MIR without interpreting, linking or loading FFI."""
-        self._validate(checked)
-        from compiler.EffectAnalysis import analyze_effects
+    @staticmethod
+    def _foreign_contracts(hir):
+        """Classify all declarations, including ones bound before program execution."""
         from compiler.EffectModel import HOST_EFFECTS
         from common.Paths import get_repo_root
+        stdlib = (Path(get_repo_root()) / 'stdlib').resolve()
+        trusted, untrusted = {}, []
+        for declaration in hir.functions:
+            if not hasattr(declaration, 'extern_types'):
+                continue
+            file = declaration.span.file_path
+            if (declaration.extern_name in HOST_EFFECTS and file
+                    and Path(file).resolve().is_relative_to(stdlib)):
+                trusted['wysna_fn_' + declaration.name] = declaration.extern_name
+            else:
+                untrusted.append(declaration.name)
+        return trusted, tuple(sorted(untrusted))
+
+    def explain_with_foreign_bindings(self, checked):
+        """Analyze effects and classify declarations the interpreter binds eagerly."""
+        self._validate(checked)
+        from compiler.EffectAnalysis import analyze_effects
         from mir.Lowering import Lowering
         hir = self.lower_hir(checked)
         module = Lowering(checked._interner, checked.source.file).lower(hir)
-        stdlib = (Path(get_repo_root()) / 'stdlib').resolve()
-        trusted = {}
-        for declaration in hir.functions:
-            if hasattr(declaration, 'extern_types') and declaration.extern_name in HOST_EFFECTS:
-                file = declaration.span.file_path
-                if file and Path(file).resolve().is_relative_to(stdlib):
-                    trusted['wysna_fn_' + declaration.name] = declaration.extern_name
-        return analyze_effects(module, checked._interner, self.source_texts(), trusted)
+        trusted, untrusted = self._foreign_contracts(hir)
+        return analyze_effects(module, checked._interner, self.source_texts(), trusted), untrusted
+
+    def explain(self, checked):
+        """Analyze verified resolved MIR without interpreting, linking or loading FFI."""
+        return self.explain_with_foreign_bindings(checked)[0]
 
     def emit_c(self, checked, backend='hir', *, target_profile=None):
         self._validate(checked)
