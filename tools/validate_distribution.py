@@ -82,6 +82,10 @@ def validate(installation, report, expected_commit=None):
         invalid.write_text('let value: int = "wrong"\n', encoding='utf-8')
         diagnostic = json.loads(run('structured-diagnostic', ['check', invalid, '--output-format=json-v1'], code=1).stdout)
         assert diagnostic['status'] == 'diagnostic_error', diagnostic
+        span = diagnostic['diagnostics'][0]['primary_span']
+        assert invalid.read_bytes()[span['start_byte']:span['end_byte']] == b'"wrong"', diagnostic
+        human = run('human-diagnostic', ['check', invalid], code=1)
+        assert 'let value: int = "wrong"' in human.stderr and '^^^^^^^' in human.stderr, human.stderr
         formatted = run('format', ['fmt', source]).stdout
         formatted_source = work / 'formatted.wysna'
         formatted_source.write_text(formatted, encoding='utf-8')

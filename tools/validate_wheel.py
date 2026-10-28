@@ -135,6 +135,13 @@ def validate(wheel, forbidden, report):
         run('check', ['check', 'hello.wysna'])
         rejected = run('invalid', ['check', '--json', 'invalid.wysna'], code=1)
         assert json.loads(rejected.stdout)['code'] == 'W2001'
+        human = run('invalid-human-diagnostic', ['check', 'invalid.wysna'], code=1)
+        assert 'let value: int = "wrong"' in human.stderr and '^^^^^^^' in human.stderr
+        structured = json.loads(run('invalid-json-v1-diagnostic',
+                                    ['check', '--output-format=json-v1', 'invalid.wysna'], code=1).stdout)
+        span = structured['diagnostics'][0]['primary_span']
+        source_bytes = (work / 'invalid.wysna').read_bytes()
+        assert source_bytes[span['start_byte']:span['end_byte']] == b'"wrong"'
         run('run', ['run', 'hello.wysna'], expected='hello installed\n')
         run('stdlib', ['run', 'library.wysna'], expected='hello stdlib\n{"ready":true}\njson node budget 3\n')
         formatted = run('fmt', ['fmt', 'library.wysna'])
@@ -153,7 +160,10 @@ def validate(wheel, forbidden, report):
         assert '7' in repl.stdout
         for command in ('test', 'bench'):
             unavailable = run(command + '-source-only', [command], code=1)
-            assert unavailable.stderr == 'wysna ' + command + ' requires a source checkout\n'
+            expected = 'wysna ' + command + ' requires a source checkout\n'
+            if command == 'test':
+                expected += "To run project tests, use 'wysna project test'.\n"
+            assert unavailable.stderr == expected
         selfhost = run('selfhost-source-only', ['emit-c', '--backend=selfhost', 'hello.wysna', '-o', 'selfhost.c'], code=1)
         assert '[W2013]' in selfhost.stderr
         assert not (site_packages / '.wysna_cache').exists()
@@ -180,7 +190,9 @@ def validate(wheel, forbidden, report):
         assert lsp.returncode == 0 and not lsp.stderr, lsp
         messages = lsp_messages(lsp.stdout)
         assert next(item for item in messages if item.get('id') == 1)['result']['capabilities']['definitionProvider']
-        assert next(item for item in messages if item.get('method') == 'textDocument/publishDiagnostics')['params']['diagnostics'][0]['code'] == 'W2001'
+        diagnostic = next(item for item in messages if item.get('method') == 'textDocument/publishDiagnostics')['params']['diagnostics'][0]
+        assert diagnostic['code'] == 'W2001' and diagnostic['source'] == 'Wysna'
+        assert diagnostic['range']['start'] == {'line': 0, 'character': 17}
         assert next(item for item in messages if item.get('id') == 2)['result'] is None
         checks.append({'name': 'lsp-without-c', 'messages': messages})
         assert not denied.exists(), denied.read_text() if denied.exists() else ''

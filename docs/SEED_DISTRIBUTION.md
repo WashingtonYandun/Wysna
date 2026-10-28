@@ -90,6 +90,8 @@ the bundled toolchain.
 
 - `wysna test`, `wysna bench`, and `--backend=selfhost` require a source checkout and
   are not part of this distribution.
+- For tests in an installed user project, use `wysna project test`; this is separate
+  from the compiler's source-checkout maintenance suite.
 - HTTP requires separately installed libcurl development files and `curl-config`.
   Declared C FFI libraries and their headers remain explicit dependencies.
   Apple's system libcurl uses a macOS SDK; `SDKROOT` can select a compatible SDK.

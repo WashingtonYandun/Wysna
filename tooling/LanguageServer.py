@@ -71,6 +71,9 @@ class LanguageServer:
             self.checked[uri] = self.compiler.check(source, path)
         except WysnaError as error:
             for error in getattr(error, 'diagnostics', (error,)):
+                message = error.message
+                if getattr(error, 'help', None):
+                    message += '\nHelp: ' + error.help
                 error_source = self.compiler.source_text(error.file, source)
                 lines = error_source.splitlines(keepends=True)
                 start = sum(map(len, lines[:max(error.line - 1, 0)])) + max(error.col - 1, 0)
@@ -85,11 +88,11 @@ class LanguageServer:
                 if error.file != path:
                     # Dependency errors must not use another file's coordinates in this document.
                     diagnostics.append({'range': {'start': position_at(source, 0), 'end': position_at(source, 0)},
-                                        'severity': 1, 'code': error.code, 'source': 'w',
-                                        'message': f'{error.file}:{error.line}:{error.col}: {error.message}'})
+                                        'severity': 1, 'code': error.code, 'source': 'Wysna',
+                                        'message': f'{error.file}:{error.line}:{error.col}: {message}'})
                 else:
                     diagnostics.append({'range': {'start': position_at(source, start), 'end': position_at(source, end)},
-                                        'severity': 1, 'code': error.code, 'source': 'w', 'message': error.message})
+                                        'severity': 1, 'code': error.code, 'source': 'Wysna', 'message': message})
         self.send({'jsonrpc': '2.0', 'method': 'textDocument/publishDiagnostics',
                    'params': {'uri': uri, 'version': document['version'], 'diagnostics': diagnostics}})
 

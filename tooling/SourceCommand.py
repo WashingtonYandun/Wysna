@@ -10,6 +10,7 @@ from formatter.Formatter import Formatter
 from compiler.CompilerService import CompilerService
 from compiler.NativeToolchain import NativeCompilationError, NativeToolchain
 from error.Error import WysnaError
+from tooling.DiagnosticRender import render_diagnostic
 from tooling.ToolResult import (
     artifact_file,
     artifact_inline,
@@ -57,6 +58,15 @@ def _sources_for_diagnostics(file_name, source_code, service=None):
     if service is not None:
         sources.update(service.source_texts())
     return sources
+
+
+def _print_human_diagnostics(error, sources, span_cache=None):
+    for diagnostic in getattr(error, "diagnostics", (error,)):
+        if diagnostic.stage == "runtime":
+            text = str(diagnostic)
+        else:
+            text = render_diagnostic(diagnostic, sources, span_cache=span_cache)
+        print(text, file=sys.stderr)
 
 
 
@@ -401,8 +411,7 @@ def run_pipeline(
             ]
             _set_run_report(report_state, "diagnostic_error", 1, 1,
                             diagnostics=diagnostics)
-            for diagnostic in getattr(err, "diagnostics", (err,)):
-                print(str(diagnostic), file=sys.stderr)
+            _print_human_diagnostics(err, source_by_file, span_cache=span_cache)
             return 1
         if json_v1:
             _write_json_v1(
@@ -414,8 +423,8 @@ def run_pipeline(
         if json_diagnostics:
             print(json.dumps(err.to_dict(), indent=2))
         else:
-            for diagnostic in getattr(err, 'diagnostics', (err,)):
-                print(str(diagnostic), file=sys.stderr)
+            source_by_file = _sources_for_diagnostics(file_name, source_code, locals().get("service"))
+            _print_human_diagnostics(err, source_by_file, span_cache={})
         return 1
     except Exception as exc:
         if report_state is not None:

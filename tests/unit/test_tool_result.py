@@ -52,8 +52,8 @@ def test_check_json_v1_diagnostic_uses_exact_source_hash_and_byte_position(tmp_p
     assert payload["status"] == "diagnostic_error"
     assert diagnostic["code"] == "W2001"
     assert span["source_sha256"] == hashlib.sha256(source_bytes).hexdigest()
-    assert source_bytes[span["start_byte"]:span["end_byte"]] == b"let"
-    assert span["start_byte"] == source_bytes.index(b"let")
+    assert source_bytes[span["start_byte"]:span["end_byte"]] == b'"wrong"'
+    assert span["start_byte"] == source_bytes.index(b'"wrong"')
 
 
 def test_check_json_v1_uses_utf8_token_ranges_and_exact_crlf_snapshot(tmp_path):
@@ -67,8 +67,8 @@ def test_check_json_v1_uses_utf8_token_ranges_and_exact_crlf_snapshot(tmp_path):
     span = payload["diagnostics"][0]["primary_span"]
     assert result.returncode == 1
     assert span["source_sha256"] == hashlib.sha256(source_bytes).hexdigest()
-    assert source_bytes[span["start_byte"]:span["end_byte"]] == b"let"
-    assert span["start_byte"] == source_bytes.index(b"let")
+    assert source_bytes[span["start_byte"]:span["end_byte"]] == b'"wrong"'
+    assert span["start_byte"] == source_bytes.index(b'"wrong"')
 
 
 def test_check_json_v1_resolves_imported_diagnostics_to_import_snapshot(tmp_path):
@@ -85,7 +85,7 @@ def test_check_json_v1_resolves_imported_diagnostics_to_import_snapshot(tmp_path
     assert result.returncode == 1
     assert span["source_id"] == str(library.resolve())
     assert span["source_sha256"] == hashlib.sha256(library_bytes).hexdigest()
-    assert library_bytes[span["start_byte"]:span["end_byte"]] == b"let"
+    assert library_bytes[span["start_byte"]:span["end_byte"]] == b'"wrong"'
 
 
 def test_check_json_v1_reports_lexer_character_range_and_missing_location_as_null(tmp_path):
@@ -242,7 +242,7 @@ def test_run_report_json_hashes_the_unmodified_crlf_source_snapshot(tmp_path):
     assert result.returncode == 1
     assert payload["status"] == "diagnostic_error"
     assert span["source_sha256"] == hashlib.sha256(source_bytes).hexdigest()
-    assert source_bytes[span["start_byte"]:span["end_byte"]] == b"let"
+    assert source_bytes[span["start_byte"]:span["end_byte"]] == b'"wrong"'
 
 
 def test_run_report_json_rejects_source_overwrite(tmp_path):

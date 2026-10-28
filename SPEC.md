@@ -567,6 +567,9 @@ fn compile(source: str) {
      locations, typed data, and fixes. The primary span contains the exact source hash
      and UTF-8 byte offsets when its source and position are known. Existing point-only
      diagnostics use a zero-width range; unavailable locations are `null`.
+   - When a diagnostic has actionable guidance, `data.help` contains an English
+     explanation. It is optional and is not an automatic edit; consumers must not
+     assume that every diagnostic has a hint or that applying it preserves intent.
    - File read failures use `W5003`, output artifact failures use `W5004`, and usage
      failures use `W5002`. Successful commands have `status: "ok"` and empty diagnostics.
      Type and syntax failures use

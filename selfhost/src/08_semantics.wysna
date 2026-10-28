@@ -207,8 +207,34 @@ fn sem_assignable(context: SemanticContext, source: int, target: int) -> bool {
     }
     return false
 }
+fn sem_diagnostic_type(context: SemanticContext, type_id: int, depth: int) -> str {
+    let type_ = context.types[type_id]
+    let mut name = type_.kind
+    if type_.name != "" { name = type_.name }
+    if depth >= 8 { return name }
+    if type_.kind == "optional" and len(type_.args) == 1 {
+        return sem_diagnostic_type(context, type_.args[0], depth + 1) + "?"
+    }
+    if type_.kind == "result" and len(type_.args) == 2 {
+        return sem_diagnostic_type(context, type_.args[0], depth + 1) + " ! " + sem_diagnostic_type(context, type_.args[1], depth + 1)
+    }
+    if len(type_.args) > 0 {
+        name = name + "["
+        for i in 0..len(type_.args) {
+            if i > 0 { name = name + ", " }
+            name = name + sem_diagnostic_type(context, type_.args[i], depth + 1)
+        }
+        name = name + "]"
+    }
+    return name
+}
+fn sem_require_at(context: SemanticContext, source: int, target: int, code: str, location: Token) {
+    if not sem_assignable(context, source, target) {
+        report_error_at(code, location, "incompatible types: expected '" + sem_diagnostic_type(context, target, 0) + "', found '" + sem_diagnostic_type(context, source, 0) + "'")
+    }
+}
 fn sem_require(context: SemanticContext, source: int, target: int, code: str) {
-    if not sem_assignable(context, source, target) { sem_error(context, code, "incompatible types") }
+    sem_require_at(context, source, target, code, sem_at(context))
 }
 fn sem_type(context: SemanticContext) -> int {
     let source = sem_at(context)
@@ -1679,6 +1705,7 @@ fn sem_let(context: SemanticContext) -> int {
     let previous = context.expected_type
     context.expected_type = annotation
 
+    let initializer_source = sem_at(context)
     let initializer = sem_expression(context, 0, true)
     let value = initializer.type_id
     context.expected_type = previous
@@ -1689,7 +1716,7 @@ fn sem_let(context: SemanticContext) -> int {
         let untyped_dict = inferred.kind == "dict" and sem_kind(context, inferred.args[0]) == "any"
         if value == context.none_type or sem_kind(context, value) == "empty" or untyped_list or untyped_dict { sem_error(context, "W2001", "initializer needs type context") }
         annotation = value
-    } else { sem_require(context, value, annotation, "W2001") }
+    } else { sem_require_at(context, value, annotation, "W2001", initializer_source) }
     let binding = sem_declare(context, name, annotation, mutable)
     return sem_node(context, "let", context.unit_type, source, name, [initializer.node], binding, -1)
 }

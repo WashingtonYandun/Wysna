@@ -103,6 +103,9 @@ wysna explain hello.wysna --output-format=json-v1
 
 `run` executes source through the reference runtime. `build` produces a native
 executable through verified MIR and C99. Arguments after `--` belong to the program.
+For projects with test entries in `wysna.toml`, run `wysna project test` from the
+project directory. The separate `wysna test` command runs the compiler's own
+maintenance suite and requires a source checkout.
 
 ## Language tour
 

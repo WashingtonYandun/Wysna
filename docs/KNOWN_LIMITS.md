@@ -98,10 +98,9 @@ builds a portable installation with a private CPython and Zig as the C99 toolcha
 macOS arm64, Linux x64 and Windows x64; it needs no virtual environment or host C SDK.
 Its launcher verifies the required components before importing Seed, and
 `wysna doctor` verifies the complete installed file index. External FFI libraries are
-not included. The Windows bundle also has an Inno Setup lifecycle test covering
-installation, repair and uninstallation. macOS and Linux distribution assembly is not
-yet a separate CI acceptance gate, and CI generation does not by itself establish a
-published, signed, or manually validated release.
+not included. CI validates the Windows, macOS and Linux installer lifecycles on their
+respective hosts, including installation and removal. The published 0.5.0 installers
+are unsigned; CI acceptance does not establish manual acceptance on every machine.
 Missing Wysna Compiler sources produce `W2013` before any bootstrap-cache write. Wysna
 Seed native builds require a host C99 toolchain; an unavailable or invalid compiler command produces
 `W5001` with stage `toolchain`, rather than an internal compiler error. This checks
@@ -186,7 +185,7 @@ a proposed memory model; do not treat this as an implicit promise that ARC is th
 | LSP | `initialize`, `didOpen/didChange/didClose`, `definition`, `hover`, `completion`, document formatting and `publishDiagnostics`. No references, rename, signature help, semantic tokens or incremental sync. |
 | Dictionary keys | `int`, `str`, `bool`, `enum` only; `float` and composites containing it are rejected with `W2010`. |
 | `NetError` | Declared in the prelude (`checker/SymbolTable.py`) and referenced by a parser fixture, but nothing produces one. Either implement a network module or remove the type. |
-| Standard library scope | Includes text, path, filesystem, file/buffer I/O, resources, algorithms, UTF-8 and JSON. Networking, cryptography, process management and Unicode normalization are not provided. |
+| Standard library scope | Includes text, paths, filesystem, file/buffer I/O, resources, algorithms, UTF-8, JSON, process execution and an HTTP client with explicit host dependencies. Cryptography and Unicode normalization are not provided; see [standard library](STDLIB.md) for contracts and platform limits. |
 
 The CLI has POSIX and Windows adapters for cache locks, compiler processes, executable
 names and RSS telemetry. The Windows smoke job must pass on that host before support
@@ -197,8 +196,8 @@ to be reclaimed. `std/resources` does not make raw opaque aliases safe or unwind
 
 Standard File/Bytes owners now release host storage at last reference; they do not
 extend that guarantee to arbitrary FFI pointers or strong cycles. IO remains
-synchronous. JSON, task isolation, cancellation and nonblocking networking require
-the acceptance contracts in [Service foundations](SERVICE_FOUNDATIONS.md).
+synchronous. Bounded JSON is available; task isolation, cancellation and nonblocking
+networking require the acceptance contracts in [Service foundations](SERVICE_FOUNDATIONS.md).
 
 ---
 

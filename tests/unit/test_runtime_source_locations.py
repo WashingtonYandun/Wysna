@@ -111,7 +111,9 @@ def test_native_runtime_panics_report_exact_wysna_source_location():
                 assert built.returncode == 0, (backend, built.stderr)
 
                 column = source_text.splitlines()[line - 1].index(marker) + 1
-                source_name = source if backend == "selfhost" else source.resolve()
+                # All engines report canonical module paths; on macOS the temporary
+                # directory may be reached through the /var -> /private/var symlink.
+                source_name = source.resolve()
                 error_code = "W4001" if "zero" in message.lower() else "W4002"
                 expected = f"[{error_code}] {source_name}:{line}:{column} - {message}\n"
                 env = os.environ.copy()

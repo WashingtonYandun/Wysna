@@ -112,6 +112,7 @@ class WysnaError(Exception):
         code (str): Stable diagnostic code (e.g. 'W2001').
         severity (str): Diagnostic severity ('error' or 'warning').
         stage (str): Compiler stage ('lexer', 'parser', 'type', 'runtime').
+        help (str | None): Optional guidance; it is not an automatic fix.
     """
     def __init__(
         self,
@@ -122,6 +123,7 @@ class WysnaError(Exception):
         code: str = "W0001",
         severity: str = "error",
         stage: str = "compiler",
+        help: Optional[str] = None,
     ) -> None:
         self.message = message
         self.has_location = line is not None and col is not None
@@ -133,6 +135,7 @@ class WysnaError(Exception):
         self.code = normalize_diagnostic_code(code)
         self.severity = severity
         self.stage = stage
+        self.help = help
         super().__init__(self.__str__())
 
     def __str__(self) -> str:
@@ -185,7 +188,7 @@ class ParserError(WysnaError):
 
 
 class TypeError(WysnaError):
-    def __init__(self, message: str, line: Optional[int] = None, col: Optional[int] = None, file: str = "<stdin>", code: str = "W2001") -> None:
+    def __init__(self, message: str, line: Optional[int] = None, col: Optional[int] = None, file: str = "<stdin>", code: str = "W2001", help: Optional[str] = None) -> None:
         super().__init__(
             message=message,
             line=line,
@@ -193,6 +196,7 @@ class TypeError(WysnaError):
             file=file,
             code=normalize_diagnostic_code(code, default="W2001"),
             stage="type",
+            help=help,
         )
 
 

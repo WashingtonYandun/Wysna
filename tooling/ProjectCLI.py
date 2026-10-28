@@ -27,6 +27,7 @@ from project.Targets import target_spec
 from runtime.ExecutionContext import ExecutionContext
 from runtime.WasiRunner import WasiRunner, WasiRuntimeError
 from tooling.TargetValidation import validate_checked_target
+from tooling.DiagnosticRender import render_diagnostic
 from tooling.ToolResult import (
     artifact_file,
     diagnostic_from_error,
@@ -141,7 +142,7 @@ def _run_check(resolver, target_name, json_mode):
         if json_mode:
             return _emit("project.check", "diagnostic_error", 1, diagnostics=[diagnostic],
                          target=_target_metadata(target), json_mode=True)
-        print(str(error), file=sys.stderr)
+        print(render_diagnostic(error, service.source_texts()), file=sys.stderr)
         return 1
     if json_mode:
         return _emit("project.check", "ok", 0,
@@ -189,7 +190,7 @@ def _run_build(resolver, target_name, output, json_mode):
         if json_mode:
             return _emit("project.build", "diagnostic_error", 1, diagnostics=[diagnostic],
                          target=_target_metadata(target), json_mode=True)
-        print(str(error), file=sys.stderr)
+        print(render_diagnostic(error, service.source_texts()), file=sys.stderr)
         return 1
     except WasiCompilationError as error:
         diagnostic = diagnostic_record("W5001", "wasi-toolchain", str(error))
@@ -392,7 +393,7 @@ def _run_wasi_program(resolver, target, entry, program_args, report_path=None):
     except WysnaError as error:
         diagnostic = diagnostic_from_error(error, service.source_texts())
         if not report_path:
-            print(str(error), file=sys.stderr)
+            print(render_diagnostic(error, service.source_texts()), file=sys.stderr)
         return finish("diagnostic_error", 1, 1, diagnostics=[diagnostic])
     except WasiCompilationError as error:
         diagnostic = diagnostic_record("W5001", "wasi-toolchain", str(error))

@@ -200,6 +200,7 @@ def main(argv=None) -> None:
                 return
             if not os.path.isdir(os.path.join(get_repo_root(), "tests", "unit")):
                 print(f"{prog} test requires a source checkout", file=sys.stderr)
+                print(f"To run project tests, use '{prog} project test'.", file=sys.stderr)
                 sys.exit(1)
             if args and args[0] == "--differential":
                 gen_count = 25
