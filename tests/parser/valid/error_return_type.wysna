@@ -2,6 +2,8 @@ fn read_file(path: str) -> str ! IoError {
     return "ok"
 }
 
-fn fetch() -> Response ! NetError {
+struct NetworkFailure { message: str }
+
+fn fetch() -> Response ! NetworkFailure {
     return resp
 }

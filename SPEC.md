@@ -560,6 +560,8 @@ fn compile(source: str) {
      `emit-c` and `build` return the path and SHA-256 of the artifact they created.
      An artifact path must not overwrite its source file. Failed commands never list an
      existing output file as a newly produced artifact.
+   - `project new NAME` creates a new project directory without replacing existing
+     paths. With v1 output, its newly created files are returned as hashed artifacts.
    - Native compiler/linker stderr is capped at 8,192 characters in a diagnostic and
      marked with `[tool output truncated]` when the cap is reached. Captured subprocess
      stdout is not mixed into the control stream.
@@ -567,6 +569,9 @@ fn compile(source: str) {
      locations, typed data, and fixes. The primary span contains the exact source hash
      and UTF-8 byte offsets when its source and position are known. Existing point-only
      diagnostics use a zero-width range; unavailable locations are `null`.
+   - When a diagnostic has actionable guidance, `data.help` contains an English
+     explanation. It is optional and is not an automatic edit; consumers must not
+     assume that every diagnostic has a hint or that applying it preserves intent.
    - File read failures use `W5003`, output artifact failures use `W5004`, and usage
      failures use `W5002`. Successful commands have `status: "ok"` and empty diagnostics.
      Type and syntax failures use

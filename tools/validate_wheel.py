@@ -132,11 +132,35 @@ def validate(wheel, forbidden, report):
 
         run('version', ['version'])
         run('help', ['--help'])
+        created = json.loads(run('project-new', ['project', 'new', 'new-project', '--output-format=json-v1']).stdout)
+        assert created['status'] == 'ok' and len(created['artifacts']) == 3, created
+        new_manifest = str(work / 'new-project' / 'wysna.toml')
+        run('new-project-check', ['project', 'check', '--manifest', new_manifest])
+        run('new-project-test', ['project', 'test', '--manifest', new_manifest])
         run('check', ['check', 'hello.wysna'])
         rejected = run('invalid', ['check', '--json', 'invalid.wysna'], code=1)
         assert json.loads(rejected.stdout)['code'] == 'W2001'
+        human = run('invalid-human-diagnostic', ['check', 'invalid.wysna'], code=1)
+        assert 'let value: int = "wrong"' in human.stderr and '^^^^^^^' in human.stderr
+        structured = json.loads(run('invalid-json-v1-diagnostic',
+                                    ['check', '--output-format=json-v1', 'invalid.wysna'], code=1).stdout)
+        span = structured['diagnostics'][0]['primary_span']
+        source_bytes = (work / 'invalid.wysna').read_bytes()
+        assert source_bytes[span['start_byte']:span['end_byte']] == b'"wrong"'
         run('run', ['run', 'hello.wysna'], expected='hello installed\n')
         run('stdlib', ['run', 'library.wysna'], expected='hello stdlib\n{"ready":true}\njson node budget 3\n')
+        (work / 'prelude-errors.wysna').write_text(
+            'let issue = NetError { message: "offline" }\n'
+            'let io = IoError { message: "io" }\n'
+            'print(issue.message, io.message)\n', encoding='utf-8')
+        run('prelude-errors-run', ['run', 'prelude-errors.wysna'], expected='offline io\n')
+        prelude_binary = work / ('prelude-errors.exe' if os.name == 'nt' else 'prelude-errors')
+        run('prelude-errors-build', ['build', 'prelude-errors.wysna', '-o', str(prelude_binary)])
+        prelude = subprocess.run([str(prelude_binary)], cwd=work, env=environment,
+                                 capture_output=True, text=True, timeout=30)
+        assert prelude.returncode == 0 and prelude.stdout == 'offline io\n' and not prelude.stderr, prelude
+        checks.append({'name': 'prelude-errors-native', 'exit_code': prelude.returncode,
+                       'stdout': prelude.stdout})
         formatted = run('fmt', ['fmt', 'library.wysna'])
         (work / 'formatted.wysna').write_text(formatted.stdout, encoding='utf-8')
         run('fmt-idempotence', ['fmt', 'formatted.wysna'], expected=formatted.stdout)
@@ -144,16 +168,23 @@ def validate(wheel, forbidden, report):
             run(command, [command, 'hello.wysna'])
         run('emit-c', ['emit-c', 'library.wysna', '-o', 'library.c'])
         assert '#include "runtime/wysna_runtime.h"' in (work / 'library.c').read_text()
+        failed_output = run('emit-c-filesystem-error',
+                            ['emit-c', 'hello.wysna', '-o', 'missing-directory/program.c'], code=3)
+        assert '[W5004]' in failed_output.stderr and '[Internal Error]' not in failed_output.stderr
         binary = work / ('program.exe' if os.name == 'nt' else 'program')
         run('build', ['build', 'library.wysna', '-o', str(binary)])
         native = subprocess.run([str(binary)], cwd=work, env=environment, capture_output=True, text=True, timeout=30)
         assert native.returncode == 0 and native.stdout == 'hello stdlib\n{"ready":true}\njson node budget 3\n' and not native.stderr, native
         checks.append({'name': 'native-execution', 'exit_code': native.returncode, 'stdout': native.stdout})
-        repl = run('repl', ['repl'], input_text='print(7)\nexit\n')
-        assert '7' in repl.stdout
+        repl_input = 'fn twice(value: int) -> int {\nreturn value * 2\n}\nlet value = 21\nprint(twice(value))\nexit\n'
+        repl = run('repl', ['repl'], input_text=repl_input)
+        assert '42' in repl.stdout and '[W1001]' not in repl.stdout, repl.stdout
         for command in ('test', 'bench'):
             unavailable = run(command + '-source-only', [command], code=1)
-            assert unavailable.stderr == 'wysna ' + command + ' requires a source checkout\n'
+            expected = 'wysna ' + command + ' requires a source checkout\n'
+            if command == 'test':
+                expected += "To run project tests, use 'wysna project test'.\n"
+            assert unavailable.stderr == expected
         selfhost = run('selfhost-source-only', ['emit-c', '--backend=selfhost', 'hello.wysna', '-o', 'selfhost.c'], code=1)
         assert '[W2013]' in selfhost.stderr
         assert not (site_packages / '.wysna_cache').exists()
@@ -180,7 +211,9 @@ def validate(wheel, forbidden, report):
         assert lsp.returncode == 0 and not lsp.stderr, lsp
         messages = lsp_messages(lsp.stdout)
         assert next(item for item in messages if item.get('id') == 1)['result']['capabilities']['definitionProvider']
-        assert next(item for item in messages if item.get('method') == 'textDocument/publishDiagnostics')['params']['diagnostics'][0]['code'] == 'W2001'
+        diagnostic = next(item for item in messages if item.get('method') == 'textDocument/publishDiagnostics')['params']['diagnostics'][0]
+        assert diagnostic['code'] == 'W2001' and diagnostic['source'] == 'Wysna'
+        assert diagnostic['range']['start'] == {'line': 0, 'character': 17}
         assert next(item for item in messages if item.get('id') == 2)['result'] is None
         checks.append({'name': 'lsp-without-c', 'messages': messages})
         assert not denied.exists(), denied.read_text() if denied.exists() else ''

@@ -17,7 +17,7 @@ wysna build program.wysna -o program --profile release
 wysna run program.wysna -- argument "two words"
 ```
 
-Windows executables receive an `.exe` suffix and an explicit 8 MiB stack reserve, shared with the compiler bootstrap and Seed native linker policy. `run` builds a private temporary executable and forwards arguments after `--`, standard input/output/error, the working directory and the application's exit status. `--timeout-ms N` sets the application's deadline from 1 to 600000 ms; compilation phases each have a 120000 ms deadline. Interrupts cancel the child process tree before temporary artifacts are removed.
+Windows executables receive an `.exe` suffix and an explicit 8 MiB stack reserve, shared with the compiler bootstrap and Seed native linker policy. `run` builds a private temporary executable and forwards arguments after `--`, standard input/output/error, the working directory and the application's exit status. `--timeout-ms N` sets the application's deadline from 1 to 600000 ms; compilation phases each have a 600000 ms deadline. Interrupts cancel the child process tree before temporary artifacts are removed.
 
 The `dev`, `release` and `size` profiles select `-O0 -g`, `-O2` and `-Os`. All profiles retain Wysna runtime checks. They do not enable fast-math or unchecked indexing. Source checking always precedes C compilation. Errors never trigger a Python fallback.
 
@@ -25,7 +25,7 @@ The `dev`, `release` and `size` profiles select `-O0 -g`, `-O2` and `-Os`. All p
 
 The native pipeline covers scalars, UTF-8 strings and paths, globals, collections, CoW mutation, direct ranges and nested tuple loop bindings, optional and Result channels, closed error unions, structs/enums, classes/inheritance/interfaces, pattern matching with guards, closures by snapshot, function values, concrete generic functions/structs/enums and the scalar/opaque C ABI. The profile and independent-verifier contracts are described in [MIR design](MIR_DESIGN.md).
 
-Parameterized classes/interfaces, generic nominal values whose type arguments remain unresolved, library-mode exports, WebAssembly targets and the Seed project/package/LSP/formatter commands are outside this SDK profile. An unresolved nominal value needs an explicit type context. Native profile exclusions report `W2013`; unsupported commands report `W5002`. The SDK does not claim universal Seed parity.
+Parameterized classes with fields and no methods, inheritance or interfaces are supported. Parameterized classes with methods, inheritance or interfaces, parameterized interfaces, generic nominal values whose type arguments remain unresolved, library-mode exports, WebAssembly targets and the Seed project/package/LSP/formatter commands are outside this SDK profile. An unresolved nominal value needs an explicit type context. Native profile exclusions report `W2013`; unsupported commands report `W5002`. The SDK does not claim universal Seed parity.
 
 External C dependencies remain explicit:
 

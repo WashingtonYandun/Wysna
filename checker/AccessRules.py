@@ -129,6 +129,7 @@ def check_assignment_expr(checker: "TypeChecker", expr: AssignmentExpr, is_state
                 code="W2001"
             )
         checker._mark_result_lift(expr.value, sym.type, force=True)
+        expr.target.resolved_symbol = sym
         expr.target.inferred_type = sym.type
         expr.target.inferred_type_id = checker.interner.from_type(sym.type)
         expr.target.session_arena_id = checker.interner.arena_id

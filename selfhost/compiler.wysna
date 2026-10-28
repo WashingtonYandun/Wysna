@@ -1555,6 +1555,7 @@ fn sem_assignable(context: SemanticContext, source: int, target: int) -> bool {
         return sem_error_channel_assignable(context, source, target)
     }
     if s.kind == "class" and (t.kind == "class" or t.kind == "interface") {
+        if s.kind == "class" and t.kind == "class" and s.name == t.name { return s.args == t.args }
         let mut current = s.name
         let mut visits = 0
         while current != "" and visits <= len(context.classes) {
@@ -1572,8 +1573,36 @@ fn sem_assignable(context: SemanticContext, source: int, target: int) -> bool {
     }
     return false
 }
-fn sem_require(context: SemanticContext, source: int, target: int, code: str) {
-    if not sem_assignable(context, source, target) { sem_error(context, code, "incompatible types") }
+fn sem_diagnostic_type(context: SemanticContext, type_id: int, depth: int) -> str {
+    if type_id < 0 or type_id >= len(context.types) { return "?" }
+    let type_ = context.types[type_id]
+    let mut name = type_.kind
+    if type_.name != "" { name = type_.name }
+    if depth >= 8 { return name }
+    if type_.kind == "optional" and len(type_.args) == 1 {
+        return sem_diagnostic_type(context, type_.args[0], depth + 1) + "?"
+    }
+    if type_.kind == "result" and len(type_.args) == 2 {
+        return sem_diagnostic_type(context, type_.args[0], depth + 1) + " ! " + sem_diagnostic_type(context, type_.args[1], depth + 1)
+    }
+    if len(type_.args) > 0 {
+        name = name + "["
+        for i in 0..len(type_.args) {
+            if i > 0 { name = name + ", " }
+            name = name + sem_diagnostic_type(context, type_.args[i], depth + 1)
+        }
+        name = name + "]"
+    }
+    return name
+}
+fn sem_require_at(context: SemanticContext, source: int, target: int, code: str, location: Token) {
+    if not sem_assignable(context, source, target) {
+        report_error_at(code, location, "incompatible types: expected '" + sem_diagnostic_type(context, target, 0) + "', found '" + sem_diagnostic_type(context, source, 0) + "'")
+    }
+}
+fn sem_source_at(context: SemanticContext, sources: list[Token], index: int) -> Token {
+    if index >= 0 and index < len(sources) { return sources[index] }
+    return sem_at(context)
 }
 fn sem_type(context: SemanticContext) -> int {
     let source = sem_at(context)
@@ -1616,8 +1645,8 @@ fn sem_type(context: SemanticContext) -> int {
             if name == "Option" { kind = "optional" }
             if name == "Result" { kind = "result" }
             if name == "Weak" { kind = "weak" }
-            if (kind == "list" or kind == "optional" or kind == "weak") and len(args) != 1 { sem_error(context, "W2001", "type arity") }
-            if (kind == "dict" or kind == "result") and len(args) != 2 { sem_error(context, "W2001", "type arity") }
+            if (kind == "list" or kind == "optional" or kind == "weak") and len(args) != 1 { report_error_at("W2001", source, "type arity") }
+            if (kind == "dict" or kind == "result") and len(args) != 2 { report_error_at("W2001", source, "type arity") }
             if kind == "dict" {
                 if context.collecting_declarations {
                     context.pending_key_types.append(args[0])
@@ -1629,14 +1658,14 @@ fn sem_type(context: SemanticContext) -> int {
             let base = sem_named(context, name)
             let generic = sem_generic_type(context, name)
             if sem_match(context, "LBRACKET") {
-                if generic < 0 { sem_error(context, "W2001", "type is not generic: " + name) }
+                if generic < 0 { report_error_at("W2001", source, "type is not generic: " + name) }
                 let mut arguments: list[int] = [sem_type(context)]
                 while sem_match(context, "COMMA") { arguments.append(sem_type(context)) }
                 sem_expect(context, "RBRACKET")
-                if len(arguments) != len(context.generic_types[generic].params) { sem_error(context, "W2001", "generic type arity: " + name) }
+                if len(arguments) != len(context.generic_types[generic].params) { report_error_at("W2001", source, "generic type arity: " + name) }
                 result = sem_intern(context, context.types[base].kind, name, arguments)
             } else {
-                if generic >= 0 { sem_error(context, "W2001", "generic type arguments required: " + name) }
+                if generic >= 0 { report_error_at("W2001", source, "generic type arguments required: " + name) }
                 result = base
             }
         }
@@ -1708,13 +1737,16 @@ fn sem_declare(context: SemanticContext, name: str, type_id: int, mutable: bool)
 fn sem_value(type_id: int) -> SemValue {
     return SemValue { type_id: type_id, root: "", writable: -1, terminates: false, node: -1 }
 }
-fn sem_mutable(context: SemanticContext, root: str) {
+fn sem_mutable_at(context: SemanticContext, root: str, location: Token) {
     if len(root) >= 5 and slice(root, 0, 5) == "this:" { return }
     if root != "" {
         let variable = sem_lookup(context, root)
-        if variable >= 0 and context.capture_depth >= 0 and context.variables[variable].depth < context.capture_depth { sem_error(context, "W3001", "captured snapshots are immutable") }
-        if variable < 0 or not context.variables[variable].mutable { sem_error(context, "W3001", "mutation of immutable binding") }
+        if variable >= 0 and context.capture_depth >= 0 and context.variables[variable].depth < context.capture_depth { report_error_at("W3001", location, "captured snapshots are immutable") }
+        if variable < 0 or not context.variables[variable].mutable { report_error_at("W3001", location, "mutation of immutable binding") }
     }
+}
+fn sem_mutable(context: SemanticContext, root: str) {
+    sem_mutable_at(context, root, sem_at(context))
 }
 fn sem_skip_block(context: SemanticContext) -> int {
     sem_expect(context, "LBRACE")
@@ -1773,12 +1805,14 @@ fn sem_collect_function(context: SemanticContext, owner: str, visible: bool) {
 }
 fn sem_collect_record(context: SemanticContext, kind: str) {
     sem_take(context)
+    let name_token = sem_at(context)
     let name = sem_expect(context, "IDENT").val
     let previous_type_params = context.type_params
     let mut type_params: list[str] = []
     let generic = sem_generic_type(context, name)
+    let generic_class = generic >= 0 and kind == "class"
     if generic >= 0 {
-        if kind == "class" or kind == "interface" { report_error_at("W2013", sem_at(context), "Compiler native-core-v1 does not support parameterized classes or interfaces") }
+        if kind == "interface" { report_error_at("W2013", name_token, "Compiler native-core-v1 does not support parameterized interfaces") }
         type_params = context.generic_types[generic].params
     }
     context.type_params = type_params
@@ -1802,14 +1836,21 @@ fn sem_collect_record(context: SemanticContext, kind: str) {
         interfaces.append(sem_expect(context, "IDENT").val)
         while sem_match(context, "COMMA") { interfaces.append(sem_expect(context, "IDENT").val) }
     }
+    if generic_class and (parent != "" or len(interfaces) > 0) {
+        report_error_at("W2013", name_token, "Compiler native-core-v1 supports parameterized classes only with fields and no inheritance or interfaces")
+    }
     if kind == "class" { context.classes.append(SemClass { name: name, parent: parent, interfaces: interfaces }) }
     sem_expect(context, "LBRACE")
+    let mut generic_method = false
     while true {
         sem_skip_separators(context)
         if sem_is(context, "RBRACE") { break }
         let mut visible = true
         if sem_match(context, "PRIVATE") { visible = false } else { sem_match(context, "PUBLIC") }
-        if sem_is(context, "FN") { sem_collect_function(context, name + ".", visible) }
+        if sem_is(context, "FN") {
+            if generic_class { generic_method = true }
+            sem_collect_function(context, name + ".", visible)
+        }
         elif kind == "enum" {
             let variant = sem_expect(context, "IDENT").val
             let mut payload_types: list[int] = []
@@ -1836,13 +1877,16 @@ fn sem_collect_record(context: SemanticContext, kind: str) {
         }
     }
     sem_expect(context, "RBRACE")
+    if generic_class and generic_method {
+        report_error_at("W2013", name_token, "Compiler native-core-v1 supports parameterized classes only with fields and no methods")
+    }
     if kind == "enum" { context.completed_enums.append(name) }
     context.type_params = previous_type_params
 }
 fn sem_builtin(name: str) -> bool {
     return name == "join_strings" or name == "print" or name == "eprint" or name == "len" or name == "int" or name == "float" or name == "str" or name == "ord" or name == "chr" or name == "bytes" or name == "slice" or name == "args" or name == "exit" or name == "enumerate" or name == "dict_items" or name == "read_file" or name == "write_file" or name == "Some" or name == "Ok" or name == "Err" or name == "weak" or name == "upgrade"
 }
-fn sem_call_builtin(context: SemanticContext, name: str, args: list[int], discard: bool) -> int {
+fn sem_call_builtin(context: SemanticContext, name: str, args: list[int], sources: list[Token], discard: bool) -> int {
     let count = len(args)
     if name == "print" or name == "eprint" { return context.unit_type }
     if name == "args" {
@@ -1855,8 +1899,8 @@ fn sem_call_builtin(context: SemanticContext, name: str, args: list[int], discar
     if count != arity { sem_error(context, "W2005", "builtin arity: " + name) }
     if name == "join_strings" {
         if count != 2 { sem_error(context, "W2005", "join_strings arity") }
-        sem_require(context, args[0], sem_wrap(context, "list", context.string_type), "W2001")
-        sem_require(context, args[1], context.string_type, "W2001")
+        sem_require_at(context, args[0], sem_wrap(context, "list", context.string_type), "W2001", sem_source_at(context, sources, 0))
+        sem_require_at(context, args[1], context.string_type, "W2001", sem_source_at(context, sources, 1))
         return context.string_type
     }
     let first = args[0]
@@ -1865,26 +1909,26 @@ fn sem_call_builtin(context: SemanticContext, name: str, args: list[int], discar
     if name == "Ok" or name == "Err" {
         if context.expected_type >= 0 and sem_kind(context, context.expected_type) == "result" {
             let channel = context.types[context.expected_type].args
-            if name == "Ok" { if not discard or channel[0] != context.unit_type { sem_require(context, first, channel[0], "W2001") } }
-            elif discard and channel[0] == context.unit_type { sem_require(context, first, channel[1], "W2004") }
-            else { sem_require(context, first, channel[1], "W2001") }
+            if name == "Ok" { if not discard or channel[0] != context.unit_type { sem_require_at(context, first, channel[0], "W2001", sem_source_at(context, sources, 0)) } }
+            elif discard and channel[0] == context.unit_type { sem_require_at(context, first, channel[1], "W2004", sem_source_at(context, sources, 0)) }
+            else { sem_require_at(context, first, channel[1], "W2001", sem_source_at(context, sources, 0)) }
             return context.expected_type
         }
         if name == "Ok" { return sem_wrap(context, "ok", first) }
         return sem_wrap(context, "err", first)
     }
     if name == "len" {
-        if kind != "list" and kind != "dict" and kind != "tuple" and first != context.string_type { sem_error(context, "W2001", "len requires a collection or string") }
+        if kind != "list" and kind != "dict" and kind != "tuple" and first != context.string_type { report_error_at("W2001", sem_source_at(context, sources, 0), "len requires a collection or string") }
         return context.integer_type
     }
     if name == "int" or name == "float" or name == "str" {
-        if name != "str" and first != context.integer_type and first != context.float_type and first != context.string_type and first != context.boolean_type { sem_error(context, "W2001", "conversion argument") }
+        if name != "str" and first != context.integer_type and first != context.float_type and first != context.string_type and first != context.boolean_type { report_error_at("W2001", sem_source_at(context, sources, 0), "conversion argument") }
         if name == "int" { return context.integer_type }
         if name == "float" { return context.float_type }
         return context.string_type
     }
     if name == "chr" or name == "exit" {
-        sem_require(context, first, context.integer_type, "W2001")
+        sem_require_at(context, first, context.integer_type, "W2001", sem_source_at(context, sources, 0))
         if name == "chr" { return context.string_type }
         return context.unit_type
     }
@@ -1892,45 +1936,45 @@ fn sem_call_builtin(context: SemanticContext, name: str, args: list[int], discar
         # SPEC 11.1: slice() is polymorphic over str and list[T] and preserves the
         # container kind.
         let first_type = context.types[first]
-        sem_require(context, args[1], context.integer_type, "W2001")
-        sem_require(context, args[2], context.integer_type, "W2001")
+        sem_require_at(context, args[1], context.integer_type, "W2001", sem_source_at(context, sources, 1))
+        sem_require_at(context, args[2], context.integer_type, "W2001", sem_source_at(context, sources, 2))
         if first == context.string_type { return context.string_type }
         if first_type.kind == "list" { return first }
-        sem_error(context, "W2001", "slice expects str or list")
+        report_error_at("W2001", sem_source_at(context, sources, 0), "slice expects str or list")
         return context.string_type
     }
     if name == "ord" or name == "bytes" or name == "read_file" or name == "write_file" {
-        sem_require(context, first, context.string_type, "W2001")
+        sem_require_at(context, first, context.string_type, "W2001", sem_source_at(context, sources, 0))
         if name == "ord" { return context.integer_type }
         if name == "bytes" { return sem_wrap(context, "list", context.integer_type) }
         let io = sem_named(context, "IoError")
         if name == "read_file" { return sem_intern(context, "result", "", [context.string_type, io]) }
-        sem_require(context, args[1], context.string_type, "W2001")
+        sem_require_at(context, args[1], context.string_type, "W2001", sem_source_at(context, sources, 1))
         return sem_intern(context, "result", "", [context.unit_type, io])
     }
     if name == "weak" {
-        if kind != "class" { sem_error(context, "W2001", "weak requires class") }
+        if kind != "class" { report_error_at("W2001", sem_source_at(context, sources, 0), "weak requires class") }
         return sem_wrap(context, "weak", first)
     }
     if name == "upgrade" {
-        if kind != "weak" { sem_error(context, "W2001", "upgrade requires weak") }
+        if kind != "weak" { report_error_at("W2001", sem_source_at(context, sources, 0), "upgrade requires weak") }
         return sem_wrap(context, "optional", context.types[first].args[0])
     }
     if name == "enumerate" {
-        if kind != "list" { sem_error(context, "W2001", "enumerate requires list") }
+        if kind != "list" { report_error_at("W2001", sem_source_at(context, sources, 0), "enumerate requires list") }
         return sem_wrap(context, "list", sem_intern(context, "tuple", "", [context.integer_type, context.types[first].args[0]]))
     }
     if name == "dict_items" {
-        if kind != "dict" { sem_error(context, "W2001", "dict_items requires dict") }
+        if kind != "dict" { report_error_at("W2001", sem_source_at(context, sources, 0), "dict_items requires dict") }
         return sem_wrap(context, "list", sem_intern(context, "tuple", "", context.types[first].args))
     }
     sem_error(context, "W1001", "unknown builtin")
     return context.unit_type
 }
-fn sem_check_call(context: SemanticContext, signature: int, args: list[int], discard: bool) -> int {
+fn sem_check_call(context: SemanticContext, signature: int, args: list[int], sources: list[Token], discard: bool) -> int {
     let unification = new SemUnification()
     let type_ = context.types[signature]
-    if type_.kind == "builtin" { return sem_call_builtin(context, type_.name, args, discard) }
+    if type_.kind == "builtin" { return sem_call_builtin(context, type_.name, args, sources, discard) }
     if type_.kind == "enum_ctor" {
         let mut separator = -1
         for i in 0..len(type_.name) - 1 { if slice(type_.name, i, i + 1) == "." { separator = i } }
@@ -1945,9 +1989,9 @@ fn sem_check_call(context: SemanticContext, signature: int, args: list[int], dis
             if len(args) != 1 { sem_error(context, "W2005", "Result constructor arity") }
             if context.expected_type >= 0 and sem_kind(context, context.expected_type) == "result" {
                 let expected = context.types[context.expected_type]
-                if variant == "Ok" { if not discard or expected.args[0] != context.unit_type { sem_require(context, args[0], expected.args[0], "W2001") } }
-                elif discard and expected.args[0] == context.unit_type { sem_require(context, args[0], expected.args[1], "W2004") }
-                else { sem_require(context, args[0], expected.args[1], "W2001") }
+                if variant == "Ok" { if not discard or expected.args[0] != context.unit_type { sem_require_at(context, args[0], expected.args[0], "W2001", sem_source_at(context, sources, 0)) } }
+                elif discard and expected.args[0] == context.unit_type { sem_require_at(context, args[0], expected.args[1], "W2004", sem_source_at(context, sources, 0)) }
+                else { sem_require_at(context, args[0], expected.args[1], "W2001", sem_source_at(context, sources, 0)) }
             }
             if variant == "Ok" { return sem_wrap(context, "ok", args[0]) }
             return sem_wrap(context, "err", args[0])
@@ -1962,7 +2006,7 @@ fn sem_check_call(context: SemanticContext, signature: int, args: list[int], dis
             let empty_types: list[int] = []
             unification.names = empty_names
             unification.types = empty_types
-            for i in 0..len(args) { if not sem_unify_type(context, unification, payload_types[i], args[i]) { sem_error(context, "W2001", "enum payload type mismatch") } }
+            for i in 0..len(args) { if not sem_unify_type(context, unification, payload_types[i], args[i]) { report_error_at("W2001", sem_source_at(context, sources, i), "enum payload type mismatch") } }
             let mut concrete: list[int] = []
             for parameter in context.generic_types[generic].params {
                 let mut found = -1
@@ -1975,10 +2019,10 @@ fn sem_check_call(context: SemanticContext, signature: int, args: list[int], dis
             unification.names = context.generic_types[generic].params
             unification.types = context.types[target].args
             for i in 0..len(args) {
-                sem_require(context, args[i], sem_substitute_type(context, payload_types[i], unification.names, unification.types), "W2001")
+                sem_require_at(context, args[i], sem_substitute_type(context, payload_types[i], unification.names, unification.types), "W2001", sem_source_at(context, sources, i))
             }
         } else {
-            for i in 0..len(args) { sem_require(context, args[i], payload_types[i], "W2001") }
+            for i in 0..len(args) { sem_require_at(context, args[i], payload_types[i], "W2001", sem_source_at(context, sources, i)) }
         }
         return target
     }
@@ -2001,7 +2045,7 @@ fn sem_check_call(context: SemanticContext, signature: int, args: list[int], dis
         for i in 0..len(args) {
             let field_type = context.fields[fields[i]].type_id
             if generic >= 0 and not explicit { sem_unify_type(context, unification, field_type, args[i]) }
-            sem_require(context, args[i], sem_substitute_type(context, field_type, unification.names, unification.types), "W2001")
+            sem_require_at(context, args[i], sem_substitute_type(context, field_type, unification.names, unification.types), "W2001", sem_source_at(context, sources, i))
         }
         if generic >= 0 and not explicit {
             let mut concrete: list[int] = []
@@ -2018,7 +2062,7 @@ fn sem_check_call(context: SemanticContext, signature: int, args: list[int], dis
     if type_.kind == "constructor" {
         let target = type_.args[0]
         let method = sem_method(context, context.types[target].name, "init")
-        if method >= 0 { sem_check_call(context, context.functions[method].type_id, args, false) }
+        if method >= 0 { sem_check_call(context, context.functions[method].type_id, args, sources, false) }
         elif len(args) != 0 { sem_error(context, "W2005", "constructor arity") }
         return target
     }
@@ -2032,7 +2076,7 @@ fn sem_check_call(context: SemanticContext, signature: int, args: list[int], dis
     for i in 0..len(args) { sem_unify_type(context, unification, type_.args[i], args[i]) }
     for i in 0..len(args) {
         let expected = sem_substitute_type(context, type_.args[i], unification.names, unification.types)
-        sem_require(context, args[i], expected, "W2001")
+        sem_require_at(context, args[i], expected, "W2001", sem_source_at(context, sources, i))
     }
     return sem_substitute_type(context, type_.args[len(args)], unification.names, unification.types)
 }
@@ -2085,7 +2129,7 @@ fn sem_field(context: SemanticContext, owner: str, name: str) -> int {
     }
     return -1
 }
-fn sem_member(context: SemanticContext, receiver: SemValue, name: str) -> SemValue {
+fn sem_member(context: SemanticContext, receiver: SemValue, name: str, location: Token) -> SemValue {
     let type_ = context.types[receiver.type_id]
     if type_.kind == "typeparam" {
         let mut constraint = ""
@@ -2100,7 +2144,7 @@ fn sem_member(context: SemanticContext, receiver: SemValue, name: str) -> SemVal
             }
         }
         if sem_defer(context, "member:" + name, [receiver.type_id]) { return sem_value(sem_intern(context, "dependent", name, [receiver.type_id])) }
-        sem_error(context, "W3002", "unknown member on generic type parameter: " + name)
+        report_error_at("W3002", location, "unknown member on generic type parameter: " + name)
     }
     if type_.kind == "enum" {
         for i in 0..len(context.variants) {
@@ -2111,7 +2155,7 @@ fn sem_member(context: SemanticContext, receiver: SemValue, name: str) -> SemVal
                 return sem_value(sem_intern(context, "enum_ctor", type_.name + "." + name, arguments))
             }
         }
-        sem_error(context, "W1001", "unknown enum variant")
+        report_error_at("W1001", location, "unknown enum variant")
     }
     if type_.kind == "optional" and (name == "Some" or name == "None") {
         if name == "None" { return sem_value(context.none_type) }
@@ -2125,28 +2169,28 @@ fn sem_member(context: SemanticContext, receiver: SemValue, name: str) -> SemVal
     if type_.kind == "list" or type_.kind == "dict" {
         let mut args: list[int] = []
         if name == "append" and type_.kind == "list" {
-            sem_mutable(context, receiver.root)
+            sem_mutable_at(context, receiver.root, location)
             args = [type_.args[0], context.unit_type]
         } elif name == "pop" and type_.kind == "list" {
-            sem_mutable(context, receiver.root)
+            sem_mutable_at(context, receiver.root, location)
             args = [type_.args[0]]
         } elif name == "clear" and type_.kind == "list" {
-            sem_mutable(context, receiver.root)
+            sem_mutable_at(context, receiver.root, location)
             args = [context.unit_type]
         } elif name == "get" and type_.kind == "dict" { args = [type_.args[0], sem_wrap(context, "optional", type_.args[1])] }
         elif name == "keys" and type_.kind == "dict" { args = [sem_wrap(context, "list", type_.args[0])] }
         elif name == "values" and type_.kind == "dict" { args = [sem_wrap(context, "list", type_.args[1])] }
-        else { sem_error(context, "W3002", "unknown collection method") }
+        else { report_error_at("W3002", location, "unknown collection method") }
         return SemValue { type_id: sem_intern(context, "function", "", args), root: "#collection", writable: -1, terminates: false, node: -1 }
     }
     let field_index = sem_field(context, type_.name, name)
     if field_index >= 0 {
         let field = context.fields[field_index]
-        if not field.visible and context.owner != field.owner { sem_error(context, "W3002", "private field") }
+        if not field.visible and context.owner != field.owner { report_error_at("W3002", location, "private field") }
         if context.initializing and receiver.root == "this" and field.owner == context.owner {
             let mut found = false
             for initialized in context.initialized { if initialized == name { found = true } }
-            if not found and not sem_is(context, "ASSIGN") { sem_error(context, "W3004", "read before initialization") }
+            if not found and not sem_is(context, "ASSIGN") { report_error_at("W3004", location, "read before initialization") }
         }
         let mut root = receiver.root
         if type_.kind == "class" {
@@ -2163,10 +2207,10 @@ fn sem_member(context: SemanticContext, receiver: SemValue, name: str) -> SemVal
     let method_index = sem_method(context, type_.name, name)
     if method_index >= 0 {
         let method = context.functions[method_index]
-        if not method.visible and method.owner != context.owner + "." { sem_error(context, "W3002", "private method access") }
+        if not method.visible and method.owner != context.owner + "." { report_error_at("W3002", location, "private method access") }
         return SemValue { type_id: method.type_id, root: "#method", writable: -1, terminates: false, node: -1 }
     }
-    sem_error(context, "W3002", "unknown member: " + name)
+    report_error_at("W3002", location, "unknown member: " + name)
     return sem_value(context.unit_type)
 }
 fn sem_group_is_tuple(context: SemanticContext) -> bool {
@@ -2192,13 +2236,15 @@ fn sem_prefix(context: SemanticContext, allow_struct: bool, statement: bool) -> 
     if sem_match(context, "TRUE") or sem_match(context, "FALSE") { return sem_expr(context, "boolean", sem_value(context.boolean_type), source, source.kind, [], -1, -1) }
     if sem_match(context, "NONE") { return sem_expr(context, "none", sem_value(context.none_type), source, "", [], -1, -1) }
     if sem_match(context, "MINUS") {
+        let value_source = sem_at(context)
         let value = sem_expression(context, 9, allow_struct)
-        if value.type_id != context.integer_type and value.type_id != context.float_type { sem_error(context, "W2001", "numeric negation") }
+        if value.type_id != context.integer_type and value.type_id != context.float_type { report_error_at("W2001", value_source, "numeric negation") }
         return sem_expr(context, "unary", sem_value(value.type_id), source, "MINUS", [value.node], -1, -1)
     }
     if sem_match(context, "NOT") {
+        let operand_source = sem_at(context)
         let operand = sem_expression(context, 9, allow_struct)
-        sem_require(context, operand.type_id, context.boolean_type, "W2001")
+        sem_require_at(context, operand.type_id, context.boolean_type, "W2001", operand_source)
         return sem_expr(context, "unary", sem_value(context.boolean_type), source, "NOT", [operand.node], -1, -1)
     }
     if sem_match(context, "LPAREN") {
@@ -2233,14 +2279,16 @@ fn sem_prefix(context: SemanticContext, allow_struct: bool, statement: bool) -> 
         let mut element = -1
         if expected_container >= 0 and sem_kind(context, expected_container) == "list" { element = context.types[expected_container].args[0] }
         context.expected_type = element
+        let initial_source = sem_at(context)
         let initial = sem_expression(context, 0, true)
         let mut values: list[int] = [initial.node]
         let mut first = initial.type_id
-        if element >= 0 { sem_require(context, first, element, "W2001") first = element }
+        if element >= 0 { sem_require_at(context, first, element, "W2001", initial_source) first = element }
         while sem_match(context, "COMMA") {
             if sem_is(context, "RBRACKET") { break }
+            let next_source = sem_at(context)
             let next = sem_expression(context, 0, true)
-            sem_require(context, next.type_id, first, "W2001")
+            sem_require_at(context, next.type_id, first, "W2001", next_source)
             values.append(next.node)
         }
         sem_expect(context, "RBRACKET")
@@ -2261,33 +2309,37 @@ fn sem_prefix(context: SemanticContext, allow_struct: bool, statement: bool) -> 
             expected_value = context.types[expected_container].args[1]
         }
         context.expected_type = expected_key
+        let key_source = sem_at(context)
         let key_value = sem_expression(context, 0, true)
         let key = key_value.type_id
         context.expected_type = expected_container
-        if not sem_key(context, key) { sem_error(context, "W2010", "invalid dictionary key") }
-        if expected_key >= 0 { sem_require(context, key, expected_key, "W2001") }
+        if not sem_key(context, key) { report_error_at("W2010", key_source, "invalid dictionary key") }
+        if expected_key >= 0 { sem_require_at(context, key, expected_key, "W2001", key_source) }
         sem_expect(context, "COLON")
         context.expected_type = expected_value
+        let first_value_source = sem_at(context)
         let first_value = sem_expression(context, 0, true)
         let value = first_value.type_id
         let mut values: list[int] = [key_value.node, first_value.node]
         context.expected_type = expected_container
-        if expected_value >= 0 { sem_require(context, value, expected_value, "W2001") }
+        if expected_value >= 0 { sem_require_at(context, value, expected_value, "W2001", first_value_source) }
         while sem_match(context, "COMMA") {
             if sem_is(context, "RBRACE") { break }
             context.expected_type = expected_key
+            let next_key_source = sem_at(context)
             let next_key_value = sem_expression(context, 0, true)
             let next_key = next_key_value.type_id
             values.append(next_key_value.node)
             context.expected_type = expected_container
-            sem_require(context, next_key, key, "W2001")
+            sem_require_at(context, next_key, key, "W2001", next_key_source)
             sem_expect(context, "COLON")
             context.expected_type = expected_value
+            let next_value_source = sem_at(context)
             let next_value_expression = sem_expression(context, 0, true)
             let next_value = next_value_expression.type_id
             values.append(next_value_expression.node)
             context.expected_type = expected_container
-            sem_require(context, next_value, value, "W2001")
+            sem_require_at(context, next_value, value, "W2001", next_value_source)
         }
         sem_expect(context, "RBRACE")
         let type_id = if expected_key >= 0 { expected_container } else { sem_intern(context, "dict", "", [key, value]) }
@@ -2296,21 +2348,22 @@ fn sem_prefix(context: SemanticContext, allow_struct: bool, statement: bool) -> 
     if sem_is(context, "IF") { return sem_if(context, statement) }
     if sem_is(context, "MATCH") { return sem_match_expression(context, statement) }
     if sem_is(context, "THIS") or sem_is(context, "SUPER") {
-        if context.capture_depth >= 0 { sem_error(context, "W2001", "capture receiver through explicit local binding") }
+        if context.capture_depth >= 0 { report_error_at("W2001", source, "capture receiver through explicit local binding") }
         let is_super = sem_take(context).kind == "SUPER"
-        if context.owner == "" { sem_error(context, "W1004", "receiver outside method") }
+        if context.owner == "" { report_error_at("W1004", source, "receiver outside method") }
         let mut owner = context.owner
         if is_super {
             owner = ""
             for class_ in context.classes { if class_.name == context.owner { owner = class_.parent } }
-            if owner == "" { sem_error(context, "W1004", "super without base class") }
+            if owner == "" { report_error_at("W1004", source, "super without base class") }
         }
         let symbol = sem_lookup(context, "self")
-        if symbol < 0 { sem_error(context, "W9999", "checked receiver binding missing") }
+        if symbol < 0 { report_error_at("W9999", source, "checked receiver binding missing") }
         return sem_expr(context, if is_super { "super" } else { "binding" }, SemValue { type_id: sem_named(context, owner), root: "this", writable: -1, terminates: false, node: -1 }, source, "self", [], context.variables[symbol].binding, -1)
     }
     sem_match(context, "NEW")
-    let name = sem_expect(context, "IDENT").val
+    let name_token = sem_expect(context, "IDENT")
+    let name = name_token.val
     let variable = sem_lookup(context, name)
     if variable >= 0 {
         let value = context.variables[variable]
@@ -2320,13 +2373,14 @@ fn sem_prefix(context: SemanticContext, allow_struct: bool, statement: bool) -> 
     if name == "None" { return sem_expr(context, "none", sem_value(context.none_type), source, "", [], -1, -1) }
     if name == "Option" or name == "Result" {
         sem_expect(context, "DOT")
-        let variant = sem_expect(context, "IDENT").val
+        let variant_token = sem_expect(context, "IDENT")
+        let variant = variant_token.val
         if name == "Option" and variant == "None" { return sem_expr(context, "none", sem_value(context.none_type), source, "", [], -1, -1) }
         if name == "Option" and variant == "Some" or name == "Result" and (variant == "Ok" or variant == "Err") {
             let empty: list[int] = []
             return sem_expr(context, "callee", sem_value(sem_intern(context, "enum_ctor", name + "." + variant, empty)), source, variant, [], -1, -1)
         }
-        sem_error(context, "W1001", "unknown built-in enum variant: " + name + "." + variant)
+        report_error_at("W1001", variant_token, "unknown built-in enum variant: " + name + "." + variant)
     }
     if sem_builtin(name) {
         let empty: list[int] = []
@@ -2343,7 +2397,7 @@ fn sem_prefix(context: SemanticContext, allow_struct: bool, statement: bool) -> 
                 if not sem_match(context, "COMMA") { break }
             }
             sem_expect(context, "RBRACKET")
-            if len(arguments) != len(signature.type_params) { sem_error(context, "W2001", "generic function type arity") }
+            if len(arguments) != len(signature.type_params) { report_error_at("W2001", source, "generic function type arity") }
             let mut substitutions: list[int] = []
             for parameter in signature.type_params {
                 let empty: list[int] = []
@@ -2365,7 +2419,7 @@ fn sem_prefix(context: SemanticContext, allow_struct: bool, statement: bool) -> 
             if not sem_match(context, "COMMA") { break }
         }
         sem_expect(context, "RBRACKET")
-        if len(type_arguments) != len(context.generic_types[generic_type].params) { sem_error(context, "W2001", "generic type arity: " + name) }
+        if len(type_arguments) != len(context.generic_types[generic_type].params) { report_error_at("W2001", source, "generic type arity: " + name) }
         selected_type = sem_intern(context, context.generic_types[generic_type].kind, name, type_arguments)
     } elif context.expected_type >= 0 and generic_type >= 0 and sem_same_type_declaration(context, sem_named(context, name), context.expected_type) {
         selected_type = context.expected_type
@@ -2382,8 +2436,8 @@ fn sem_prefix(context: SemanticContext, allow_struct: bool, statement: bool) -> 
         let mut variant = -1
         for i in 0..len(context.variants) {
             if context.variants[i] == name {
-                if variant >= 0 { sem_error(context, "W1001", "ambiguous enum variant") }
-                if len(context.variant_payloads[i]) > 0 { sem_error(context, "W2005", "enum variant requires a payload: " + name) }
+                if variant >= 0 { report_error_at("W1001", name_token, "ambiguous enum variant: " + name) }
+                if len(context.variant_payloads[i]) > 0 { report_error_at("W2005", name_token, "enum variant requires a payload: " + name) }
                 variant = context.variant_types[i]
             }
         }
@@ -2392,7 +2446,7 @@ fn sem_prefix(context: SemanticContext, allow_struct: bool, statement: bool) -> 
             if context.capture_nodes { context.nodes[value.node].labels = [context.types[variant].name, name] }
             return value
         }
-        sem_error(context, "W1001", "unknown identifier: " + name)
+        report_error_at("W1001", name_token, "unknown identifier: " + name)
     }
     if sem_kind(context, named_type) == "class" { return sem_expr(context, "new_callee", sem_value(sem_wrap(context, "constructor", named_type)), source, name, [], -1, -1) }
     if sem_kind(context, named_type) == "struct" {
@@ -2414,22 +2468,24 @@ fn sem_prefix(context: SemanticContext, allow_struct: bool, statement: bool) -> 
             let mut initialized: list[str] = []
             let mut values: list[int] = []
             while not sem_is(context, "RBRACE") {
+                let field_token = sem_at(context)
                 let field_name = sem_expect(context, "IDENT").val
                 let field = sem_field(context, name, field_name)
-                if field < 0 { sem_error(context, "W3002", "unknown struct field") }
-                for previous in initialized { if previous == field_name { sem_error(context, "W2007", "duplicate initializer") } }
+                if field < 0 { report_error_at("W3002", field_token, "unknown struct field") }
+                for previous in initialized { if previous == field_name { report_error_at("W2007", field_token, "duplicate initializer") } }
                 initialized.append(field_name)
                 sem_expect(context, "COLON")
                 let field_context = context.expected_type
                 let field_type = sem_substitute_type(context, context.fields[field].type_id, unification.names, unification.types)
                 context.expected_type = if sem_symbolic(context, field_type) { -1 } else { field_type }
+                let field_value_source = sem_at(context)
                 let expression = sem_expression(context, 0, true)
                 context.expected_type = field_context
                 let actual = expression.type_id
                 values.append(expression.node)
                 if generic_type >= 0 and selected_type < 0 { sem_unify_type(context, unification, context.fields[field].type_id, actual) }
                 let expected = sem_substitute_type(context, context.fields[field].type_id, unification.names, unification.types)
-                sem_require(context, actual, expected, "W2001")
+                sem_require_at(context, actual, expected, "W2001", field_value_source)
                 sem_match(context, "COMMA")
             }
             sem_expect(context, "RBRACE")
@@ -2437,7 +2493,7 @@ fn sem_prefix(context: SemanticContext, allow_struct: bool, statement: bool) -> 
                 if field.owner == name {
                     let mut found = false
                     for candidate in initialized { if candidate == field.name { found = true } }
-                    if not found { sem_error(context, "W2007", "missing struct field") }
+                    if not found { report_error_at("W2007", source, "missing struct field") }
                 }
             }
             if generic_type >= 0 and selected_type < 0 {
@@ -2445,7 +2501,7 @@ fn sem_prefix(context: SemanticContext, allow_struct: bool, statement: bool) -> 
                 for parameter in context.generic_types[generic_type].params {
                     let mut concrete = -1
                     for i in 0..len(unification.names) { if unification.names[i] == parameter { concrete = unification.types[i] } }
-                    if concrete < 0 { sem_error(context, "W2001", "cannot infer generic struct type argument: " + parameter) }
+                    if concrete < 0 { report_error_at("W2001", source, "cannot infer generic struct type argument: " + parameter) }
                     concrete_types.append(concrete)
                 }
                 named_type = sem_intern(context, context.generic_types[generic_type].kind, name, concrete_types)
@@ -2488,6 +2544,7 @@ fn sem_expression(context: SemanticContext, minimum: int, allow_struct: bool) ->
             let callee = left
             let mut argument_nodes: list[int] = []
             let mut args: list[int] = []
+            let mut arg_sources: list[Token] = []
             let signature = context.types[left.type_id]
             let previous_expected = context.expected_type
             while not sem_is(context, "RPAREN") {
@@ -2506,6 +2563,7 @@ fn sem_expression(context: SemanticContext, minimum: int, allow_struct: bool) ->
                     elif signature.name == "Result.Err" and expected_type.kind == "result" { context.expected_type = expected_type.args[1] }
                 }
 
+                arg_sources.append(sem_at(context))
                 let argument = sem_expression(context, 0, true)
                 if context.initializing and argument.root == "this" { sem_complete_constructor(context) }
                 args.append(argument.type_id)
@@ -2520,7 +2578,7 @@ fn sem_expression(context: SemanticContext, minimum: int, allow_struct: bool) ->
                     sem_check_generic_constraints(context, function_index, args, call_file, call_line, call_col)
                 }
             }
-            let actual = sem_check_call(context, left.type_id, args, statement)
+            let actual = sem_check_call(context, left.type_id, args, arg_sources, statement)
             let mut concrete_target = -1
             if context.capture_nodes and len(callee.root) >= 3 and slice(callee.root, 0, 3) == "fn:" {
                 let template = sem_function(context, slice(callee.root, 3, len(callee.root)))
@@ -2552,9 +2610,10 @@ fn sem_expression(context: SemanticContext, minimum: int, allow_struct: bool) ->
                 }
             }
         } elif sem_match(context, "DOT") {
+            let name_token = sem_at(context)
             let name = sem_expect(context, "IDENT").val
             let receiver = left
-            left = sem_member(context, left, name)
+            left = sem_member(context, left, name, name_token)
             if context.capture_nodes {
                 let receiver_type = context.types[receiver.type_id]
                 if left.root == "#method" {
@@ -2571,47 +2630,50 @@ fn sem_expression(context: SemanticContext, minimum: int, allow_struct: bool) ->
             }
         } elif sem_match(context, "LBRACKET") {
             let receiver = left
+            let index_source = sem_at(context)
             let indexed = sem_expression(context, 0, true)
             let index = indexed.type_id
             sem_expect(context, "RBRACKET")
             let type_ = context.types[left.type_id]
             if type_.kind == "list" {
-                sem_require(context, index, context.integer_type, "W2001")
+                sem_require_at(context, index, context.integer_type, "W2001", index_source)
                 left = SemValue { type_id: type_.args[0], root: left.root, writable: type_.args[0], terminates: false, node: -1 }
             } elif type_.kind == "dict" {
                 # `d[k]` yields V and panics with W4002 when the key is absent; the
                 # optional form is `d.get(k)`. See SPEC 10.2.
-                sem_require(context, index, type_.args[0], "W2001")
+                sem_require_at(context, index, type_.args[0], "W2001", index_source)
                 left = SemValue { type_id: type_.args[1], root: left.root, writable: type_.args[1], terminates: false, node: -1 }
             } elif left.type_id == context.string_type {
-                sem_require(context, index, context.integer_type, "W2001")
+                sem_require_at(context, index, context.integer_type, "W2001", index_source)
                 left = sem_value(context.string_type)
-            } else { sem_error(context, "W2001", "value cannot be indexed") }
+            } else { report_error_at("W2001", call_token, "value cannot be indexed") }
             left = sem_expr(context, "index", left, call_token, "", [receiver.node, indexed.node], -1, -1)
         } elif sem_match(context, "QUESTION") {
             let operand_node = left.node
             let type_ = context.types[left.type_id]
             let returned = context.types[context.return_type]
-            if type_.kind != "optional" and type_.kind != "result" { sem_error(context, "W2006", "propagation operand") }
-            if returned.kind != type_.kind { sem_error(context, "W2006", "propagation return channel") }
-            if type_.kind == "result" and not sem_error_channel_assignable(context, type_.args[1], returned.args[1]) { sem_error(context, "W2006", "propagation error channel") }
+            if type_.kind != "optional" and type_.kind != "result" { report_error_at("W2006", call_token, "propagation operand") }
+            if returned.kind != type_.kind { report_error_at("W2006", call_token, "propagation return channel") }
+            if type_.kind == "result" and not sem_error_channel_assignable(context, type_.args[1], returned.args[1]) { report_error_at("W2006", call_token, "propagation error channel") }
             left = sem_expr(context, "propagate", sem_value(type_.args[0]), call_token, "", [operand_node], -1, -1)
         } elif sem_match(context, "ELSE") {
             let operand_node = left.node
             let mut error_binding = -1
             let operand = context.types[left.type_id]
-            if operand.kind != "optional" and operand.kind != "result" { sem_error(context, "W2006", "handler operand") }
+            if operand.kind != "optional" and operand.kind != "result" { report_error_at("W2006", call_token, "handler operand") }
             let scope = sem_enter_scope(context)
             if sem_is(context, "IDENT") {
+                let binding_token = sem_at(context)
                 let error_name = sem_take(context).val
-                if operand.kind != "result" { sem_error(context, "W2006", "optional has no error binding") }
+                if operand.kind != "result" { report_error_at("W2006", binding_token, "optional has no error binding") }
                 error_binding = sem_declare(context, error_name, operand.args[1], false)
             }
+            let handler_source = sem_at(context)
             let handler = sem_block(context, false)
             sem_leave_scope(context, scope)
             if not handler.terminates {
-                if sem_kind(context, handler.type_id) == "empty" { sem_error(context, "W2001", "handler collection requires a concrete element type") }
-                sem_require(context, handler.type_id, operand.args[0], "W2001")
+                if sem_kind(context, handler.type_id) == "empty" { report_error_at("W2001", handler_source, "handler collection requires a concrete element type") }
+                sem_require_at(context, handler.type_id, operand.args[0], "W2001", handler_source)
             }
             left = sem_expr(context, "handler", sem_value(operand.args[0]), call_token, "", [operand_node, handler.node], error_binding, -1)
         } else {
@@ -2631,13 +2693,14 @@ fn sem_expression(context: SemanticContext, minimum: int, allow_struct: bool) ->
             let previous_expected = context.expected_type
             if operator == "ASSIGN" { context.expected_type = left.writable }
             let before_right = context.initialized
+            let right_source = sem_at(context)
             let right = sem_expression(context, right_minimum, allow_struct)
             let after_right = context.initialized
             context.expected_type = previous_expected
             if operator == "ASSIGN" {
-                if left.writable < 0 { sem_error(context, "W2002", "invalid assignment target") }
-                sem_mutable(context, left.root)
-                sem_require(context, right.type_id, left.writable, "W2001")
+                if left.writable < 0 { report_error_at("W2002", source, "invalid assignment target") }
+                sem_mutable_at(context, left.root, source)
+                sem_require_at(context, right.type_id, left.writable, "W2001", right_source)
                 if context.initializing and len(left.root) > 5 and slice(left.root, 0, 5) == "this:" { context.initialized.append(slice(left.root, 5, len(left.root))) }
                 left = sem_value(left.writable)
             } elif operator == "QQ" {
@@ -2649,16 +2712,16 @@ fn sem_expression(context: SemanticContext, minimum: int, allow_struct: bool) ->
                 if left.type_id == context.none_type { left = right }
                 elif sem_kind(context, left.type_id) == "optional" {
                     let inner = context.types[left.type_id].args[0]
-                    sem_require(context, right.type_id, inner, "W2001")
+                    sem_require_at(context, right.type_id, inner, "W2001", right_source)
                     left = sem_value(inner)
-                } else { sem_error(context, "W2006", "coalesce requires optional") }
+                } else { report_error_at("W2006", source, "coalesce requires optional") }
             } elif operator == "DOT_DOT" or operator == "DOT_DOT_EQ" {
-                sem_require(context, left.type_id, context.integer_type, "W2001")
-                sem_require(context, right.type_id, context.integer_type, "W2001")
+                sem_require_at(context, left.type_id, context.integer_type, "W2001", source)
+                sem_require_at(context, right.type_id, context.integer_type, "W2001", right_source)
                 left = sem_value(sem_wrap(context, "list", context.integer_type))
             } elif operator == "AND" or operator == "OR" {
-                sem_require(context, left.type_id, context.boolean_type, "W2001")
-                sem_require(context, right.type_id, context.boolean_type, "W2001")
+                sem_require_at(context, left.type_id, context.boolean_type, "W2001", source)
+                sem_require_at(context, right.type_id, context.boolean_type, "W2001", right_source)
                 let skips_right = (operator == "AND" and logical_constant == 0) or (
                     operator == "OR" and logical_constant == 1
                 )
@@ -2672,15 +2735,15 @@ fn sem_expression(context: SemanticContext, minimum: int, allow_struct: bool) ->
             } elif operator == "EQ" or operator == "NEQ" {
                 let left_kind = sem_kind(context, left.type_id)
                 let right_kind = sem_kind(context, right.type_id)
-                if not sem_defer(context, "equality", [left.type_id, right.type_id]) and (not sem_equality_value(context, left.type_id) or not sem_equality_value(context, right.type_id)) { sem_error(context, "W2001", "function payloads do not support value equality") }
+                if not sem_defer(context, "equality", [left.type_id, right.type_id]) and (not sem_equality_value(context, left.type_id) or not sem_equality_value(context, right.type_id)) { report_error_at("W2001", right_source, "function payloads do not support value equality") }
                 let result_pair = (left_kind == "ok" or left_kind == "err") and (right_kind == "ok" or right_kind == "err")
-                if not result_pair and not sem_assignable(context, left.type_id, right.type_id) and not sem_assignable(context, right.type_id, left.type_id) { sem_error(context, "W2001", "equality types") }
+                if not result_pair and not sem_assignable(context, left.type_id, right.type_id) and not sem_assignable(context, right.type_id, left.type_id) { report_error_at("W2001", right_source, "equality types") }
                 left = sem_value(context.boolean_type)
             } else {
                 let deferred = sem_defer(context, "operator:" + operator, [left.type_id, right.type_id])
-                if not deferred and left.type_id != right.type_id { sem_error(context, "W2001", "binary operand types") }
-                if not deferred and left.type_id != context.integer_type and left.type_id != context.float_type and (operator != "PLUS" or left.type_id != context.string_type) { sem_error(context, "W2001", "invalid binary operation") }
-                if not deferred and operator == "PERCENT" and left.type_id != context.integer_type { sem_error(context, "W2001", "modulo requires integers") }
+                if not deferred and left.type_id != right.type_id { report_error_at("W2001", right_source, "binary operand types") }
+                if not deferred and left.type_id != context.integer_type and left.type_id != context.float_type and (operator != "PLUS" or left.type_id != context.string_type) { report_error_at("W2001", source, "invalid binary operation") }
+                if not deferred and operator == "PERCENT" and left.type_id != context.integer_type { report_error_at("W2001", source, "modulo requires integers") }
                 if operator == "LT" or operator == "LTE" or operator == "GT" or operator == "GTE" { left = sem_value(context.boolean_type) }
                 else { left = sem_value(left.type_id) }
             }
@@ -2695,22 +2758,24 @@ fn sem_intersect(left: list[str], right: list[str]) -> list[str] {
     for value in left { for other in right { if value == other { result.append(value) } } }
     return result
 }
-fn sem_check_discarded_branch(context: SemanticContext, type_id: int, statement: bool) {
+fn sem_check_discarded_branch(context: SemanticContext, type_id: int, statement: bool, location: Token) {
     if statement and context.expected_type >= 0 and sem_kind(context, context.expected_type) == "result" and sem_unit_return(context, context.expected_type) {
-        sem_require_tail(context, type_id, context.expected_type)
+        sem_require_tail_at(context, type_id, context.expected_type, location)
     }
 }
 fn sem_if(context: SemanticContext, statement: bool) -> SemValue {
     let source = sem_expect(context, "IF")
+    let condition_source = sem_at(context)
     let condition = sem_expression(context, 0, false)
-    sem_require(context, condition.type_id, context.boolean_type, "W2001")
+    sem_require_at(context, condition.type_id, context.boolean_type, "W2001", condition_source)
     let mut conditions: list[int] = [condition.node]
     let mut branches: list[int] = []
     let mut sources: list[Token] = [source]
     let initial = context.initialized
+    let first_source = sem_at(context)
     let first = sem_block(context, statement)
     branches.append(first.node)
-    sem_check_discarded_branch(context, first.type_id, statement)
+    sem_check_discarded_branch(context, first.type_id, statement, first_source)
     let mut initialized = context.initialized
     let mut all_return = first.terminates
     let mut common = first.type_id
@@ -2718,13 +2783,15 @@ fn sem_if(context: SemanticContext, statement: bool) -> SemValue {
     while sem_is(context, "ELIF") {
         sources.append(sem_take(context))
         context.initialized = initial
+        let condition_source = sem_at(context)
         let condition = sem_expression(context, 0, false)
-        sem_require(context, condition.type_id, context.boolean_type, "W2001")
+        sem_require_at(context, condition.type_id, context.boolean_type, "W2001", condition_source)
         conditions.append(condition.node)
+        let branch_source = sem_at(context)
         let branch = sem_block(context, statement)
         branches.append(branch.node)
-        sem_check_discarded_branch(context, branch.type_id, statement)
-        if not branch.terminates and not all_return and not sem_assignable(context, branch.type_id, common) { if not statement { sem_error(context, "W2001", "incompatible if branches") } common = context.unit_type }
+        sem_check_discarded_branch(context, branch.type_id, statement, branch_source)
+        if not branch.terminates and not all_return and not sem_assignable(context, branch.type_id, common) { if not statement { report_error_at("W2001", branch_source, "incompatible if branches") } common = context.unit_type }
         if not branch.terminates {
             if all_return { initialized = context.initialized } else { initialized = sem_intersect(initialized, context.initialized) }
             if all_return { common = branch.type_id }
@@ -2734,11 +2801,12 @@ fn sem_if(context: SemanticContext, statement: bool) -> SemValue {
     }
     context.initialized = initial
     if sem_match(context, "ELSE") {
+        let branch_source = sem_at(context)
         let branch = sem_block(context, statement)
         branches.append(branch.node)
-        sem_check_discarded_branch(context, branch.type_id, statement)
+        sem_check_discarded_branch(context, branch.type_id, statement, branch_source)
         if not branch.terminates {
-            if not all_return and not sem_assignable(context, branch.type_id, common) { if not statement { sem_error(context, "W2001", "incompatible if branches") } common = context.unit_type }
+            if not all_return and not sem_assignable(context, branch.type_id, common) { if not statement { report_error_at("W2001", branch_source, "incompatible if branches") } common = context.unit_type }
             if all_return { initialized = context.initialized } else { initialized = sem_intersect(initialized, context.initialized) }
             if all_return { common = branch.type_id }
         }
@@ -2831,7 +2899,7 @@ fn sem_pattern_matrix(context: SemanticContext, types: list[int], rows: list[lis
 }
 fn sem_pattern(context: SemanticContext, subject: int) -> str {
     let source = sem_at(context)
-    let name = sem_pattern_syntax(context, subject)
+    let name = sem_pattern_syntax(context, subject, source)
     if name == "None" and sem_kind(context, subject) != "optional" and sem_kind(context, subject) != "enum" { report_error_at("W2001", source, "none pattern requires an optional subject") }
     context.patterns[context.last_pattern].source = source
     context.patterns[context.last_pattern].type_id = subject
@@ -2843,13 +2911,13 @@ fn sem_binding_pattern(context: SemanticContext, name: str, subject: int) -> str
     context.patterns[context.last_pattern].binding = binding
     return pattern
 }
-fn sem_pattern_syntax(context: SemanticContext, subject: int) -> str {
+fn sem_pattern_syntax(context: SemanticContext, subject: int, source: Token) -> str {
     if sem_match(context, "ELSE") { return sem_leaf_pattern(context, "*") }
     if sem_match(context, "NONE") { return sem_leaf_pattern(context, "None") }
     if sem_match(context, "MINUS") {
         let literal = sem_take(context)
         if literal.kind != "INT" { report_error_at("W0002", literal, "expected integer pattern after '-'") }
-        sem_require(context, context.integer_type, subject, "W2001")
+        sem_require_at(context, context.integer_type, subject, "W2001", literal)
         return sem_leaf_pattern(context, "literal:-" + literal.val)
     }
     if sem_is(context, "INT") or sem_is(context, "STR") or sem_is(context, "TRUE") or sem_is(context, "FALSE") {
@@ -2858,23 +2926,23 @@ fn sem_pattern_syntax(context: SemanticContext, subject: int) -> str {
         if token.kind == "INT" { type_id = context.integer_type }
         elif token.kind == "FLOAT" { type_id = context.float_type }
         elif token.kind == "STR" { type_id = context.string_type }
-        sem_require(context, type_id, subject, "W2001")
+        sem_require_at(context, type_id, subject, "W2001", token)
         return sem_leaf_pattern(context, "literal:" + token.val)
     }
     if sem_match(context, "LPAREN") {
-        if sem_kind(context, subject) != "tuple" { sem_error(context, "W2001", "tuple pattern requires a tuple") }
+        if sem_kind(context, subject) != "tuple" { report_error_at("W2001", source, "tuple pattern requires a tuple") }
         let elements = context.types[subject].args
         let mut children: list[int] = []
         if not sem_is(context, "RPAREN") {
             while true {
-                if len(children) >= len(elements) { sem_error(context, "W2001", "too many tuple pattern elements") }
+                if len(children) >= len(elements) { report_error_at("W2001", source, "too many tuple pattern elements") }
                 sem_pattern(context, elements[len(children)])
                 children.append(context.last_pattern)
                 if not sem_match(context, "COMMA") or sem_is(context, "RPAREN") { break }
             }
         }
         sem_expect(context, "RPAREN")
-        if len(children) != len(elements) { sem_error(context, "W2001", "tuple pattern arity") }
+        if len(children) != len(elements) { report_error_at("W2001", source, "tuple pattern arity") }
         return sem_record_pattern(context, "tuple", children)
     }
 
@@ -2885,7 +2953,7 @@ fn sem_pattern_syntax(context: SemanticContext, subject: int) -> str {
     let kind = sem_kind(context, subject)
     if sem_match(context, "LPAREN") {
         if kind == "error_union" {
-            if owner != "" { sem_error(context, "W2001", "error type patterns must be unqualified") }
+            if owner != "" { report_error_at("W2001", source, "error type patterns must be unqualified") }
             let mut error_type = -1
             if name == "int" { error_type = context.integer_type }
             elif name == "float" { error_type = context.float_type }
@@ -2894,12 +2962,12 @@ fn sem_pattern_syntax(context: SemanticContext, subject: int) -> str {
             else { error_type = sem_named(context, name) }
             let mut is_alternative = false
             for alternative in context.types[subject].args { if alternative == error_type { is_alternative = true } }
-            if not is_alternative { sem_error(context, "W2001", "error type pattern is not an alternative of this union") }
-            if sem_is(context, "RPAREN") { sem_error(context, "W2005", "error type pattern requires exactly one payload binding") }
-            if not sem_is(context, "IDENT") { sem_error(context, "W2005", "error type pattern payload must be a binding or wildcard") }
+            if not is_alternative { report_error_at("W2001", source, "error type pattern is not an alternative of this union") }
+            if sem_is(context, "RPAREN") { report_error_at("W2005", source, "error type pattern requires exactly one payload binding") }
+            if not sem_is(context, "IDENT") { report_error_at("W2005", source, "error type pattern payload must be a binding or wildcard") }
             let child_pattern = sem_pattern(context, error_type)
-            if child_pattern != "*" { sem_error(context, "W2005", "error type pattern payload must be a binding or wildcard") }
-            if sem_match(context, "COMMA") { sem_error(context, "W2005", "error type pattern requires exactly one payload binding") }
+            if child_pattern != "*" { report_error_at("W2005", source, "error type pattern payload must be a binding or wildcard") }
+            if sem_match(context, "COMMA") { report_error_at("W2005", source, "error type pattern requires exactly one payload binding") }
             sem_expect(context, "RPAREN")
             return sem_record_pattern(context, sem_error_type_name(context, error_type), [context.last_pattern])
         }
@@ -2915,7 +2983,7 @@ fn sem_pattern_syntax(context: SemanticContext, subject: int) -> str {
             payload_types = [context.types[subject].args[1]]
             valid = true
         } elif kind == "enum" {
-            if owner != "" and owner != context.types[subject].name { sem_error(context, "W2001", "pattern enum identity") }
+            if owner != "" and owner != context.types[subject].name { report_error_at("W2001", source, "pattern enum identity") }
             let generic = sem_generic_type(context, context.types[subject].name)
             for i in 0..len(context.variants) {
                 if context.variants[i] == name and context.types[context.variant_types[i]].name == context.types[subject].name {
@@ -2929,36 +2997,36 @@ fn sem_pattern_syntax(context: SemanticContext, subject: int) -> str {
                 }
             }
         }
-        if not valid { sem_error(context, "W2001", "payload pattern") }
+        if not valid { report_error_at("W2001", source, "payload pattern") }
         let mut count = 0
         let mut children: list[int] = []
         if not sem_is(context, "RPAREN") {
-            if count >= len(payload_types) { sem_error(context, "W2001", "too many enum pattern bindings") }
+            if count >= len(payload_types) { report_error_at("W2001", source, "too many enum pattern bindings") }
             sem_pattern(context, payload_types[count])
             children.append(context.last_pattern)
             count = count + 1
             while sem_match(context, "COMMA") {
                 if sem_is(context, "RPAREN") { break }
-                if count >= len(payload_types) { sem_error(context, "W2001", "too many enum pattern bindings") }
+                if count >= len(payload_types) { report_error_at("W2001", source, "too many enum pattern bindings") }
                 sem_pattern(context, payload_types[count])
                 children.append(context.last_pattern)
                 count = count + 1
             }
         }
         sem_expect(context, "RPAREN")
-        if count != len(payload_types) { sem_error(context, "W2001", "enum pattern arity") }
+        if count != len(payload_types) { report_error_at("W2001", source, "enum pattern arity") }
         return sem_record_pattern(context, name, children)
     }
     if kind == "enum" {
-        if owner != "" and owner != context.types[subject].name { sem_error(context, "W2001", "pattern enum identity") }
+        if owner != "" and owner != context.types[subject].name { report_error_at("W2001", source, "pattern enum identity") }
         let mut valid = false
         for i in 0..len(context.variants) { if context.variants[i] == name and context.types[context.variant_types[i]].name == context.types[subject].name and len(context.variant_payloads[i]) == 0 { valid = true } }
         if valid { return sem_leaf_pattern(context, name) }
-        if owner != "" { sem_error(context, "W1001", "unknown enum pattern") }
+        if owner != "" { report_error_at("W1001", source, "unknown enum pattern") }
         return sem_binding_pattern(context, name, subject)
     }
     if name == "None" and (kind == "optional" or owner == "Option") { return sem_leaf_pattern(context, "None") }
-    if owner != "" { sem_error(context, "W2001", "qualified enum pattern required") }
+    if owner != "" { report_error_at("W2001", source, "qualified enum pattern required") }
     return sem_binding_pattern(context, name, subject)
 }
 fn sem_match_expression(context: SemanticContext, statement: bool) -> SemValue {
@@ -2995,9 +3063,10 @@ fn sem_match_expression(context: SemanticContext, statement: bool) -> SemValue {
         let pattern = context.last_pattern
         let mut guarded = false
         let mut guard = -1
-        if sem_match(context, "IF") { guarded = true let value = sem_expression(context, 0, false) sem_require(context, value.type_id, context.boolean_type, "W2001") guard = value.node }
+        if sem_match(context, "IF") { guarded = true let guard_source = sem_at(context) let value = sem_expression(context, 0, false) sem_require_at(context, value.type_id, context.boolean_type, "W2001", guard_source) guard = value.node }
         if not sem_match(context, "FAT_ARROW") { sem_error(context, "W0001", "expected '=>' after match pattern") }
         let mut branch = SemFlow { type_id: context.unit_type, terminates: false, node: -1 }
+        let branch_source = sem_at(context)
         if sem_is(context, "LBRACE") { branch = sem_block(context, false) }
         else { let value = sem_expression(context, 0, true) branch = SemFlow { type_id: value.type_id, terminates: value.terminates, node: value.node } }
         if context.capture_nodes {
@@ -3011,7 +3080,7 @@ fn sem_match_expression(context: SemanticContext, statement: bool) -> SemValue {
         if not branch.terminates {
             if live_branches == 0 { initialized = context.initialized } else { initialized = sem_intersect(initialized, context.initialized) }
             live_branches = live_branches + 1
-            if common >= 0 { sem_require(context, branch.type_id, common, "W2001") } else { common = branch.type_id }
+            if common >= 0 { sem_require_at(context, branch.type_id, common, "W2001", branch_source) } else { common = branch.type_id }
         }
         all_return = all_return and branch.terminates
         sem_leave_scope(context, scope)
@@ -3021,10 +3090,10 @@ fn sem_match_expression(context: SemanticContext, statement: bool) -> SemValue {
     let kind = sem_kind(context, subject)
     let closed = kind == "enum" or kind == "optional" or kind == "result" or kind == "error_union" or kind == "bool" or kind == "tuple"
     let exhaustive = sem_pattern_matrix(context, [subject], covered)
-    if closed and not exhaustive { sem_error(context, "W2003", "non-exhaustive match") }
+    if closed and not exhaustive { report_error_at("W2003", source, "non-exhaustive match") }
     if not closed and not exhaustive {
-        if common >= 0 and common != context.unit_type { sem_error(context, "W2003", "value match requires exhaustive patterns") }
-        if not statement and context.expected_type >= 0 and context.expected_type != context.unit_type { sem_error(context, "W2003", "value match requires exhaustive patterns") }
+        if common >= 0 and common != context.unit_type { report_error_at("W2003", source, "value match requires exhaustive patterns") }
+        if not statement and context.expected_type >= 0 and context.expected_type != context.unit_type { report_error_at("W2003", source, "value match requires exhaustive patterns") }
         initialized = sem_intersect(initialized, initial)
         all_return = false
     }
@@ -3044,17 +3113,18 @@ fn sem_let(context: SemanticContext) -> int {
     let previous = context.expected_type
     context.expected_type = annotation
 
+    let initializer_source = sem_at(context)
     let initializer = sem_expression(context, 0, true)
     let value = initializer.type_id
     context.expected_type = previous
-    if sem_kind(context, value) == "builtin" { sem_error(context, "W2013", "builtin values require an explicit lambda adapter") }
+    if sem_kind(context, value) == "builtin" { report_error_at("W2013", initializer_source, "builtin values require an explicit lambda adapter") }
     if annotation < 0 {
         let inferred = context.types[value]
         let untyped_list = inferred.kind == "list" and sem_kind(context, inferred.args[0]) == "any"
         let untyped_dict = inferred.kind == "dict" and sem_kind(context, inferred.args[0]) == "any"
-        if value == context.none_type or sem_kind(context, value) == "empty" or untyped_list or untyped_dict { sem_error(context, "W2001", "initializer needs type context") }
+        if value == context.none_type or sem_kind(context, value) == "empty" or untyped_list or untyped_dict { report_error_at("W2001", initializer_source, "initializer needs type context") }
         annotation = value
-    } else { sem_require(context, value, annotation, "W2001") }
+    } else { sem_require_at(context, value, annotation, "W2001", initializer_source) }
     let binding = sem_declare(context, name, annotation, mutable)
     return sem_node(context, "let", context.unit_type, source, name, [initializer.node], binding, -1)
 }
@@ -3074,22 +3144,25 @@ fn sem_block(context: SemanticContext, statement: bool) -> SemFlow {
             context.expected_type = context.return_type
             let mut value = context.unit_type
             let mut returned_node = sem_node(context, "unit", context.unit_type, statement_source, "", [], -1, -1)
+            let mut return_source = statement_source
             if expression_starter(sem_at(context).kind) {
 
+                return_source = sem_at(context)
                 let expression = sem_expression(context, 0, true)
                 value = expression.type_id
                 returned_node = expression.node
             }
             context.expected_type = previous
             if context.return_type < 0 { context.return_type = value }
-            sem_require(context, value, context.return_type, "W2004")
+            sem_require_at(context, value, context.return_type, "W2004", return_source)
             sem_complete_constructor(context)
             statements.append(sem_node(context, "return", context.unit_type, statement_source, "", [returned_node], -1, -1))
             terminates = true
             tail = context.unit_type
         } elif sem_match(context, "WHILE") {
+            let condition_source = sem_at(context)
             let condition = sem_expression(context, 0, false)
-            sem_require(context, condition.type_id, context.boolean_type, "W2001")
+            sem_require_at(context, condition.type_id, context.boolean_type, "W2001", condition_source)
             context.loop = context.loop + 1
             let initialized = context.initialized
             let body = sem_block(context, true)
@@ -3100,9 +3173,10 @@ fn sem_block(context: SemanticContext, statement: bool) -> SemFlow {
         } elif sem_match(context, "FOR") {
             let pattern = sem_for_pattern(context, true)
             sem_expect(context, "IN")
+            let sequence_source = sem_at(context)
             let sequence = sem_expression(context, 0, false)
             let iterable = sequence.type_id
-            if sem_kind(context, iterable) != "list" { sem_error(context, "W2001", "for requires list or range") }
+            if sem_kind(context, iterable) != "list" { report_error_at("W2001", sequence_source, "for requires list or range") }
             let element = context.types[iterable].args[0]
             let scope = sem_enter_scope(context)
             sem_bind_for_pattern(context, pattern, element)
@@ -3137,15 +3211,15 @@ fn sem_unit_return(context: SemanticContext, type_id: int) -> bool {
     if type_id == context.unit_type { return true }
     return type_id >= 0 and sem_kind(context, type_id) == "result" and context.types[type_id].args[0] == context.unit_type
 }
-fn sem_require_tail(context: SemanticContext, source: int, target: int) {
+fn sem_require_tail_at(context: SemanticContext, source: int, target: int, location: Token) {
     if sem_unit_return(context, target) {
         if sem_kind(context, target) == "result" {
             let mut error_type = -1
             if sem_kind(context, source) == "result" { error_type = context.types[source].args[1] }
             elif sem_kind(context, source) == "err" { error_type = context.types[source].args[0] }
-            if error_type >= 0 and not sem_error_channel_assignable(context, error_type, context.types[target].args[1]) { sem_error(context, "W2004", "incompatible error channel") }
+            if error_type >= 0 and not sem_error_channel_assignable(context, error_type, context.types[target].args[1]) { report_error_at("W2004", location, "incompatible error channel") }
         }
-    } else { sem_require(context, source, target, "W2004") }
+    } else { sem_require_at(context, source, target, "W2004", location) }
 }
 fn sem_check_function(context: SemanticContext, function: SemFunction) {
     if function.body < 0 { return }
@@ -3192,7 +3266,7 @@ fn sem_check_function(context: SemanticContext, function: SemFunction) {
     }
     let flow = sem_block(context, sem_unit_return(context, context.return_type))
     if not flow.terminates {
-        sem_require_tail(context, flow.type_id, context.return_type)
+        sem_require_tail_at(context, flow.type_id, context.return_type, context.tokens[function.body])
         if sem_kind(context, context.return_type) == "result" and sem_unit_return(context, context.return_type) { sem_mark_unit_tail(context, flow.node) }
     }
     sem_complete_constructor(context)
@@ -3329,13 +3403,14 @@ fn sem_validate(context: SemanticContext, tokens: list[Token]) {
         sem_skip_separators(context)
         if sem_is(context, "EOF") { break }
         sem_match(context, "PUB")
+        let declaration_source = sem_at(context)
         if sem_match(context, "EXTERN") {
-            if sem_expect(context, "STR").val != "C" { sem_error(context, "W2013", "only C ABI is supported") }
+            if sem_expect(context, "STR").val != "C" { report_error_at("W2013", declaration_source, "only C ABI is supported") }
             sem_collect_function(context, "", true)
             let signature = context.types[context.functions[len(context.functions) - 1].type_id].args
             for i in 0..len(signature) {
                 let kind = sem_kind(context, signature[i])
-                if kind != "int" and kind != "float" and kind != "bool" and kind != "opaque" and not (i == len(signature) - 1 and kind == "unit") { sem_error(context, "W2001", "FFI accepts only scalars and opaque handles") }
+                if kind != "int" and kind != "float" and kind != "bool" and kind != "opaque" and not (i == len(signature) - 1 and kind == "unit") { report_error_at("W2001", declaration_source, "FFI accepts only scalars and opaque handles") }
             }
         }
         elif sem_is(context, "FN") and context.tokens[context.pos + 1].kind == "IDENT" { sem_collect_function(context, "", true) }
@@ -3426,11 +3501,12 @@ fn sem_lambda(context: SemanticContext) -> SemValue {
     let mut body = -1
     let mut types: list[int] = []
     while not sem_is(context, "PIPE") {
+        let parameter_token = sem_at(context)
         let name = sem_expect(context, "IDENT").val
         let mut type_id = -1
         if sem_match(context, "COLON") { type_id = sem_type(context) }
         elif expected >= 0 and sem_kind(context, expected) == "function" and len(params) + 1 < len(context.types[expected].args) { type_id = context.types[expected].args[len(params)] }
-        else { sem_error(context, "W2001", "lambda parameter needs type context") }
+        else { report_error_at("W2001", parameter_token, "lambda parameter needs type context") }
         params.append(name)
         types.append(type_id)
         parameter_bindings.append(sem_declare(context, name, type_id, false))
@@ -3446,19 +3522,20 @@ fn sem_lambda(context: SemanticContext) -> SemValue {
     if sem_match(context, "FAT_ARROW") {
         context.expected_type = returned
         context.statement_context = sem_unit_return(context, returned)
+        let expression_source = sem_at(context)
         let expression = sem_expression(context, 0, true)
         let actual = expression.type_id
         body = sem_node(context, "block", actual, token, "", [expression.node], -1, -1)
-        if returned < 0 { returned = actual } else { sem_require_tail(context, actual, returned) }
+        if returned < 0 { returned = actual } else { sem_require_tail_at(context, actual, returned, expression_source) }
     } else {
         let flow = sem_block(context, sem_unit_return(context, context.return_type))
         body = flow.node
         if returned < 0 { returned = if context.return_type >= 0 { context.return_type } else { flow.type_id } }
-        if not flow.terminates { sem_require_tail(context, flow.type_id, returned) }
+        if not flow.terminates { sem_require_tail_at(context, flow.type_id, returned, token) }
     }
     types.append(returned)
     let signature = sem_intern(context, "function", "", types)
-    if expected >= 0 { sem_require(context, signature, expected, "W2001") }
+    if expected >= 0 { sem_require_at(context, signature, expected, "W2001", token) }
     let captures = context.capture_names
     sem_leave_scope(context, scope)
     context.return_type = previous_return

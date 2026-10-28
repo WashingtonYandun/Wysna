@@ -224,6 +224,16 @@ class HirBuilder:
                     self.enum_variants[v_name] = stmt.name
 
         struct_decls: List[HirStructDecl] = []
+        # Prelude types have checked definitions but no source-level declaration.
+        for name in ("IoError", "NetError"):
+            definition = self.interner.struct_defs.get(name)
+            if definition is not None and name not in self.structs:
+                fields = [HirFieldDef(field, type_id, is_public=True,
+                                      span=Span(1, 1, file_path="<prelude>"))
+                          for field, type_id in definition.fields.items()]
+                struct_decls.append(HirStructDecl(name, definition.def_id, fields,
+                                                 Span(1, 1, file_path="<prelude>")))
+                self.structs.add(name)
         enum_decls: List[HirEnumDecl] = []
         intf_decls: List[HirInterfaceDecl] = []
         class_decls: List[HirClassDecl] = []

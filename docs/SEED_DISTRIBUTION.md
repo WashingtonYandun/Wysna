@@ -90,6 +90,8 @@ the bundled toolchain.
 
 - `wysna test`, `wysna bench`, and `--backend=selfhost` require a source checkout and
   are not part of this distribution.
+- For tests in an installed user project, use `wysna project test`; this is separate
+  from the compiler's source-checkout maintenance suite.
 - HTTP requires separately installed libcurl development files and `curl-config`.
   Declared C FFI libraries and their headers remain explicit dependencies.
   Apple's system libcurl uses a macOS SDK; `SDKROOT` can select a compatible SDK.
@@ -132,9 +134,10 @@ installation untouched. Linux integrates with the distribution's package manager
 Windows retains its per-user wizard and registered uninstaller.
 
 `installers.json` and `SHA256SUMS` record the exact package artifacts and source
-provenance. `--signing-identity` signs only the macOS Installer package; it does not
-notarize the package or sign every embedded binary. The 0.5.0 release does not
-include signed or notarized installers.
+provenance. `--signing-identity` signs only the macOS Installer package.
+`--notarization-profile` requires that signature, submits the package with
+`notarytool`, staples the ticket and validates it. Neither option signs every
+embedded binary. The 0.5.0 release does not include signed or notarized installers.
 
 Run the standalone acceptance tool outside the checkout:
 

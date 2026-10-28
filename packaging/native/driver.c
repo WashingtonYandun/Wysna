@@ -17,6 +17,8 @@
 #endif
 #define SDK_ARGUMENT_LIMIT 240
 #define SDK_LINK_LIMIT 16
+/* Selfbuild and large programs can exceed the old two-minute engine cap on slow runners. */
+#define SDK_COMPILE_TIMEOUT_MS 600000
 
 #ifdef _WIN32
 #define SDK_ENGINE "libexec/wysna-compiler.exe"
@@ -201,7 +203,7 @@ static int sdk_build(SdkInvocation* invocation, const SdkOptions* options) {
     arguments[count++] = WYSNA_NATIVE_STACK_LINK_ARGUMENT;
 #endif
     arguments[count++] = "-lc"; arguments[count++] = "-lm"; arguments[count++] = "-o"; arguments[count++] = invocation->product;
-    int status = sdk_child(invocation->zig, count, arguments, 120000);
+    int status = sdk_child(invocation->zig, count, arguments, SDK_COMPILE_TIMEOUT_MS);
     int restored_local = sdk_environment("ZIG_LOCAL_CACHE_DIR", invocation->previous_local_cache);
     int restored_global = sdk_environment("ZIG_GLOBAL_CACHE_DIR", invocation->previous_global_cache);
     if (!restored_local || !restored_global) return sdk_error("W5001", "Cannot restore the application environment", NULL);
@@ -252,7 +254,7 @@ static int sdk_execute(SdkInvocation* invocation, const SdkOptions* options, int
     engine_arguments[engine_count++] = strcmp(options->command, "check") == 0 ? "--check-mir" : strcmp(options->command, "emit-mir") == 0 ? "--emit-mir" : "--emit-c-mir";
     engine_arguments[engine_count++] = invocation->source;
     if (build || run || options->output) engine_arguments[engine_count++] = invocation->generated;
-    int status = sdk_child(invocation->engine, engine_count, engine_arguments, 120000);
+    int status = sdk_child(invocation->engine, engine_count, engine_arguments, SDK_COMPILE_TIMEOUT_MS);
     if (status) return status;
     if (build || run) {
         status = sdk_build(invocation, options); if (status) return status;

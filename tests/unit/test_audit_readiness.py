@@ -215,7 +215,7 @@ def test_lsp_publishes_recovered_syntax_diagnostics():
     uri = (ROOT / 'readiness-diagnostics.wysna').as_uri()
     server.update(uri, 'let first =\nlet second =\nlet valid = 1', 1)
     diagnostics = messages[-1]['params']['diagnostics']
-    assert len(diagnostics) == 2 and all(item['source'] == 'w' for item in diagnostics)
+    assert len(diagnostics) == 2 and all(item['source'] == 'Wysna' for item in diagnostics)
     assert uri not in server.checked
 
 

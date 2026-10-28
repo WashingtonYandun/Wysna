@@ -79,11 +79,17 @@ Independent Wysna Compiler: selfhost/src/ → direct C99 → NativeToolchain
 git clone https://github.com/WashingtonYandun/wysna.git
 cd wysna
 
+# Install pytest and the optional HTTP/service test dependencies
+python3 -m pip install -e '.[dev]'
+
 # Verify toolchain CLI
 ./wysna --version
 
 # Run the full conformance test suite
 ./wysna test
+
+# Run the complete Python unit suite
+python3 -m pytest -q
 ```
 
 ---

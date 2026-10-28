@@ -101,7 +101,15 @@ def macos_payload(bundle, record, temporary):
     return payload, scripts, version_root
 
 
-def package_macos(bundle, output, record, temporary, signing_identity=None):
+def notarize_macos(package, profile):
+    """Submit a signed macOS package and attach the notarization ticket."""
+    run(['xcrun', 'notarytool', 'submit', str(package), '--keychain-profile', profile, '--wait'])
+    run(['xcrun', 'stapler', 'staple', str(package)])
+    run(['xcrun', 'stapler', 'validate', str(package)])
+
+
+def package_macos(bundle, output, record, temporary, signing_identity=None,
+                  notarization_profile=None):
     payload, scripts, version_root = macos_payload(bundle, record, temporary)
     component = temporary / 'component.pkg'
     run(['pkgbuild', '--root', payload, '--scripts', scripts, '--identifier', 'com.wysofia.wysna',
@@ -124,6 +132,8 @@ def package_macos(bundle, output, record, temporary, signing_identity=None):
     if signing_identity:
         command += ['--sign', signing_identity]
     run(command + [target])
+    if notarization_profile:
+        notarize_macos(target, notarization_profile)
     return [target]
 
 
@@ -202,7 +212,8 @@ def package_linux(bundle, output, record, temporary, formats):
     return results
 
 
-def build_installers(bundle, output, *, formats=None, signing_identity=None):
+def build_installers(bundle, output, *, formats=None, signing_identity=None,
+                     notarization_profile=None):
     bundle, output = Path(bundle).resolve(), Path(output).resolve()
     record = verify_bundle(bundle)
     if output.exists():
@@ -211,11 +222,14 @@ def build_installers(bundle, output, *, formats=None, signing_identity=None):
         raise ValueError('--formats selects Linux package formats only')
     if signing_identity and record['platform'] != 'aarch64-macos':
         raise ValueError('--signing-identity applies only to macOS Installer packages')
+    if notarization_profile and (record['platform'] != 'aarch64-macos' or not signing_identity):
+        raise ValueError('--notarization-profile requires a signed macOS Installer package')
     output.mkdir(parents=True)
     with tempfile.TemporaryDirectory(prefix='wysna-installer-') as temporary:
         temporary = Path(temporary)
         if record['platform'] == 'aarch64-macos':
-            results = package_macos(bundle, output, record, temporary, signing_identity)
+            results = package_macos(bundle, output, record, temporary, signing_identity,
+                                    notarization_profile)
         elif record['platform'] == 'x86_64-linux':
             results = package_linux(bundle, output, record, temporary, formats or ('deb', 'rpm'))
         elif record['platform'] == 'x86_64-windows':
@@ -231,8 +245,8 @@ def build_installers(bundle, output, *, formats=None, signing_identity=None):
     (output / 'installers.json').write_text(json.dumps({'schema':'wysna.installers/1','version':record['version'],
         'source_commit':record['source_commit'],'source_dirty':record['source_dirty'],
         'platform':record['platform'],'gui_installation':True,'host_python_required':False,
-        'host_c_compiler_required':False,'signed':bool(signing_identity),'notarized':False,
-        'files':files},indent=2))
+        'host_c_compiler_required':False,'signed':bool(signing_identity),
+        'notarized':bool(notarization_profile),'files':files},indent=2))
     return files
 
 
@@ -242,9 +256,11 @@ def main():
     parser.add_argument('--output', type=Path, required=True)
     parser.add_argument('--formats', nargs='+', choices=('deb','rpm'))
     parser.add_argument('--signing-identity')
+    parser.add_argument('--notarization-profile')
     args = parser.parse_args()
     print(json.dumps(build_installers(args.bundle,args.output,formats=args.formats,
-                                     signing_identity=args.signing_identity),indent=2))
+                                     signing_identity=args.signing_identity,
+                                     notarization_profile=args.notarization_profile),indent=2))
 
 
 if __name__ == '__main__':

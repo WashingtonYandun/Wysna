@@ -1,4 +1,5 @@
-fn fetch() -> str ! NetError {
+struct NetworkFailure { message: str }
+fn fetch() -> str ! NetworkFailure {
     let s = read_file("test.wysna")?
     return s
 }

@@ -47,11 +47,40 @@ class Environment:
         self.is_function_boundary = is_function_boundary
         self.bindings: Dict[str, WysnaValue] = {}
         self.mutables: Set[str] = set()
+        self._declaration_journal = None
 
     def declare(self, name: str, value: WysnaValue, is_mut: bool = False) -> None:
+        if self._declaration_journal is not None and name not in self._declaration_journal:
+            self._declaration_journal[name] = (
+                name in self.bindings, self.bindings.get(name), name in self.mutables
+            )
         self.bindings[name] = value.clone_value()
         if is_mut:
             self.mutables.add(name)
+        else:
+            self.mutables.discard(name)
+
+    def begin_declaration_journal(self) -> None:
+        if self._declaration_journal is not None:
+            raise RuntimeError("A declaration journal is already active")
+        self._declaration_journal = {}
+
+    def end_declaration_journal(self, *, rollback: bool) -> None:
+        journal = self._declaration_journal
+        if journal is None:
+            raise RuntimeError("No declaration journal is active")
+        self._declaration_journal = None
+        if not rollback:
+            return
+        for name, (existed, value, mutable) in journal.items():
+            if existed:
+                self.bindings[name] = value
+            else:
+                self.bindings.pop(name, None)
+            if mutable:
+                self.mutables.add(name)
+            else:
+                self.mutables.discard(name)
 
     def assign(self, name: str, value: WysnaValue) -> None:
         if name in self.bindings:

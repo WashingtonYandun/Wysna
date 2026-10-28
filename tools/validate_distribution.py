@@ -39,9 +39,9 @@ def validate(installation, report, expected_commit=None):
         work = Path(temporary).resolve()
         environment = isolated_environment(work)
 
-        def run(name, arguments, *, executable=cli, code=0, expected=None, cwd=work):
+        def run(name, arguments, *, executable=cli, code=0, expected=None, cwd=work, input_text=None):
             result = subprocess.run([str(executable), *map(str, arguments)], cwd=cwd, env=environment,
-                                    capture_output=True, text=True, encoding='utf-8', timeout=300)
+                                    input=input_text, capture_output=True, text=True, encoding='utf-8', timeout=300)
             check = {'name': name, 'exit_code': result.returncode,
                      'stdout': result.stdout, 'stderr': result.stderr}
             checks.append(check)
@@ -52,6 +52,14 @@ def validate(installation, report, expected_commit=None):
             return result
 
         run('version', ['version'])
+        repl_input = 'fn twice(value: int) -> int {\nreturn value * 2\n}\nlet value = 21\nprint(twice(value))\nexit\n'
+        repl = run('repl-state', ['repl'], input_text=repl_input)
+        assert '42' in repl.stdout and '[W1001]' not in repl.stdout, repl.stdout
+        created = json.loads(run('project-new', ['project', 'new', 'new-project', '--output-format=json-v1']).stdout)
+        assert created['status'] == 'ok' and len(created['artifacts']) == 3, created
+        new_manifest = work / 'new-project' / 'wysna.toml'
+        run('new-project-check', ['project', 'check', '--manifest', new_manifest])
+        run('new-project-test', ['project', 'test', '--manifest', new_manifest])
         health = json.loads(run('full-integrity', ['doctor', '--output-format=json-v1']).stdout)
         assert health['result']['verified_files'] == len(manifest['files']), health
         assert health['result']['root'] == str(installation), health
@@ -74,6 +82,17 @@ def validate(installation, report, expected_commit=None):
         native = work / ('native.exe' if os.name == 'nt' else 'native')
         run('native-build-without-host-compiler', ['build', source, '-o', native])
         run('native-execution', [], executable=native, expected=expected)
+        failed_output = run('emit-c-filesystem-error',
+                            ['emit-c', source, '-o', work / 'missing-directory/program.c'], code=3)
+        assert '[W5004]' in failed_output.stderr and '[Internal Error]' not in failed_output.stderr
+        prelude_source = work / 'prelude-errors.wysna'
+        prelude_source.write_text('let issue = NetError { message: "offline" }\n'
+                                  'let io = IoError { message: "io" }\n'
+                                  'print(issue.message, io.message)\n', encoding='utf-8')
+        run('prelude-errors-run', ['run', prelude_source], expected='offline io\n')
+        prelude_binary = work / ('prelude-errors.exe' if os.name == 'nt' else 'prelude-errors')
+        run('prelude-errors-build', ['build', prelude_source, '-o', prelude_binary])
+        run('prelude-errors-native', [], executable=prelude_binary, expected='offline io\n')
         arguments = work / 'arguments.wysna'
         arguments.write_text('let arguments = args()\nprint(arguments[1])\n', encoding='utf-8')
         run('program-arguments', ['run', arguments, '--', '--output-format=json-v1'],
@@ -82,6 +101,10 @@ def validate(installation, report, expected_commit=None):
         invalid.write_text('let value: int = "wrong"\n', encoding='utf-8')
         diagnostic = json.loads(run('structured-diagnostic', ['check', invalid, '--output-format=json-v1'], code=1).stdout)
         assert diagnostic['status'] == 'diagnostic_error', diagnostic
+        span = diagnostic['diagnostics'][0]['primary_span']
+        assert invalid.read_bytes()[span['start_byte']:span['end_byte']] == b'"wrong"', diagnostic
+        human = run('human-diagnostic', ['check', invalid], code=1)
+        assert 'let value: int = "wrong"' in human.stderr and '^^^^^^^' in human.stderr, human.stderr
         formatted = run('format', ['fmt', source]).stdout
         formatted_source = work / 'formatted.wysna'
         formatted_source.write_text(formatted, encoding='utf-8')

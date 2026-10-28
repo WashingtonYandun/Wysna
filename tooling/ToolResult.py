@@ -107,7 +107,7 @@ def _token_span(source, filename, line, column, source_sha256, span_cache):
         return None
 
 
-def _source_for_file(source_by_file, filename):
+def source_for_file(source_by_file, filename):
     if not filename:
         return None
     source = source_by_file.get(filename)
@@ -159,7 +159,7 @@ def diagnostic_from_error(error, source_by_file=None, *, span_cache=None):
     """Adapt a legacy compiler diagnostic without inventing an unknown range."""
     source_by_file = source_by_file or {}
     filename = getattr(error, "file", None)
-    source = _source_for_file(source_by_file, filename)
+    source = source_for_file(source_by_file, filename)
 
     return {
         "code": getattr(error, "code", "W9999"),
@@ -177,7 +177,7 @@ def diagnostic_from_error(error, source_by_file=None, *, span_cache=None):
             span_cache=span_cache,
         ),
         "related": [],
-        "data": {},
+        "data": {"help": error.help} if getattr(error, "help", None) else {},
         "fixes": [],
     }
 
