@@ -168,6 +168,9 @@ def validate(wheel, forbidden, report):
             run(command, [command, 'hello.wysna'])
         run('emit-c', ['emit-c', 'library.wysna', '-o', 'library.c'])
         assert '#include "runtime/wysna_runtime.h"' in (work / 'library.c').read_text()
+        failed_output = run('emit-c-filesystem-error',
+                            ['emit-c', 'hello.wysna', '-o', 'missing-directory/program.c'], code=3)
+        assert '[W5004]' in failed_output.stderr and '[Internal Error]' not in failed_output.stderr
         binary = work / ('program.exe' if os.name == 'nt' else 'program')
         run('build', ['build', 'library.wysna', '-o', str(binary)])
         native = subprocess.run([str(binary)], cwd=work, env=environment, capture_output=True, text=True, timeout=30)

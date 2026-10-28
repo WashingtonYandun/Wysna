@@ -445,17 +445,22 @@ def run_pipeline(
             source_by_file = _sources_for_diagnostics(file_name, source_code, locals().get("service"))
             _print_human_diagnostics(err, source_by_file, span_cache={})
         return 1
+    except OSError as exc:
+        message = f"Unable to access a requested file: {exc}"
+        diagnostic = diagnostic_record("W5004", "filesystem", message, filename=file_name)
+        if report_state is not None:
+            _set_run_report(report_state, "toolchain_error", 3, 3, diagnostics=[diagnostic])
+        elif json_v1:
+            _write_json_v1(tool_command, "toolchain_error", 3, extra_diagnostics=[diagnostic])
+            return 3
+        error = WysnaError(message, file=file_name, code="W5004", stage="filesystem")
+        if json_diagnostics and report_state is None:
+            print(json.dumps(error.to_dict(), indent=2))
+        else:
+            print(render_diagnostic(error, {}), file=sys.stderr)
+        return 3
     except Exception as exc:
         if report_state is not None:
-            if isinstance(exc, OSError):
-                diagnostic = diagnostic_record(
-                    "W5004", "filesystem", f"Unable to access a requested file: {exc}",
-                    filename=file_name,
-                )
-                _set_run_report(report_state, "toolchain_error", 3, 3,
-                                diagnostics=[diagnostic])
-                print(f"[Filesystem Error] {exc}", file=sys.stderr)
-                return 3
             diagnostic = diagnostic_record(
                 "W9999", "internal", str(exc), filename=file_name,
             )
@@ -464,14 +469,6 @@ def run_pipeline(
             print(f"[Internal Error] {exc}", file=sys.stderr)
             return 4
         if json_v1:
-            if isinstance(exc, OSError):
-                diagnostic = diagnostic_record(
-                    "W5004", "filesystem", f"Unable to write requested output: {exc}",
-                    filename=file_name,
-                )
-                _write_json_v1(tool_command, "toolchain_error", 3,
-                               extra_diagnostics=[diagnostic])
-                return 3
             diagnostic = diagnostic_record(
                 "W9999", "internal", str(exc), filename=file_name,
             )

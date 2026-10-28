@@ -82,6 +82,9 @@ def validate(installation, report, expected_commit=None):
         native = work / ('native.exe' if os.name == 'nt' else 'native')
         run('native-build-without-host-compiler', ['build', source, '-o', native])
         run('native-execution', [], executable=native, expected=expected)
+        failed_output = run('emit-c-filesystem-error',
+                            ['emit-c', source, '-o', work / 'missing-directory/program.c'], code=3)
+        assert '[W5004]' in failed_output.stderr and '[Internal Error]' not in failed_output.stderr
         prelude_source = work / 'prelude-errors.wysna'
         prelude_source.write_text('let issue = NetError { message: "offline" }\n'
                                   'let io = IoError { message: "io" }\n'

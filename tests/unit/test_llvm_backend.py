@@ -359,6 +359,28 @@ class LlvmBackendTests(unittest.TestCase):
         return subprocess.run([sys.executable, str(ROOT / 'main.py'), *map(str, args)],
                               capture_output=True, text=True, timeout=60, cwd=ROOT)
 
+    def test_unusable_compiler_cache_is_a_filesystem_error(self):
+        _, checked = self.checked('print("hello")')
+        cache_file = self.directory / 'not-a-directory'
+        cache_file.write_text('occupied', encoding='utf-8')
+        with patch.dict(os.environ, {'WYSNA_COMPILER_CACHE_HOME': str(cache_file),
+                                     'WYSNA_COMPILER_CACHE': 'on'}):
+            for json_mode in (False, True):
+                args = ['build', '--backend=llvm-experimental', checked.source.file,
+                        '-o', self.directory / 'program']
+                if json_mode:
+                    args.append('--output-format=json-v1')
+                result = self.cli(*args)
+                self.assertEqual(result.returncode, 3, (result.stdout, result.stderr))
+                if json_mode:
+                    payload = json.loads(result.stdout)
+                    self.assertEqual(payload['status'], 'toolchain_error')
+                    self.assertEqual(payload['diagnostics'][0]['code'], 'W5004')
+                    self.assertEqual(result.stderr, '')
+                else:
+                    self.assertIn('[W5004]', result.stderr)
+                    self.assertNotIn('[Internal Error]', result.stderr)
+
     def test_cli_outputs_and_rejected_combinations(self):
         service, checked = self.checked('print("CLI", 42)')
         source = checked.source.file

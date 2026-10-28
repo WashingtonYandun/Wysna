@@ -130,6 +130,47 @@ def test_unknown_source_location_does_not_invent_excerpt():
     )
 
 
+def test_missing_output_directory_is_a_filesystem_error(tmp_path):
+    source = tmp_path / 'valid.wysna'
+    source.write_text('print(1)\n', encoding='utf-8')
+    output = tmp_path / 'missing' / 'generated.c'
+    args = [sys.executable, str(ROOT / 'main.py'), 'emit-c', str(source), '-o', str(output)]
+    human = subprocess.run(args, capture_output=True, text=True, cwd=tmp_path, timeout=60)
+    assert human.returncode == 3 and '[W5004]' in human.stderr
+    assert '[Internal Error]' not in human.stderr and human.stdout == ''
+    legacy = subprocess.run(args + ['--json'], capture_output=True, text=True,
+                            cwd=tmp_path, timeout=60)
+    assert legacy.returncode == 3 and legacy.stderr == ''
+    assert json.loads(legacy.stdout)['code'] == 'W5004'
+    machine = subprocess.run(args + ['--output-format=json-v1'], capture_output=True, text=True,
+                             cwd=tmp_path, timeout=60)
+    payload = json.loads(machine.stdout)
+    assert machine.returncode == 3 and machine.stderr == ''
+    assert payload['status'] == 'toolchain_error' and payload['diagnostics'][0]['code'] == 'W5004'
+
+
+def test_permission_failure_is_sanitized_without_internal_error(monkeypatch, capsys, tmp_path):
+    from tooling.SourceCommand import run_pipeline
+
+    def denied(*args, **kwargs):
+        raise PermissionError('denied \x1b[31moutput')
+
+    monkeypatch.setattr('tooling.SourceCommand.open', denied, raising=False)
+    code = run_pipeline('print(1)\n', str(tmp_path / 'valid.wysna'),
+                        emit_c_path=str(tmp_path / 'generated.c'), tool_command='emit-c')
+    output = capsys.readouterr()
+    assert code == 3 and '[W5004]' in output.err
+    assert '[Internal Error]' not in output.err and '\x1b' not in output.err
+    report = {}
+    code = run_pipeline('print(1)\n', str(tmp_path / 'valid.wysna'),
+                        emit_c_path=str(tmp_path / 'generated.c'), tool_command='emit-c',
+                        report_state=report)
+    output = capsys.readouterr()
+    assert code == 3 and report['status'] == 'toolchain_error'
+    assert report['diagnostics'][0]['code'] == 'W5004'
+    assert '\x1b' not in output.err
+
+
 def test_editor_diagnostic_uses_precise_range_and_help(tmp_path):
     messages = []
     server = LanguageServer(messages.append)
