@@ -52,8 +52,7 @@ fn mir_type(context: MirBuilder, type_id: int, source: Token) -> int {
         if not checked_type_concrete(context.program.types, context.program.templates, type_id) { mir_unsupported(source, "nominal values with unresolved type arguments; add an explicit type context") }
         let mut name = type_.name
         if len(type_.args) > 0 {
-            name = "_WYSNA_G_" + str(len(type_.name)) + "_" + type_.name
-            for child in type_.args { name = name + "__" + str(child) }
+            name = sem_nominal_specialization_name(type_.name, type_.args)
         }
         for i in 0..len(context.types) { if context.types[i].kind == type_.kind and context.types[i].name == name { return i } }
         let id = mir_intern(context, type_.kind, name, [])

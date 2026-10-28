@@ -26,6 +26,11 @@ fn sem_type_complexity(context: SemanticContext, id: int) -> int {
 fn sem_require_nominal_budget(context: SemanticContext, type_id: int) {
     if sem_type_complexity(context, type_id) > 256 { sem_error(context, "W2011", "generic nominal expansion complexity exceeded") }
 }
+fn sem_nominal_specialization_name(name: str, arguments: list[int]) -> str {
+    let mut result = "_WYSNA_G_" + str(len(name)) + "_" + name
+    for argument in arguments { result = result + "__" + str(argument) }
+    return result
+}
 fn sem_specialize(context: SemanticContext, template_id: int, selected: int, actual: list[int], source: Token) -> int {
     let unification = new SemUnification()
     let template = context.functions[template_id]
@@ -44,6 +49,16 @@ fn sem_specialize(context: SemanticContext, template_id: int, selected: int, act
         if type_id < 0 or sem_symbolic(context, type_id) { report_error_at("W2001", source, "cannot infer generic type argument: " + parameter) }
         if sem_type_complexity(context, type_id) > 256 { report_error_at("W2011", source, "generic specialization complexity exceeded") }
         arguments.append(type_id)
+    }
+    return sem_specialize_arguments(context, template_id, arguments, source)
+}
+fn sem_specialize_arguments(context: SemanticContext, template_id: int, arguments: list[int], source: Token) -> int {
+    let template = context.functions[template_id]
+    let declared = context.types[template.type_id].args
+    if len(arguments) != len(template.type_params) { report_error_at("W2013", source, "generic specialization arity mismatch") }
+    for type_id in arguments {
+        if sem_symbolic(context, type_id) { report_error_at("W2001", source, "generic specialization requires concrete arguments") }
+        if sem_type_complexity(context, type_id) > 256 { report_error_at("W2011", source, "generic specialization complexity exceeded") }
     }
     for specialization in context.specializations { if specialization.template == template_id and specialization.arguments == arguments { return specialization.function } }
     # Compare all occurrences in the ancestry, including mutual recursion.
@@ -64,7 +79,11 @@ fn sem_specialize(context: SemanticContext, template_id: int, selected: int, act
     for part in declared { parts.append(sem_substitute_type(context, part, template.type_params, arguments)) }
     let empty: list[str] = []
     let id = len(context.functions)
-    let name = "__wysna_specialization_" + str(len(context.specializations))
+    let mut name = "__wysna_specialization_" + str(len(context.specializations))
+    if template.owner != "" {
+        let owner = slice(template.owner, 0, len(template.owner) - 1)
+        name = sem_nominal_specialization_name(owner, arguments) + "." + slice(template.name, len(template.owner), len(template.name))
+    }
     if sem_function(context, name) >= 0 { report_error_at("W1002", source, "reserved specialization identity collision") }
     context.functions.append(SemFunction { abi_params: template.abi_params, abi_return: template.abi_return, name: name, params: template.params, type_params: empty, constraints: empty, type_id: sem_intern(context, "function", "", parts), body: template.body, end: template.end, owner: template.owner, visible: false })
     let mut ancestry = context.specialization_ancestry
@@ -74,7 +93,24 @@ fn sem_specialize(context: SemanticContext, template_id: int, selected: int, act
 }
 fn sem_complete_specializations(context: SemanticContext) {
     let mut cursor = 0
-    while cursor < len(context.specializations) {
+    let mut type_cursor = 0
+    while true {
+        while type_cursor < len(context.types) {
+            let type_id = type_cursor
+            type_cursor = type_cursor + 1
+            let function_count = len(context.functions)
+            let type_ = context.types[type_id]
+            let generic = sem_generic_type(context, type_.name)
+            if type_.kind == "class" and generic >= 0 and len(type_.args) == len(context.generic_types[generic].params) and not sem_symbolic(context, type_id) {
+                for id in 0..function_count {
+                    let function = context.functions[id]
+                    if function.owner == type_.name + "." and len(function.type_params) == len(type_.args) and len(function.name) > len(function.owner) and slice(function.name, 0, len(function.owner)) == function.owner {
+                        sem_specialize_arguments(context, id, type_.args, context.tokens[0])
+                    }
+                }
+            }
+        }
+        if cursor >= len(context.specializations) { break }
         let item = context.specializations[cursor]
         let template = context.functions[item.template]
         context.substitution_names = template.type_params
