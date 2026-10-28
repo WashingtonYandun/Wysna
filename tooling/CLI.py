@@ -4,8 +4,6 @@ import os
 import sys
 from typing import Optional
 from parser.Parser import Parser
-from checker.TypeChecker import TypeChecker
-from runtime.Interpreter import Interpreter
 from runtime.ExecutionContext import ExecutionContext
 from runtime.Values import WysnaUnit
 from error.Error import WysnaError
@@ -19,6 +17,8 @@ from common.Version import WYSNA_VERSION
 from common.Paths import get_repo_root
 from compiler.Bootstrap import ensure_selfhost_compiler_binary
 from tooling.SourceCommand import run_pipeline, _bounded_tool_output, _write_json_v1
+from tooling.DiagnosticRender import render_diagnostic
+from tooling.ReplSession import ReplSession
 from tooling.RunReport import _capture_application_exit, _set_run_report, _write_run_report
 
 
@@ -40,8 +40,7 @@ def repl(show_tokens: bool = False, show_ast: bool = False) -> None:
     print("==================================================")
 
     parser = Parser(file="<repl>")
-    checker = TypeChecker(file="<repl>")
-    interp = Interpreter(file="<repl>")
+    session = ReplSession()
 
     while True:
         try:
@@ -57,16 +56,15 @@ def repl(show_tokens: bool = False, show_ast: bool = False) -> None:
             break
 
         try:
-            ast = parser.parse(line)
             if show_ast:
+                session.pending_source = line
+                ast = parser.parse(line)
                 print(json.dumps(ast.to_dict(), indent=2))
-
-            checker.check(ast)
-            res = interp.interpret(ast)
+            res = session.execute(line)
             if not isinstance(res, WysnaUnit):
                 print(res)
         except WysnaError as err:
-            print(str(err))
+            print(render_diagnostic(err, {"<repl>": session.pending_source}))
         except Exception as exc:
             print(f"Error: {exc}")
 

@@ -161,8 +161,8 @@ def validate(wheel, forbidden, report):
         native = subprocess.run([str(binary)], cwd=work, env=environment, capture_output=True, text=True, timeout=30)
         assert native.returncode == 0 and native.stdout == 'hello stdlib\n{"ready":true}\njson node budget 3\n' and not native.stderr, native
         checks.append({'name': 'native-execution', 'exit_code': native.returncode, 'stdout': native.stdout})
-        repl = run('repl', ['repl'], input_text='print(7)\nexit\n')
-        assert '7' in repl.stdout
+        repl = run('repl', ['repl'], input_text='let value = 42\nprint(value)\nexit\n')
+        assert '42' in repl.stdout and '[W1001]' not in repl.stdout, repl.stdout
         for command in ('test', 'bench'):
             unavailable = run(command + '-source-only', [command], code=1)
             expected = 'wysna ' + command + ' requires a source checkout\n'

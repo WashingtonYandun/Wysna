@@ -39,9 +39,9 @@ def validate(installation, report, expected_commit=None):
         work = Path(temporary).resolve()
         environment = isolated_environment(work)
 
-        def run(name, arguments, *, executable=cli, code=0, expected=None, cwd=work):
+        def run(name, arguments, *, executable=cli, code=0, expected=None, cwd=work, input_text=None):
             result = subprocess.run([str(executable), *map(str, arguments)], cwd=cwd, env=environment,
-                                    capture_output=True, text=True, encoding='utf-8', timeout=300)
+                                    input=input_text, capture_output=True, text=True, encoding='utf-8', timeout=300)
             check = {'name': name, 'exit_code': result.returncode,
                      'stdout': result.stdout, 'stderr': result.stderr}
             checks.append(check)
@@ -52,6 +52,8 @@ def validate(installation, report, expected_commit=None):
             return result
 
         run('version', ['version'])
+        repl = run('repl-state', ['repl'], input_text='let value = 42\nprint(value)\nexit\n')
+        assert '42' in repl.stdout and '[W1001]' not in repl.stdout, repl.stdout
         created = json.loads(run('project-new', ['project', 'new', 'new-project', '--output-format=json-v1']).stdout)
         assert created['status'] == 'ok' and len(created['artifacts']) == 3, created
         new_manifest = work / 'new-project' / 'wysna.toml'

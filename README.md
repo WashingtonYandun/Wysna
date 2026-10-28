@@ -106,6 +106,7 @@ executable through verified MIR and C99. Arguments after `--` belong to the prog
 Create a project with `wysna project new example`, then run `wysna project test`
 from its directory. The separate `wysna test` command runs the compiler's own
 maintenance suite and requires a source checkout.
+`wysna repl` keeps definitions and values between inputs; `exit` closes the session.
 
 ## Language tour
 

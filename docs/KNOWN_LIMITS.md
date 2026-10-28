@@ -4,6 +4,12 @@ This file records what Wysna does **not** do, why, and what it would take to cha
 tracks deferred decisions separately from defects. Items marked *open decision* change
 the language surface and need an explicit decision before implementation.
 
+The interactive REPL rechecks the accepted session history on every input, so long
+sessions can become slower. Input is currently entered one line at a time. A failed
+input removes bindings it introduced, but completed mutations and external effects
+such as output or file writes are not rolled back. Imported modules cannot be changed
+mid-session; restart the REPL to load their new contents.
+
 ---
 
 ## 1. Closures capture immutable snapshots

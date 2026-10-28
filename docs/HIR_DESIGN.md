@@ -23,7 +23,8 @@ Linking qualifies module references in a
 separate tree, preserving the checked module's member expressions for editor queries.
 `lower_hir`, `lower_mir`, `export_mir` and `emit_c` reuse checked modules and their canonical type arena;
 they do not read or check dependencies again. The AST emitter and interpreter remain
-independent execution paths. The REPL retains its interactive checker state.
+independent execution paths. The REPL rechecks accepted input history for each new
+input while retaining its runtime environment, and executes only new statements.
 
 This boundary is an adapter over the existing checked AST. It does not yet remove HIR's
 type recovery paths, consolidate all type relations or check unused generic bodies.

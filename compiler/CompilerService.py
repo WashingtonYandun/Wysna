@@ -143,6 +143,13 @@ class CompilerService:
         interpreter.foreign_libraries = foreign_libraries
         return interpreter.interpret(self._linked_ast(checked))
 
+    def interpret_incremental(self, checked, interpreter, *, first_line, loaded_sources):
+        """Execute a checked interactive delta without exposing mutable syntax."""
+        self._validate(checked)
+        from runtime.InteractiveExecution import interpret_incremental
+        return interpret_incremental(self._linked_ast(checked), interpreter,
+                                     checked.source.file, first_line, loaded_sources)
+
     def lower_hir(self, checked):
         self._validate(checked)
         from hir.HirBuilder import HirBuilder
