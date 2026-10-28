@@ -12,6 +12,17 @@ from tooling.LanguageServer import LanguageServer
 ROOT = Path(__file__).resolve().parents[2]
 
 
+def test_legacy_neterror_type_remains_available(tmp_path):
+    source = tmp_path / "legacy.wysna"
+    source.write_text('fn describe(error: NetError) -> str { return error.message }\n'
+                      'print("ok")\n', encoding="utf-8")
+    for command in ('check', 'run'):
+        result = subprocess.run([sys.executable, str(ROOT / 'main.py'), command, str(source)],
+                                cwd=tmp_path, capture_output=True, text=True, timeout=60)
+        assert result.returncode == 0, result.stderr
+    assert result.stdout == 'ok\n'
+
+
 def test_none_mismatch_has_actionable_human_and_json_diagnostics(tmp_path):
     source = tmp_path / "example.wysna"
     source.write_text("let name: str = none\n", encoding="utf-8")

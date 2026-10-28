@@ -32,8 +32,6 @@
   enclosing construct.
 - Reports `Wysna` as the language-server diagnostic source and directs users of an
   installed distribution to `wysna project test`.
-- Removes the unused `NetError` prelude type from Seed and native semantics; error
-  union fixtures declare their own error structs.
 
 ### Security
 

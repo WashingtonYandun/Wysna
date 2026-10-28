@@ -111,6 +111,9 @@ CASES.extend([('class',
   'fn read() -> int { this.value } }\n'
   'fn read(value: Reader) -> int { value.read() }\n'
   'print(read(new Counter(9)))'),
+ ('legacy_neterror_type',
+  'fn describe(error: NetError) -> str { return error.message }\n'
+  'print("ok")'),
  ('generic_class',
   'class Box[T] { value: T }\n'
   'let first: Box[int] = new Box[int]()\n'

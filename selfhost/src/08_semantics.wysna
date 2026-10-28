@@ -1988,8 +1988,10 @@ fn sem_initialize(context: SemanticContext, tokens: list[Token]) {
     context.return_type = context.unit_type
     let empty: list[int] = []
     sem_intern(context, "struct", "IoError", empty)
+    sem_intern(context, "struct", "NetError", empty)
     sem_intern(context, "opaque", "opaque", empty)
     context.fields.append(SemField { owner: "IoError", name: "message", type_id: context.string_type, visible: true })
+    context.fields.append(SemField { owner: "NetError", name: "message", type_id: context.string_type, visible: true })
     for i in 0..len(tokens) - 1 {
         let kind = tokens[i].kind
         if kind == "STRUCT" or kind == "CLASS" or kind == "INTERFACE" or kind == "ENUM" {
