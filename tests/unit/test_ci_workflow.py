@@ -87,6 +87,12 @@ def test_ci_workflow_contracts():
     assert '--strict-source --compiler-source' in native_consumer
     assert 'validate_native_sdk.py' in native_consumer
     assert 'compiler-contracts' in jobs, 'Compiler contracts need their own execution budget'
+    product = jobs['product-contracts']
+    assert 'os: [ubuntu-latest, macos-latest, windows-latest]' in product
+    for module in ('test_repl_session.py', 'test_project_scaffold.py',
+                   'test_human_diagnostics.py', 'test_tool_result.py',
+                   'test_selfhost_diagnostics.py'):
+        assert module in product
     contracts, conformance = jobs['compiler-contracts'], jobs['conformance']
     runtime = jobs['runtime-conformance']
     integration = jobs['integration-conformance']
