@@ -149,6 +149,18 @@ def validate(wheel, forbidden, report):
         assert source_bytes[span['start_byte']:span['end_byte']] == b'"wrong"'
         run('run', ['run', 'hello.wysna'], expected='hello installed\n')
         run('stdlib', ['run', 'library.wysna'], expected='hello stdlib\n{"ready":true}\njson node budget 3\n')
+        (work / 'prelude-errors.wysna').write_text(
+            'let issue = NetError { message: "offline" }\n'
+            'let io = IoError { message: "io" }\n'
+            'print(issue.message, io.message)\n', encoding='utf-8')
+        run('prelude-errors-run', ['run', 'prelude-errors.wysna'], expected='offline io\n')
+        prelude_binary = work / ('prelude-errors.exe' if os.name == 'nt' else 'prelude-errors')
+        run('prelude-errors-build', ['build', 'prelude-errors.wysna', '-o', str(prelude_binary)])
+        prelude = subprocess.run([str(prelude_binary)], cwd=work, env=environment,
+                                 capture_output=True, text=True, timeout=30)
+        assert prelude.returncode == 0 and prelude.stdout == 'offline io\n' and not prelude.stderr, prelude
+        checks.append({'name': 'prelude-errors-native', 'exit_code': prelude.returncode,
+                       'stdout': prelude.stdout})
         formatted = run('fmt', ['fmt', 'library.wysna'])
         (work / 'formatted.wysna').write_text(formatted.stdout, encoding='utf-8')
         run('fmt-idempotence', ['fmt', 'formatted.wysna'], expected=formatted.stdout)

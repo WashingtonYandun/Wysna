@@ -82,6 +82,14 @@ def validate(installation, report, expected_commit=None):
         native = work / ('native.exe' if os.name == 'nt' else 'native')
         run('native-build-without-host-compiler', ['build', source, '-o', native])
         run('native-execution', [], executable=native, expected=expected)
+        prelude_source = work / 'prelude-errors.wysna'
+        prelude_source.write_text('let issue = NetError { message: "offline" }\n'
+                                  'let io = IoError { message: "io" }\n'
+                                  'print(issue.message, io.message)\n', encoding='utf-8')
+        run('prelude-errors-run', ['run', prelude_source], expected='offline io\n')
+        prelude_binary = work / ('prelude-errors.exe' if os.name == 'nt' else 'prelude-errors')
+        run('prelude-errors-build', ['build', prelude_source, '-o', prelude_binary])
+        run('prelude-errors-native', [], executable=prelude_binary, expected='offline io\n')
         arguments = work / 'arguments.wysna'
         arguments.write_text('let arguments = args()\nprint(arguments[1])\n', encoding='utf-8')
         run('program-arguments', ['run', arguments, '--', '--output-format=json-v1'],
