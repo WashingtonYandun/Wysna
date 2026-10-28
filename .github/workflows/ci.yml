@@ -51,8 +51,26 @@ jobs:
           tests/unit/test_project_scaffold.py
           tests/unit/test_human_diagnostics.py
           tests/unit/test_tool_result.py
+          tests/unit/test_capability_policy.py
+
+  native-diagnostics:
+    name: Native diagnostics (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+    env:
+      CC: clang
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: Install test runner
+        run: python -m pip install pytest==8.4.2
       - name: Verify native compiler diagnostics
-        if: runner.os == 'Linux'
         run: python -m pytest -q tests/unit/test_selfhost_diagnostics.py
 
   llvm-smoke:
@@ -194,6 +212,7 @@ jobs:
           python3 -m tests.unit.test_audit_findings
           python3 -m tests.unit.test_standard_toolkit
           python3 -m tests.unit.test_http_client
+          python3 -m tests.unit.test_language_server
       - name: Upload coverage reports
         if: always()
         uses: actions/upload-artifact@v4
