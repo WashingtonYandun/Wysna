@@ -6,6 +6,13 @@ import unicodedata
 from tooling.ToolResult import diagnostic_from_error, source_for_file
 
 
+_ANSI_ESCAPE = re.compile(
+    r"\x1b(?:\[[0-?]*[ -/]*[@-~]"          # CSI: colors, cursor movement, erase
+    r"|\][^\x07\x1b\r\n]*(?:\x07|\x1b\\)"  # OSC: terminal hyperlinks and titles
+    r"|[@-_])"                              # Single-character escapes
+)
+
+
 def _display(text):
     """Expand tabs and replace terminal control characters in source excerpts."""
     result = []
@@ -25,16 +32,24 @@ def _display(text):
     return "".join(result), width
 
 
+def _sanitize(text):
+    """Render untrusted diagnostic text on one line without terminal controls."""
+    stripped = _ANSI_ESCAPE.sub("", str(text))
+    return _display(stripped)[0]
+
+
 def render_diagnostic(error, source_by_file, *, span_cache=None):
     """Render a diagnostic without inventing locations or rereading files."""
     if getattr(error, "has_location", True):
-        header = str(error)
+        header = _sanitize(str(error))
     else:
-        header = f"[{error.code}] {error.file} - {error.message}"
+        header = _sanitize(f"[{error.code}] {error.file} - {error.message}")
     record = diagnostic_from_error(error, source_by_file, span_cache=span_cache)
+    help_text = record["data"].get("help")
+    if help_text:
+        help_text = _sanitize(help_text)
     span = record["primary_span"]
     if span is None:
-        help_text = record["data"].get("help")
         return f"{header}\n  = help: {help_text}" if help_text else header
     source = source_for_file(source_by_file, span["source_id"])
     if source is None:
@@ -68,7 +83,6 @@ def render_diagnostic(error, source_by_file, *, span_cache=None):
                 f" {' ' * len(gutter)} |\n"
                 f" {gutter} | {left}{shown}{right}\n"
                 f" {' ' * len(gutter)} | {' ' * (len(left) + indent)}{'^' * mark_width}")
-    help_text = record["data"].get("help")
     if help_text:
         rendered += f"\n {' ' * len(gutter)} = help: {help_text}"
     return rendered

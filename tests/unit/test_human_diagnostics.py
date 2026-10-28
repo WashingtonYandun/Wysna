@@ -43,6 +43,50 @@ def test_excerpt_uses_snapshot_and_sanitizes_terminal_controls():
     assert "^" in result
 
 
+def test_header_and_help_sanitize_terminal_controls():
+    filename = "evil\x1b[31m.wysna"
+    source = "let value = 1\n"
+    error = WysnaError(
+        "bad \x1b[31mred\x1b[0m message\ninjected",
+        line=1,
+        col=1,
+        file=filename,
+        help="visit \x1b]8;;https://example.invalid\x07here",
+    )
+    result = render_diagnostic(error, {filename: source})
+    lines = result.splitlines()
+    assert result.count("\n") == 4
+    assert lines[0].startswith("[W0001] evil")
+    assert "\x1b" not in result and "\x07" not in result
+    assert "injected" in lines[0]
+    assert lines[-1].strip().startswith("= help: visit")
+
+
+def test_unlocated_header_sanitizes_terminal_controls():
+    error = WysnaError("bad \x1b[2Jtext", file="evil\x1b[0m.wysna", code="W9999")
+    result = render_diagnostic(error, {})
+    assert result == "[W9999] evil.wysna - bad text"
+
+
+def test_unterminated_osc_does_not_swallow_following_text():
+    error = WysnaError("bad \x1b]0;title\nnext \x07line", file="evil.wysna")
+    result = render_diagnostic(error, {"evil.wysna": "let value = 1\n"})
+    header = result.splitlines()[0]
+    assert "\x1b" not in result and "\x07" not in result
+    assert "next" in header and "line" in header
+
+
+def test_runtime_diagnostic_header_is_sanitized(capsys):
+    from tooling.SourceCommand import _print_human_diagnostics
+
+    error = WysnaError("bad \x1b[31mred", line=1, col=1,
+                       file="evil\x1b[0m.wysna", code="W4002", stage="runtime")
+    _print_human_diagnostics(error, {})
+    result = capsys.readouterr().err
+    assert "\x1b" not in result
+    assert "[W4002]" in result and "bad red" in result and "evil.wysna" in result
+
+
 def test_unknown_source_location_does_not_invent_excerpt():
     error = WysnaError("unlocated failure", file="missing.wysna", code="W9999")
     assert render_diagnostic(error, {"missing.wysna": "some text"}) == (

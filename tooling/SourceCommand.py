@@ -63,7 +63,8 @@ def _sources_for_diagnostics(file_name, source_code, service=None):
 def _print_human_diagnostics(error, sources, span_cache=None):
     for diagnostic in getattr(error, "diagnostics", (error,)):
         if diagnostic.stage == "runtime":
-            text = str(diagnostic)
+            # Runtime failures keep their one-line header and add no excerpt.
+            text = render_diagnostic(diagnostic, {})
         else:
             text = render_diagnostic(diagnostic, sources, span_cache=span_cache)
         print(text, file=sys.stderr)
