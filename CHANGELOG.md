@@ -1,5 +1,30 @@
 # Changelog
 
+## Unreleased
+
+### Tooling and Interactive Use
+
+- Adds `wysna project new NAME`, which creates a manifest, source entry point and
+  test without replacing existing paths. `--output-format=json-v1` returns the new
+  files as hashed artifacts.
+- Makes `wysna repl` retain definitions and values between inputs, continue across
+  open delimiters, recover from failed declarations, and recheck accepted history
+  without replaying earlier effects or output.
+- Renders human diagnostics with bounded source excerpts and precise spans, including
+  an optional `data.help` hint. Terminal control sequences in diagnostic text are
+  removed before printing.
+- Points native compiler diagnostics at the offending argument, expression, member, or
+  declaration for type, mutability, pattern and arity errors instead of the end of the
+  enclosing construct.
+- Reports `Wysna` as the language-server diagnostic source and directs users of an
+  installed distribution to `wysna project test`.
+
+### Verification
+
+- Adds cross-platform product-contract CI coverage for the REPL, project scaffold,
+  human diagnostics and tool results, plus native diagnostic checks and installer
+  lifecycle validation for `project new` and multiline REPL input.
+
 ## 0.5.0 — 2026-10-27
 
 ### Language and Compilers
