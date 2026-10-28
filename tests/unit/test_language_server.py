@@ -186,6 +186,18 @@ class LanguageServerTests(unittest.TestCase):
         self.assertEqual(offset_at(source, location['range']['start']), expected)
         self.assertEqual(self.slices(source, [location]), ['item'])
 
+    def test_imported_names_with_double_underscores_keep_their_source_name(self):
+        library_source = 'pub fn long__name() -> int { return 2 }\n'
+        self.library.write_text(library_source, encoding='utf-8')
+        source = 'import "library.wysna" as library\nprint(library.long__name())\n'
+        self.open(self.library_uri, library_source)
+        self.open(self.main_uri, source)
+        position = position_at(source, source.index('long__name'))
+        self.assertIn('long__name', self.server.hover(self.main_uri, position)['contents']['value'])
+        location = self.server.definition(self.main_uri, position)
+        self.assertEqual(location['uri'], self.library_uri)
+        self.assertEqual(self.slices(library_source, [location]), ['long__name'])
+
     def test_dependency_edits_and_close_publish_diagnostics_for_open_dependents(self):
         library_source = self.library.read_text(encoding='utf-8')
         self.open(self.library_uri, library_source)

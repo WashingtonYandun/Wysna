@@ -236,7 +236,7 @@ class LanguageServer:
         name = str(name)
         prefix = '__wysna_module_'
         if name.startswith(prefix) and '__' in name[len(prefix):]:
-            return name.rsplit('__', 1)[-1]
+            return name[len(prefix):].split('__', 1)[1]
         return name
 
     @staticmethod
