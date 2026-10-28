@@ -104,6 +104,7 @@ def print_help(prog: Optional[str] = None) -> None:
     print(f"  {prog} capabilities [--output-format=json-v1]   # Discover target availability and requirements")
     print(f"  {prog} repl                                    # Start interactive REPL")
     print(f"  {prog} [run] [--stats] [--report-json <path>] [--invocation-id <id>] <file.wysna> [-- args...] # Execute Wysna source file")
+    print(f"  {prog} run --deny=<cap,...>|--allow=<cap,...> <file.wysna> # Static capability gate before interpretation")
     print(f"  {prog} check [--json|--output-format=json-v1] [--stats] <file.wysna>   # Static typecheck without execution")
     print(f"  {prog} fmt [--write] [--output-format=json-v1] <file.wysna> # Canonical deterministic formatter")
     print(f"  {prog} build [--output-format=json-v1] <file.wysna> [-o <bin>] # Compile a native binary")
@@ -181,6 +182,7 @@ def main(argv=None) -> None:
     fmt_only = False
     fmt_write = False
     backend = "hir"
+    backend_explicit = False
     use_selfhost = False
     use_hir = None
     emit_c_path: Optional[str] = None
@@ -188,6 +190,7 @@ def main(argv=None) -> None:
     emit_llvm_path: Optional[str] = None
     optimization_profile = None
     run_timeout_ms = None
+    capability_policy = None
     show_mir = False
     subcmd: Optional[str] = None
     file_to_run: Optional[str] = None
@@ -277,6 +280,7 @@ def main(argv=None) -> None:
             return
         elif subcmd == "emit-llvm":
             backend = "llvm-experimental"
+            backend_explicit = True
         elif subcmd == "check":
             check_only = True
         elif subcmd == "fmt":
@@ -308,6 +312,7 @@ def main(argv=None) -> None:
                 show_ast = True
             else:
                 backend = "ast"
+                backend_explicit = True
                 use_hir = False
         elif arg in ("--check", "-c"):
             check_only = True
@@ -337,17 +342,21 @@ def main(argv=None) -> None:
             fmt_write = True
         elif arg in ("--selfhost", "--backend=selfhost"):
             backend = "selfhost"
+            backend_explicit = True
             use_selfhost = True
         elif arg in ("--hir", "--backend=hir"):
             backend = "hir"
+            backend_explicit = True
             use_hir = True
-        elif arg in ("--backend=ast",):
+        elif arg == "--backend=ast":
             backend = "ast"
+            backend_explicit = True
             use_hir = False
         elif arg.startswith("--backend="):
             b_val = arg.split("=", 1)[1]
             if b_val in ("c99", "hir", "ast", "selfhost", "llvm-experimental"):
                 backend = "hir" if b_val == "c99" else b_val
+                backend_explicit = True
                 use_selfhost = False
                 use_hir = None
             else:
@@ -386,6 +395,15 @@ def main(argv=None) -> None:
                 build_bin_path = args[i]
             else:
                 build_bin_path = args[i]
+        elif arg.startswith("--deny=") or arg.startswith("--allow="):
+            if capability_policy is not None:
+                usage_error("--allow and --deny may be specified only once")
+            mode, value = arg[2:].split("=", 1)
+            from tooling.CapabilityPolicy import parse_capabilities
+            try:
+                capability_policy = (mode, parse_capabilities(value))
+            except ValueError as error:
+                usage_error(str(error))
         elif arg == "--link-lib":
             i += 1
             if i >= len(args) or args[i].startswith("-"):
@@ -420,6 +438,14 @@ def main(argv=None) -> None:
         if (show_tokens or show_ast or show_mir or fmt_only or fmt_write
                 or emit_c_path is not None or json_diagnostics):
             usage_error("llvm-experimental does not support these diagnostic, C generation, or build options")
+
+    if capability_policy is not None:
+        if (subcmd not in (None, "run") or backend_explicit
+                or backend != "hir" or use_selfhost or use_hir is not None
+                or check_only or fmt_only or show_tokens or show_ast or show_mir
+                or emit_c_path is not None or build_bin_path is not None
+                or emit_llvm_path is not None):
+            usage_error("--allow and --deny are supported only by interpreted run")
 
     if requested_invocation_id is not None and report_json_path is None:
         usage_error("--invocation-id requires --report-json")
@@ -575,6 +601,7 @@ def main(argv=None) -> None:
             emit_llvm_path=emit_llvm_path,
             optimization_profile=optimization_profile,
             run_timeout_ms=run_timeout_ms,
+            capability_policy=capability_policy,
             backend=backend,
             use_selfhost=use_selfhost,
             use_hir=use_hir,

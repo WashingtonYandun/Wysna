@@ -48,6 +48,7 @@ DIAGNOSTIC_CODES: Dict[str, str] = {
     "W5002": "Invalid command usage or option",
     "W5003": "Source file could not be read",
     "W5004": "Requested output artifact could not be written or read back",
+    "W5006": "Capability policy rejected execution",
 }
 
 LEGACY_CODE_MAP: Dict[str, str] = {

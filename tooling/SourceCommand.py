@@ -98,6 +98,7 @@ def run_pipeline(
     emit_llvm_path=None,
     optimization_profile=None,
     run_timeout_ms=None,
+    capability_policy=None,
 ) -> int:
     if tool_command is None:
         if check_only:
@@ -121,6 +122,13 @@ def run_pipeline(
                 raise WysnaError("Unsupported option for llvm-experimental", code="W5002", stage="options")
         elif emit_llvm_path is not None or run_timeout_ms is not None or (optimization_profile is not None and build_bin_path is None):
             raise WysnaError("LLVM options require llvm-experimental", code="W5002", stage="options")
+        if capability_policy is not None and (
+                backend != "hir" or use_selfhost or use_hir is not None
+                or check_only or fmt_only or show_tokens or show_ast or show_mir
+                or emit_c_path is not None or build_bin_path is not None
+                or emit_llvm_path is not None):
+            raise WysnaError("Capability policy applies only to interpreted run",
+                             code="W5002", stage="options")
         # Resolve legacy flags if passed explicitly
         if use_selfhost:
             backend = "selfhost"
@@ -203,6 +211,11 @@ def run_pipeline(
             from mir.Nodes import dump
             print(dump(service.lower_mir(checked)), end="")
             return 0
+
+        if capability_policy is not None:
+            from tooling.CapabilityPolicy import enforce_capability_policy
+            enforce_capability_policy(service.explain(checked), capability_policy[0],
+                                      capability_policy[1], file_name)
 
         if check_only:
             if json_v1:

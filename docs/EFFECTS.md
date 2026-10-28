@@ -35,6 +35,22 @@ Exit status is `0` on success, `1` for source/semantic diagnostics, `2` for usag
 errors, and `3` for filesystem failures. `--output-format=json-v1` emits one
 tool-result document, including on errors.
 
+## Static execution policy
+
+`wysna run --deny=CAP,...` or `wysna run --allow=CAP,...` computes this report
+before interpretation and refuses execution with `W5006` when the program violates
+the policy. Capability names are `stdio`, `arguments`, `environment`, `clock`,
+`filesystem.read`, `filesystem.write`, `network`, `processes`, `process-control`
+and `native-ffi`. `unknown` is a report sentinel, not a policy capability. Explicit
+backend selection and non-run commands are rejected as usage errors because the gate
+only covers interpreted Seed execution.
+
+The gate is conservative: it refuses any program whose report is not
+`complete_within_model`, including indirect calls and uncontrolled FFI. This is a
+pre-execution gate over modeled source effects. It is not an operating-system
+sandbox, does not constrain native builds or `wysna project run`, and cannot prove
+that trusted runtime or FFI code remains inside the policy.
+
 ## Model
 
 The model is versioned as `wysna.effects-model/1`; reports use
