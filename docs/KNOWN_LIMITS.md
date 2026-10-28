@@ -205,10 +205,9 @@ The CLI has POSIX and Windows adapters for cache locks, compiler processes, exec
 names and RSS telemetry. The Windows smoke job must pass on that host before support
 is announced. A successful macOS run does not establish Windows compatibility.
 
-The legacy `NetError` prelude type remains available for compatibility. Seed checks
-and executes programs using it as a type, but constructing it directly currently
-fails during native HIR lowering. Programs can declare their own network error struct
-instead when they need to construct one.
+The legacy `NetError` prelude type remains available for compatibility. Its `message`
+field and the corresponding `IoError` field are strings; both support checked
+record literals such as `NetError { message: "offline" }`.
 
 Class cycles format finitely as `<cycle>` but still require Weak or explicit breaking
 to be reclaimed. `std/resources` does not make raw opaque aliases safe or unwind panic.

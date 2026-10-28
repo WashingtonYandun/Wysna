@@ -1,6 +1,7 @@
 """User-facing diagnostics and their machine-readable source ranges."""
 
 import json
+import os
 from pathlib import Path
 import subprocess
 import sys
@@ -21,6 +22,30 @@ def test_legacy_neterror_type_remains_available(tmp_path):
                                 cwd=tmp_path, capture_output=True, text=True, timeout=60)
         assert result.returncode == 0, result.stderr
     assert result.stdout == 'ok\n'
+
+
+def test_prelude_errors_can_be_constructed_and_compiled(tmp_path):
+    source = tmp_path / 'prelude-errors.wysna'
+    source.write_text('let net = NetError { message: "network" }\n'
+                      'let io = IoError { message: "filesystem" }\n'
+                      'print(net.message, io.message)\n', encoding='utf-8')
+    binary = tmp_path / ('program.exe' if os.name == 'nt' else 'program')
+    for command in (['run', str(source)], ['build', str(source), '-o', str(binary)]):
+        result = subprocess.run([sys.executable, str(ROOT / 'main.py'), *command],
+                                cwd=tmp_path, capture_output=True, text=True, timeout=60)
+        assert result.returncode == 0, result.stderr
+        if command[0] == 'run':
+            assert result.stdout == 'network filesystem\n'
+    result = subprocess.run([str(binary)], cwd=tmp_path, capture_output=True, text=True, timeout=30)
+    assert result.returncode == 0 and result.stdout == 'network filesystem\n', result.stderr
+
+
+def test_prelude_error_constructor_fields_are_type_checked(tmp_path):
+    source = tmp_path / 'bad-prelude.wysna'
+    source.write_text('let issue = NetError { message: 123 }\n', encoding='utf-8')
+    result = subprocess.run([sys.executable, str(ROOT / 'main.py'), 'check', str(source)],
+                            cwd=tmp_path, capture_output=True, text=True, timeout=60)
+    assert result.returncode == 1 and '[W2001]' in result.stderr
 
 
 def test_none_mismatch_has_actionable_human_and_json_diagnostics(tmp_path):

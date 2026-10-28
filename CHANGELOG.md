@@ -30,6 +30,8 @@
 - Points native compiler diagnostics at the offending argument, expression, member, or
   declaration for type, mutability, pattern and arity errors instead of the end of the
   enclosing construct.
+- Preserves the `NetError` prelude type and supports native compilation of explicit
+  `NetError` and `IoError` struct values.
 - Reports `Wysna` as the language-server diagnostic source and directs users of an
   installed distribution to `wysna project test`.
 

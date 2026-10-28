@@ -114,6 +114,15 @@ CASES.extend([('class',
  ('legacy_neterror_type',
   'fn describe(error: NetError) -> str { return error.message }\n'
   'print("ok")'),
+ ('prelude_error_constructors',
+  'let net = NetError { message: "network" }\n'
+  'let io = IoError { message: "filesystem" }\n'
+  'print(net.message, io.message)'),
+ ('prelude_error_nested_and_result',
+  'struct Box[T] { value: T }\n'
+  'fn make() -> str ! NetError { return Err(NetError { message: "offline" }) }\n'
+  'let value = Box { value: IoError { message: "nested" } }\n'
+  'print(make() else error { error.message }, value.value.message)'),
  ('generic_class',
   'class Box[T] { value: T }\n'
   'let first: Box[int] = new Box[int]()\n'
