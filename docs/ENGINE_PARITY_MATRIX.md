@@ -45,7 +45,9 @@ nominal error identity, exhaustive handlers and managed payload cleanup.
 
 Function values, captures, FFI, generic OOP, the standard library and LSP have separate
 contracts in `tests/unit/test_expansion_contracts.py`. A green core corpus does not
-imply Wysna Compiler support for every expansion combination. Scoped resources have a separate
+imply Wysna Compiler support for every expansion combination. Fields-only parameterized
+classes are covered separately by the native MIR pipeline; parameterized classes with
+methods, inheritance or interfaces remain outside that profile. Scoped resources have a separate
 four-engine gate in `tests/unit/test_audit_readiness.py`. The SQLite adapter/application
 also has dedicated checks; see [C interoperability](FFI_VALIDATION.md).
 

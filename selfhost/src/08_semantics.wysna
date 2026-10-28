@@ -190,6 +190,7 @@ fn sem_assignable(context: SemanticContext, source: int, target: int) -> bool {
         return sem_error_channel_assignable(context, source, target)
     }
     if s.kind == "class" and (t.kind == "class" or t.kind == "interface") {
+        if s.kind == "class" and t.kind == "class" and s.name == t.name { return s.args == t.args }
         let mut current = s.name
         let mut visits = 0
         while current != "" and visits <= len(context.classes) {
@@ -439,12 +440,14 @@ fn sem_collect_function(context: SemanticContext, owner: str, visible: bool) {
 }
 fn sem_collect_record(context: SemanticContext, kind: str) {
     sem_take(context)
+    let name_token = sem_at(context)
     let name = sem_expect(context, "IDENT").val
     let previous_type_params = context.type_params
     let mut type_params: list[str] = []
     let generic = sem_generic_type(context, name)
+    let generic_class = generic >= 0 and kind == "class"
     if generic >= 0 {
-        if kind == "class" or kind == "interface" { report_error_at("W2013", sem_at(context), "Compiler native-core-v1 does not support parameterized classes or interfaces") }
+        if kind == "interface" { report_error_at("W2013", name_token, "Compiler native-core-v1 does not support parameterized interfaces") }
         type_params = context.generic_types[generic].params
     }
     context.type_params = type_params
@@ -468,14 +471,21 @@ fn sem_collect_record(context: SemanticContext, kind: str) {
         interfaces.append(sem_expect(context, "IDENT").val)
         while sem_match(context, "COMMA") { interfaces.append(sem_expect(context, "IDENT").val) }
     }
+    if generic_class and (parent != "" or len(interfaces) > 0) {
+        report_error_at("W2013", name_token, "Compiler native-core-v1 supports parameterized classes only with fields and no inheritance or interfaces")
+    }
     if kind == "class" { context.classes.append(SemClass { name: name, parent: parent, interfaces: interfaces }) }
     sem_expect(context, "LBRACE")
+    let mut generic_method = false
     while true {
         sem_skip_separators(context)
         if sem_is(context, "RBRACE") { break }
         let mut visible = true
         if sem_match(context, "PRIVATE") { visible = false } else { sem_match(context, "PUBLIC") }
-        if sem_is(context, "FN") { sem_collect_function(context, name + ".", visible) }
+        if sem_is(context, "FN") {
+            if generic_class { generic_method = true }
+            sem_collect_function(context, name + ".", visible)
+        }
         elif kind == "enum" {
             let variant = sem_expect(context, "IDENT").val
             let mut payload_types: list[int] = []
@@ -502,6 +512,9 @@ fn sem_collect_record(context: SemanticContext, kind: str) {
         }
     }
     sem_expect(context, "RBRACE")
+    if generic_class and generic_method {
+        report_error_at("W2013", name_token, "Compiler native-core-v1 supports parameterized classes only with fields and no methods")
+    }
     if kind == "enum" { context.completed_enums.append(name) }
     context.type_params = previous_type_params
 }
@@ -1975,10 +1988,8 @@ fn sem_initialize(context: SemanticContext, tokens: list[Token]) {
     context.return_type = context.unit_type
     let empty: list[int] = []
     sem_intern(context, "struct", "IoError", empty)
-    sem_intern(context, "struct", "NetError", empty)
     sem_intern(context, "opaque", "opaque", empty)
     context.fields.append(SemField { owner: "IoError", name: "message", type_id: context.string_type, visible: true })
-    context.fields.append(SemField { owner: "NetError", name: "message", type_id: context.string_type, visible: true })
     for i in 0..len(tokens) - 1 {
         let kind = tokens[i].kind
         if kind == "STRUCT" or kind == "CLASS" or kind == "INTERFACE" or kind == "ENUM" {

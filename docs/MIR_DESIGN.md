@@ -24,7 +24,7 @@ The `native-core-v1` source profile contains:
 - Function values, snapshot closures, indirect calls, concrete generic functions and concrete generic structs/enums. Generic definitions retain symbolic obligations and bounded specialization.
 - Relative/standard-library imports through one module loader, physical module identity, and the declared scalar/opaque C ABI.
 
-Parameterized classes/interfaces, generic nominal values with unresolved type arguments, library-mode exports and WebAssembly targets are outside this native profile. An unresolved nominal value requires an explicit concrete type context. Seed's formatter, package/project and LSP commands remain outside the SDK. Unsupported source features report `W2013`; there is no Python fallback. This is a declared, tested profile, not universal Seed parity.
+Parameterized classes with fields and no methods, inheritance or interfaces are supported in this native profile. Parameterized classes with methods, inheritance or interfaces, parameterized interfaces, generic nominal values with unresolved type arguments, library-mode exports and WebAssembly targets remain outside it. An unresolved nominal value requires an explicit concrete type context. Seed's formatter, package/project and LSP commands remain outside the SDK. Unsupported source features report `W2013`; there is no Python fallback. This is a declared, tested profile, not universal Seed parity.
 
 Value equality rejects function payloads in structs, enums and collections during checking (`W2001`); classes retain identity equality. Generic function arguments and materialized nominal types share a structural complexity limit of 256, with expanding nominal recursion rejected as `W2011`. Ordinary recursive enums remain supported.
 

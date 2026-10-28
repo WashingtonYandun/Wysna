@@ -25,7 +25,7 @@ The `dev`, `release` and `size` profiles select `-O0 -g`, `-O2` and `-Os`. All p
 
 The native pipeline covers scalars, UTF-8 strings and paths, globals, collections, CoW mutation, direct ranges and nested tuple loop bindings, optional and Result channels, closed error unions, structs/enums, classes/inheritance/interfaces, pattern matching with guards, closures by snapshot, function values, concrete generic functions/structs/enums and the scalar/opaque C ABI. The profile and independent-verifier contracts are described in [MIR design](MIR_DESIGN.md).
 
-Parameterized classes/interfaces, generic nominal values whose type arguments remain unresolved, library-mode exports, WebAssembly targets and the Seed project/package/LSP/formatter commands are outside this SDK profile. An unresolved nominal value needs an explicit type context. Native profile exclusions report `W2013`; unsupported commands report `W5002`. The SDK does not claim universal Seed parity.
+Parameterized classes with fields and no methods, inheritance or interfaces are supported. Parameterized classes with methods, inheritance or interfaces, parameterized interfaces, generic nominal values whose type arguments remain unresolved, library-mode exports, WebAssembly targets and the Seed project/package/LSP/formatter commands are outside this SDK profile. An unresolved nominal value needs an explicit type context. Native profile exclusions report `W2013`; unsupported commands report `W5002`. The SDK does not claim universal Seed parity.
 
 External C dependencies remain explicit:
 

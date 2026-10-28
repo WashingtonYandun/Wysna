@@ -111,6 +111,24 @@ CASES.extend([('class',
   'fn read() -> int { this.value } }\n'
   'fn read(value: Reader) -> int { value.read() }\n'
   'print(read(new Counter(9)))'),
+ ('generic_class',
+  'class Box[T] { value: T }\n'
+  'let first: Box[int] = new Box[int]()\n'
+  'first.value = 3\n'
+  'let second: Box[str] = new Box[str]()\n'
+  'second.value = "text"\n'
+  'print(first.value, second.value, first, second)'),
+ ('generic_class_parameters',
+  'class Pair[A, B] { first: A, second: B }\n'
+  'let pair: Pair[int, str] = new Pair[int, str]()\n'
+  'pair.first = 7\n'
+  'pair.second = "seven"\n'
+  'print(pair.first, pair.second, pair)'),
+ ('generic_class_collection',
+  'class Bag[T] { values: list[T] }\n'
+  'let bag: Bag[int] = new Bag[int]()\n'
+  'bag.values = [1, 2]\n'
+  'print(bag.values, len(bag.values), bag)'),
  ('class_snapshot',
   'class Box { value: int\n'
   'fn init(value: int) { this.value = value } }\n'
@@ -285,10 +303,13 @@ class NativeMirPipelineTests(unittest.TestCase):
 
     def test_native_phase_rejects_invalid_source(self):
         cases = [
-            ('class Box[T] { value: T }', 'W2013'),
+            ('class Box[T] { value: T\n    fn get() -> T { return this.value } }', 'W2013'),
+            ('class Base { value: int }\nclass Box[T] extends Base { value: T }', 'W2013'),
             ('interface Action[T] { fn apply(value: T) -> T }', 'W2013'),
             ('enum Maybe[T] { None, Value(T) }\nprint(Maybe.None)', 'W2013'),
             ('enum Maybe[T] { None, Value(T) }\nprint(Maybe.None == Maybe.None)', 'W2013'),
+            ('class Box[T] { value: T }\nlet value: Box[int] = new Box[str]()', 'W2001'),
+            ('class Box[T] { value: T }\nlet value: Box[int] = new Box[int]()\nvalue.value = "bad"', 'W2001'),
             ('enum Tree[T] { None, Next(Tree[list[T]]) }\nlet value: Tree[int] = Tree.None\nprint(value)', 'W2011'),
             ('enum Tree[T] { None, Next(Tree[list[T]]) }\nlet value: Tree[int] = Tree.None\nprint(value == value)', 'W2011'),
             ('let value = || => 1\nprint(value == value)', 'W2001'),
