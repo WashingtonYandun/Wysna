@@ -47,6 +47,8 @@
 - Adds macOS Installer signing and `notarytool` notarization options to
   `tools/package_installers.py`. Notarization requires a signed package, submits it,
   staples the ticket and validates the result; the 0.5.0 release remains unsigned.
+- Raises the native SDK compilation deadline from two to ten minutes so selfbuilds
+  complete on slower CI runners without changing the application timeout contract.
 
 ### Verification
 

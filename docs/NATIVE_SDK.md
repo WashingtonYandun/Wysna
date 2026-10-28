@@ -17,7 +17,7 @@ wysna build program.wysna -o program --profile release
 wysna run program.wysna -- argument "two words"
 ```
 
-Windows executables receive an `.exe` suffix and an explicit 8 MiB stack reserve, shared with the compiler bootstrap and Seed native linker policy. `run` builds a private temporary executable and forwards arguments after `--`, standard input/output/error, the working directory and the application's exit status. `--timeout-ms N` sets the application's deadline from 1 to 600000 ms; compilation phases each have a 120000 ms deadline. Interrupts cancel the child process tree before temporary artifacts are removed.
+Windows executables receive an `.exe` suffix and an explicit 8 MiB stack reserve, shared with the compiler bootstrap and Seed native linker policy. `run` builds a private temporary executable and forwards arguments after `--`, standard input/output/error, the working directory and the application's exit status. `--timeout-ms N` sets the application's deadline from 1 to 600000 ms; compilation phases each have a 600000 ms deadline. Interrupts cancel the child process tree before temporary artifacts are removed.
 
 The `dev`, `release` and `size` profiles select `-O0 -g`, `-O2` and `-Os`. All profiles retain Wysna runtime checks. They do not enable fast-math or unchecked indexing. Source checking always precedes C compilation. Errors never trigger a Python fallback.
 
