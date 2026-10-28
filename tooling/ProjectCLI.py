@@ -21,7 +21,7 @@ from compiler.CompilerService import CompilerService
 from compiler.NativeToolchain import NativeCompilationError, NativeToolchain
 from compiler.WasiToolchain import WasiCompilationError, WasiToolchain
 from error.Error import ToolchainError, WysnaError
-from project.Manifest import ManifestError
+from project.Manifest import ManifestError, ManifestIOError
 from project.Resolver import ProjectResolver
 from project.Scaffold import ScaffoldError, create_project
 from project.Targets import target_spec
@@ -681,10 +681,18 @@ def run_project_command(argv):
         if json_mode:
             diagnostic = diagnostic_record("W5004", "filesystem", str(error))
             return _emit(result_command, "toolchain_error", 3, diagnostics=[diagnostic], json_mode=True)
-        print(f"wysna project: {error}", file=sys.stderr)
+        diagnostic = WysnaError(str(error), file="<project>", code="W5004", stage="filesystem")
+        print(render_diagnostic(diagnostic, {}), file=sys.stderr)
         return 3
     except (ManifestError, OSError, ValueError) as error:
         message = str(error)
+        if isinstance(error, (OSError, ManifestIOError)):
+            if json_mode:
+                diagnostic = diagnostic_record("W5004", "filesystem", message)
+                return _emit(result_command, "toolchain_error", 3, diagnostics=[diagnostic], json_mode=True)
+            diagnostic = WysnaError(message, file="<project>", code="W5004", stage="filesystem")
+            print(render_diagnostic(diagnostic, {}), file=sys.stderr)
+            return 3
         if json_mode:
             diagnostic = diagnostic_record("W5002", result_command, message)
             return _emit(result_command, "usage_error", 2, diagnostics=[diagnostic], json_mode=True)

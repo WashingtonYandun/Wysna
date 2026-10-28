@@ -8,6 +8,8 @@ import sys
 
 import pytest
 
+from project.Manifest import ManifestIOError
+from project.Resolver import ProjectResolver
 from project.Scaffold import ScaffoldError, create_project
 from tooling.ProjectCLI import run_project_command
 
@@ -104,6 +106,62 @@ def test_filesystem_failure_returns_machine_readable_error(monkeypatch, capsys):
     assert result == 3 and output.err == ""
     assert payload["command"] == "project.new" and payload["status"] == "toolchain_error"
     assert payload["diagnostics"][0]["code"] == "W5004"
+
+
+@pytest.mark.parametrize('wrapped', [False, True])
+def test_project_filesystem_failures_are_not_usage_errors(monkeypatch, capsys, wrapped):
+    def denied(_):
+        if wrapped:
+            try:
+                raise PermissionError('denied access')
+            except OSError as cause:
+                raise ManifestIOError('cannot read manifest') from cause
+        raise PermissionError('denied access')
+
+    monkeypatch.setattr('tooling.ProjectCLI._find_manifest', denied)
+    code = run_project_command(['check'])
+    human = capsys.readouterr()
+    assert code == 3 and '[W5004]' in human.err and human.out == ''
+    code = run_project_command(['check', '--output-format=json-v1'])
+    machine = capsys.readouterr()
+    payload = json.loads(machine.out)
+    assert code == 3 and machine.err == ''
+    assert payload['status'] == 'toolchain_error' and payload['diagnostics'][0]['code'] == 'W5004'
+
+
+def test_unreadable_manifest_reports_filesystem_error(tmp_path, monkeypatch, capsys):
+    project, _ = create_project('example', tmp_path)
+    monkeypatch.chdir(project)
+    original = Path.read_bytes
+
+    def denied(path):
+        if path.name == 'wysna.toml':
+            raise PermissionError('manifest access denied')
+        return original(path)
+
+    monkeypatch.setattr(Path, 'read_bytes', denied)
+    code = run_project_command(['check', '--output-format=json-v1'])
+    payload = json.loads(capsys.readouterr().out)
+    assert code == 3 and payload['status'] == 'toolchain_error'
+    assert payload['diagnostics'][0]['code'] == 'W5004'
+
+
+def test_unreadable_lockfile_reports_filesystem_error(tmp_path, monkeypatch, capsys):
+    project, _ = create_project('example', tmp_path)
+    ProjectResolver.load(project / 'wysna.toml').write_lock()
+    monkeypatch.chdir(project)
+    original = Path.read_text
+
+    def denied(path, *args, **kwargs):
+        if path.name == 'wysna.lock':
+            raise PermissionError('lockfile access denied')
+        return original(path, *args, **kwargs)
+
+    monkeypatch.setattr(Path, 'read_text', denied)
+    code = run_project_command(['check', '--frozen', '--output-format=json-v1'])
+    payload = json.loads(capsys.readouterr().out)
+    assert code == 3 and payload['status'] == 'toolchain_error'
+    assert payload['diagnostics'][0]['code'] == 'W5004'
 
 
 def test_creation_failure_preserves_external_changes(tmp_path, monkeypatch):

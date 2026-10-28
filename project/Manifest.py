@@ -18,6 +18,10 @@ class ManifestError(ValueError):
     """A user-facing manifest or lockfile error."""
 
 
+class ManifestIOError(ManifestError):
+    """A manifest or dependency could not be read due to a filesystem failure."""
+
+
 _NAME = re.compile(r"^[a-z][a-z0-9-]{0,62}$")
 _SEMVER_NUMBER = r"(?:0|[1-9][0-9]*)"
 _SEMVER_PRERELEASE_ID = r"(?:0|[1-9][0-9]*|[0-9A-Za-z-]*[A-Za-z-][0-9A-Za-z-]*)"
@@ -107,7 +111,9 @@ class ProjectManifest:
         try:
             raw = manifest_path.read_bytes()
             data = tomllib.loads(raw.decode("utf-8"))
-        except (OSError, UnicodeError, ValueError) as error:
+        except OSError as error:
+            raise ManifestIOError(f"cannot read manifest '{manifest_path}': {error}") from error
+        except (UnicodeError, ValueError) as error:
             raise ManifestError(f"cannot read manifest '{manifest_path}': {error}") from error
         if not isinstance(data, dict):
             raise ManifestError("manifest root must be a table")
