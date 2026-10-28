@@ -57,7 +57,7 @@ def test_generic_specializations_structs_and_main():
     assert output.getvalue() == '3\ntext\n9\nmain\n'
 
 
-def test_import_initialization_runs_once_and_changes_require_restart(tmp_path, monkeypatch):
+def test_import_initialization_runs_once_and_reload_applies_changes(tmp_path, monkeypatch):
     monkeypatch.chdir(tmp_path)
     module = tmp_path / 'library.wysna'
     module.write_text('print("initialized")\npub fn value() -> int { return 12 }\n', encoding='utf-8')
@@ -71,7 +71,9 @@ def test_import_initialization_runs_once_and_changes_require_restart(tmp_path, m
     with pytest.raises(WysnaError) as failure:
         session.execute('print(library.value())')
     assert failure.value.code == 'W1003'
-    assert output.getvalue() == 'initialized\n12\n12\n'
+    assert session.reload() is True
+    session.execute('print(library.value())')
+    assert output.getvalue() == 'initialized\n12\n12\nchanged\n13\n'
 
 
 def test_sessions_are_independent():
@@ -142,6 +144,20 @@ def test_cli_survives_invalid_input_and_retains_previous_state():
 ])
 def test_continuation_handles_strings_comments_and_mismatched_delimiters(source, expected):
     assert needs_continuation(source) is expected
+
+
+def test_cli_lists_commands_and_resets_session_state():
+    root = Path(__file__).resolve().parents[2]
+    result = subprocess.run(
+        [sys.executable, str(root / 'main.py'), 'repl'],
+        input='let value = 42\n:help\n:reset\nprint(value)\nexit\n',
+        text=True, capture_output=True, cwd=root, timeout=60,
+    )
+    assert result.returncode == 0
+    assert ':reload' in result.stdout and ':reset' in result.stdout
+    assert 'Session reset.' in result.stdout
+    assert 'W1001' in result.stdout
+    assert 'Traceback' not in result.stdout + result.stderr
 
 
 def test_cli_accepts_multiline_functions_and_recovers_from_invalid_input():

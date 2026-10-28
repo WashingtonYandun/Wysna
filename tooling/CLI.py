@@ -54,6 +54,21 @@ def repl(show_tokens: bool = False, show_ast: bool = False) -> None:
             continue
         if not pending and line.strip() == "exit":
             break
+        if not pending and line.strip() == ":help":
+            print("Commands: :help, :reload, :reset, exit")
+            print("  :reload  recheck the session against changed imported modules")
+            print("  :reset   discard all session state")
+            continue
+        if not pending and line.strip() == ":reload":
+            try:
+                print("Reloaded imports." if session.reload() else "Nothing to reload.")
+            except WysnaError as err:
+                print(render_diagnostic(err, {"<repl>": session.pending_source}))
+            continue
+        if not pending and line.strip() == ":reset":
+            session = ReplSession()
+            print("Session reset.")
+            continue
 
         pending.append(line)
         source = "\n".join(pending)
