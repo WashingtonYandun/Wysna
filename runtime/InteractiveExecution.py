@@ -32,11 +32,11 @@ def interpret_incremental(linked, interpreter, root_file, first_line, loaded_sou
     program.interner = linked.interner
     program.session_linked = True
     program.call_entrypoint = False
-    before = set(environment.bindings)
+    environment.begin_declaration_journal()
     try:
-        return interpreter.interpret(program)
+        value = interpreter.interpret(program)
     except BaseException:
-        for name in set(environment.bindings) - before:
-            environment.bindings.pop(name, None)
-            environment.mutables.discard(name)
+        environment.end_declaration_journal(rollback=True)
         raise
+    environment.end_declaration_journal(rollback=False)
+    return value

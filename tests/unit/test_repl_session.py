@@ -8,6 +8,8 @@ import sys
 import pytest
 
 from error.Error import WysnaError
+from runtime.Environment import Environment
+from runtime.Values import WysnaInt
 from tooling.ReplSession import ReplSession
 
 
@@ -89,6 +91,30 @@ def test_enum_variant_shadowing_survives_later_inputs():
     session.execute('print(Red)')
     session.execute('print(Red)')
     assert output.getvalue() == '42\n42\n'
+
+
+def test_failed_shadow_restores_original_binding():
+    session = ReplSession(stdout=StringIO())
+    session.execute('enum Color { Red, Blue }')
+    environment = session.interpreter.global_env
+    original = environment.bindings['Red']
+    with pytest.raises(WysnaError):
+        session.execute('let Red = 42; print(1 / 0)')
+    assert environment.bindings['Red'] is original
+    session.execute('print(Red)')
+
+
+def test_declaration_rollback_preserves_prior_mutations_and_mutability():
+    environment = Environment()
+    environment.declare('value', WysnaInt(1), is_mut=True)
+    environment.begin_declaration_journal()
+    environment.assign('value', WysnaInt(2))
+    environment.declare('value', WysnaInt(3))
+    environment.declare('new', WysnaInt(4), is_mut=True)
+    environment.end_declaration_journal(rollback=True)
+    assert environment.lookup('value').value == 2
+    assert 'value' in environment.mutables
+    assert not environment.exists('new') and 'new' not in environment.mutables
 
 
 def test_cli_survives_invalid_input_and_retains_previous_state():
