@@ -176,6 +176,16 @@ class LanguageServerTests(unittest.TestCase):
         self.open(uri, source)
         self.assertIsNone(self.server.rename(uri, position_at(source, source.index('value')), 'other'))
 
+    def test_definition_resolves_same_name_parameter_on_declaration_line(self):
+        source = 'fn item(item: int) -> int { return item }\nprint(item(1))\n'
+        uri = (self.root / 'same-line.wysna').as_uri()
+        self.open(uri, source)
+        use = source.index('return item') + len('return ')
+        expected = source.index('item: int')
+        location = self.server.definition(uri, position_at(source, use))
+        self.assertEqual(offset_at(source, location['range']['start']), expected)
+        self.assertEqual(self.slices(source, [location]), ['item'])
+
     def test_dependency_edits_and_close_publish_diagnostics_for_open_dependents(self):
         library_source = self.library.read_text(encoding='utf-8')
         self.open(self.library_uri, library_source)

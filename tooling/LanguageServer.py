@@ -152,11 +152,11 @@ class LanguageServer:
         source = unit.source_text(path)
         name = self._source_name(symbol.name)
         target = next((t for t in Lexer(source).tokenize()
-                       if t.line == symbol.line and t.value == name), None)
-        lines = source.splitlines(keepends=True)
-        start = target.start_offset if target else sum(map(len, lines[:symbol.line - 1])) + symbol.col - 1
-        end = target.end_offset if target else start + len(name)
-        return {'uri': Path(path).as_uri(), 'range': {'start': position_at(source, start), 'end': position_at(source, end)}}
+                       if t.line == symbol.line and t.col >= symbol.col and t.value == name), None)
+        if target is None:
+            return None
+        return {'uri': Path(path).as_uri(), 'range': {'start': position_at(source, target.start_offset),
+                                                     'end': position_at(source, target.end_offset)}}
 
     def symbol_at(self, uri, position):
         unit = self.checked.get(uri)
