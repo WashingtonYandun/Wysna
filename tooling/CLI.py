@@ -80,7 +80,7 @@ def print_help(prog: Optional[str] = None) -> None:
     print("Core tools (native C99 builds by default):")
     print(f"  {prog} lsp                                       # LSP over stdio")
     print(f"  {prog} explain <file.wysna> [--function NAME] [--output-format=json-v1] # Conservative effects and capability report")
-    print(f"  {prog} project <lock|check|build|run|test> [options] # Reproducible local projects")
+    print(f"  {prog} project <new|lock|check|build|run|test> [options] # Reproducible local projects")
     print(f"  {prog} api [std/module] [--output-format=json-v1] # Discover standard-library APIs")
     print(f"  {prog} capabilities [--output-format=json-v1]   # Discover target availability and requirements")
     print(f"  {prog} repl                                    # Start interactive REPL")

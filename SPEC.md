@@ -560,6 +560,8 @@ fn compile(source: str) {
      `emit-c` and `build` return the path and SHA-256 of the artifact they created.
      An artifact path must not overwrite its source file. Failed commands never list an
      existing output file as a newly produced artifact.
+   - `project new NAME` creates a new project directory without replacing existing
+     paths. With v1 output, its newly created files are returned as hashed artifacts.
    - Native compiler/linker stderr is capped at 8,192 characters in a diagnostic and
      marked with `[tool output truncated]` when the cap is reached. Captured subprocess
      stdout is not mixed into the control stream.

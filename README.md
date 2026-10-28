@@ -103,8 +103,8 @@ wysna explain hello.wysna --output-format=json-v1
 
 `run` executes source through the reference runtime. `build` produces a native
 executable through verified MIR and C99. Arguments after `--` belong to the program.
-For projects with test entries in `wysna.toml`, run `wysna project test` from the
-project directory. The separate `wysna test` command runs the compiler's own
+Create a project with `wysna project new example`, then run `wysna project test`
+from its directory. The separate `wysna test` command runs the compiler's own
 maintenance suite and requires a source checkout.
 
 ## Language tour
@@ -162,7 +162,7 @@ error channels and pattern matching.
 | `wysna build` | Compile a native executable through verified MIR → C99. |
 | `wysna fmt` | Canonical, deterministic formatting. |
 | `wysna explain` | Conservative effect and capability report over verified MIR. |
-| `wysna project` | Lock, check, build, run and test local projects. |
+| `wysna project` | Create, lock, check, build, run and test local projects. |
 | `wysna api` / `wysna capabilities` | Discover standard-library APIs and target availability. |
 | `wysna lsp` | Language server over stdio. |
 

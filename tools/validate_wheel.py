@@ -132,6 +132,11 @@ def validate(wheel, forbidden, report):
 
         run('version', ['version'])
         run('help', ['--help'])
+        created = json.loads(run('project-new', ['project', 'new', 'new-project', '--output-format=json-v1']).stdout)
+        assert created['status'] == 'ok' and len(created['artifacts']) == 3, created
+        new_manifest = str(work / 'new-project' / 'wysna.toml')
+        run('new-project-check', ['project', 'check', '--manifest', new_manifest])
+        run('new-project-test', ['project', 'test', '--manifest', new_manifest])
         run('check', ['check', 'hello.wysna'])
         rejected = run('invalid', ['check', '--json', 'invalid.wysna'], code=1)
         assert json.loads(rejected.stdout)['code'] == 'W2001'

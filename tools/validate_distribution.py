@@ -52,6 +52,11 @@ def validate(installation, report, expected_commit=None):
             return result
 
         run('version', ['version'])
+        created = json.loads(run('project-new', ['project', 'new', 'new-project', '--output-format=json-v1']).stdout)
+        assert created['status'] == 'ok' and len(created['artifacts']) == 3, created
+        new_manifest = work / 'new-project' / 'wysna.toml'
+        run('new-project-check', ['project', 'check', '--manifest', new_manifest])
+        run('new-project-test', ['project', 'test', '--manifest', new_manifest])
         health = json.loads(run('full-integrity', ['doctor', '--output-format=json-v1']).stdout)
         assert health['result']['verified_files'] == len(manifest['files']), health
         assert health['result']['root'] == str(installation), health

@@ -30,6 +30,13 @@ _LANGUAGE_VERSION = ".".join(WYSNA_VERSION.split(".")[:2])
 _MAX_TEST_TIMEOUT_MS = 600_000
 
 
+def validate_package_name(name):
+    """Validate the same package-name contract for manifests and scaffolds."""
+    if not isinstance(name, str) or not _NAME.fullmatch(name):
+        raise ManifestError("package.name must start with a lowercase letter and contain only lowercase letters, digits, or hyphens")
+    return name
+
+
 def _keys(value, allowed, label):
     if not isinstance(value, dict):
         raise ManifestError(f"{label} must be a table")
@@ -113,8 +120,7 @@ class ProjectManifest:
         name = _required_string(package.get("name"), "package.name")
         version = _required_string(package.get("version"), "package.version")
         language = _required_string(package.get("language"), "package.language")
-        if not _NAME.fullmatch(name):
-            raise ManifestError("package.name must start with a lowercase letter and contain only lowercase letters, digits, or hyphens")
+        validate_package_name(name)
         if not _VERSION.fullmatch(version):
             raise ManifestError("package.version must be an exact semantic version")
         if language != _LANGUAGE_VERSION:

@@ -23,6 +23,7 @@ from compiler.WasiToolchain import WasiCompilationError, WasiToolchain
 from error.Error import ToolchainError, WysnaError
 from project.Manifest import ManifestError
 from project.Resolver import ProjectResolver
+from project.Scaffold import ScaffoldError, create_project
 from project.Targets import target_spec
 from runtime.ExecutionContext import ExecutionContext
 from runtime.WasiRunner import WasiRunner, WasiRuntimeError
@@ -72,7 +73,7 @@ def _find_manifest(explicit):
 
 def _parse_arguments(argv):
     if not argv or argv[0] in ("--help", "-h"):
-        print("Usage: wysna project <lock|check|build|run|test> [options]")
+        print("Usage: wysna project <new|lock|check|build|run|test> [options]")
         print("Use --manifest PATH to select a project root explicitly.")
         return None
     command = argv[0]
@@ -643,6 +644,19 @@ def run_project_command(argv):
                         for index in range(len(option_argv) - 1)))
     result_command = "project"
     try:
+        if argv and argv[0] == "new":
+            result_command = "project.new"
+            parser = _StrictArgumentParser(prog="wysna project new")
+            parser.add_argument("name")
+            parser.add_argument("--output-format", choices=("json-v1",))
+            options = parser.parse_args(argv[1:])
+            root, files = create_project(options.name, Path.cwd())
+            if json_mode:
+                artifacts = [artifact_file("project-source", "text/plain", path) for path in files]
+                return _emit(result_command, "ok", 0, artifacts=artifacts, json_mode=True)
+            print(f"[OK] Created project: {root}")
+            print(f"Next: cd {options.name} && wysna project test")
+            return 0
         parsed = _parse_arguments(argv)
         if parsed is None:
             return 0
@@ -663,6 +677,12 @@ def run_project_command(argv):
             return _run_program(resolver, options.target or "app", options.entry, program_args,
                                 report_path=options.report_json)
         return _run_tests(resolver, options.filter, options.report_json, options.frozen)
+    except ScaffoldError as error:
+        if json_mode:
+            diagnostic = diagnostic_record("W5004", "filesystem", str(error))
+            return _emit(result_command, "toolchain_error", 3, diagnostics=[diagnostic], json_mode=True)
+        print(f"wysna project: {error}", file=sys.stderr)
+        return 3
     except (ManifestError, OSError, ValueError) as error:
         message = str(error)
         if json_mode:
