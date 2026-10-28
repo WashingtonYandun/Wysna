@@ -29,3 +29,21 @@ def test_native_compiler_reports_expected_and_found_types(tmp_path):
         if location:
             assert location in result.stderr
         assert not output.exists()
+
+
+def test_native_compiler_points_to_unknown_names(tmp_path):
+    compiler = ensure_selfhost_compiler_binary(str(ROOT))
+    cases = [
+        ('let value = missing\n', 'unknown identifier: missing', ':1:13 -'),
+        ('print(Option.Missing)\n', 'unknown built-in enum variant: Option.Missing', ':1:14 -'),
+        ('enum Event { Data(int) }\nlet item = Data\n', 'enum variant requires a payload: Data', ':2:12 -'),
+    ]
+    for index, (text, expected, location) in enumerate(cases):
+        source = tmp_path / f"unknown-{index}.wysna"
+        output = tmp_path / f"unknown-{index}.c"
+        source.write_text(text, encoding="utf-8")
+        result = subprocess.run([compiler, str(source), str(output)], cwd=ROOT,
+                                capture_output=True, text=True, timeout=60)
+        assert result.returncode != 0
+        assert expected in result.stderr and location in result.stderr, result.stderr
+        assert not output.exists()

@@ -2336,7 +2336,8 @@ fn sem_prefix(context: SemanticContext, allow_struct: bool, statement: bool) -> 
         return sem_expr(context, if is_super { "super" } else { "binding" }, SemValue { type_id: sem_named(context, owner), root: "this", writable: -1, terminates: false, node: -1 }, source, "self", [], context.variables[symbol].binding, -1)
     }
     sem_match(context, "NEW")
-    let name = sem_expect(context, "IDENT").val
+    let name_token = sem_expect(context, "IDENT")
+    let name = name_token.val
     let variable = sem_lookup(context, name)
     if variable >= 0 {
         let value = context.variables[variable]
@@ -2346,13 +2347,14 @@ fn sem_prefix(context: SemanticContext, allow_struct: bool, statement: bool) -> 
     if name == "None" { return sem_expr(context, "none", sem_value(context.none_type), source, "", [], -1, -1) }
     if name == "Option" or name == "Result" {
         sem_expect(context, "DOT")
-        let variant = sem_expect(context, "IDENT").val
+        let variant_token = sem_expect(context, "IDENT")
+        let variant = variant_token.val
         if name == "Option" and variant == "None" { return sem_expr(context, "none", sem_value(context.none_type), source, "", [], -1, -1) }
         if name == "Option" and variant == "Some" or name == "Result" and (variant == "Ok" or variant == "Err") {
             let empty: list[int] = []
             return sem_expr(context, "callee", sem_value(sem_intern(context, "enum_ctor", name + "." + variant, empty)), source, variant, [], -1, -1)
         }
-        sem_error(context, "W1001", "unknown built-in enum variant: " + name + "." + variant)
+        report_error_at("W1001", variant_token, "unknown built-in enum variant: " + name + "." + variant)
     }
     if sem_builtin(name) {
         let empty: list[int] = []
@@ -2408,8 +2410,8 @@ fn sem_prefix(context: SemanticContext, allow_struct: bool, statement: bool) -> 
         let mut variant = -1
         for i in 0..len(context.variants) {
             if context.variants[i] == name {
-                if variant >= 0 { sem_error(context, "W1001", "ambiguous enum variant") }
-                if len(context.variant_payloads[i]) > 0 { sem_error(context, "W2005", "enum variant requires a payload: " + name) }
+                if variant >= 0 { report_error_at("W1001", name_token, "ambiguous enum variant: " + name) }
+                if len(context.variant_payloads[i]) > 0 { report_error_at("W2005", name_token, "enum variant requires a payload: " + name) }
                 variant = context.variant_types[i]
             }
         }
@@ -2418,7 +2420,7 @@ fn sem_prefix(context: SemanticContext, allow_struct: bool, statement: bool) -> 
             if context.capture_nodes { context.nodes[value.node].labels = [context.types[variant].name, name] }
             return value
         }
-        sem_error(context, "W1001", "unknown identifier: " + name)
+        report_error_at("W1001", name_token, "unknown identifier: " + name)
     }
     if sem_kind(context, named_type) == "class" { return sem_expr(context, "new_callee", sem_value(sem_wrap(context, "constructor", named_type)), source, name, [], -1, -1) }
     if sem_kind(context, named_type) == "struct" {
