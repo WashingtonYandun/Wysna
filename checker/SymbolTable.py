@@ -83,7 +83,6 @@ def create_global_scope() -> Scope:
     scope.define_type("unit", UnitType)
     scope.define_type("none", NoneType)
     scope.define_type("IoError", StructType("IoError", {"message": StrType}))
-    scope.define_type("NetError", StructType("NetError", {"message": StrType}))
 
     # 2. Built-in Functions
     # print(any...) -> unit
