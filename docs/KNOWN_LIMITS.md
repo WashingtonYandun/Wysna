@@ -9,7 +9,7 @@ sessions can become slower. Open delimiters continue onto subsequent lines; othe
 incomplete expressions are reported immediately. A failed input removes bindings
 it introduced, but completed mutations and external effects
 such as output or file writes are not rolled back. Imported modules cannot be changed
-mid-session; restart the REPL to load their new contents.
+mid-session; use `:reload` to recheck the session and load their new contents.
 
 ---
 
@@ -94,7 +94,7 @@ the listed fixtures does not guarantee equivalent behaviour for every Wysna prog
 
 Wysna Compiler has modular source files under `selfhost/src/`, bundled into
 `selfhost/compiler.wysna`. It parses and checks source using its own implementation and
-uses one checked-node → verified MIR → C99 pipeline under `native-core-v1`. Parameterized classes/interfaces, unresolved generic nominal values, library-mode exports and WASM targets remain explicit profile limits; see [MIR design](MIR_DESIGN.md). Compiler does not share Seed's compilation session or type arena. Deterministic bootstrap and corpus tests are evidence for their measured inputs, not universal semantic equivalence.
+uses one checked-node → verified MIR → C99 pipeline under `native-core-v1`. Parameterized classes with methods, inheritance or interfaces, parameterized interfaces, unresolved generic nominal values, library-mode exports and WASM targets remain explicit profile limits; see [MIR design](MIR_DESIGN.md). Compiler does not share Seed's compilation session or type arena. Deterministic bootstrap and corpus tests are evidence for their measured inputs, not universal semantic equivalence.
 
 The [native SDK](NATIVE_SDK.md) packages the native engine, runtime, stdlib and pinned C toolchain. Its commands run without Python. The SDK is a portable development artifact; platform acceptance, signing and release publication are distinct gates. HTTP and other external C dependencies are not included in the offline core.
 
@@ -189,9 +189,9 @@ a proposed memory model; do not treat this as an implicit promise that ARC is th
 | Chained assignment | HIR uses `HirAssignment`; the value is preserved and each index is evaluated once. The artificial depth limit was removed. |
 | Parser error recovery | Check and LSP recover up to 100 syntax diagnostics. JSON preserves the first error and adds `diagnostics`; recovered programs never execute. |
 | `wysna fmt` coverage | The gate checks idempotence and AST preservation across fixtures, runtime programs, recursive examples, the standard library, and self-hosted sources. It also runs generated trees before and after formatting. |
-| LSP | `initialize`, `didOpen/didChange/didClose`, `definition`, `hover`, `completion`, document formatting and `publishDiagnostics`. No references, rename, signature help, semantic tokens or incremental sync. |
+| LSP | `initialize`, `didOpen/didChange/didClose` with ordered ranged edits, `definition`, `hover`, `completion`, `references`, `rename`, document formatting and `publishDiagnostics`. No signature help or semantic tokens. |
+| Capability policy | `wysna run --allow` and `--deny` reject modeled capability violations and incomplete effect analyses before interpretation (`W5006`). This is a static gate, not an OS sandbox; native builds, `project run` and trusted runtime/FFI behavior are outside it. |
 | Dictionary keys | `int`, `str`, `bool`, `enum` only; `float` and composites containing it are rejected with `W2010`. |
-| `NetError` | Declared in the prelude (`checker/SymbolTable.py`) and referenced by a parser fixture, but nothing produces one. Either implement a network module or remove the type. |
 | Standard library scope | Includes text, paths, filesystem, file/buffer I/O, resources, algorithms, UTF-8, JSON, process execution and an HTTP client with explicit host dependencies. Cryptography and Unicode normalization are not provided; see [standard library](STDLIB.md) for contracts and platform limits. |
 
 The CLI has POSIX and Windows adapters for cache locks, compiler processes, executable
@@ -215,7 +215,7 @@ limits remain part of the published scope:
 
 | Finding | Status in 0.5.0 | Remaining work |
 | :--- | :--- | :--- |
-| W01 · Compiler architecture | Seed uses AST/HIR/MIR; Compiler uses one checked-node → verified MIR → C99 pipeline under `native-core-v1` and ships a native SDK. Parameterized classes/interfaces, unresolved generic nominal values, library-mode exports and WASM targets remain explicit profile limits. | Extend the Compiler MIR/profile to those constructs and keep independent parity and installed-acceptance gates. |
+| W01 · Compiler architecture | Seed uses AST/HIR/MIR; Compiler uses one checked-node → verified MIR → C99 pipeline under `native-core-v1` and ships a native SDK. Parameterized classes with methods, inheritance or interfaces, parameterized interfaces, unresolved generic nominal values, library-mode exports and WASM targets remain explicit profile limits. | Extend the Compiler MIR/profile to those constructs and keep independent parity and installed-acceptance gates. |
 | W03 · Value size | On a 64-bit ABI, `WVal` occupies 32 bytes; list slots store full tagged values. | Measure a compact representation with explicit runtime and FFI compatibility. |
 | W04 · CoW cost | Mutating a shared buffer can copy all of its elements. No uniqueness analysis proves that it can be mutated in place. | Measure memory pressure and design a verifiable uniqueness rule before changing ownership or the ABI. |
 | W05 · Generics | A generic function body is checked when a specialization is created. A generic function that is never instantiated may not receive the same body checking. | Separate generic body checking from type substitution without losing concrete diagnostics. |

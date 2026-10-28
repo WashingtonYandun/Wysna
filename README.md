@@ -107,7 +107,8 @@ Create a project with `wysna project new example`, then run `wysna project test`
 from its directory. The separate `wysna test` command runs the compiler's own
 maintenance suite and requires a source checkout.
 `wysna repl` keeps definitions and values between inputs and continues while delimiters
-are open; `exit` closes the session.
+are open. `:help` lists the commands, `:reload` rechecks the session after imported
+modules change, `:reset` discards session state, and `exit` closes the session.
 
 ## Language tour
 
@@ -169,8 +170,11 @@ error channels and pattern matching.
 | `wysna lsp` | Language server over stdio. |
 
 Structured commands accept `--output-format=json-v1`. `explain` reports transitive
-effects and marks unknown FFI or indirect calls; it is **not** a sandbox, permission
-enforcer or purity proof. See [effect contracts](docs/EFFECTS.md).
+effects and marks unknown FFI or indirect calls. `wysna run --allow=...` or
+`--deny=...` applies that report as a static pre-execution gate and refuses
+incomplete analyses. It is **not** an operating-system sandbox, does not cover
+native builds or project runs, and is not a purity proof. See
+[effect contracts](docs/EFFECTS.md).
 
 ## Standard library
 
@@ -217,8 +221,9 @@ and [engine parity](docs/ENGINE_PARITY_MATRIX.md).
 
 Native programs and the reference runtime execute with the user's OS authority.
 Process isolation alone does not restrict filesystem, network or FFI access. The WASI
-profile has a Wasmtime boundary with declared preopens, fuel and linear-memory limits;
-`explain` reports effects but does not enforce a policy or sandbox execution.
+profile has a Wasmtime boundary with declared preopens, fuel and linear-memory limits.
+`wysna run --allow=...` and `--deny=...` gate modeled effects for interpreted Seed
+programs, but they are not an OS sandbox or a guarantee about native children.
 
 Do not run untrusted native code based on effect reports. See [SECURITY.md](SECURITY.md)
 and [scope](docs/SCOPE.md) for the full boundary.
@@ -245,9 +250,14 @@ source checkout exposes the full toolchain, including `wysna test` and `wysna be
 ```sh
 git clone --branch develop https://github.com/WashingtonYandun/Wysna.git
 cd Wysna
+python3 -m pip install -e '.[dev]'
 ./wysna --version
 ./wysna test
 ```
+
+The `dev` extra installs pytest and the optional HTTP/service dependencies used by
+the complete unit suite. Without those extras, the full suite fails rather than
+silently skipping the affected contracts.
 
 On Windows, run the source CLI as `py -3 main.py`.
 

@@ -2,6 +2,13 @@
 
 ## Unreleased
 
+### Native Compiler
+
+- Supports parameterized classes whose declarations contain fields only, including
+  multiple concrete instantiations such as `Box[int]` and `Box[str]`. Methods,
+  inheritance, interfaces and parameterized interfaces remain explicit `W2013`
+  profile limits.
+
 ### Tooling and Interactive Use
 
 - Adds `wysna project new NAME`, which creates a manifest, source entry point and
@@ -10,6 +17,11 @@
 - Makes `wysna repl` retain definitions and values between inputs, continue across
   open delimiters, recover from failed declarations, and recheck accepted history
   without replaying earlier effects or output.
+- Adds `:help`, `:reload` and `:reset` to the REPL. `:reload` rechecks accepted
+  history and executes changed imported modules again without restarting the session.
+- Applies ordered, ranged `didChange` edits in the language server, resolves
+  declarations as well as uses, and adds `references` and `rename` across open
+  modules. Signature help and semantic tokens remain unsupported.
 - Renders human diagnostics with bounded source excerpts and precise spans, including
   an optional `data.help` hint. Terminal control sequences in diagnostic text are
   removed before printing.
@@ -18,12 +30,31 @@
   enclosing construct.
 - Reports `Wysna` as the language-server diagnostic source and directs users of an
   installed distribution to `wysna project test`.
+- Removes the unused `NetError` prelude type from Seed and native semantics; error
+  union fixtures declare their own error structs.
+
+### Security
+
+- Adds `wysna run --deny=CAP,...` and `--allow=CAP,...`, a static capability gate
+  over the conservative effect report. It rejects modeled violations and refuses
+  incomplete analyses before interpretation (`W5006`). This is not an OS sandbox and
+  does not cover native builds, `project run`, or trusted runtime/FFI behavior.
+
+### Distribution and Development
+
+- Adds a `dev` extra installing pytest and the optional HTTP/service dependencies,
+  and documents it in the README and contribution guide.
+- Adds macOS Installer signing and `notarytool` notarization options to
+  `tools/package_installers.py`. Notarization requires a signed package, submits it,
+  staples the ticket and validates the result; the 0.5.0 release remains unsigned.
 
 ### Verification
 
+- Runs native compiler diagnostics on Ubuntu, macOS and Windows instead of only
+  Linux, and adds language-server coverage to the compiler-contract CI jobs.
 - Adds cross-platform product-contract CI coverage for the REPL, project scaffold,
-  human diagnostics and tool results, plus native diagnostic checks and installer
-  lifecycle validation for `project new` and multiline REPL input.
+  human diagnostics and tool results, plus installer lifecycle validation for
+  `project new` and multiline REPL input.
 
 ## 0.5.0 — 2026-10-27
 
