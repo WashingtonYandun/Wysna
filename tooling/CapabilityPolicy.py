@@ -41,7 +41,7 @@ def enforce_capability_policy(report, mode, capabilities, file_name, *, untruste
         raise WysnaError(
             'Capability policy requires a complete effect analysis; unresolved functions: '
             + unresolved,
-            file=file_name, line=1, col=1, code='W5006', stage='capability-policy',
+            file=file_name, code='W5006', stage='capability-policy',
             help='Remove indirect/virtual calls or uncontrolled FFI, or run without a policy.',
         )
     observed = set(program['capabilities'])
@@ -50,7 +50,7 @@ def enforce_capability_policy(report, mode, capabilities, file_name, *, untruste
         if rejected:
             raise WysnaError(
                 'Capability policy denied modeled capabilities: ' + ', '.join(rejected),
-                file=file_name, line=1, col=1, code='W5006', stage='capability-policy',
+                file=file_name, code='W5006', stage='capability-policy',
                 help='This static gate is not a sandbox; native FFI and runtime code remain outside it.',
             )
         return
@@ -58,6 +58,6 @@ def enforce_capability_policy(report, mode, capabilities, file_name, *, untruste
     if rejected:
         raise WysnaError(
             'Capability policy does not allow modeled capabilities: ' + ', '.join(rejected),
-            file=file_name, line=1, col=1, code='W5006', stage='capability-policy',
+            file=file_name, code='W5006', stage='capability-policy',
             help='This static gate is not a sandbox; native FFI and runtime code remain outside it.',
         )

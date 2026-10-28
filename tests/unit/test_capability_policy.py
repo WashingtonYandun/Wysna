@@ -1,6 +1,7 @@
 """Capability policy refuses modeled and uncertified execution before side effects."""
 
 from pathlib import Path
+import json
 import os
 import shutil
 import subprocess
@@ -107,6 +108,21 @@ class CapabilityPolicyTests(unittest.TestCase):
             self.assertEqual(refused.returncode, 1, refused.stderr)
             self.assertIn('W5006', refused.stderr)
             self.assertEqual(refused.stdout, '')
+
+    def test_policy_error_does_not_invent_a_source_location(self):
+        with tempfile.TemporaryDirectory(prefix='wysna-policy-') as temporary:
+            directory = Path(temporary).resolve()
+            source = directory / 'main.wysna'
+            source.write_text('let harmless = 1\nprint("blocked")\n', encoding='utf-8')
+            report = directory / 'report.json'
+            result = invoke(directory, source, '--deny=stdio', '--report-json', str(report))
+            self.assertEqual(result.returncode, 1, result.stderr)
+            self.assertIn('[W5006]', result.stderr)
+            self.assertNotIn(':1:1', result.stderr)
+            self.assertNotIn('1 | let harmless', result.stderr)
+            payload = json.loads(report.read_text(encoding='utf-8'))
+            self.assertEqual(payload['diagnostics'][0]['code'], 'W5006')
+            self.assertIsNone(payload['diagnostics'][0]['primary_span'])
 
     def test_indirect_call_cannot_escape_the_policy(self):
         with tempfile.TemporaryDirectory(prefix='wysna-policy-') as temporary:
