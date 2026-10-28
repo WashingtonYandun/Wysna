@@ -130,6 +130,19 @@ class LlvmBackendTests(unittest.TestCase):
                     self.assertEqual(result.timing_ms['object_emit'] == 0, result.cache_hits['program'])
                     self.assertTrue(result.c_compiler_version)
 
+    def test_prelude_error_literals_match_c99(self):
+        source = ('fn make() -> str ! NetError { return Err(NetError { message: "offline" }) }\n'
+                  'let io = IoError { message: "io" }\n'
+                  'print(make() else error { error.message }, io.message)\n')
+        service, checked = self.checked(source)
+        reference = self.c99(service, checked)
+        self.assertEqual((reference.returncode, reference.stdout), (0, b'offline io\n'))
+        emission = service.emit_llvm(checked, toolchain=self.toolchain)
+        built = self.toolchain.build(emission, self.directory / 'llvm-prelude-errors')
+        actual = self.execute(built.output_path)
+        self.assertEqual((actual.returncode, actual.stdout, actual.stderr),
+                         (reference.returncode, reference.stdout, reference.stderr))
+
     def test_explicit_application_exit_matches_c99(self):
         for code in (0, 7):
             service, checked = self.checked('print("before")\nexit(' + str(code) + ')\nprint("unreachable")\n')
