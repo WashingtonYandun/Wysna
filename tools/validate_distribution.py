@@ -52,7 +52,8 @@ def validate(installation, report, expected_commit=None):
             return result
 
         run('version', ['version'])
-        repl = run('repl-state', ['repl'], input_text='let value = 42\nprint(value)\nexit\n')
+        repl_input = 'fn twice(value: int) -> int {\nreturn value * 2\n}\nlet value = 21\nprint(twice(value))\nexit\n'
+        repl = run('repl-state', ['repl'], input_text=repl_input)
         assert '42' in repl.stdout and '[W1001]' not in repl.stdout, repl.stdout
         created = json.loads(run('project-new', ['project', 'new', 'new-project', '--output-format=json-v1']).stdout)
         assert created['status'] == 'ok' and len(created['artifacts']) == 3, created

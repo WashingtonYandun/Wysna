@@ -18,7 +18,7 @@ from common.Paths import get_repo_root
 from compiler.Bootstrap import ensure_selfhost_compiler_binary
 from tooling.SourceCommand import run_pipeline, _bounded_tool_output, _write_json_v1
 from tooling.DiagnosticRender import render_diagnostic
-from tooling.ReplSession import ReplSession
+from tooling.ReplSession import ReplSession, needs_continuation
 from tooling.RunReport import _capture_application_exit, _set_run_report, _write_run_report
 
 
@@ -41,26 +41,32 @@ def repl(show_tokens: bool = False, show_ast: bool = False) -> None:
 
     parser = Parser(file="<repl>")
     session = ReplSession()
+    pending = []
 
     while True:
         try:
-            line = input("wysna> ")
+            line = input("...> " if pending else "wysna> ")
         except (EOFError, KeyboardInterrupt):
             print("\nExiting.")
             break
 
-        line = line.strip()
-        if not line:
+        if not pending and not line.strip():
             continue
-        if line == "exit":
+        if not pending and line.strip() == "exit":
             break
+
+        pending.append(line)
+        source = "\n".join(pending)
+        if needs_continuation(source):
+            continue
+        pending.clear()
 
         try:
             if show_ast:
-                session.pending_source = line
-                ast = parser.parse(line)
+                session.pending_source = source
+                ast = parser.parse(source)
                 print(json.dumps(ast.to_dict(), indent=2))
-            res = session.execute(line)
+            res = session.execute(source)
             if not isinstance(res, WysnaUnit):
                 print(res)
         except WysnaError as err:

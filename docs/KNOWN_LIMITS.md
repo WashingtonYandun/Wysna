@@ -5,8 +5,9 @@ tracks deferred decisions separately from defects. Items marked *open decision* 
 the language surface and need an explicit decision before implementation.
 
 The interactive REPL rechecks the accepted session history on every input, so long
-sessions can become slower. Input is currently entered one line at a time. A failed
-input removes bindings it introduced, but completed mutations and external effects
+sessions can become slower. Open delimiters continue onto subsequent lines; other
+incomplete expressions are reported immediately. A failed input removes bindings
+it introduced, but completed mutations and external effects
 such as output or file writes are not rolled back. Imported modules cannot be changed
 mid-session; restart the REPL to load their new contents.
 

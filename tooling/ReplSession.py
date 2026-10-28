@@ -5,6 +5,41 @@ from error.Error import WysnaError
 from runtime.Interpreter import Interpreter
 
 
+def needs_continuation(source):
+    """Recognize open delimiters outside single-line strings and comments."""
+    pairs = {')': '(', ']': '[', '}': '{'}
+    stack = []
+    in_string = False
+    escaped = False
+    in_comment = False
+    for char in source:
+        if char == '\n':
+            if in_string:
+                return False
+            in_comment = False
+            continue
+        if in_comment:
+            continue
+        if in_string:
+            if escaped:
+                escaped = False
+            elif char == '\\':
+                escaped = True
+            elif char == '"':
+                in_string = False
+        elif char == '#':
+            in_comment = True
+        elif char == '"':
+            in_string = True
+        elif char in '([{':
+            stack.append(char)
+        elif char in pairs:
+            if not stack or stack[-1] != pairs[char]:
+                return False
+            stack.pop()
+    return bool(stack) and not in_string
+
+
 class ReplSession:
     def __init__(self, *, stdout=None, project_root=None):
         self.history = ""

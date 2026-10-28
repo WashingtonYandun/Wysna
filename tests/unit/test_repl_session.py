@@ -10,7 +10,7 @@ import pytest
 from error.Error import WysnaError
 from runtime.Environment import Environment
 from runtime.Values import WysnaInt
-from tooling.ReplSession import ReplSession
+from tooling.ReplSession import ReplSession, needs_continuation
 
 
 def test_variables_and_errors_preserve_consistent_state():
@@ -127,4 +127,35 @@ def test_cli_survives_invalid_input_and_retains_previous_state():
     assert result.returncode == 0
     assert result.stdout.count('42') >= 2
     assert 'W2001' in result.stdout
+    assert 'Traceback' not in result.stdout + result.stderr
+
+
+@pytest.mark.parametrize(('source', 'expected'), [
+    ('fn f() {', True),
+    ('fn f() {\n  print("}") # }\n', True),
+    ('fn f() {\n  print("}") # }\n}', False),
+    ('let values = [1,', True),
+    ('print("unterminated', False),
+    ('fn f() {\nprint("unterminated\n', False),
+    ('print([)]', False),
+    ('print("[\\\"]")', False),
+])
+def test_continuation_handles_strings_comments_and_mismatched_delimiters(source, expected):
+    assert needs_continuation(source) is expected
+
+
+def test_cli_accepts_multiline_functions_and_recovers_from_invalid_input():
+    root = Path(__file__).resolve().parents[2]
+    source = ('fn twice(value: int) -> int {\n'
+              '  return value * 2 # }\n'
+              '}\n'
+              'print(twice(21))\n'
+              'print([)]\n'
+              'print(twice(2))\nexit\n')
+    result = subprocess.run([sys.executable, str(root / 'main.py'), 'repl'], input=source,
+                            text=True, capture_output=True, cwd=root, timeout=60)
+    assert result.returncode == 0
+    assert '42' in result.stdout and '4' in result.stdout
+    assert '...> ' in result.stdout
+    assert '[W000' in result.stdout
     assert 'Traceback' not in result.stdout + result.stderr
