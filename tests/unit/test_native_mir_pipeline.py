@@ -123,6 +123,47 @@ CASES.extend([('class',
   'fn make() -> str ! NetError { return Err(NetError { message: "offline" }) }\n'
   'let value = Box { value: IoError { message: "nested" } }\n'
   'print(make() else error { error.message }, value.value.message)'),
+ ('generic_class_methods',
+  'class Box[T] { value: T\n'
+  'fn init(value: T) { this.value = value }\n'
+  'fn get() -> T { this.value }\n'
+  'fn set(value: T) { this.value = value }\n'
+  'fn again() -> T { this.get() } }\n'
+  'let a: Box[int] = new Box[int](42)\n'
+  'let b: Box[str] = new Box[str]("hello")\n'
+  'print(a.get(), b.get())\n'
+  'a.set(7)\nb.set("world")\nprint(a.again(), b.again())'),
+ ('generic_class_phantom_method',
+  'class Flag[T] { value: int\nfn get() -> int { this.value } }\n'
+  'let flag: Flag[str] = new Flag[str]()\nflag.value = 8\nprint(flag.get())'),
+ ('generic_class_methods_list',
+  'class Box[T] { value: T\nfn init(value: T) { this.value = value }\nfn get() -> T { this.value } }\n'
+  'let x: Box[list[int]] = new Box[list[int]]([1, 2])\nprint(x.get())'),
+ ('generic_class_method_identity',
+  'class Box[T] { value: T\nfn init(v: T) { this.value = v }\n'
+  'fn set(v: T) { this.value = v }\nfn get() -> T { this.value } }\n'
+  'let a: Box[int] = new Box[int](1)\nlet b = a\nb.set(3)\nprint(a.get(), b.get(), a == b)'),
+ ('generic_class_recursive_method',
+  'class Counter[T] { value: T\nfn init(v: T) { this.value = v }\n'
+  'fn calc(n: int) -> int { if n == 0 { 1 } else { n * this.calc(n - 1) } } }\n'
+  'let a: Counter[str] = new Counter[str]("x")\nprint(a.calc(5))'),
+ ('generic_class_method_list_of_objects',
+  'class Box[T] { value: T\nfn init(v: T) { this.value = v }\nfn get() -> T { this.value } }\n'
+  'let items: list[Box[int]] = [new Box[int](1), new Box[int](2)]\n'
+  'for x in items { print(x.get()) }'),
+ ('generic_class_nested_methods',
+  'class Box[T] { value: T\nfn init(value: T) { this.value = value }\nfn get() -> T { this.value } }\n'
+  'let inner: Box[int] = new Box[int](8)\n'
+  'let outer: Box[Box[int]] = new Box[Box[int]](inner)\nprint(outer.get().get())'),
+ ('generic_class_generic_operation',
+  'class Box[T] { value: T\nfn init(value: T) { this.value = value }\n'
+  'fn twice() -> T { this.value + this.value } }\n'
+  'let a: Box[int] = new Box[int](21)\nlet b: Box[str] = new Box[str]("go")\n'
+  'print(a.twice(), b.twice())'),
+ ('generic_class_optional_method',
+  'class Box[T] { value: T\nfn init(value: T) { this.value = value }\n'
+  'fn get() -> T? { Some(this.value) } }\n'
+  'let value: Box[str] = new Box[str]("yes")\nprint(value.get() ?? "no")'),
  ('generic_class',
   'class Box[T] { value: T }\n'
   'let first: Box[int] = new Box[int]()\n'
@@ -315,7 +356,13 @@ class NativeMirPipelineTests(unittest.TestCase):
 
     def test_native_phase_rejects_invalid_source(self):
         cases = [
-            ('class Box[T] { value: T\n    fn get() -> T { return this.value } }', 'W2013'),
+            ('class Box[T] { value: T\nfn init(v: T) { this.value = v }\nfn set(v: T) { this.value = v } }\nlet b: Box[int] = new Box[int](1)\nb.set("bad")', 'W2001'),
+            ('class Box[T] { value: T\nfn init(v: T) { this.value = v }\nfn get() -> T { true } }\nlet b: Box[int] = new Box[int](1)\nprint(b.get())', 'W2004'),
+            ('class Box[T] { value: T\nfn init(v: T) {} }\nlet b: Box[int] = new Box[int](1)', 'W3004'),
+            ('class Box[T] { value: T\nfn init(v: T) { this.value = v }\nfn twice() -> T { this.value + this.value } }\nlet b: Box[bool] = new Box[bool](true)\nprint(b.twice())', 'W2001'),
+            ('class Box[T: Missing] { value: T }', 'W2012'),
+            ('interface Show { fn show() -> str }\nclass Box[T: Show] { value: T }', 'W2013'),
+            ('class Box[T] { value: T\n    fn get[U](value: U) -> U { value } }', 'W2013'),
             ('class Base { value: int }\nclass Box[T] extends Base { value: T }', 'W2013'),
             ('interface Action[T] { fn apply(value: T) -> T }', 'W2013'),
             ('enum Maybe[T] { None, Value(T) }\nprint(Maybe.None)', 'W2013'),

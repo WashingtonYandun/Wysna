@@ -38,9 +38,19 @@ fn checked_records(context: SemanticContext) -> list[CheckedRecord] {
                 }
                 for i in 0..len(context.functions) {
                     let function = context.functions[i]
-                    if function.owner == owner_name + "." {
+                    if function.owner == owner_name + "." and len(function.name) > len(function.owner) and slice(function.name, 0, len(function.owner)) == function.owner {
                         let method_name = slice(function.name, len(function.owner), len(function.name))
-                        let method = CheckedMethod { name: method_name, type_id: function.type_id, target: i, owner: sem_named(context, owner_name), visible: function.visible }
+                        let mut target = i
+                        let mut method_owner = sem_named(context, owner_name)
+                        let mut method_type = function.type_id
+                        if generic >= 0 {
+                            method_owner = id
+                            method_type = sem_substitute_type(context, method_type, names, type_.args)
+                            target = -1
+                            for specialization in context.specializations { if specialization.template == i and specialization.arguments == type_.args { target = specialization.function } }
+                            if target < 0 { report_error_at("W9999", context.tokens[0], "missing specialized method") }
+                        }
+                        let method = CheckedMethod { name: method_name, type_id: method_type, target: target, owner: method_owner, visible: function.visible }
                         let mut replaced = false
                         for j in 0..len(methods) { if methods[j].name == method_name { methods[j] = method replaced = true } }
                         if not replaced { methods.append(method) }

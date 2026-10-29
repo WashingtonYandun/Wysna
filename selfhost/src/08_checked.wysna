@@ -198,7 +198,7 @@ fn checked_finish(context: SemanticContext, tokens: list[Token], file: str) -> C
         let mut params = function.params
         let mut type_id = function.type_id
         if function.owner != "" {
-            let owner = sem_named(context, slice(function.owner, 0, len(function.owner) - 1))
+            let owner = sem_function_owner_type(context, function)
             type_id = checked_receiver_signature(context, owner, type_id)
             params = ["self"]
             for name in function.params { params.append(name) }

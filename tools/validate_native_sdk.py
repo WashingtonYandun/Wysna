@@ -133,6 +133,16 @@ def validate(sdk, report, strict_source=False, compiler_source=None):
                              'let ordinary = Box__0 { label: "distinct" }\n'
                              'print(box.value, ordinary.label, snapshot, values)\n', encoding='utf-8')
         run('generic-closure-cow-identities', ['run', semantics], stdout=b'10 distinct [1, 2] [1, 2, 3]\n')
+        generic_methods = project / 'generic-methods.wysna'
+        generic_methods.write_text('class Box[T] { value: T\n'
+                                   'fn init(value: T) { this.value = value }\n'
+                                   'fn get() -> T { this.value }\n'
+                                   'fn set(value: T) { this.value = value } }\n'
+                                   'let a: Box[int] = new Box[int](42)\n'
+                                   'let b: Box[str] = new Box[str]("hello")\n'
+                                   'print(a.get(), b.get())\n'
+                                   'a.set(7)\nb.set("world")\nprint(a.get(), b.get())\n', encoding='utf-8')
+        run('generic-class-methods', ['run', generic_methods], stdout=b'42 hello\n7 world\n')
         strings = project / 'strings.wysna'
         strings.write_text('let value = "á\\0界"\nprint(len(value), value)\n', encoding='utf-8')
         run('unicode-and-nul', ['run', strings], stdout='3 á\0界\n'.encode())
