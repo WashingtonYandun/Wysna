@@ -353,7 +353,6 @@ def check_c_determinism(source: str, repo_root: Path, work_dir: Path) -> Tuple[b
             sys.executable,
             str(repo_root / "main.py"),
             "emit-c",
-            "--backend=hir",
             str(source_file),
             "-o",
             str(out_c),

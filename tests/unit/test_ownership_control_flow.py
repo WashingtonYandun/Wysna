@@ -26,10 +26,11 @@ def run_ownership_tests():
                 from main import ensure_selfhost_compiler_binary
                 selfhost_bin = ensure_selfhost_compiler_binary(str(root))
                 command = [selfhost_bin, str(source), str(c_path)]
+            elif backend == 'ast':
+                command = [sys.executable, str(root / 'tests/emit_ast_oracle.py'),
+                           str(source), str(c_path)]
             else:
                 command = [sys.executable, 'main.py', 'emit-c']
-                if backend == 'hir':
-                    command.append('--hir')
                 command += [str(source), '-o', str(c_path)]
             emitted = subprocess.run(command, cwd=root, capture_output=True, text=True, timeout=60)
             assert emitted.returncode == 0, (backend, emitted.stderr)

@@ -23,7 +23,7 @@ class NativeBuildResult:
 
 
 @dataclass(frozen=True)
-class SelfhostEmissionResult:
+class CompilerEmissionResult:
     source: str
     codegen_ms: float
 
@@ -194,7 +194,7 @@ class NativeToolchain:
                     break
         return compiler_flags, linker_flags
 
-    def emit_selfhost(self, compiler_path, file):
+    def emit_compiler(self, compiler_path, file):
         """Use the independent compiler directly, resolving imports beside its input."""
         input_path = os.path.abspath(os.fspath(file))
         input_directory = os.path.dirname(input_path) or os.getcwd()
@@ -217,4 +217,4 @@ class NativeToolchain:
                     source = source.replace(include, '#define WYSNA_HAS_HTTP 1\n' + include, 1)
                 else:
                     source = '#define WYSNA_HAS_HTTP 1\n' + source
-        return SelfhostEmissionResult(source, codegen_ms)
+        return CompilerEmissionResult(source, codegen_ms)

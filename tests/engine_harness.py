@@ -123,9 +123,10 @@ def run_engine(engine, source, label, selfhost_bin, directory, sanitize=False, r
         # Direct invocation: no Seed parser/checker runs on the input first.
         command = [str(selfhost_bin), str(source_path), str(c_path)]
     elif engine == 'ast':
-        command = driver + ['emit-c', '--backend=ast', str(source_path), '-o', str(c_path)]
+        command = [sys.executable, str(ROOT / 'tests/emit_ast_oracle.py'),
+                   str(source_path), str(c_path)]
     elif engine == 'hir':
-        command = driver + ['emit-c', '--backend=hir', str(source_path), '-o', str(c_path)]
+        command = driver + ['emit-c', str(source_path), '-o', str(c_path)]
     front = execute(command, directory, 'frontend', max(120, run_timeout) if engine == 'interpreter' else 120)
     result = EngineResult(engine)
     failure = ('timeout' in front or 'launch_error' in front or front['returncode'] < 0)

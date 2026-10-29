@@ -1,9 +1,9 @@
 # Engine Support and Corpus Coverage
 
-Wysna Seed (`seed`) is the reference implementation in Python. Its default native pipeline is checked AST → typed HIR →
-verified MIR → C99 → system compiler. The public backend name remains `hir`.
-The interpreter and AST C99 backend are execution oracles; Wysna Compiler (`selfhost`) is an independent
-self-hosted compiler. MIR is an intermediate representation, not a fifth engine. The read-only
+Wysna Seed (`seed`) is the full-profile reference implementation in Python. Its default native pipeline is checked AST → typed HIR →
+verified MIR → C99 → system compiler. C99 is the output backend; HIR/MIR are internal representations.
+The interpreter and AST C99 emitter are execution oracles; Wysna Compiler is an independent
+self-hosted `native-core-v1` engine. MIR is an intermediate representation, not an additional engine. The read-only
 [effect report](EFFECTS.md) is a static analysis of verified MIR, not another execution engine, and is
 not part of the engine parity counts.
 Wysna Compiler's `native-core-v1` profile uses verified MIR for its normal C99 route and interchange. Focused parity, native phase isolation and installed SDK acceptance have separate gates. Profile bounds are defined in [MIR design](MIR_DESIGN.md).
@@ -75,6 +75,6 @@ Seed HIR/MIR builds a separately recorded initial engine. Three successive nativ
 every engine to pass every fixture. `--sanitize` instruments native programs with
 ASan/UBSan; Linux additionally enables LSan.
 
-`wysna build --backend=selfhost` invokes native Wysna Compiler directly, with no Wysna Seed semantic pre-check.
+`wysna build --engine=compiler` invokes native Wysna Compiler directly, with no Wysna Seed semantic pre-check. This selects an engine; `--backend` selects only the emitted target.
 Unsupported syntax or semantics must be diagnosed by Wysna Compiler. See [known limits](KNOWN_LIMITS.md)
 for runtime and platform boundaries.

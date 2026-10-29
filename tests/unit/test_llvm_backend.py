@@ -404,7 +404,7 @@ class LlvmBackendTests(unittest.TestCase):
                      ['emit-c', '--backend=llvm-experimental'],
                      ['check', '--backend=llvm-experimental', '--sanitize'],
                      ['check', '--backend=llvm-experimental', '--link-lib', 'foreign'],
-                     ['check', '--profile=release'], ['emit-llvm', '--backend=hir'],
+                     ['check', '--profile=release'], ['emit-llvm', '--backend=c99'],
                      ['build', '--backend=llvm-experimental', '--profile=fast']):
             with self.subTest(args=args):
                 result = self.cli(*args, source, '--output-format=json-v1')
@@ -414,7 +414,7 @@ class LlvmBackendTests(unittest.TestCase):
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertEqual(json.loads(result.stdout)['target']['llvm_version'], [20, 1, 8])
         with redirect_stderr(io.StringIO()):
-            self.assertEqual(run_pipeline('print(1)', backend='llvm-experimental', use_selfhost=True), 1)
+            self.assertEqual(run_pipeline('print(1)', backend='llvm-experimental', engine='compiler'), 1)
 
     def test_cli_reuses_one_validated_provider_for_emission_and_linking(self):
         calls = []

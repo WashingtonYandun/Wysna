@@ -125,7 +125,7 @@ def package(output, archive=None):
             for name in ('sqlite3.c', 'sqlite3.h'):
                 (workspace / name).write_bytes(zipped.read(SQLITE_ARCHIVE + '/' + name))
         generated = workspace / 'application.c'
-        execute([sys.executable, str(ROOT / 'main.py'), 'emit-c', '--backend=hir',
+        execute([sys.executable, str(ROOT / 'main.py'), 'emit-c',
                  str(ROOT / 'examples/ffi/sqlite/import_csv.wysna'), '-o', str(generated)])
         objects = []
         for index, source in enumerate((generated, ROOT / 'examples/ffi/sqlite/adapter.c', workspace / 'sqlite3.c')):

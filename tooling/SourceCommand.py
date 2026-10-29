@@ -82,9 +82,8 @@ def run_pipeline(
     fmt_write: bool = False,
     emit_c_path: Optional[str] = None,
     build_bin_path: Optional[str] = None,
-    backend: str = "hir",
-    use_selfhost: bool = False,
-    use_hir: Optional[bool] = None,
+    backend: str = "c99",
+    engine: str = "seed",
     sanitize: bool = False,
     show_stats: bool = False,
     link_libraries=(),
@@ -114,8 +113,12 @@ def run_pipeline(
         else:
             tool_command = "run"
     try:
+        if engine not in ("seed", "compiler"):
+            raise WysnaError("--engine must be seed or compiler", code="W5002", stage="options")
+        if backend not in ("c99", "llvm-experimental"):
+            raise WysnaError("--backend must be c99 or llvm-experimental", code="W5002", stage="options")
         if backend == "llvm-experimental":
-            if (use_selfhost or use_hir is not None or show_tokens or show_ast or show_mir
+            if (engine != "seed" or show_tokens or show_ast or show_mir
                     or fmt_only or fmt_write or emit_c_path is not None
                     or json_diagnostics
                     or tool_command not in ("run", "check", "emit-llvm", "build")):
@@ -126,19 +129,22 @@ def run_pipeline(
             raise WysnaError("--link-lib cannot be combined with a capability policy",
                              code="W5002", stage="options")
         if capability_policy is not None and (
-                backend != "hir" or use_selfhost or use_hir is not None
+                backend != "c99" or engine != "seed"
                 or check_only or fmt_only or show_tokens or show_ast or show_mir
                 or emit_c_path is not None or build_bin_path is not None
                 or emit_llvm_path is not None):
             raise WysnaError("Capability policy applies only to interpreted run",
                              code="W5002", stage="options")
-        # Resolve legacy flags if passed explicitly
-        if use_selfhost:
-            backend = "selfhost"
-        elif use_hir is False:
-            backend = "ast"
-        elif use_hir is True:
-            backend = "hir"
+
+        compiler_direct = engine == "compiler" and (emit_c_path is not None or build_bin_path is not None)
+        if engine == "compiler" and (
+                not compiler_direct or file_name == "<stdin>" or check_only or show_tokens
+                or show_ast or show_mir or fmt_only or fmt_write or emit_llvm_path is not None
+                or capability_policy is not None):
+            raise WysnaError(
+                "The compiler engine currently supports file-based emit-c and build only; "
+                "use the standalone Compiler SDK for its native commands",
+                code="W5002", stage="options")
 
         import time
 
@@ -146,15 +152,7 @@ def run_pipeline(
         lex_ms = parse_ms = check_ms = 0.0
         ast = None
         checked = None
-        selfhost_direct = (
-            backend == "selfhost"
-            and (emit_c_path is not None or build_bin_path is not None)
-            and file_name != "<stdin>"
-            and not show_tokens
-            and not show_ast
-            and not fmt_only
-            and not check_only
-        )
+        compiler_direct = compiler_direct and not show_tokens and not show_ast and not fmt_only and not check_only
 
         if show_tokens:
             tokens = Lexer(source_code, file=file_name).tokenize()
@@ -163,7 +161,7 @@ def run_pipeline(
             if not show_ast and not check_only and emit_c_path is None and build_bin_path is None:
                 return 0
 
-        if not selfhost_direct:
+        if not compiler_direct:
             service = CompilerService(project_root=project_root,
                                       project_resolver=project_resolver)
             parsed = service.parse(source_code, file_name, recover=check_only)
@@ -196,7 +194,7 @@ def run_pipeline(
                 )
             return 0
 
-        if not selfhost_direct:
+        if not compiler_direct:
             # 3. Static Type Checking
             t_check0 = time.perf_counter()
             checked = service.check_parsed(parsed)
@@ -255,15 +253,15 @@ def run_pipeline(
             codegen_telemetry = None
             phase_ms = {}
             hir_ms = None
-            if backend == "selfhost" and file_name != "<stdin>":
+            if engine == "compiler" and file_name != "<stdin>":
                 selfhost_bin = ensure_selfhost_compiler_binary(repo_root)
-                emission = toolchain.emit_selfhost(selfhost_bin, file_name)
+                emission = toolchain.emit_compiler(selfhost_bin, file_name)
                 c_code, codegen_ms = emission.source, emission.codegen_ms
             else:
-                emission = service.emit_c(checked, backend="ast" if backend == "ast" else "hir")
+                emission = service.emit_c(checked)
                 c_code = emission.source
                 codegen_telemetry = dict(emission.telemetry)
-                phase_ms = emission.timing_ms if backend != "ast" else {}
+                phase_ms = emission.timing_ms
                 hir_ms = phase_ms.get("hir")
                 codegen_ms = emission.timing_ms["codegen"]
 
@@ -275,7 +273,7 @@ def run_pipeline(
                     "status": "ok",
                     "file": file_name,
                     "backend": "c99",
-                    "implementation": "compiler" if backend == "selfhost" else "seed",
+                    "implementation": engine,
                     "optimization": optimization_profile or "release",
                     "telemetry": {
                         "monomorphization": dict(checked.telemetry) if checked is not None else None,

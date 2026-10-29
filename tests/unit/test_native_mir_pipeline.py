@@ -324,7 +324,7 @@ class NativeMirPipelineTests(unittest.TestCase):
                     module, arena = import_module(self.invoke("--emit-mir", source))
                     emissions = {
                         "hir": service.emit_c(checked).source,
-                        "ast": service.emit_c(checked, backend="ast").source,
+                        "ast": service._emit_ast_oracle_for_testing(checked).source,
                         "exchange": CCodeGen(arena).generate(module),
                         "native": self.invoke("--emit-c-mir", source),
                     }

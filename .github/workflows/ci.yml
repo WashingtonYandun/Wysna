@@ -553,7 +553,7 @@ jobs:
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
       - name: Bootstrap Wysna Compiler through the Windows cache lock
         run: |
-          python main.py build --backend=selfhost tests/runtime/readiness_patterns.wysna -o patterns.exe
+          python main.py build --engine=compiler tests/runtime/readiness_patterns.wysna -o patterns.exe
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           ./patterns.exe
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }

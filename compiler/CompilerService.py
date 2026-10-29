@@ -198,23 +198,9 @@ class CompilerService:
         """Analyze verified resolved MIR without interpreting, linking or loading FFI."""
         return self.explain_with_foreign_bindings(checked)[0]
 
-    def emit_c(self, checked, backend='hir', *, target_profile=None):
+    def emit_c(self, checked, *, target_profile=None):
         self._validate(checked)
         browser_library = target_profile == 'browser-library'
-        if backend == 'ast':
-            if browser_library:
-                raise WysnaError('browser-library requires verified HIR and MIR emission',
-                                 file=checked.source.file, code='W2013', stage='target')
-            from codegen.CCodeGen import CCodeGen
-            started = time.perf_counter()
-            generator = CCodeGen(file=checked.source.file)
-            source = generator.generate(self._linked_ast(checked))
-            source = self._enable_http_runtime(source)
-            emitted = (time.perf_counter() - started) * 1000
-            return EmissionResult(source, generator.telemetry.to_dict(),
-                                  {'hir': 0.0, 'mir': 0.0, 'c_emit': emitted, 'codegen': emitted})
-        if backend != 'hir':
-            raise ValueError('Unsupported Seed backend: ' + str(backend))
         from hir.HirCCodeGen import HirCCodeGen
         started = time.perf_counter()
         module = self.lower_hir(checked)
@@ -229,6 +215,18 @@ class CompilerService:
                                'c_emit': generator.phase_ms['c_emit'],
                                'codegen': (emitted - lowered) * 1000},
                               tuple(getattr(generator, 'abi_exports', ())))
+
+    def _emit_ast_oracle_for_testing(self, checked):
+        """Emit through the independent AST oracle for differential tests only."""
+        self._validate(checked)
+        from codegen.CCodeGen import CCodeGen
+        started = time.perf_counter()
+        generator = CCodeGen(file=checked.source.file)
+        source = generator.generate(self._linked_ast(checked))
+        source = self._enable_http_runtime(source)
+        emitted = (time.perf_counter() - started) * 1000
+        return EmissionResult(source, generator.telemetry.to_dict(),
+                              {'hir': 0.0, 'mir': 0.0, 'c_emit': emitted, 'codegen': emitted})
 
     def emit_llvm(self, checked, *, profile='dev', toolchain=None):
         """Emit the verified native-command LLVM profile from the same resolved HIR/MIR boundary."""
