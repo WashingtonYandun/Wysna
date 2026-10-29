@@ -155,8 +155,7 @@ class CapabilityPolicyTests(unittest.TestCase):
             )
             self.assertEqual(checked.returncode, 2, checked.stderr)
             self.assertIn('only by interpreted run', checked.stderr)
-            for option in ('--backend=ast', '--backend=selfhost', '--backend=c99',
-                           '--selfhost', '--hir'):
+            for option in ('--backend=c99', '--engine=compiler'):
                 selected = invoke(directory, source, '--deny=stdio', option)
                 self.assertEqual(selected.returncode, 2, (option, selected.stderr))
                 self.assertIn('only by interpreted run', selected.stderr)

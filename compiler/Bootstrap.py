@@ -66,7 +66,7 @@ def bootstrap_compiler(repo_root, output_directory):
         raise RuntimeError("The compiler bundle is stale; run tools/bundle_selfhost.py")
     fingerprint, provenance = bootstrap_fingerprint(root)
     service = CompilerService()
-    seed_source = service.emit_c(service.check(source, source_path), backend="hir").source
+    seed_source = service.emit_c(service.check(source, source_path)).source
     bootstrap_c = directory / "bootstrap.c"
     bootstrap_c.write_text(seed_source, encoding="utf-8")
 
@@ -122,7 +122,9 @@ def ensure_selfhost_compiler_binary(repo_root: str) -> str:
     if not source.is_file():
         from error.Error import TypeError as WysnaTypeError
         raise WysnaTypeError("Wysna Compiler bootstrap requires a source checkout", file=str(source), code="W2013")
-    cache = root / ".wysna_cache/bootstrap"
+    configured_cache = os.environ.get("WYSNA_CACHE_HOME")
+    cache_root = Path(configured_cache).expanduser() if configured_cache else root / ".wysna_cache"
+    cache = cache_root / "bootstrap"
     cache.mkdir(parents=True, exist_ok=True)
     with cache_lock(str(cache / "bootstrap.lock")):
         fingerprint, _ = bootstrap_fingerprint(root)

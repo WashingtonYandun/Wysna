@@ -2,6 +2,17 @@
 
 ## Unreleased
 
+### Compiler architecture and migration
+
+- Separates `--engine=seed|compiler` from `--backend=c99|llvm-experimental`.
+  C99 remains the supported default; LLVM remains experimental. The Seed CLI's
+  Compiler engine supports file-based `emit-c` and `build` for `native-core-v1`.
+- Removes the public AST-to-C route and the mixed `--backend=hir|ast|selfhost`
+  selectors. Use `--engine=seed|compiler`; use `wysna ast <file>` only to inspect
+  syntax. AST-to-C emission is reserved for the differential test harness.
+- Allows `WYSNA_CACHE_HOME` to relocate the native bootstrap cache for read-only
+  source checkouts.
+
 ### Native Compiler
 
 - Supports parameterized classes whose declarations contain fields only, including

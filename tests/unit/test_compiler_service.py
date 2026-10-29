@@ -91,9 +91,11 @@ def test_checked_snapshot_and_consumer_isolation():
                 linked.body.clear()
                 service.lower_hir(checked).functions.clear()
                 service.lower_mir(checked).functions.clear()
-                for backend in ('hir', 'ast'):
-                    emission = service.emit_c(checked, backend=backend)
-                    built = NativeToolchain(str(ROOT)).build(emission.source, str(root / backend))
+                for engine, emission in (
+                    ('seed', service.emit_c(checked)),
+                    ('ast_oracle', service._emit_ast_oracle_for_testing(checked)),
+                ):
+                    built = NativeToolchain(str(ROOT)).build(emission.source, str(root / engine))
                     executed = subprocess.run([built.output_path], capture_output=True, text=True, timeout=30)
                     assert (executed.returncode, executed.stdout) == (0, '42\n'), executed.stderr
                 output = io.StringIO()
@@ -176,17 +178,17 @@ def test_cli_uses_service_and_preserves_outputs():
     assert json.loads(errors.getvalue())['telemetry']['monomorphization'] is not None
 
 
-def test_direct_selfhost_does_not_use_seed_checker():
+def test_compiler_engine_does_not_use_seed_checker():
     import main
-    from compiler.NativeToolchain import SelfhostEmissionResult
+    from compiler.NativeToolchain import CompilerEmissionResult
     with tempfile.TemporaryDirectory(prefix='wysna-service-selfhost-') as temporary:
         root = Path(temporary)
         entry, emitted = root / 'input.wysna', root / 'output.c'
         entry.write_text('selfhost owns this source')
         with patch.object(CompilerService, 'check', side_effect=AssertionError('Seed pre-check')):
             with patch('tooling.SourceCommand.ensure_selfhost_compiler_binary', return_value='compiler'):
-                with patch.object(NativeToolchain, 'emit_selfhost', return_value=SelfhostEmissionResult('/* direct */\n', 1.0)) as emit:
-                    assert main.run_pipeline(entry.read_text(), str(entry), backend='selfhost',
+                with patch.object(NativeToolchain, 'emit_compiler', return_value=CompilerEmissionResult('/* direct */\n', 1.0)) as emit:
+                    assert main.run_pipeline(entry.read_text(), str(entry), engine='compiler',
                                              emit_c_path=str(emitted)) == 0
         assert emitted.read_text() == '/* direct */\n'
         emit.assert_called_once_with('compiler', str(entry))
@@ -429,7 +431,7 @@ def run_compiler_service_tests():
     test_stale_and_foreign_results_rejected_before_lowering()
     test_dependency_and_options_invalidation()
     test_cli_uses_service_and_preserves_outputs()
-    test_direct_selfhost_does_not_use_seed_checker()
+    test_compiler_engine_does_not_use_seed_checker()
     test_lsp_metadata_survives_lowering_and_multiple_roots()
     test_completion_before_later_shadow_keeps_outer_binding()
     test_provided_ast_requires_matching_unchecked_source()

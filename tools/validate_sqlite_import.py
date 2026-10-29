@@ -89,8 +89,11 @@ def validate(rows=10000, samples=3, sanitize=False):
                 source = directory / (backend + '.c')
                 if backend == 'selfhost':
                     execute([selfhost_bin, str(PILOT / 'import_csv.wysna'), str(source)])
+                elif backend == 'ast':
+                    execute([sys.executable, str(ROOT / 'tests/emit_ast_oracle.py'),
+                             str(PILOT / 'import_csv.wysna'), str(source)])
                 else:
-                    execute([sys.executable, str(ROOT / 'main.py'), 'emit-c', '--backend=' + backend,
+                    execute([sys.executable, str(ROOT / 'main.py'), 'emit-c',
                              str(PILOT / 'import_csv.wysna'), '-o', str(source)])
             command = compiler + flags + [str(source), str(adapter), '-lsqlite3', '-o', str(binary)]
             execute(command)

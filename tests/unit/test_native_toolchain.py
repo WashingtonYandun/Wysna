@@ -209,14 +209,14 @@ def _check_selfhost_emission(outcome):
 
         with patch('compiler.NativeToolchain.subprocess.run', side_effect=run):
             if outcome == 'ok':
-                result = NativeToolchain(ROOT).emit_selfhost(compiler, source)
+                result = NativeToolchain(ROOT).emit_compiler(compiler, source)
                 assert result.source == '/* emitted C */' and result.codegen_ms >= 0
                 with expect_error(FrozenInstanceError):
                     result.source = 'changed'
             else:
                 expected = subprocess.TimeoutExpired if outcome == 'timeout' else NativeCompilationError
                 with expect_error(expected) as raised:
-                    NativeToolchain(ROOT).emit_selfhost(compiler, source)
+                    NativeToolchain(ROOT).emit_compiler(compiler, source)
                 if outcome == 'failure':
                     error = raised.exception
                     assert (error.phase, error.label, error.stderr, error.returncode) == (

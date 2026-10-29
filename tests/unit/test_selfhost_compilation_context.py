@@ -152,7 +152,7 @@ class CompilationContextTests(unittest.TestCase):
         service = CompilerService()
         checked = service.check(source + DRIVER, "compilation-context-test.wysna")
         c_path = cls.directory / "contexts.c"
-        c_path.write_text(service.emit_c(checked, backend="ast").source)
+        c_path.write_text(service._emit_ast_oracle_for_testing(checked).source)
         cls.binary = cls.directory / executable_name("contexts")
         flags = ["-fsanitize=address,undefined", "-fno-omit-frame-pointer"] if os.name != "nt" else []
         built = subprocess.run(compiler_command() + ["-std=c99", "-O0"] + flags + [f"-I{ROOT}", str(c_path), "-lm", "-o", str(cls.binary)],

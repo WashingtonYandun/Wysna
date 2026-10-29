@@ -107,20 +107,21 @@ def print_help(prog: Optional[str] = None) -> None:
     print(f"  {prog} run --deny=<cap,...>|--allow=<cap,...> <file.wysna> # Static capability gate before interpretation")
     print(f"  {prog} check [--json|--output-format=json-v1] [--stats] <file.wysna>   # Static typecheck without execution")
     print(f"  {prog} fmt [--write] [--output-format=json-v1] <file.wysna> # Canonical deterministic formatter")
-    print(f"  {prog} build [--output-format=json-v1] <file.wysna> [-o <bin>] # Compile a native binary")
+    print(f"  {prog} build [--engine=seed|compiler] [--backend=llvm-experimental] [--profile=dev|release|size] [--output-format=json-v1] <file.wysna> [-o <bin>] # Compile a native binary")
     print(f"  {prog} version                                   # Show compiler version")
     print("Compiler inspection and verification:")
     print(f"  {prog} ast [--json] <file.wysna>               # Emit canonical JSON AST (v0.1)")
     print(f"  {prog} mir <file.wysna>                        # Emit verified MIR as JSON")
     print(f"  {prog} emit-mir [--implementation=seed|compiler] <file.wysna> [-o <out.json>] # Emit portable MIR")
     print(f"  {prog} tokens <file.wysna>                     # Emit lexical token stream")
-    print(f"  {prog} emit-c [--backend=hir|ast|selfhost] [--output-format=json-v1] <file.wysna> [-o <out.c>] # Transpile to C99")
-    print(f"  {prog} build --backend=hir|ast|selfhost <file.wysna> [-o <bin>] # Select an explicit verification path")
+    print(f"  {prog} emit-c [--engine=seed|compiler] [--output-format=json-v1] <file.wysna> [-o <out.c>] # Emit C99")
     print("Experimental tools (see docs/SCOPE.md for their contracts):")
     print(f"  {prog} service serve --worker <bin> --database <db> # Local bounded HTTP/JSON pilot")
     print(f"  {prog} emit-llvm <file.wysna> [-o <out.ll>] # Native-command LLVM IR (Seed)")
     print(f"  {prog} run --backend=llvm-experimental [--sanitize] [--timeout-ms <N>] <file.wysna> [-- args...]")
     print(f"  {prog} build --backend=llvm-experimental --profile=dev|release|size <file.wysna> [-o <bin>]")
+    print("  Engines: seed (full Seed profile, default) or compiler (native-core-v1; emit-c/build only here).")
+    print("  Backends: c99 (default) or llvm-experimental. The AST emitter is a test oracle, not a CLI backend.")
     print("Source-checkout maintenance:")
     print(f"  {prog} test [--differential [N]] [--fuzz [N]]            # Run conformance, differential, or fuzz suite")
     print(f"  {prog} bench [--update-baseline]                         # Run Seed/Compiler performance benchmark harness")
@@ -181,10 +182,10 @@ def main(argv=None) -> None:
     show_stats = False
     fmt_only = False
     fmt_write = False
-    backend = "hir"
+    backend = "c99"
     backend_explicit = False
-    use_selfhost = False
-    use_hir = None
+    engine = "seed"
+    engine_explicit = False
     emit_c_path: Optional[str] = None
     build_bin_path: Optional[str] = None
     emit_llvm_path: Optional[str] = None
@@ -280,7 +281,6 @@ def main(argv=None) -> None:
             return
         elif subcmd == "emit-llvm":
             backend = "llvm-experimental"
-            backend_explicit = True
         elif subcmd == "check":
             check_only = True
         elif subcmd == "fmt":
@@ -308,12 +308,7 @@ def main(argv=None) -> None:
         if arg in ("--tokens", "-t"):
             show_tokens = True
         elif arg == "--ast":
-            if subcmd == "ast":
-                show_ast = True
-            else:
-                backend = "ast"
-                backend_explicit = True
-                use_hir = False
+            usage_error("--ast is not a compiler backend; use 'wysna ast <file>' to inspect syntax")
         elif arg in ("--check", "-c"):
             check_only = True
         elif arg == "--json":
@@ -340,27 +335,27 @@ def main(argv=None) -> None:
             fmt_only = True
         elif arg in ("--write", "-w"):
             fmt_write = True
-        elif arg in ("--selfhost", "--backend=selfhost"):
-            backend = "selfhost"
-            backend_explicit = True
-            use_selfhost = True
-        elif arg in ("--hir", "--backend=hir"):
-            backend = "hir"
-            backend_explicit = True
-            use_hir = True
-        elif arg == "--backend=ast":
-            backend = "ast"
-            backend_explicit = True
-            use_hir = False
+        elif arg in ("--selfhost", "--hir"):
+            usage_error(f"{arg} is no longer a backend selector; use --engine=compiler or --engine=seed")
+        elif arg.startswith("--engine="):
+            if engine_explicit:
+                usage_error("--engine may be specified only once")
+            engine = arg.split("=", 1)[1]
+            if engine not in ("seed", "compiler"):
+                usage_error("Unknown engine. Valid engines: seed, compiler")
+            engine_explicit = True
         elif arg.startswith("--backend="):
+            if backend_explicit:
+                usage_error("--backend may be specified only once")
             b_val = arg.split("=", 1)[1]
-            if b_val in ("c99", "hir", "ast", "selfhost", "llvm-experimental"):
-                backend = "hir" if b_val == "c99" else b_val
+            if b_val in ("hir", "ast", "selfhost"):
+                usage_error(f"--backend={b_val} mixes compiler engine selection with output targets; "
+                            "use --engine=seed|compiler. The AST oracle is test-only.")
+            if b_val in ("c99", "llvm-experimental"):
+                backend = b_val
                 backend_explicit = True
-                use_selfhost = False
-                use_hir = None
             else:
-                usage_error(f"Unknown backend '{b_val}'. Valid backends: c99, hir, ast, selfhost, llvm-experimental")
+                usage_error(f"Unknown backend '{b_val}'. Valid backends: c99, llvm-experimental")
         elif arg == "--timeout-ms":
             i += 1
             if i >= len(args) or not args[i].isdigit() or not 1 <= int(args[i]) <= 600000:
@@ -428,11 +423,22 @@ def main(argv=None) -> None:
 
     if subcmd == "emit-llvm" and backend != "llvm-experimental":
         usage_error("emit-llvm requires --backend=llvm-experimental")
+    if backend_explicit and backend == "c99" and subcmd not in ("emit-c", "build"):
+        usage_error("--backend=c99 applies only to emit-c and build; check, fmt, and run use Seed directly")
+    if engine == "compiler":
+        if subcmd not in ("emit-c", "build"):
+            usage_error("--engine=compiler in the Seed CLI supports emit-c and build only; use the standalone Compiler SDK for native check/run commands")
+        if backend != "c99":
+            usage_error("--engine=compiler currently supports only the C99 output backend")
+        if (show_tokens or show_ast or show_mir or fmt_only or fmt_write or check_only):
+            usage_error("--engine=compiler does not support Seed inspection or formatting options")
     if optimization_profile is not None and backend != "llvm-experimental" and subcmd != "build":
         usage_error("--profile is supported by native builds and LLVM source commands")
     if run_timeout_ms is not None and (subcmd not in (None, "run") or backend != "llvm-experimental"):
         usage_error("--timeout-ms is supported by run --backend=llvm-experimental")
     if backend == "llvm-experimental":
+        if engine != "seed":
+            usage_error("llvm-experimental currently supports only the Seed engine")
         if subcmd not in (None, "run", "check", "emit-llvm", "build"):
             usage_error("llvm-experimental supports run, check, emit-llvm, and build")
         if (show_tokens or show_ast or show_mir or fmt_only or fmt_write
@@ -442,8 +448,8 @@ def main(argv=None) -> None:
     if capability_policy is not None:
         if link_libraries:
             usage_error("--link-lib cannot be combined with a capability policy")
-        if (subcmd not in (None, "run") or backend_explicit
-                or backend != "hir" or use_selfhost or use_hir is not None
+        if (subcmd not in (None, "run") or backend_explicit or engine_explicit
+                or backend != "c99" or engine != "seed"
                 or check_only or fmt_only or show_tokens or show_ast or show_mir
                 or emit_c_path is not None or build_bin_path is not None
                 or emit_llvm_path is not None):
@@ -478,7 +484,7 @@ def main(argv=None) -> None:
         elif subcmd == "fmt":
             if not fmt_only or check_only or emit_c_path is not None or build_bin_path is not None:
                 usage_error("fmt --output-format=json-v1 supports formatting only")
-            if sanitize or link_libraries or backend != "hir":
+            if sanitize or link_libraries or backend != "c99" or engine != "seed":
                 usage_error("fmt --output-format=json-v1 does not accept backend or build options")
         elif subcmd == "emit-c":
             if check_only or fmt_only or fmt_write or build_bin_path is not None:
@@ -605,8 +611,7 @@ def main(argv=None) -> None:
             run_timeout_ms=run_timeout_ms,
             capability_policy=capability_policy,
             backend=backend,
-            use_selfhost=use_selfhost,
-            use_hir=use_hir,
+            engine=engine,
             sanitize=sanitize,
             show_stats=show_stats,
             link_libraries=link_libraries,

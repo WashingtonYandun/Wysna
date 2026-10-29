@@ -1,6 +1,6 @@
 # Wysna MIR: Verified Intermediate Representation
 
-Wysna Seed's default pipeline is checked AST → typed and verified HIR → verified MIR → C99 → C compiler. The public backend name remains `hir`; `--backend=ast` selects the independent AST oracle. Wysna Compiler uses its own frontend and a single productive pipeline: checked nodes → verified MIR → native C99 emitter. Its positional CLI and MIR commands use the same implementation.
+Wysna separates compiler **engines** from output **backends**. The default `seed` engine implements the full Seed language profile and lowers checked AST → typed and verified HIR → verified MIR → C99. The `compiler` engine is the standalone self-hosted `native-core-v1` profile and lowers its own checked representation → verified MIR → C99. Both produce C99 which a system or bundled C toolchain turns into a native executable. `--engine=seed|compiler` selects the compiler implementation; `--backend=c99|llvm-experimental` selects the output target. C99 is the supported default. LLVM is opt-in and remains experimental. The independent AST C emitter is a test oracle and has no production CLI selection.
 
 ## Interchange and native-core-v1
 
@@ -46,7 +46,7 @@ Snapshots use copy-on-write lists: consumers cannot mutate one another's checked
 
 ## Bootstrap provenance
 
-`compiler/Bootstrap.py` is the authoritative bootstrap builder. Seed lowers the compiler source through verified HIR/MIR and emits `bootstrap.c`, which builds the initial native engine. That engine emits native C0; C0 builds Stage 1, which emits C1; C1 builds Stage 2, which emits C2. Acceptance requires **C0 = C1 = C2** and unchanged source/runtime/build inputs. The Seed emission hash is recorded separately. The AST C99 backend remains an independent conformance oracle; it is not the bootstrap path.
+`compiler/Bootstrap.py` is the authoritative bootstrap builder. Seed lowers the compiler source through verified HIR/MIR and emits `bootstrap.c`, which builds the initial native engine. That engine emits native C0; C0 builds Stage 1, which emits C1; C1 builds Stage 2, which emits C2. Acceptance requires **C0 = C1 = C2** and unchanged source/runtime/build inputs. The Seed emission hash is recorded separately. The independent AST C99 emitter remains a conformance oracle; it is not the bootstrap path.
 
 Caches are versioned by implementation fingerprint, locked while constructing, and validate the Seed/native C emission hashes and both stage binaries before reuse. `bootstrap.json` records provenance. A fixed point demonstrates deterministic self-hosting; independent behavior and rejection tests establish the measured semantic evidence.
 
