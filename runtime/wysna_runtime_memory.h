@@ -8,48 +8,48 @@
 /* Deterministic RC + Copy-on-Write */
 static inline WVal wysna_clone(WVal v) {
     if (v.tag == W_POINTER && v.as.handle.owner) {
-        wysna_check_refcount(v.as.handle.owner->refcount, "retain/resource");
+        wysna_check_retain_count(v.as.handle.owner->refcount, "retain/resource");
         v.as.handle.owner->refcount++;
         wysna_g_retain_count++;
     } else if (v.tag == W_FUNCTION) {
-        wysna_check_refcount(v.as.function->refcount, "retain/function");
+        wysna_check_retain_count(v.as.function->refcount, "retain/function");
         v.as.function->refcount++;
         wysna_g_retain_count++;
     } else if (v.tag == W_STR && v.as.string.owner) {
         if (v.as.string.owner->refcount == -1) return v;
-        wysna_check_refcount(v.as.string.owner->refcount, "retain/string");
+        wysna_check_retain_count(v.as.string.owner->refcount, "retain/string");
         v.as.string.owner->refcount++;
         wysna_g_retain_count++;
     } else if (v.tag == W_LIST && v.as.list) {
-        wysna_check_refcount(v.as.list->refcount, "retain/list");
+        wysna_check_retain_count(v.as.list->refcount, "retain/list");
         v.as.list->refcount++;
         wysna_g_retain_count++;
     } else if (v.tag == W_DICT && v.as.dict) {
-        wysna_check_refcount(v.as.dict->refcount, "retain/dict");
+        wysna_check_retain_count(v.as.dict->refcount, "retain/dict");
         v.as.dict->refcount++;
         wysna_g_retain_count++;
     } else if (v.tag == W_WEAK && v.as.weak) {
-        wysna_check_refcount(v.as.weak->weak, "retain/weak");
+        wysna_check_retain_count(v.as.weak->weak, "retain/weak");
         v.as.weak->weak++;
         wysna_g_retain_count++;
     } else if (v.tag == W_OBJECT && v.as.st) {
-        wysna_check_refcount(v.as.st->control->strong, "retain/object");
+        wysna_check_retain_count(v.as.st->control->strong, "retain/object");
         v.as.st->control->strong++;
         wysna_g_retain_count++;
     } else if (v.tag == W_STRUCT && v.as.st) {
-        wysna_check_refcount(v.as.st->refcount, "retain/struct_or_object");
+        wysna_check_retain_count(v.as.st->refcount, "retain/struct_or_object");
         v.as.st->refcount++;
         wysna_g_retain_count++;
     } else if (v.tag == W_TUPLE && v.as.tuple) {
-        wysna_check_refcount(v.as.tuple->refcount, "retain/tuple");
+        wysna_check_retain_count(v.as.tuple->refcount, "retain/tuple");
         v.as.tuple->refcount++;
         wysna_g_retain_count++;
     } else if ((v.tag == W_OK || v.tag == W_ERR) && v.as.box) {
-        wysna_check_refcount(v.as.box->refcount, "retain/box");
+        wysna_check_retain_count(v.as.box->refcount, "retain/box");
         v.as.box->refcount++;
         wysna_g_retain_count++;
     } else if (v.tag == W_ENUM && v.as.en.box) {
-        wysna_check_refcount(v.as.en.box->refcount, "retain/enum_box");
+        wysna_check_retain_count(v.as.en.box->refcount, "retain/enum_box");
         v.as.en.box->refcount++;
         wysna_g_retain_count++;
     }

@@ -232,7 +232,7 @@ struct WBoxBuf {
     WVal val;
 };
 
-/* Deterministic RC & Memory Instrumentation Counters (v0.1.3) */
+/* Reference-counting and memory instrumentation counters. */
 #define wysna_g_alloc_count (wysna_runtime_context.alloc_count)
 #define wysna_g_free_count (wysna_runtime_context.free_count)
 #define wysna_g_retain_count (wysna_runtime_context.retain_count)
@@ -285,6 +285,14 @@ static inline void wysna_check_refcount(int32_t rc, const char* op) {
         fprintf(stderr, "[W4003] RuntimeError: Memory safety violation (%s on object with refcount %" PRId32 ")\n", op, rc);
         exit(1);
     }
+}
+
+static inline void wysna_check_retain_count(int32_t rc, const char* op) {
+    if (rc == INT32_MAX) {
+        fprintf(stderr, "[W4003] RuntimeError: Memory safety violation (reference count overflow during %s)\n", op);
+        exit(1);
+    }
+    wysna_check_refcount(rc, op);
 }
 
 static inline void* wysna_alloc_safe(size_t size) {

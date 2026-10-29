@@ -158,6 +158,7 @@ static inline WVal wysna_builtin_weak(WVal object) {
     WVal value = wysna_unit();
     value.tag = W_WEAK;
     value.as.weak = object.as.st->control;
+    wysna_check_retain_count(value.as.weak->weak, "retain/weak");
     value.as.weak->weak++;
     wysna_g_retain_count++;
     return value;
