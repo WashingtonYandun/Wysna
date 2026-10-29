@@ -196,10 +196,10 @@ def _check_selfhost_emission(outcome):
         compiler = directory / 'compiler with spaces'
 
         def run(command, **options):
-            assert command[:2] == [str(compiler), os.path.abspath(source)]
+            assert command[:4] == [str(compiler), "--stdlib-root", str(ROOT / "stdlib"), os.path.abspath(source)]
             assert options == {'capture_output': True, 'text': True,
                                'cwd': str(directory), 'timeout': 120}
-            emitted = Path(command[2])
+            emitted = Path(command[4])
             directories.append(emitted.parent)
             emitted.write_text('/* emitted C */', encoding='utf-8')
             if outcome == 'timeout':

@@ -156,7 +156,9 @@ pause behaviour and complexity that the "deterministic refcounting" promise in S
 rules out.
 
 **Policy.** `WYSNA_MEM_CHECK` is opt-in and checks logical runtime allocation counters during
-normal cleanup. It does not collect cycles, run on panic-driven `exit()`, or replace
+normal cleanup. An explicit Wysna `exit(code)` terminates with active frames and skips
+the zero-live-object check; it preserves the requested exit status. It does not unwind
+those frames. The check does not collect cycles, run on panic-driven `exit()`, or replace
 ASan/LSan byte-level checks in development and CI. Keeping it opt-in avoids changing
 stderr or exit status for production programs that intentionally retain process-lifetime
 objects.

@@ -30,6 +30,7 @@ fn mir_verify_runtime(module: MirModule, operation: MirOperation, slots: list[Mi
         return false
     }
     if name == "wysna_builtin_print" or name == "wysna_builtin_eprint" { return returned == 1 }
+    if name == "wysna_builtin_unix_time" { return len(operation.args) == 0 and returned == 3 }
     if name == "wysna_builtin_args" { return len(operation.args) == 0 and module.types[returned].kind == "list" and module.types[returned].args[0] == 5 }
     if name == "wysna_builtin_env" {
         return len(operation.args) == 1 and slots[operation.args[0]].type_id == 5 and mir_is_optional(module.types, returned) and module.types[returned].args[0] == 5

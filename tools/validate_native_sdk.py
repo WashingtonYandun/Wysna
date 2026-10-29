@@ -128,6 +128,21 @@ def validate(sdk, report, strict_source=False, compiler_source=None):
             stdout='SDK á界 CLI á界\n'.encode('utf-8'),
             custom={**environment, 'WYSNA_NATIVE_SDK_TEST': 'SDK á界'})
 
+        automation = project / 'automation.wysna'
+        automation.write_text('import "std/environment" as environment\n'
+                              'import "std/process" as process\n'
+                              'import "std/time" as clock\n'
+                              'let arguments = environment.arguments()\n'
+                              'print("clock", clock.unix_seconds() > 0)\n'
+                              'let status = process.run(arguments[1], ["--version"], 30000) else { exit(70) 0 }\n'
+                              'exit(status)\n', encoding='utf-8')
+        automation_environment = dict(environment, WYSNA_MEM_CHECK='1')
+        result = run('automation-clock-and-process', ['run', automation, '--', cli],
+                     custom=automation_environment)
+        require(b'clock true' in result.stdout and
+                ('Wysna ' + manifest['version'] + ' native SDK').encode() in result.stdout,
+                ('automation output', result.stdout, result.stderr))
+
         adapter = project / 'adapter á.c'
         adapter.write_text('#include <stdint.h>\n#include <stdio.h>\n'
                            'int64_t wysna_sdk_double(int32_t value) { return (int64_t)value * 2; }\n'

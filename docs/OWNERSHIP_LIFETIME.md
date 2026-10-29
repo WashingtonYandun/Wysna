@@ -104,7 +104,9 @@ In `runtime/wysna_runtime.h`, reference-counted payloads (`WStringBuf`, `WListBu
 3. **Zero-Leak Exit Verification (`WYSNA_MEM_CHECK=1`):** At the end of `main()`, after releasing top-level and global bindings, `wysna_runtime_cleanup()` checks `getenv("WYSNA_MEM_CHECK")`. When set to `"1"`, if `wysna_g_live_objects != 0` or `wysna_g_alloc_count != wysna_g_free_count`, the process aborts with `[W4003]` and prints exact allocation/free/live counters.
 
 This check is intentionally opt-in. It reports logical Wysna runtime buffers only, runs during
-normal cleanup, and does not collect strong cycles. A runtime panic calls `exit()` and
+normal cleanup, and does not collect strong cycles. Explicit Wysna `exit(code)` stops
+the process with active frames, so it skips the zero-live-object check and preserves the
+requested status; it does not unwind those frames. A runtime panic calls `exit()` and
 does not reach this check. Development and CI use ASan/LSan separately for byte-level
 memory diagnostics; `WYSNA_MEM_CHECK` is not a substitute for those tools.
 

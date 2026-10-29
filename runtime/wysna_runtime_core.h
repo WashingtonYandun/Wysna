@@ -324,7 +324,7 @@ static inline void* wysna_realloc_safe(void* old_ptr, size_t new_size) {
 #define wysna_g_argv_allocated (wysna_runtime_context.argv_allocated)
 #endif
 
-static inline void wysna_runtime_cleanup(void) {
+static inline void wysna_runtime_cleanup_impl(bool verify_live_objects) {
 #ifdef _WIN32
     if (wysna_g_argv_allocated && wysna_g_argv) {
         for (int i = 0; i < wysna_g_argc; i++) {
@@ -353,13 +353,23 @@ static inline void wysna_runtime_cleanup(void) {
                 wysna_g_cow_detach_list, wysna_g_cow_detach_dict, wysna_g_cow_detach_struct, wysna_g_cow_copied_slots, wysna_g_cow_copied_bytes, wysna_g_cow_allocated_bytes, wysna_g_cow_alloc_count);
     }
     const char* check_env = getenv("WYSNA_MEM_CHECK");
-    if (check_env && strcmp(check_env, "1") == 0) {
+    if (verify_live_objects && check_env && strcmp(check_env, "1") == 0) {
         if (wysna_g_live_objects != 0 || wysna_g_alloc_count != wysna_g_free_count) {
             fprintf(stderr, "[W4003] RuntimeError: Memory leak detected at exit (alloc=%" PRId64 ", free=%" PRId64 ", retain=%" PRId64 ", release=%" PRId64 ", live=%" PRId64 ")\n",
                     wysna_g_alloc_count, wysna_g_free_count, wysna_g_retain_count, wysna_g_release_count, wysna_g_live_objects);
             exit(1);
         }
     }
+}
+
+/* Explicit exit ends the process with active frames. Only normal completion can
+ * verify that their values have been released. */
+static inline void wysna_runtime_cleanup(void) {
+    wysna_runtime_cleanup_impl(true);
+}
+
+static inline void wysna_runtime_cleanup_for_exit(void) {
+    wysna_runtime_cleanup_impl(false);
 }
 
 #endif /* WYSNA_RUNTIME_CORE_H */
