@@ -457,6 +457,8 @@ jobs:
           test "$native_output" = "$browser_output"
       - name: Stage browser application assets
         run: cp -R examples/shared-browser-app/web "$RUNNER_TEMP/wysna-shared-app/web"
+      - name: Verify headless-browser retry and failure diagnostics
+        run: python3 -m tests.unit.test_browser_smoke
       - name: Open the shared application in headless Chrome
         run: python3 examples/shared-browser-app/tests/browser_smoke.py "$RUNNER_TEMP/wysna-shared-app"
 

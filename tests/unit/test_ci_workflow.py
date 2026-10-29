@@ -151,6 +151,7 @@ def test_ci_workflow_contracts():
     assert 'python .wysna_cache/installation-wheel/validate_wheel.py --wheel .wysna_cache/installation-wheel/*.whl' in jobs['installed-wheel']
     assert 'Install Wysna from the checkout' not in jobs['browser-library']
     assert 'pip install -e' not in jobs['browser-library']
+    assert 'python3 -m tests.unit.test_browser_smoke' in jobs['browser-library']
     assert 'python -m pip install --retries 10 --timeout 30 wasmtime==50.0.1' in jobs['wasi-command']
     assert re.search(r'^    if: always\(\)$', conformance, re.MULTILINE)
     match = re.search(r'- name: Require compiler, runtime, integration and LLVM smoke success\n[\s\S]*?        run: \|\n'
