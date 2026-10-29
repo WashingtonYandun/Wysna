@@ -46,7 +46,7 @@ Snapshots use copy-on-write lists: consumers cannot mutate one another's checked
 
 ## Bootstrap provenance
 
-`compiler/Bootstrap.py` is the authoritative bootstrap builder. Seed's AST oracle emits `bootstrap.c`, which builds the initial native engine. That engine emits native C0; C0 builds Stage 1, which emits C1; C1 builds Stage 2, which emits C2. Acceptance requires **C0 = C1 = C2** and unchanged source/runtime/build inputs. The Seed emission hash is recorded separately. Comparing Seed AST text to native MIR text is not the fixed-point contract.
+`compiler/Bootstrap.py` is the authoritative bootstrap builder. Seed lowers the compiler source through verified HIR/MIR and emits `bootstrap.c`, which builds the initial native engine. That engine emits native C0; C0 builds Stage 1, which emits C1; C1 builds Stage 2, which emits C2. Acceptance requires **C0 = C1 = C2** and unchanged source/runtime/build inputs. The Seed emission hash is recorded separately. The AST C99 backend remains an independent conformance oracle; it is not the bootstrap path.
 
 Caches are versioned by implementation fingerprint, locked while constructing, and validate the Seed/native C emission hashes and both stage binaries before reuse. `bootstrap.json` records provenance. A fixed point demonstrates deterministic self-hosting; independent behavior and rejection tests establish the measured semantic evidence.
 

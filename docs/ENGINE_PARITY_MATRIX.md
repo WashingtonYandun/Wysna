@@ -66,7 +66,7 @@ fixture does not prove equivalence of the two module implementations.
 
 ## Bootstrap Fixed-Point vs. Core Corpus Parity
 
-Seed AST builds a separately recorded initial engine. Three successive native MIR emissions of `selfhost/compiler.wysna` must have identical C0, C1 and C2 hashes. This demonstrates the recorded deterministic fixed point, not semantic correctness. Corpus parity separately checks output, exit status and rejection diagnostics across four engines. The native SDK additionally requires installed acceptance without Python or a discovered host C toolchain.
+Seed HIR/MIR builds a separately recorded initial engine. Three successive native MIR emissions of `selfhost/compiler.wysna` must have identical C0, C1 and C2 hashes. This demonstrates the recorded deterministic fixed point, not semantic correctness. Corpus parity separately checks output, exit status and rejection diagnostics across four engines, including the independent Seed AST oracle. The native SDK additionally requires installed acceptance without Python or a discovered host C toolchain.
 
 ## Execution profiles
 
