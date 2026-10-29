@@ -252,7 +252,7 @@ class NativeMirPipelineTests(unittest.TestCase):
         self.assertEqual(result.returncode, 0, result.stderr)
         return result.stdout
 
-    def execute(self, source, directory, engine):
+    def execute(self, source, directory, engine, arguments=()):
         c_path = directory / (engine + ".c")
         executable = directory / executable_name(engine)
         c_path.write_text(source, encoding="utf-8")
@@ -263,7 +263,8 @@ class NativeMirPipelineTests(unittest.TestCase):
                                capture_output=True, text=True, timeout=120)
         self.assertEqual(built.returncode, 0, built.stderr)
         environment = dict(os.environ, WYSNA_MEM_CHECK="1", UBSAN_OPTIONS="halt_on_error=1")
-        completed = subprocess.run([str(executable)], capture_output=True, env=environment, timeout=20)
+        completed = subprocess.run([str(executable), *arguments], capture_output=True,
+                                   env=environment, timeout=20)
         self.assertNotIn(b"runtime error:", completed.stderr)
         self.assertNotIn(b"AddressSanitizer", completed.stderr)
         return completed.returncode, completed.stdout, completed.stderr
@@ -310,19 +311,22 @@ class NativeMirPipelineTests(unittest.TestCase):
             }
             seed = service.emit_c(checked).source
             emissions["hir"] = seed
-            cases = ((None, b"<unset> <no-arg>\n"), ("", b" <no-arg>\n"),
-                     ("Wysna á界", "Wysna á界 <no-arg>\n".encode("utf-8")))
+            runtime_arguments = ("CLI á界",)
+            cases = ((None, "<unset> CLI á界\n".encode("utf-8")),
+                     ("", " CLI á界\n".encode("utf-8")),
+                     ("Wysna á界", "Wysna á界 CLI á界\n".encode("utf-8")))
             for value, expected_output in cases:
                 with self.subTest(value=value), patch.dict(os.environ):
                     os.environ.pop(variable, None)
                     if value is not None:
                         os.environ[variable] = value
-                    reference = self.execute(seed, directory, "environment-hir")
+                    reference = self.execute(seed, directory, "environment-hir", runtime_arguments)
                     self.assertEqual(reference[0], 0, reference[2])
                     self.assertEqual(reference[1], expected_output)
                     for engine, emission in emissions.items():
                         with self.subTest(value=value, engine=engine):
-                            self.assertEqual(self.execute(emission, directory, "environment-" + engine), reference)
+                            self.assertEqual(self.execute(emission, directory, "environment-" + engine,
+                                                          runtime_arguments), reference)
 
     def test_runtime_errors_match_independent_consumers(self):
         cases = [
