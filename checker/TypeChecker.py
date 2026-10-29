@@ -647,10 +647,12 @@ class TypeChecker:
             if not self.type_relations.is_assignable(init_type, expected_type):
                 raise TypeError(
                     message=f"Type mismatch: cannot assign value of type '{init_type}' to variable '{stmt.name}' of type '{expected_type}'",
-                    line=stmt.line,
-                    col=stmt.col,
+                    line=stmt.initializer.line,
+                    col=stmt.initializer.col,
                     file=self.file,
-                    code="W2001"
+                    code="W2001",
+                    help=("If this value can be absent, consider an optional type."
+                          if isinstance(stmt.initializer, NoneLiteral) else None),
                 )
             var_type = expected_type
         else:

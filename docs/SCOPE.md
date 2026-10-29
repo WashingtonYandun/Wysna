@@ -2,8 +2,8 @@
 
 Wysna is an experimental language for predictable automation written by people and
 AI agents. CLI tools and scripting are the first product workflow; general-purpose
-use remains the direction. The current development version is 0.5.0, not a published
-stability or security guarantee.
+use remains the direction. Version 0.5.0 is published as a pre-1.0 release; it is
+not a security guarantee, and language contracts may evolve before 1.0.
 
 ## One recommended installation
 
@@ -60,14 +60,17 @@ WASI has a Wasmtime host boundary, declared preopens, fuel and linear-memory lim
 The current host's complete permissions must be inspected; a fuel budget is not
 five seconds of CPU, and a linear-memory limit is not total process RSS.
 
-`explain` reports conservative effects and unknowns. It does not enforce a policy,
-prove purity, sandbox execution or provide a complete audit trail. Unknown external
-and indirect calls must never be silently approved.
+`explain` reports conservative effects and unknowns. It does not prove purity,
+sandbox execution or provide a complete audit trail. `wysna run --allow=...` and
+`--deny=...` add a static pre-execution gate over the same report for interpreted
+Seed runs. The gate refuses incomplete analyses, so indirect or uncontrolled FFI
+cannot silently pass; it does not apply to native builds or `wysna project run`,
+and it is not an operating-system sandbox.
 
-A restricted execution profile requires an explicit policy contract, enforcement
-at every host boundary, negative escape tests and bounded audit semantics before
-it can be advertised. Do not describe current Wysna as a secure runtime for arbitrary
-untrusted code, or add a public code-execution endpoint on that assumption.
+A fully restricted execution profile still requires enforcement at every host
+boundary, negative escape tests, bounded resource controls and audit semantics
+before it can be advertised. Do not describe current Wysna as a secure runtime for
+arbitrary untrusted code, or add a public code-execution endpoint on that assumption.
 
 ## CI and compatibility
 

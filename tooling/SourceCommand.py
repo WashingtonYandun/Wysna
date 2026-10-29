@@ -10,6 +10,7 @@ from formatter.Formatter import Formatter
 from compiler.CompilerService import CompilerService
 from compiler.NativeToolchain import NativeCompilationError, NativeToolchain
 from error.Error import WysnaError
+from tooling.DiagnosticRender import render_diagnostic
 from tooling.ToolResult import (
     artifact_file,
     artifact_inline,
@@ -59,6 +60,16 @@ def _sources_for_diagnostics(file_name, source_code, service=None):
     return sources
 
 
+def _print_human_diagnostics(error, sources, span_cache=None):
+    for diagnostic in getattr(error, "diagnostics", (error,)):
+        if diagnostic.stage == "runtime":
+            # Runtime failures keep their one-line header and add no excerpt.
+            text = render_diagnostic(diagnostic, {})
+        else:
+            text = render_diagnostic(diagnostic, sources, span_cache=span_cache)
+        print(text, file=sys.stderr)
+
+
 
 def run_pipeline(
     source_code: str,
@@ -87,6 +98,7 @@ def run_pipeline(
     emit_llvm_path=None,
     optimization_profile=None,
     run_timeout_ms=None,
+    capability_policy=None,
 ) -> int:
     if tool_command is None:
         if check_only:
@@ -110,6 +122,16 @@ def run_pipeline(
                 raise WysnaError("Unsupported option for llvm-experimental", code="W5002", stage="options")
         elif emit_llvm_path is not None or run_timeout_ms is not None or (optimization_profile is not None and build_bin_path is None):
             raise WysnaError("LLVM options require llvm-experimental", code="W5002", stage="options")
+        if capability_policy is not None and link_libraries:
+            raise WysnaError("--link-lib cannot be combined with a capability policy",
+                             code="W5002", stage="options")
+        if capability_policy is not None and (
+                backend != "hir" or use_selfhost or use_hir is not None
+                or check_only or fmt_only or show_tokens or show_ast or show_mir
+                or emit_c_path is not None or build_bin_path is not None
+                or emit_llvm_path is not None):
+            raise WysnaError("Capability policy applies only to interpreted run",
+                             code="W5002", stage="options")
         # Resolve legacy flags if passed explicitly
         if use_selfhost:
             backend = "selfhost"
@@ -192,6 +214,13 @@ def run_pipeline(
             from mir.Nodes import dump
             print(dump(service.lower_mir(checked)), end="")
             return 0
+
+        if capability_policy is not None:
+            from tooling.CapabilityPolicy import enforce_capability_policy
+            report, bindings = service.explain_with_foreign_bindings(checked)
+            enforce_capability_policy(report, capability_policy[0],
+                                      capability_policy[1], file_name,
+                                      untrusted_bindings=bindings)
 
         if check_only:
             if json_v1:
@@ -401,8 +430,7 @@ def run_pipeline(
             ]
             _set_run_report(report_state, "diagnostic_error", 1, 1,
                             diagnostics=diagnostics)
-            for diagnostic in getattr(err, "diagnostics", (err,)):
-                print(str(diagnostic), file=sys.stderr)
+            _print_human_diagnostics(err, source_by_file, span_cache=span_cache)
             return 1
         if json_v1:
             _write_json_v1(
@@ -414,20 +442,25 @@ def run_pipeline(
         if json_diagnostics:
             print(json.dumps(err.to_dict(), indent=2))
         else:
-            for diagnostic in getattr(err, 'diagnostics', (err,)):
-                print(str(diagnostic), file=sys.stderr)
+            source_by_file = _sources_for_diagnostics(file_name, source_code, locals().get("service"))
+            _print_human_diagnostics(err, source_by_file, span_cache={})
         return 1
+    except OSError as exc:
+        message = f"Unable to access a requested file: {exc}"
+        diagnostic = diagnostic_record("W5004", "filesystem", message, filename=file_name)
+        if report_state is not None:
+            _set_run_report(report_state, "toolchain_error", 3, 3, diagnostics=[diagnostic])
+        elif json_v1:
+            _write_json_v1(tool_command, "toolchain_error", 3, extra_diagnostics=[diagnostic])
+            return 3
+        error = WysnaError(message, file=file_name, code="W5004", stage="filesystem")
+        if json_diagnostics and report_state is None:
+            print(json.dumps(error.to_dict(), indent=2))
+        else:
+            print(render_diagnostic(error, {}), file=sys.stderr)
+        return 3
     except Exception as exc:
         if report_state is not None:
-            if isinstance(exc, OSError):
-                diagnostic = diagnostic_record(
-                    "W5004", "filesystem", f"Unable to access a requested file: {exc}",
-                    filename=file_name,
-                )
-                _set_run_report(report_state, "toolchain_error", 3, 3,
-                                diagnostics=[diagnostic])
-                print(f"[Filesystem Error] {exc}", file=sys.stderr)
-                return 3
             diagnostic = diagnostic_record(
                 "W9999", "internal", str(exc), filename=file_name,
             )
@@ -436,14 +469,6 @@ def run_pipeline(
             print(f"[Internal Error] {exc}", file=sys.stderr)
             return 4
         if json_v1:
-            if isinstance(exc, OSError):
-                diagnostic = diagnostic_record(
-                    "W5004", "filesystem", f"Unable to write requested output: {exc}",
-                    filename=file_name,
-                )
-                _write_json_v1(tool_command, "toolchain_error", 3,
-                               extra_diagnostics=[diagnostic])
-                return 3
             diagnostic = diagnostic_record(
                 "W9999", "internal", str(exc), filename=file_name,
             )

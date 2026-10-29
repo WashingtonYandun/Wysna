@@ -12,6 +12,7 @@ CONTRACT_MODULES = (
     'test_audit_remediation', 'test_mir', 'test_selfhost_mir', 'test_dictionary_key_parity', 'test_native_mir_pipeline',
     'test_selfhost_compilation_context', 'test_distribution_contract', 'test_installers',
     'test_audit_findings', 'test_standard_toolkit', 'test_http_client',
+    'test_language_server',
 )
 MATRIX = {'ubuntu-latest,clang', 'ubuntu-latest,gcc', 'macos-latest,clang'}
 
@@ -87,6 +88,15 @@ def test_ci_workflow_contracts():
     assert '--strict-source --compiler-source' in native_consumer
     assert 'validate_native_sdk.py' in native_consumer
     assert 'compiler-contracts' in jobs, 'Compiler contracts need their own execution budget'
+    product = jobs['product-contracts']
+    assert 'os: [ubuntu-latest, macos-latest, windows-latest]' in product
+    for module in ('test_repl_session.py', 'test_project_scaffold.py',
+                   'test_human_diagnostics.py', 'test_tool_result.py',
+                   'test_capability_policy.py'):
+        assert module in product
+    native_diagnostics = jobs['native-diagnostics']
+    assert 'os: [ubuntu-latest, macos-latest, windows-latest]' in native_diagnostics
+    assert 'test_selfhost_diagnostics.py' in native_diagnostics
     contracts, conformance = jobs['compiler-contracts'], jobs['conformance']
     runtime = jobs['runtime-conformance']
     integration = jobs['integration-conformance']

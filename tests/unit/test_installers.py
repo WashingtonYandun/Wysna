@@ -11,7 +11,8 @@ import unittest
 from unittest.mock import patch
 
 from tools.package_distribution import extract_python
-from tools.package_installers import build_installers, inno_compiler, verify_bundle
+from tools.package_installers import (build_installers, inno_compiler, notarize_macos,
+                                      verify_bundle)
 from tooling.ApiIndex import run_capabilities_command
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -151,6 +152,29 @@ class InstallerTests(unittest.TestCase):
         (bundle / 'unrecorded-link').symlink_to('missing')
         with self.assertRaisesRegex(ValueError, 'symbolic link'):
             verify_bundle(bundle)
+
+    def test_macos_notarization_submits_staples_and_validates(self):
+        package = self.root / 'wysna-0.6.0-macos-arm64.pkg'
+        with patch('tools.package_installers.run') as execute:
+            notarize_macos(package, 'wysna-notary')
+        commands = [call.args[0] for call in execute.call_args_list]
+        self.assertEqual(commands, [
+            ['xcrun', 'notarytool', 'submit', str(package),
+             '--keychain-profile', 'wysna-notary', '--wait'],
+            ['xcrun', 'stapler', 'staple', str(package)],
+            ['xcrun', 'stapler', 'validate', str(package)],
+        ])
+
+    def test_notarization_requires_a_signed_macos_package(self):
+        bundle = self.root / 'bundle'
+        bundle.mkdir()
+        (bundle / 'command').write_text('owned')
+        record = {'schema': 'wysna.installation/1', 'version': '0.5.0',
+                  'source_commit': '0' * 40, 'platform': 'x86_64-linux',
+                  'files': {'command': lifecycle.digest(bundle / 'command')}}
+        (bundle / 'installation.json').write_text(json.dumps(record))
+        with self.assertRaisesRegex(ValueError, 'notarization-profile'):
+            build_installers(bundle, self.root / 'output', notarization_profile='unused')
 
     def test_inno_compiler_discovery_supports_standard_installation_outside_path(self):
         compiler = self.root / 'Inno Setup 6/ISCC.exe'

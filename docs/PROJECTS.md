@@ -5,6 +5,18 @@ lockfile updates, project commands, and isolated user test entries. Single-file
 commands remain available and `wysna test` continues to run compiler maintenance
 tests.
 
+## Create a project
+
+Run `wysna project new example-tool` to create a new directory with a manifest,
+native CLI entry point and one test. The destination must not already exist and
+the command never overwrites existing files. Then run `wysna project check`,
+`wysna project run` and `wysna project test` from that directory. Run
+`wysna project lock` before using `--frozen`.
+
+`--output-format=json-v1` returns a versioned result with the created files as
+artifacts. If creation fails and another process has changed or added files, the
+command preserves those files and reports the partial directory for inspection.
+
 ## Manifest version 1
 
 Create `wysna.toml` at the package root:

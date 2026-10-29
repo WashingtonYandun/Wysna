@@ -7,7 +7,7 @@ from pathlib import Path
 import tempfile
 import unicodedata
 
-from project.Manifest import ManifestError, ProjectManifest
+from project.Manifest import ManifestError, ManifestIOError, ProjectManifest
 
 
 _IGNORED_DIRECTORY_NAMES = {".git", ".wysna_cache", "__pycache__", ".pytest_cache", "build", "dist"}
@@ -63,7 +63,7 @@ def _hash_files(manifest):
                     hasher.update(chunk)
             digest = hasher.hexdigest()
         except OSError as error:
-            raise ManifestError(f"cannot hash dependency input '{path}': {error}") from error
+            raise ManifestIOError(f"cannot hash dependency input '{path}': {error}") from error
         inputs.append({"path": logical, "sha256": digest})
     inputs.sort(key=lambda item: item["path"])
     content = json.dumps(inputs, ensure_ascii=False, sort_keys=True, separators=(",", ":")).encode("utf-8")
@@ -262,7 +262,9 @@ class ProjectResolver:
             raise ManifestError("wysna.lock is required by --frozen; run 'wysna project lock' first")
         try:
             current = json.loads(path.read_text(encoding="utf-8"))
-        except (OSError, UnicodeError, ValueError) as error:
+        except OSError as error:
+            raise ManifestIOError(f"cannot read lockfile '{path}': {error}") from error
+        except (UnicodeError, ValueError) as error:
             raise ManifestError(f"cannot read lockfile '{path}': {error}") from error
         expected = self.lock_data()
         if current != expected:

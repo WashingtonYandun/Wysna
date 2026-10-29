@@ -87,6 +87,13 @@ class NativeSdkContractTests(unittest.TestCase):
             self.assertNotIn('native', component['target'])
         self.assertIn(host_platform(), COMPONENTS['zig'])
 
+    def test_native_driver_allows_slow_selfbuild_compilation(self):
+        root = Path(__file__).resolve().parents[2]
+        driver = (root / 'packaging/native/driver.c').read_text(encoding='utf-8')
+        self.assertIn('#define SDK_COMPILE_TIMEOUT_MS 600000', driver)
+        self.assertEqual(driver.count('SDK_COMPILE_TIMEOUT_MS'), 3)
+        self.assertNotIn('engine_arguments, 120000', driver)
+
     def test_existing_installation_is_preserved_before_any_download(self):
         with tempfile.TemporaryDirectory() as temporary:
             output = Path(temporary)

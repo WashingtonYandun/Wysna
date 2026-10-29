@@ -4,8 +4,6 @@ import os
 import sys
 from typing import Optional
 from parser.Parser import Parser
-from checker.TypeChecker import TypeChecker
-from runtime.Interpreter import Interpreter
 from runtime.ExecutionContext import ExecutionContext
 from runtime.Values import WysnaUnit
 from error.Error import WysnaError
@@ -19,6 +17,8 @@ from common.Version import WYSNA_VERSION
 from common.Paths import get_repo_root
 from compiler.Bootstrap import ensure_selfhost_compiler_binary
 from tooling.SourceCommand import run_pipeline, _bounded_tool_output, _write_json_v1
+from tooling.DiagnosticRender import render_diagnostic
+from tooling.ReplSession import ReplSession, needs_continuation
 from tooling.RunReport import _capture_application_exit, _set_run_report, _write_run_report
 
 
@@ -40,33 +40,52 @@ def repl(show_tokens: bool = False, show_ast: bool = False) -> None:
     print("==================================================")
 
     parser = Parser(file="<repl>")
-    checker = TypeChecker(file="<repl>")
-    interp = Interpreter(file="<repl>")
+    session = ReplSession()
+    pending = []
 
     while True:
         try:
-            line = input("wysna> ")
+            line = input("...> " if pending else "wysna> ")
         except (EOFError, KeyboardInterrupt):
             print("\nExiting.")
             break
 
-        line = line.strip()
-        if not line:
+        if not pending and not line.strip():
             continue
-        if line == "exit":
+        if not pending and line.strip() == "exit":
             break
+        if not pending and line.strip() == ":help":
+            print("Commands: :help, :reload, :reset, exit")
+            print("  :reload  reload imports if the session has no declarations")
+            print("  :reset   discard all session state")
+            continue
+        if not pending and line.strip() == ":reload":
+            try:
+                print("Reloaded imports." if session.reload() else "Nothing to reload.")
+            except WysnaError as err:
+                print(render_diagnostic(err, {"<repl>": session.pending_source}))
+            continue
+        if not pending and line.strip() == ":reset":
+            session = ReplSession()
+            print("Session reset.")
+            continue
+
+        pending.append(line)
+        source = "\n".join(pending)
+        if needs_continuation(source):
+            continue
+        pending.clear()
 
         try:
-            ast = parser.parse(line)
             if show_ast:
+                session.pending_source = source
+                ast = parser.parse(source)
                 print(json.dumps(ast.to_dict(), indent=2))
-
-            checker.check(ast)
-            res = interp.interpret(ast)
+            res = session.execute(source)
             if not isinstance(res, WysnaUnit):
                 print(res)
         except WysnaError as err:
-            print(str(err))
+            print(render_diagnostic(err, {"<repl>": session.pending_source}))
         except Exception as exc:
             print(f"Error: {exc}")
 
@@ -80,11 +99,12 @@ def print_help(prog: Optional[str] = None) -> None:
     print("Core tools (native C99 builds by default):")
     print(f"  {prog} lsp                                       # LSP over stdio")
     print(f"  {prog} explain <file.wysna> [--function NAME] [--output-format=json-v1] # Conservative effects and capability report")
-    print(f"  {prog} project <lock|check|build|run|test> [options] # Reproducible local projects")
+    print(f"  {prog} project <new|lock|check|build|run|test> [options] # Reproducible local projects")
     print(f"  {prog} api [std/module] [--output-format=json-v1] # Discover standard-library APIs")
     print(f"  {prog} capabilities [--output-format=json-v1]   # Discover target availability and requirements")
     print(f"  {prog} repl                                    # Start interactive REPL")
     print(f"  {prog} [run] [--stats] [--report-json <path>] [--invocation-id <id>] <file.wysna> [-- args...] # Execute Wysna source file")
+    print(f"  {prog} run --deny=<cap,...>|--allow=<cap,...> <file.wysna> # Static capability gate before interpretation")
     print(f"  {prog} check [--json|--output-format=json-v1] [--stats] <file.wysna>   # Static typecheck without execution")
     print(f"  {prog} fmt [--write] [--output-format=json-v1] <file.wysna> # Canonical deterministic formatter")
     print(f"  {prog} build [--output-format=json-v1] <file.wysna> [-o <bin>] # Compile a native binary")
@@ -162,6 +182,7 @@ def main(argv=None) -> None:
     fmt_only = False
     fmt_write = False
     backend = "hir"
+    backend_explicit = False
     use_selfhost = False
     use_hir = None
     emit_c_path: Optional[str] = None
@@ -169,6 +190,7 @@ def main(argv=None) -> None:
     emit_llvm_path: Optional[str] = None
     optimization_profile = None
     run_timeout_ms = None
+    capability_policy = None
     show_mir = False
     subcmd: Optional[str] = None
     file_to_run: Optional[str] = None
@@ -200,6 +222,7 @@ def main(argv=None) -> None:
                 return
             if not os.path.isdir(os.path.join(get_repo_root(), "tests", "unit")):
                 print(f"{prog} test requires a source checkout", file=sys.stderr)
+                print(f"To run project tests, use '{prog} project test'.", file=sys.stderr)
                 sys.exit(1)
             if args and args[0] == "--differential":
                 gen_count = 25
@@ -257,6 +280,7 @@ def main(argv=None) -> None:
             return
         elif subcmd == "emit-llvm":
             backend = "llvm-experimental"
+            backend_explicit = True
         elif subcmd == "check":
             check_only = True
         elif subcmd == "fmt":
@@ -288,6 +312,7 @@ def main(argv=None) -> None:
                 show_ast = True
             else:
                 backend = "ast"
+                backend_explicit = True
                 use_hir = False
         elif arg in ("--check", "-c"):
             check_only = True
@@ -317,17 +342,21 @@ def main(argv=None) -> None:
             fmt_write = True
         elif arg in ("--selfhost", "--backend=selfhost"):
             backend = "selfhost"
+            backend_explicit = True
             use_selfhost = True
         elif arg in ("--hir", "--backend=hir"):
             backend = "hir"
+            backend_explicit = True
             use_hir = True
-        elif arg in ("--backend=ast",):
+        elif arg == "--backend=ast":
             backend = "ast"
+            backend_explicit = True
             use_hir = False
         elif arg.startswith("--backend="):
             b_val = arg.split("=", 1)[1]
             if b_val in ("c99", "hir", "ast", "selfhost", "llvm-experimental"):
                 backend = "hir" if b_val == "c99" else b_val
+                backend_explicit = True
                 use_selfhost = False
                 use_hir = None
             else:
@@ -366,6 +395,15 @@ def main(argv=None) -> None:
                 build_bin_path = args[i]
             else:
                 build_bin_path = args[i]
+        elif arg.startswith("--deny=") or arg.startswith("--allow="):
+            if capability_policy is not None:
+                usage_error("--allow and --deny may be specified only once")
+            mode, value = arg[2:].split("=", 1)
+            from tooling.CapabilityPolicy import parse_capabilities
+            try:
+                capability_policy = (mode, parse_capabilities(value))
+            except ValueError as error:
+                usage_error(str(error))
         elif arg == "--link-lib":
             i += 1
             if i >= len(args) or args[i].startswith("-"):
@@ -400,6 +438,16 @@ def main(argv=None) -> None:
         if (show_tokens or show_ast or show_mir or fmt_only or fmt_write
                 or emit_c_path is not None or json_diagnostics):
             usage_error("llvm-experimental does not support these diagnostic, C generation, or build options")
+
+    if capability_policy is not None:
+        if link_libraries:
+            usage_error("--link-lib cannot be combined with a capability policy")
+        if (subcmd not in (None, "run") or backend_explicit
+                or backend != "hir" or use_selfhost or use_hir is not None
+                or check_only or fmt_only or show_tokens or show_ast or show_mir
+                or emit_c_path is not None or build_bin_path is not None
+                or emit_llvm_path is not None):
+            usage_error("--allow and --deny are supported only by interpreted run")
 
     if requested_invocation_id is not None and report_json_path is None:
         usage_error("--invocation-id requires --report-json")
@@ -555,6 +603,7 @@ def main(argv=None) -> None:
             emit_llvm_path=emit_llvm_path,
             optimization_profile=optimization_profile,
             run_timeout_ms=run_timeout_ms,
+            capability_policy=capability_policy,
             backend=backend,
             use_selfhost=use_selfhost,
             use_hir=use_hir,
