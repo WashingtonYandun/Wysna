@@ -7,6 +7,7 @@ if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
 from compiler.CompilerService import CompilerService
+from error.Error import WysnaError
 
 
 def main(arguments):
@@ -34,8 +35,12 @@ def main(arguments):
             print(f"invalid test-oracle option: {option}", file=sys.stderr)
             return 2
     service = CompilerService(project_root=source_path.parent)
-    checked = service.check_file(source_path)
-    emission = service._emit_ast_oracle_for_testing(checked)
+    try:
+        checked = service.check_file(source_path)
+        emission = service._emit_ast_oracle_for_testing(checked)
+    except WysnaError as error:
+        print(error, file=sys.stderr)
+        return 1
     output_path.write_text(emission.source, encoding="utf-8")
     if binary_path is not None:
         from compiler.NativeToolchain import NativeToolchain
