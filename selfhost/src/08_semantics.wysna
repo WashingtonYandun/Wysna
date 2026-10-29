@@ -398,8 +398,10 @@ fn sem_collect_function(context: SemanticContext, owner: str, visible: bool) {
     sem_expect(context, "FN")
     let local = sem_expect(context, "IDENT").val
     let previous_type_params = context.type_params
-    let mut type_params: list[str] = []
+    let mut type_params: list[str] = previous_type_params
     let mut constraints: list[str] = []
+    for parameter in type_params { constraints.append("") }
+    if len(previous_type_params) > 0 and sem_is(context, "LBRACKET") { sem_error(context, "W2013", "generic methods in parameterized classes are not supported") }
     if sem_match(context, "LBRACKET") {
         while not sem_is(context, "RBRACKET") {
             let parameter = sem_expect(context, "IDENT")
@@ -457,7 +459,15 @@ fn sem_collect_record(context: SemanticContext, kind: str) {
         while not sem_is(context, "RBRACKET") {
             let parameter = sem_expect(context, "IDENT")
             if parameter_index >= len(type_params) or type_params[parameter_index] != parameter.val { report_error_at("W0006", parameter, "generic parameter list changed during collection") }
-            if sem_match(context, "COLON") { sem_expect(context, "IDENT") }
+            if sem_match(context, "COLON") {
+                let constraint = sem_expect(context, "IDENT")
+                if kind == "class" {
+                    let mut declared_interface = false
+                    for candidate in context.types { if candidate.name == constraint.val and candidate.kind == "interface" { declared_interface = true } }
+                    if not declared_interface { report_error_at("W2012", constraint, "generic constraint is not a declared interface") }
+                    report_error_at("W2013", constraint, "Compiler native-core-v1 does not support constrained parameterized classes")
+                }
+            }
             parameter_index = parameter_index + 1
             if not sem_match(context, "COMMA") { break }
         }
@@ -476,14 +486,12 @@ fn sem_collect_record(context: SemanticContext, kind: str) {
     }
     if kind == "class" { context.classes.append(SemClass { name: name, parent: parent, interfaces: interfaces }) }
     sem_expect(context, "LBRACE")
-    let mut generic_method = false
     while true {
         sem_skip_separators(context)
         if sem_is(context, "RBRACE") { break }
         let mut visible = true
         if sem_match(context, "PRIVATE") { visible = false } else { sem_match(context, "PUBLIC") }
         if sem_is(context, "FN") {
-            if generic_class { generic_method = true }
             sem_collect_function(context, name + ".", visible)
         }
         elif kind == "enum" {
@@ -512,9 +520,6 @@ fn sem_collect_record(context: SemanticContext, kind: str) {
         }
     }
     sem_expect(context, "RBRACE")
-    if generic_class and generic_method {
-        report_error_at("W2013", name_token, "Compiler native-core-v1 supports parameterized classes only with fields and no methods")
-    }
     if kind == "enum" { context.completed_enums.append(name) }
     context.type_params = previous_type_params
 }
@@ -697,7 +702,13 @@ fn sem_check_call(context: SemanticContext, signature: int, args: list[int], sou
     if type_.kind == "constructor" {
         let target = type_.args[0]
         let method = sem_method(context, context.types[target].name, "init")
-        if method >= 0 { sem_check_call(context, context.functions[method].type_id, args, sources, false) }
+        if method >= 0 {
+            let mut selected = context.functions[method].type_id
+            let target_type = context.types[target]
+            let generic = sem_generic_type(context, target_type.name)
+            if generic >= 0 { selected = sem_substitute_type(context, selected, context.generic_types[generic].params, target_type.args) }
+            sem_check_call(context, selected, args, sources, false)
+        }
         elif len(args) != 0 { sem_error(context, "W2005", "constructor arity") }
         return target
     }
@@ -843,7 +854,10 @@ fn sem_member(context: SemanticContext, receiver: SemValue, name: str, location:
     if method_index >= 0 {
         let method = context.functions[method_index]
         if not method.visible and method.owner != context.owner + "." { report_error_at("W3002", location, "private method access") }
-        return SemValue { type_id: method.type_id, root: "#method", writable: -1, terminates: false, node: -1 }
+        let mut method_type = method.type_id
+        let generic = sem_generic_type(context, type_.name)
+        if generic >= 0 and len(type_.args) == len(context.generic_types[generic].params) { method_type = sem_substitute_type(context, method_type, context.generic_types[generic].params, type_.args) }
+        return SemValue { type_id: method_type, root: "#method", writable: -1, terminates: false, node: -1 }
     }
     report_error_at("W3002", location, "unknown member: " + name)
     return sem_value(context.unit_type)
@@ -994,7 +1008,7 @@ fn sem_prefix(context: SemanticContext, allow_struct: bool, statement: bool) -> 
         }
         let symbol = sem_lookup(context, "self")
         if symbol < 0 { report_error_at("W9999", source, "checked receiver binding missing") }
-        return sem_expr(context, if is_super { "super" } else { "binding" }, SemValue { type_id: sem_named(context, owner), root: "this", writable: -1, terminates: false, node: -1 }, source, "self", [], context.variables[symbol].binding, -1)
+        return sem_expr(context, if is_super { "super" } else { "binding" }, SemValue { type_id: if is_super { sem_named(context, owner) } else { context.variables[symbol].type_id }, root: "this", writable: -1, terminates: false, node: -1 }, source, "self", [], context.variables[symbol].binding, -1)
     }
     sem_match(context, "NEW")
     let name_token = sem_expect(context, "IDENT")
@@ -1252,7 +1266,9 @@ fn sem_expression(context: SemanticContext, minimum: int, allow_struct: bool) ->
             if context.capture_nodes {
                 let receiver_type = context.types[receiver.type_id]
                 if left.root == "#method" {
-                    let target = sem_method(context, receiver_type.name, name)
+                    let mut target = sem_method(context, receiver_type.name, name)
+                    let generic = sem_generic_type(context, receiver_type.name)
+                    if generic >= 0 and not sem_symbolic(context, receiver.type_id) { target = sem_specialize_arguments(context, target, receiver_type.args, name_token) }
                     let kind = if context.nodes[receiver.node].kind == "super" or name == "init" { "direct_method" } else { "method" }
                     left = sem_expr(context, kind, left, call_token, context.functions[target].name, [receiver.node], -1, target)
                     context.nodes[left.node].labels = [receiver_type.name, name]
@@ -1856,6 +1872,21 @@ fn sem_require_tail_at(context: SemanticContext, source: int, target: int, locat
         }
     } else { sem_require_at(context, source, target, "W2004", location) }
 }
+fn sem_function_owner_type(context: SemanticContext, function: SemFunction) -> int {
+    let owner = slice(function.owner, 0, len(function.owner) - 1)
+    let generic = sem_generic_type(context, owner)
+    if generic < 0 { return sem_named(context, owner) }
+    let params = context.generic_types[generic].params
+    let mut args: list[int] = []
+    for item in context.specializations {
+        if context.functions[item.function].name == function.name {
+            for i in 0..len(params) { args.append(item.arguments[i]) }
+            return sem_intern(context, context.generic_types[generic].kind, owner, args)
+        }
+    }
+    for parameter in params { args.append(sem_intern(context, "typeparam", parameter, [])) }
+    return sem_intern(context, context.generic_types[generic].kind, owner, args)
+}
 fn sem_check_function(context: SemanticContext, function: SemFunction) {
     if function.body < 0 { return }
     let previous_capture = context.capture_nodes
@@ -1881,12 +1912,13 @@ fn sem_check_function(context: SemanticContext, function: SemFunction) {
     context.return_type = signature[len(signature) - 1]
     context.expected_type = context.return_type
     context.initializing = context.owner != "" and function.name == context.owner + ".init"
+    for item in context.specializations { if context.functions[item.function].name == function.name and context.functions[item.template].name == context.owner + ".init" { context.initializing = true } }
     let empty: list[str] = []
     context.initialized = empty
     let mut parameters: list[int] = []
     for i in 0..len(function.params) { parameters.append(sem_declare(context, function.params[i], signature[i], false)) }
     if context.owner != "" {
-        let receiver = sem_declare(context, "self", sem_named(context, context.owner), false)
+        let receiver = sem_declare(context, "self", sem_function_owner_type(context, function), false)
         let mut with_receiver: list[int] = [receiver]
         for parameter in parameters { with_receiver.append(parameter) }
         parameters = with_receiver
@@ -1906,7 +1938,7 @@ fn sem_check_function(context: SemanticContext, function: SemFunction) {
     }
     sem_complete_constructor(context)
     if context.capture_nodes {
-        let type_id = if context.owner == "" { function.type_id } else { checked_receiver_signature(context, sem_named(context, context.owner), function.type_id) }
+        let type_id = if context.owner == "" { function.type_id } else { checked_receiver_signature(context, sem_function_owner_type(context, function), function.type_id) }
         let captures: list[int] = []
         context.checked_functions.append(CheckedFunction { captures: captures, closure: false, name: function.name, type_id: type_id, params: parameters, body: flow.node, source: context.tokens[function.body] })
     }
@@ -2116,7 +2148,9 @@ fn sem_validate(context: SemanticContext, tokens: list[Token]) {
         }
     }
     for function in context.functions {
-        if function.owner != "" { sem_check_function(context, function) }
+        let mut specialized = false
+        for item in context.specializations { if context.functions[item.function].name == function.name { specialized = true } }
+        if function.owner != "" and not specialized { sem_check_function(context, function) }
     }
 }
 

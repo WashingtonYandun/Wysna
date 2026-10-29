@@ -95,7 +95,7 @@ the listed fixtures does not guarantee equivalent behaviour for every Wysna prog
 
 Wysna Compiler has modular source files under `selfhost/src/`, bundled into
 `selfhost/compiler.wysna`. It parses and checks source using its own implementation and
-uses one checked-node → verified MIR → C99 pipeline under `native-core-v1`. Parameterized classes with methods, inheritance or interfaces, parameterized interfaces, unresolved generic nominal values, library-mode exports and WASM targets remain explicit profile limits; see [MIR design](MIR_DESIGN.md). Compiler does not share Seed's compilation session or type arena. Deterministic bootstrap and corpus tests are evidence for their measured inputs, not universal semantic equivalence.
+uses one checked-node → verified MIR → C99 pipeline under `native-core-v1`. Constrained parameterized classes, parameterized classes with independently generic methods, inheritance or interfaces, parameterized interfaces, unresolved generic nominal values, library-mode exports and WASM targets remain explicit profile limits; see [MIR design](MIR_DESIGN.md). Compiler does not share Seed's compilation session or type arena. Deterministic bootstrap and corpus tests are evidence for their measured inputs, not universal semantic equivalence.
 
 The [native SDK](NATIVE_SDK.md) packages the native engine, runtime, stdlib and pinned C toolchain. Its commands run without Python. The SDK is a portable development artifact; platform acceptance, signing and release publication are distinct gates. HTTP and other external C dependencies are not included in the offline core.
 
@@ -226,7 +226,7 @@ limits remain part of the published scope:
 
 | Finding | Status in 0.5.0 | Remaining work |
 | :--- | :--- | :--- |
-| W01 · Compiler architecture | Seed uses AST/HIR/MIR; Compiler uses one checked-node → verified MIR → C99 pipeline under `native-core-v1` and ships a native SDK. Parameterized classes with methods, inheritance or interfaces, parameterized interfaces, unresolved generic nominal values, library-mode exports and WASM targets remain explicit profile limits. | Extend the Compiler MIR/profile to those constructs and keep independent parity and installed-acceptance gates. |
+| W01 · Compiler architecture | Seed uses AST/HIR/MIR; Compiler uses one checked-node → verified MIR → C99 pipeline under `native-core-v1` and ships a native SDK. Constrained parameterized classes, parameterized classes with independently generic methods, inheritance or interfaces, parameterized interfaces, unresolved generic nominal values, library-mode exports and WASM targets remain explicit profile limits. | Extend the Compiler MIR/profile to those constructs and keep independent parity and installed-acceptance gates. |
 | W03 · Value size | On a 64-bit ABI, `WVal` occupies 32 bytes; list slots store full tagged values. | Measure a compact representation with explicit runtime and FFI compatibility. |
 | W04 · CoW cost | Mutating a shared buffer can copy all of its elements. No uniqueness analysis proves that it can be mutated in place. | Measure memory pressure and design a verifiable uniqueness rule before changing ownership or the ABI. |
 | W05 · Generics | A generic function body is checked when a specialization is created. A generic function that is never instantiated may not receive the same body checking. | Separate generic body checking from type substitution without losing concrete diagnostics. |
