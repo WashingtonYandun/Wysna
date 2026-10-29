@@ -58,7 +58,7 @@ _STATEMENT_END_TOKENS = frozenset({TokenType.RBRACE, TokenType.EOF})
 
 class Parser:
     """
-    Recursive Descent + Pratt Parser for Wysna v0.1.
+    Recursive-descent and Pratt parser for Wysna source.
     Never calls exit(); raises ParserError with exact diagnostic codes and positions.
     """
     def __init__(self, file: str = "<stdin>") -> None:

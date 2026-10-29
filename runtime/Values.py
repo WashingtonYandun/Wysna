@@ -93,7 +93,7 @@ def display_value(value, quote_string=False):
     return "".join(parts)
 
 class WysnaValue:
-    """Base class for all runtime values in Wysna v0.1."""
+    """Base class for Wysna runtime values."""
     def clone_value(self) -> 'WysnaValue':
         return self
 
