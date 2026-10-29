@@ -1,0 +1,13 @@
+class Box[T] {
+    value: T
+    fn init(value: T) { this.value = value }
+    fn get() -> T { this.value }
+    fn set(value: T) { this.value = value }
+}
+
+let integer_box: Box[int] = new Box[int](42)
+let string_box: Box[str] = new Box[str]("hello")
+print(integer_box.get(), string_box.get())
+integer_box.set(8)
+string_box.set("wysna")
+print(integer_box.get(), string_box.get())

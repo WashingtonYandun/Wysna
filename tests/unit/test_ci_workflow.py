@@ -41,11 +41,16 @@ def test_ci_workflow_contracts():
     assert '--warmup-seconds 15 --duration-seconds 120' in service_campaign
     assert '--repetitions 3' in service_campaign
     assert '--minimum-latency-samples 1000' in service_campaign
+    assert "pip install --retries 10 --timeout 30 'aiohttp>=3.14.5,<4'" in service_campaign
+    assert 'cache: pip' in service_campaign and 'cache-dependency-path: pyproject.toml' in service_campaign
+    assert 'pip install -e' not in service_campaign
     performance_source = (ROOT / '.github/workflows/service-performance.yml').read_text(encoding='utf-8')
     assert 'workflow_dispatch:' in performance_source and 'schedule:' in performance_source
     assert 'tags:' in performance_source and '- "v*"' in performance_source
     assert '--warmup-seconds 60 --duration-seconds 600' in performance_source
     assert '--repetitions 3' in performance_source
+    assert "pip install --retries 10 --timeout 30 'aiohttp>=3.14.5,<4'" in performance_source
+    assert 'cache: pip' in performance_source and 'cache-dependency-path: pyproject.toml' in performance_source
     llvm = jobs['llvm-smoke']
     assert 'runs-on: ubuntu-latest' in llvm
     assert 'needs: wheel-build' in llvm
@@ -92,7 +97,7 @@ def test_ci_workflow_contracts():
     assert 'os: [ubuntu-latest, macos-latest, windows-latest]' in product
     for module in ('test_repl_session.py', 'test_project_scaffold.py',
                    'test_human_diagnostics.py', 'test_tool_result.py',
-                   'test_capability_policy.py'):
+                   'test_capability_policy.py', 'test_target_profiles.py'):
         assert module in product
     native_diagnostics = jobs['native-diagnostics']
     assert 'os: [ubuntu-latest, macos-latest, windows-latest]' in native_diagnostics
@@ -101,14 +106,17 @@ def test_ci_workflow_contracts():
     runtime = jobs['runtime-conformance']
     integration = jobs['integration-conformance']
     assert 'PYTHONUNBUFFERED: "1"' in source
-    for job in (contracts, runtime, integration):
+    assert 'timeout-minutes: 35' in runtime
+    for job in (contracts, integration):
         rows = re.findall(r'- \{os: ([\w-]+), cc: ([\w-]+)\}', job)
         assert {os_name + ',' + compiler for os_name, compiler in rows} == MATRIX
         assert len(rows) == len(MATRIX)
         assert 'timeout-minutes: 30' in job
         assert 'fail-fast: false' in job
         assert 'CC: ${{ matrix.cc }}' in job
-        assert "pip install -e '.[http,service]'" in job
+        assert "pip install --retries 10 --timeout 30 'pycurl>=7.48,<8' 'aiohttp>=3.14.5,<4'" in job
+        assert 'cache: pip' in job and 'cache-dependency-path: pyproject.toml' in job
+        assert 'pip install -e' not in job
         assert 'actions/upload-artifact@v4' in job
     modules = re.findall(r'^\s+python3 -m tests\.unit\.(\w+)\s*$', contracts, re.MULTILINE)
     assert sorted(modules) == sorted(CONTRACT_MODULES), modules
@@ -141,6 +149,10 @@ def test_ci_workflow_contracts():
     assert '-UpgradeFrom' in jobs['windows-installer']
     assert 'path: .wysna_cache/installation-wheel' in jobs['installed-wheel']
     assert 'python .wysna_cache/installation-wheel/validate_wheel.py --wheel .wysna_cache/installation-wheel/*.whl' in jobs['installed-wheel']
+    assert 'Install Wysna from the checkout' not in jobs['browser-library']
+    assert 'pip install -e' not in jobs['browser-library']
+    assert 'python3 -m tests.unit.test_browser_smoke' in jobs['browser-library']
+    assert 'python -m pip install --retries 10 --timeout 30 wasmtime==50.0.1' in jobs['wasi-command']
     assert re.search(r'^    if: always\(\)$', conformance, re.MULTILINE)
     match = re.search(r'- name: Require compiler, runtime, integration and LLVM smoke success\n[\s\S]*?        run: \|\n'
                       r'((?:          [^\n]*\n)+)', conformance)

@@ -222,7 +222,11 @@ for a JSON endpoint call.
 error channels, documentation when present, and explicit `unknown` values for
 ownership and effect facts that are not currently encoded in the language metadata.
 `wysna api --manifest path/to/wysna.toml` indexes a checked project module graph.
-`wysna capabilities --output-format=json-v1` reports commands and targets
-supported by the installed compiler. `wysna explain path/to/source.wysna --manifest
-path/to/wysna.toml` produces a separate read-only [effect report](EFFECTS.md); project
-target checks do not consume that report.
+`wysna capabilities --output-format=json-v1` reports commands and target profiles
+supported by the installed Seed compiler. The additive `target_profiles` field
+includes the owning engine, backend, triple, artifact kind, capabilities and
+build/run requirement objects (`name`, `version`, `provided_by`); consumers should
+select a profile only when its engine matches the compiler they are invoking.
+`wysna explain path/to/source.wysna --manifest path/to/wysna.toml` produces a
+separate read-only [effect report](EFFECTS.md); project target checks do not
+consume that report.
