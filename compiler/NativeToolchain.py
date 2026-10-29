@@ -202,7 +202,8 @@ class NativeToolchain:
             output_path = str(Path(temporary) / 'program.c')
             started = time.perf_counter()
             result = subprocess.run(
-                [os.fspath(compiler_path), input_path, output_path],
+                [os.fspath(compiler_path), "--stdlib-root", str(Path(self.repo_root) / "stdlib"),
+                 input_path, output_path],
                 capture_output=True, text=True, cwd=input_directory, timeout=120,
             )
             codegen_ms = (time.perf_counter() - started) * 1000.0

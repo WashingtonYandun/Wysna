@@ -144,10 +144,15 @@ class LlvmBackendTests(unittest.TestCase):
                          (reference.returncode, reference.stdout, reference.stderr))
 
     def test_explicit_application_exit_matches_c99(self):
-        for code in (0, 7):
-            service, checked = self.checked('print("before")\nexit(' + str(code) + ')\nprint("unreachable")\n')
+        cases = [
+            (0, 'print("before")\nexit(0)\nprint("unreachable")\n', b'before\n'),
+            (7, 'print("before")\nexit(7)\nprint("unreachable")\n', b'before\n'),
+            (7, 'fn stop() { let values = [1, 2]\nprint(values)\nexit(7) }\nstop()\n', b'[1, 2]\n'),
+        ]
+        for code, source, expected in cases:
+            service, checked = self.checked(source)
             reference = self.c99(service, checked)
-            self.assertEqual((reference.returncode, reference.stdout), (code, b'before\n'))
+            self.assertEqual((reference.returncode, reference.stdout), (code, expected))
             emission = service.emit_llvm(checked)
             build = self.toolchain.build(emission, self.directory / 'exit-program')
             actual = self.execute(build.output_path)

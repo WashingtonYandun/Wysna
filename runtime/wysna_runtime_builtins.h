@@ -43,7 +43,7 @@ static inline WVal wysna_builtin_eprint(int32_t argc, const WVal* argv) {
 
 static inline WVal wysna_builtin_exit(WVal code) {
     int c = (code.tag == W_INT) ? (int)code.as.i : 0;
-    wysna_runtime_cleanup();
+    wysna_runtime_cleanup_for_exit();
     exit(c);
     return wysna_unit();
 }
