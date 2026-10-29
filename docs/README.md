@@ -18,6 +18,7 @@ recommended installation, supported workflows, experiments and security limits.
 
 ## Tooling and distribution
 
+- [AI agent workflow](AI_AGENT_GUIDE.md): deterministic project workflow, target discovery, and diagnostics.
 - [Projects](PROJECTS.md): manifests, local dependencies, lockfiles, targets, and user tests.
 - [Seed distribution](SEED_DISTRIBUTION.md): relocatable Seed installation with private CPython and Zig.
 - [Native SDK](NATIVE_SDK.md): Python-free native compiler SDK, commands, and provenance.

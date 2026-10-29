@@ -9,26 +9,44 @@ class ArtifactKind(str, Enum):
 
 
 @dataclass(frozen=True)
+class TargetRequirement:
+    name: str
+    version: str | None = None
+    provided_by: str | None = None
+
+
+@dataclass(frozen=True)
 class TargetSpec:
     profile: str
     triple: str | None
     artifact_kind: ArtifactKind
     suffix: str
     capabilities: tuple[str, ...]
+    engine: str
+    backend: str
+    build_requirements: tuple[TargetRequirement, ...]
+    run_requirements: tuple[TargetRequirement, ...]
 
 
 TARGET_SPECS = {
     "native-cli": TargetSpec(
         "native-cli", None, ArtifactKind.NATIVE_EXECUTABLE, "",
         ("stdio", "filesystem", "environment", "processes", "network", "native-ffi"),
+        "wysna-seed", "c99",
+        (TargetRequirement("c99-compiler", provided_by="Seed distribution bundles Zig 0.15.2"),),
+        (TargetRequirement("host-operating-system"),),
     ),
     "wasi-command": TargetSpec(
         "wasi-command", "wasm32-wasip1", ArtifactKind.WASM_MODULE, ".wasm",
         ("stdio", "arguments", "clock", "random", "manifest-declared-preopens"),
+        "wysna-seed", "c99", (TargetRequirement("wasi-sdk", "34"),),
+        (TargetRequirement("wasmtime-python", "50.0.1"),),
     ),
     "browser-library": TargetSpec(
         "browser-library", "wasm32-unknown-emscripten", ArtifactKind.WASM_MODULE, ".mjs",
         ("linear-memory", "generated-utf8-abi", "bigint-int64"),
+        "wysna-seed", "c99", (TargetRequirement("emscripten", "5.0.1"),),
+        (TargetRequirement("browser-or-nodejs"),),
     ),
 }
 

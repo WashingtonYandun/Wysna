@@ -175,7 +175,9 @@ effects and marks unknown FFI or indirect calls. `wysna run --allow=...` or
 `--deny=...` applies that report as a static pre-execution gate and refuses
 incomplete analyses. It is **not** an operating-system sandbox, does not cover
 native builds or project runs, and is not a purity proof. See
-[effect contracts](docs/EFFECTS.md).
+[effect contracts](docs/EFFECTS.md). Agent-generated changes should follow the
+[AI agent workflow](docs/AI_AGENT_GUIDE.md), including target discovery and
+source-hash-checked diagnostics.
 
 ## Standard library
 

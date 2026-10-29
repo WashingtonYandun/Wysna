@@ -1,5 +1,6 @@
 import glob
 import hashlib
+import json
 import os
 import subprocess
 import sys
@@ -32,10 +33,12 @@ def run_bootstrap_test() -> bool:
         from compiler.Bootstrap import bootstrap_compiler
         artifacts = bootstrap_compiler(repo_root, tmpdir)
         stage2_bin = str(artifacts.compiler)
+        manifest = json.loads((artifacts.directory / "bootstrap.json").read_text(encoding="utf-8"))
+        assert manifest["seed_backend"] == "hir"
         for index, digest in enumerate(artifacts.hashes):
             print(f"  SHA256(native compiler{index}.c) = {digest}")
         assert len(set(artifacts.hashes)) == 1
-        print("  [PASS] Seed AST bootstrap followed by three identical native MIR emissions")
+        print("  [PASS] Seed HIR/MIR bootstrap followed by three identical native MIR emissions")
 
         # 5. Stage 2 Native Binary Compiles & Runs Full Runtime Suite
         wysna_files = sorted(glob.glob(os.path.join(repo_root, "tests", "runtime", "*.wysna")))

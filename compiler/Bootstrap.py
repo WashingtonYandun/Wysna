@@ -55,7 +55,7 @@ def bootstrap_fingerprint(repo_root):
 
 
 def bootstrap_compiler(repo_root, output_directory):
-    """Seed AST builds a bootstrap executable; three native MIR emissions must agree."""
+    """Seed HIR/MIR builds a bootstrap executable; three native MIR emissions must agree."""
     root = Path(repo_root).resolve()
     directory = Path(output_directory).resolve()
     directory.mkdir(parents=True, exist_ok=True)
@@ -66,7 +66,7 @@ def bootstrap_compiler(repo_root, output_directory):
         raise RuntimeError("The compiler bundle is stale; run tools/bundle_selfhost.py")
     fingerprint, provenance = bootstrap_fingerprint(root)
     service = CompilerService()
-    seed_source = service.emit_c(service.check(source, source_path), backend="ast").source
+    seed_source = service.emit_c(service.check(source, source_path), backend="hir").source
     bootstrap_c = directory / "bootstrap.c"
     bootstrap_c.write_text(seed_source, encoding="utf-8")
 
@@ -95,7 +95,7 @@ def bootstrap_compiler(repo_root, output_directory):
     if len(set(hashes)) != 1:
         raise RuntimeError("Native MIR bootstrap fixed point failed: " + ", ".join(hashes))
     manifest = {"format": 1, "fingerprint": fingerprint, "provenance": provenance,
-                "seed_backend": "ast", "seed_c_sha256": _sha256(bootstrap_c),
+                "seed_backend": "hir", "seed_c_sha256": _sha256(bootstrap_c),
                 "native_backend": "verified-mir-c99", "native_c_sha256": hashes,
                 "stage1_sha256": _sha256(directory / executable_name("stage1")),
                 "stage2_sha256": _sha256(directory / executable_name("stage2"))}

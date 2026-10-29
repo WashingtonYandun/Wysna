@@ -10,10 +10,14 @@ Wysna Compiler's `native-core-v1` profile uses verified MIR for its normal C99 r
 
 ## Measured corpus
 
-The table records the native MIR measurement at `f4c142183ec531fe973858a2c84da54bc538a5f4`, with the published versioned compiler and unchanged source inputs. It comes from an actual `tools/ci_conformance.py --profile=release` run. It covers
-the public runtime examples and negative fixtures, with no unsupported exclusions. The
-separate sanitizer gate checks memory safety; neither gate establishes universal language
-parity or measures code coverage.
+The table comes from an actual `tools/ci_conformance.py --profile=release` run. Its
+`summary.json` records the Git revision and hashes of the source, fixture and harness
+inputs; the measured input digest is
+`d9306a58b0a5b6e0039834f54d8e4a6ecf9ec671f91d9c9c248c2bd92ec9347c`.
+Release CI uploads that evidence with the run. The matrix covers the public runtime
+examples and negative fixtures, with no unsupported exclusions. The separate sanitizer
+gate checks memory safety; neither gate establishes universal language parity or measures
+code coverage.
 
 <!-- GENERATED TABLE START -->
 
@@ -21,12 +25,13 @@ parity or measures code coverage.
 | :--- | :---: | :---: | :---: | :---: | :---: | :--- |
 | **`core`** | 158 | ✅ 158/158 | ✅ 158/158 | ✅ 158/158 | ✅ 158/158 | Declared supported |
 | **`generics`** | 15 | ✅ 15/15 | ✅ 15/15 | ✅ 15/15 | ✅ 15/15 | Declared supported |
+| **`generic_class_methods`** | 1 | ✅ 1/1 | ✅ 1/1 | ✅ 1/1 | ✅ 1/1 | Declared supported |
 | **`checked_modules`** | 1 | ✅ 1/1 | ✅ 1/1 | ✅ 1/1 | ✅ 1/1 | Declared supported |
 | **`error_unions`** | 8 | ✅ 8/8 | ✅ 8/8 | ✅ 8/8 | ✅ 8/8 | Declared supported |
 | **`functions`** | 5 | ✅ 5/5 | ✅ 5/5 | ✅ 5/5 | ✅ 5/5 | Declared supported |
 | **`stdlib`** | 3 | ✅ 3/3 | ✅ 3/3 | ✅ 3/3 | ✅ 3/3 | Declared supported |
 | **`regressions`** | 13 | ✅ 13/13 | ✅ 13/13 | ✅ 13/13 | ✅ 13/13 | Declared supported |
-| **Total Verified** | **203** | **203/203 (100.0%)** | **203/203 (100.0%)** | **203/203 (100.0%)** | **203/203 (100.0%)** | _measured_ |
+| **Total Verified** | **204** | **204/204 (100.0%)** | **204/204 (100.0%)** | **204/204 (100.0%)** | **204/204 (100.0%)** | _measured_ |
 
 <!-- GENERATED TABLE END -->
 
@@ -37,17 +42,21 @@ than inventing success from `tests/engine_profiles.json`.
 The core category includes primitive operations, control flow, tuples, classes,
 copy-on-write, ownership, diagnostics, nested patterns, Result closures and cyclic
 formatting. Panic fixtures require a nonzero exit and their declared diagnostic code.
-Generics include functions, structs, recursive ADTs and rejected invalid layouts.
+Generics include functions, structs, recursive ADTs, concrete parameterized classes
+with methods, and rejected invalid layouts. `generic_class_methods` is a separately
+measured category so its support cannot be inferred from generic functions or structs.
 Checked modules cover imported specialization. Error unions cover subset propagation,
 nominal error identity, exhaustive handlers and managed payload cleanup.
 
 ## Expansion boundaries
 
-Function values, captures, FFI, generic OOP, the standard library and LSP have separate
+Function values, captures, FFI, the standard library and LSP have separate
 contracts in `tests/unit/test_expansion_contracts.py`. A green core corpus does not
-imply Wysna Compiler support for every expansion combination. Parameterized classes with fields and non-generic methods are covered separately by the
-native MIR pipeline; constrained classes, independently generic methods, inheritance and interfaces on
-parameterized classes remain outside that profile. Scoped resources have a separate
+imply Wysna Compiler support for every expansion combination. The measured
+`generic_class_methods` category covers concrete type arguments and methods that use
+those arguments; constrained classes, methods that introduce their own type parameters,
+inheritance and interfaces on parameterized classes remain outside that profile. Scoped
+resources have a separate
 four-engine gate in `tests/unit/test_audit_readiness.py`. The SQLite adapter/application
 also has dedicated checks; see [C interoperability](FFI_VALIDATION.md).
 
@@ -57,7 +66,7 @@ fixture does not prove equivalence of the two module implementations.
 
 ## Bootstrap Fixed-Point vs. Core Corpus Parity
 
-Seed AST builds a separately recorded initial engine. Three successive native MIR emissions of `selfhost/compiler.wysna` must have identical C0, C1 and C2 hashes. This demonstrates the recorded deterministic fixed point, not semantic correctness. Corpus parity separately checks output, exit status and rejection diagnostics across four engines. The native SDK additionally requires installed acceptance without Python or a discovered host C toolchain.
+Seed HIR/MIR builds a separately recorded initial engine. Three successive native MIR emissions of `selfhost/compiler.wysna` must have identical C0, C1 and C2 hashes. This demonstrates the recorded deterministic fixed point, not semantic correctness. Corpus parity separately checks output, exit status and rejection diagnostics across four engines, including the independent Seed AST oracle. The native SDK additionally requires installed acceptance without Python or a discovered host C toolchain.
 
 ## Execution profiles
 

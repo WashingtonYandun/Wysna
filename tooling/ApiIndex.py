@@ -1,6 +1,7 @@
 """Machine-readable Wysna standard-library API and installed-tool capabilities."""
 import argparse
 import json
+from dataclasses import asdict
 from pathlib import Path
 import sys
 
@@ -18,6 +19,7 @@ from node.NodeType import (
 from parser.Parser import Parser
 from project.Manifest import ManifestError
 from project.Resolver import ProjectResolver
+from project.Targets import TARGET_SPECS
 from tooling.ToolResult import diagnostic_from_error, diagnostic_record, tool_result, write_tool_result
 
 
@@ -315,6 +317,18 @@ def run_capabilities_command(argv):
     parser.add_argument("--output-format", choices=("json-v1",))
     try:
         parser.parse_args(argv)
+        target_profiles = []
+        for spec in TARGET_SPECS.values():
+            target_profiles.append({
+                "profile": spec.profile,
+                "engine": spec.engine,
+                "backend": spec.backend,
+                "triple": spec.triple,
+                "artifact_kind": spec.artifact_kind.value,
+                "capabilities": list(spec.capabilities),
+                "build_requirements": [asdict(requirement) for requirement in spec.build_requirements],
+                "run_requirements": [asdict(requirement) for requirement in spec.run_requirements],
+            })
         payload = {
             "schema_version": "wysna.capabilities/1",
             "compiler_version": WYSNA_VERSION,
@@ -326,14 +340,12 @@ def run_capabilities_command(argv):
                                                                           "api", "capabilities", "explain"]},
             "profiles": ["native-cli", "wasi-command", "browser-library", "c99-source"],
             "targets": ["native", "wasm32-wasip1", "wasm32-unknown-emscripten"],
-            "runtimes": {"wasi-command": "wasmtime==50.0.1",
-                         "browser-library": "emscripten==5.0.1 and browser or Node.js"},
+            "runtimes": {"wasi-command": "wasmtime-python==50.0.1",
+                         "browser-library": "browser or Node.js"},
             "capabilities": {
-                "native-cli": ["stdio", "filesystem", "environment", "processes", "network", "native-ffi"],
-                "wasi-command": ["stdio", "arguments", "clock", "random",
-                                 "manifest-declared-preopens"],
-                "browser-library": ["linear-memory", "generated-utf8-abi", "bigint-int64"],
+                profile: list(spec.capabilities) for profile, spec in TARGET_SPECS.items()
             },
+            "target_profiles": target_profiles,
             "requirements": {
                 "std/http": {
                     "interpreter": "install wysna[http] with libcurl 8.3.0 or newer",
