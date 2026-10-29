@@ -362,6 +362,38 @@ class NativeMirPipelineTests(unittest.TestCase):
                         import_module(result.stdout)
             self.assertIn("wysna_builtin_unix_time", emitted.read_text(encoding="utf-8"))
 
+    def test_standard_imports_cannot_escape_or_fall_back_to_working_directory(self):
+        with tempfile.TemporaryDirectory(prefix="wysna-stdlib-boundary-") as temporary:
+            directory = Path(temporary).resolve()
+            standard = directory / "installed" / "stdlib"
+            standard.mkdir(parents=True)
+            project = directory / "project"
+            project.mkdir()
+            cwd_std = project / "std"
+            cwd_std.mkdir()
+            (cwd_std / "ghost").write_text('pub fn value() -> int { 1 }\n', encoding="utf-8")
+            (directory / "installed" / "escape.wysna").write_text('pub fn value() -> int { 2 }\n', encoding="utf-8")
+            source = project / "main.wysna"
+            def check(code):
+                source.write_text(code, encoding="utf-8")
+                return subprocess.run([self.compiler, "--stdlib-root", str(standard), "--check-mir", str(source)],
+                                      cwd=project, capture_output=True, text=True, timeout=120)
+            for name in ("std/ghost", "std/../escape", "std//ghost", "std/./ghost"):
+                with self.subTest(name=name):
+                    result = check('import "' + name + '" as m\nprint(m.value())\n')
+                    self.assertNotEqual(result.returncode, 0)
+                    self.assertIn("W1003", result.stderr)
+            (standard / "empty.wysna").write_text('', encoding="utf-8")
+            result = check('import "std/empty" as empty\nprint("ok")\n')
+            self.assertEqual(result.returncode, 0, result.stderr)
+            if os.name != "nt":
+                external = project / "external.wysna"
+                external.write_text('pub fn value() -> int { 3 }\n', encoding="utf-8")
+                (standard / "alias.wysna").symlink_to(external)
+                result = check('import "std/alias" as m\nprint(m.value())\n')
+                self.assertNotEqual(result.returncode, 0)
+                self.assertIn("W1003", result.stderr)
+
     def test_time_module_returns_current_unix_seconds_across_emitters(self):
         code = 'import "std/time" as clock\nprint(clock.unix_seconds())\n'
         with tempfile.TemporaryDirectory(prefix="wysna-native-clock-") as temporary:

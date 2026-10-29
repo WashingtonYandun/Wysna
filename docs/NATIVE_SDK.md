@@ -43,14 +43,14 @@ Run it with `wysna run greet.wysna -- Ada`; setting `WYSNA_GREETING` customizes 
 External C dependencies remain explicit:
 
 ```sh
-wysna build program.wysna --include-dir vendor/include --link vendor/adapter.c --library sqlite3
+wysna build program.wysna --include-dir vendor/include --link vendor/adapter.c --library-dir vendor/lib --library sqlite3
 ```
 
-`--link` accepts a file, `--library` a library name, and `--include-dir` an existing directory. These are argument-vector operations, never shell fragments. HTTP requires separately installed libcurl 8.3 or newer and its include/link inputs; libcurl is not part of the offline core bundle.
+`--link` accepts a file, `--library` a library name, and `--include-dir` and `--library-dir` existing directories. These are argument-vector operations, never shell fragments. Libraries must be compatible with the SDK target and architecture; a host SDK that supplies only arm64e symbols is not sufficient for an arm64 target. HTTP requires separately installed libcurl 8.3 or newer and its include/link inputs; libcurl is not part of the offline core bundle.
 
 ## Files, caches and updates
 
-Build and file-emission outputs are staged in a private directory beside the destination and renamed only after success. Existing output survives source and compiler errors. A source file, a source alias and a `.wysna` destination are rejected. Relative imports resolve beside their importing source; standard-library resolution is confined to this installed SDK; a missing bundled module never falls back to the current directory.
+Build and file-emission outputs are staged in a private directory beside the destination and renamed only after success. Existing output survives source and compiler errors. A source file, a source alias and a `.wysna` destination are rejected. Relative imports resolve beside their importing source; standard-library resolution uses this installed SDK, rejects parent traversal and symlinks outside the standard-library root, and never falls back to the current directory when a bundled module is missing. These checks do not make an installation writable by an adversary into a filesystem sandbox.
 
 Zig's local cache is temporary. The persistent global cache is outside the SDK, under `WYSNA_CACHE_HOME` when set, otherwise the user's cache directory (`LOCALAPPDATA/Wysna` on Windows or `XDG_CACHE_HOME`/`HOME/.cache` on Unix). Toolchain cache variables are restored before the application starts. The installation can remain read-only.
 

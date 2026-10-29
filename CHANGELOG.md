@@ -15,6 +15,11 @@
 
 ### Native Compiler
 
+- Allows native SDK builds and runs to search explicit library directories with
+  `--library-dir`, alongside `--library` and existing explicit link files.
+- Rejects standard-library imports that escape their configured root or fall back
+  to a project-controlled path; empty standard modules remain valid.
+
 - Supports concrete parameterized classes with fields and ordinary methods, including
   multiple instantiations such as `Box[int]` and `Box[str]`. Constraints, inheritance,
   interfaces and independently generic methods remain explicit `W2013` profile limits.

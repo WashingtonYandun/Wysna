@@ -500,7 +500,7 @@ extern "C" fn wysna_host_buffer_get(handle: opaque, index: int) -> int
 extern "C" fn wysna_host_fs_canonical(path: opaque, output: opaque) -> int
 extern "C" fn wysna_host_close(handle: opaque) -> int
 
-fn module_canonical(path: str) -> str {
+fn module_canonical_resolved(path: str) -> str {
     let input = wysna_host_buffer_new()
     let output = wysna_host_buffer_new()
     for byte in bytes(path) { wysna_host_buffer_append(input, byte) }
@@ -519,7 +519,13 @@ fn module_canonical(path: str) -> str {
     }
     wysna_host_close(input)
     wysna_host_close(output)
-    return module_normalize(if size >= 0 { join_strings(parts, "") } else { path })
+    if size < 0 { return "" }
+    return module_normalize(join_strings(parts, ""))
+}
+
+fn module_canonical(path: str) -> str {
+    let resolved = module_canonical_resolved(path)
+    return if resolved == "" { module_normalize(path) } else { resolved }
 }
 
 # An import graph belongs to one source expansion.
@@ -589,6 +595,37 @@ fn module_contains(names: list[str], name: str) -> bool {
     for candidate in names { if candidate == name { return true } }
     return false
 }
+# Standard modules are names under one root, never relative filesystem paths.
+fn module_stdlib_name_safe(requested: str) -> bool {
+    let mut segment = ""
+    for index in 4..len(requested) {
+        let ch = requested[index]
+        if ch == "\\" { return false }
+        if ch == "/" {
+            if segment == "" or segment == "." or segment == ".." { return false }
+            segment = ""
+        } else { segment = segment + ch }
+    }
+    return segment != "" and segment != "." and segment != ".."
+}
+
+# Resolve both paths physically so a symlink in the library cannot escape its root.
+fn module_stdlib_confined(requested: str, resolved: str) -> bool {
+    let relative = slice(requested, 4, len(requested)) + ".wysna"
+    if len(resolved) <= len(relative) { return false }
+    let root = slice(resolved, 0, len(resolved) - len(relative))
+    let canonical_root = module_canonical_resolved(root)
+    let canonical_file = module_canonical_resolved(resolved)
+    if canonical_root == "" or canonical_file == "" { return false }
+    let prefix = if canonical_root == "/" { "/" } else { canonical_root + "/" }
+    return len(canonical_file) > len(prefix) and slice(canonical_file, 0, len(prefix)) == prefix
+}
+
+fn module_file_readable(path: str) -> bool {
+    let content = read_file(path) else error { return false }
+    return true
+}
+
 fn module_stdlib_path(requested: str) -> str {
     let relative = "stdlib/" + slice(requested, 4, len(requested)) + ".wysna"
     let arguments = args()
@@ -598,8 +635,7 @@ fn module_stdlib_path(requested: str) -> str {
     let mut directory = module_directory(module_normalize(arguments[0]))
     while directory != "" {
         let candidate = module_normalize(directory + relative)
-        let content = read_file(candidate) else error { "" }
-        if content != "" { return candidate }
+        if module_file_readable(candidate) { return candidate }
         let parent = module_directory(slice(directory, 0, len(directory) - 1))
         if parent == directory { break }
         directory = parent
@@ -658,11 +694,17 @@ fn module_expand(context: ModuleLoader, src: str, path: str, entry: bool) -> int
             if public_import and len(body) > 0 and body[len(body) - 1].kind == "PUB" { body.pop() }
             let requested = tokens[position + 1].val
             let mut resolved = module_normalize(module_directory(canonical) + requested)
-            if len(requested) >= 4 and slice(requested, 0, 4) == "std/" { resolved = module_stdlib_path(requested) }
-            let mut content = read_file(resolved) else err { "" }
-            if content == "" {
+            let standard = len(requested) >= 4 and slice(requested, 0, 4) == "std/"
+            if standard {
+                if not module_stdlib_name_safe(requested) { report_error_at("W1003", token, "invalid standard module: " + requested) }
+                resolved = module_stdlib_path(requested)
+                if not module_file_readable(resolved) { report_error_at("W1003", token, "module not found: " + requested) }
+                if not module_stdlib_confined(requested, resolved) { report_error_at("W1003", token, "cannot resolve standard module within its root: " + requested) }
+            }
+            let content = read_file(resolved) else err {
+                if standard { report_error_at("W1003", token, "module not found: " + requested) }
                 resolved = module_normalize(requested)
-                content = read_file(resolved) else err { report_error_at("W1003", token, "module not found: " + requested) "" }
+                read_file(resolved) else err { report_error_at("W1003", token, "module not found: " + requested) "" }
             }
             let dependency = module_expand(context, content, resolved, false)
             let mut alias = extract_module_ns(requested)
