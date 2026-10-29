@@ -47,7 +47,7 @@ from checker.LayoutGraph import LayoutGraph, build_layout_graph_from_declaration
 
 class TypeChecker:
     """
-    Two-pass Semantic Analyzer and Type Checker for Wysna v0.2.
+    Semantic analyzer and type checker for Wysna Seed.
     Pass 1: Collect & register all top-level declarations (Enums, Structs, Interfaces, Classes, Functions, Imports).
     Pass 2: Check function/method bodies, local bindings, assignments, and expressions.
     """

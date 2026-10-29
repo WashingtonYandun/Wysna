@@ -524,7 +524,7 @@ fn sem_collect_record(context: SemanticContext, kind: str) {
     context.type_params = previous_type_params
 }
 fn sem_builtin(name: str) -> bool {
-    return name == "join_strings" or name == "print" or name == "eprint" or name == "len" or name == "int" or name == "float" or name == "str" or name == "ord" or name == "chr" or name == "bytes" or name == "slice" or name == "args" or name == "exit" or name == "enumerate" or name == "dict_items" or name == "read_file" or name == "write_file" or name == "Some" or name == "Ok" or name == "Err" or name == "weak" or name == "upgrade"
+    return name == "join_strings" or name == "print" or name == "eprint" or name == "len" or name == "int" or name == "float" or name == "str" or name == "ord" or name == "chr" or name == "bytes" or name == "slice" or name == "args" or name == "env" or name == "exit" or name == "enumerate" or name == "dict_items" or name == "read_file" or name == "write_file" or name == "Some" or name == "Ok" or name == "Err" or name == "weak" or name == "upgrade"
 }
 fn sem_call_builtin(context: SemanticContext, name: str, args: list[int], sources: list[Token], discard: bool) -> int {
     let count = len(args)
@@ -582,6 +582,10 @@ fn sem_call_builtin(context: SemanticContext, name: str, args: list[int], source
         if first_type.kind == "list" { return first }
         report_error_at("W2001", sem_source_at(context, sources, 0), "slice expects str or list")
         return context.string_type
+    }
+    if name == "env" {
+        sem_require_at(context, first, context.string_type, "W2001", sem_source_at(context, sources, 0))
+        return sem_wrap(context, "optional", context.string_type)
     }
     if name == "ord" or name == "bytes" or name == "read_file" or name == "write_file" {
         sem_require_at(context, first, context.string_type, "W2001", sem_source_at(context, sources, 0))

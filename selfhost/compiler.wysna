@@ -1899,7 +1899,7 @@ fn sem_collect_record(context: SemanticContext, kind: str) {
     context.type_params = previous_type_params
 }
 fn sem_builtin(name: str) -> bool {
-    return name == "join_strings" or name == "print" or name == "eprint" or name == "len" or name == "int" or name == "float" or name == "str" or name == "ord" or name == "chr" or name == "bytes" or name == "slice" or name == "args" or name == "exit" or name == "enumerate" or name == "dict_items" or name == "read_file" or name == "write_file" or name == "Some" or name == "Ok" or name == "Err" or name == "weak" or name == "upgrade"
+    return name == "join_strings" or name == "print" or name == "eprint" or name == "len" or name == "int" or name == "float" or name == "str" or name == "ord" or name == "chr" or name == "bytes" or name == "slice" or name == "args" or name == "env" or name == "exit" or name == "enumerate" or name == "dict_items" or name == "read_file" or name == "write_file" or name == "Some" or name == "Ok" or name == "Err" or name == "weak" or name == "upgrade"
 }
 fn sem_call_builtin(context: SemanticContext, name: str, args: list[int], sources: list[Token], discard: bool) -> int {
     let count = len(args)
@@ -1957,6 +1957,10 @@ fn sem_call_builtin(context: SemanticContext, name: str, args: list[int], source
         if first_type.kind == "list" { return first }
         report_error_at("W2001", sem_source_at(context, sources, 0), "slice expects str or list")
         return context.string_type
+    }
+    if name == "env" {
+        sem_require_at(context, first, context.string_type, "W2001", sem_source_at(context, sources, 0))
+        return sem_wrap(context, "optional", context.string_type)
     }
     if name == "ord" or name == "bytes" or name == "read_file" or name == "write_file" {
         sem_require_at(context, first, context.string_type, "W2001", sem_source_at(context, sources, 0))
@@ -5475,7 +5479,7 @@ fn mir_call(context: MirBuilder, node: CheckedNode) -> int {
         return mir_op(context, "call", returned, arguments, mir_abi_name(function.name), mir_literal_unit(), node.source)
     }
     if node.text == "weak" { return mir_op(context, "runtime", returned, arguments, "wysna_builtin_weak_owned", mir_literal_unit(), node.source) }
-    let builtins: list[str] = ["upgrade", "print", "eprint", "int", "float", "str", "len", "ord", "chr", "slice", "bytes", "args", "exit", "join_strings", "enumerate", "dict_items", "read_file", "write_file"]
+    let builtins: list[str] = ["upgrade", "print", "eprint", "int", "float", "str", "len", "ord", "chr", "slice", "bytes", "args", "env", "exit", "join_strings", "enumerate", "dict_items", "read_file", "write_file"]
     for name in builtins { if node.text == name { return mir_op(context, "runtime", returned, arguments, "wysna_builtin_" + name, mir_literal_unit(), node.source) } }
     mir_unsupported(node.source, "builtin call " + node.text)
     return -1
@@ -5822,6 +5826,9 @@ fn mir_verify_runtime(module: MirModule, operation: MirOperation, slots: list[Mi
     }
     if name == "wysna_builtin_print" or name == "wysna_builtin_eprint" { return returned == 1 }
     if name == "wysna_builtin_args" { return len(operation.args) == 0 and module.types[returned].kind == "list" and module.types[returned].args[0] == 5 }
+    if name == "wysna_builtin_env" {
+        return len(operation.args) == 1 and slots[operation.args[0]].type_id == 5 and mir_is_optional(module.types, returned) and module.types[returned].args[0] == 5
+    }
     if name == "wysna_builtin_read_file" or name == "wysna_builtin_write_file" {
         let expected = if name == "wysna_builtin_read_file" { 1 } else { 2 }
         if len(operation.args) != expected or not mir_is_result(module.types, returned) { return false }
