@@ -45,7 +45,7 @@ fn mir_call(context: MirBuilder, node: CheckedNode) -> int {
         return mir_op(context, "call", returned, arguments, mir_abi_name(function.name), mir_literal_unit(), node.source)
     }
     if node.text == "weak" { return mir_op(context, "runtime", returned, arguments, "wysna_builtin_weak_owned", mir_literal_unit(), node.source) }
-    let builtins: list[str] = ["upgrade", "print", "eprint", "int", "float", "str", "len", "ord", "chr", "slice", "bytes", "args", "exit", "join_strings", "enumerate", "dict_items", "read_file", "write_file"]
+    let builtins: list[str] = ["upgrade", "print", "eprint", "int", "float", "str", "len", "ord", "chr", "slice", "bytes", "args", "env", "exit", "join_strings", "enumerate", "dict_items", "read_file", "write_file"]
     for name in builtins { if node.text == name { return mir_op(context, "runtime", returned, arguments, "wysna_builtin_" + name, mir_literal_unit(), node.source) } }
     mir_unsupported(node.source, "builtin call " + node.text)
     return -1

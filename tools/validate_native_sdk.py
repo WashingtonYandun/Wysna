@@ -112,6 +112,22 @@ def validate(sdk, report, strict_source=False, compiler_source=None):
         checks.append({'name': 'independent-application', 'status': result.returncode})
         run('run-without-host-tools', ['run', source], stdout='hello Wysna á\n'.encode())
 
+        environment_source = project / 'environment.wysna'
+        environment_source.write_text('import "std/environment" as environment\n'
+                                      'let arguments = environment.arguments()\n'
+                                      'let label = if len(arguments) > 1 { arguments[1] } else { "<no-arg>" }\n'
+                                      'print(environment.get("WYSNA_NATIVE_SDK_TEST") ?? "<unset>", label)\n',
+                                      encoding='utf-8')
+        missing_environment = dict(environment)
+        missing_environment.pop('WYSNA_NATIVE_SDK_TEST', None)
+        run('environment-get-absent', ['run', environment_source, '--', 'cli-argument'],
+            stdout=b'<unset> cli-argument\n', custom=missing_environment)
+        run('environment-get-empty', ['run', environment_source, '--', 'cli-argument'], stdout=b' cli-argument\n',
+            custom={**environment, 'WYSNA_NATIVE_SDK_TEST': ''})
+        run('environment-get-utf8', ['run', environment_source, '--', 'CLI á界'],
+            stdout='SDK á界 CLI á界\n'.encode('utf-8'),
+            custom={**environment, 'WYSNA_NATIVE_SDK_TEST': 'SDK á界'})
+
         adapter = project / 'adapter á.c'
         adapter.write_text('#include <stdint.h>\n#include <stdio.h>\n'
                            'int64_t wysna_sdk_double(int32_t value) { return (int64_t)value * 2; }\n'

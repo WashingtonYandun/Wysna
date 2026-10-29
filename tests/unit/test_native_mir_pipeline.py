@@ -4,6 +4,7 @@ from pathlib import Path
 import subprocess
 import tempfile
 import unittest
+from unittest.mock import patch
 
 from common.Platform import compiler_command, executable_name
 from compiler.Bootstrap import ensure_selfhost_compiler_binary
@@ -287,6 +288,41 @@ class NativeMirPipelineTests(unittest.TestCase):
                     self.assertEqual(expected[0], 0, expected[2])
                     self.assertEqual(self.execute(CCodeGen(arena).generate(module), directory, "exchange"), expected)
                     self.assertEqual(self.execute(native, directory, "native"), expected)
+
+    def test_environment_module_preserves_absent_empty_and_utf8_values(self):
+        variable = "WYSNA_NATIVE_PROFILE_TEST"
+        code = ('import "std/environment" as environment\n'
+                'let arguments = environment.arguments()\n'
+                'let label = if len(arguments) > 1 { arguments[1] } else { "<no-arg>" }\n'
+                'print(environment.get("' + variable + '") ?? "<unset>", label)\n')
+        with tempfile.TemporaryDirectory(prefix="wysna-native-environment-") as temporary:
+            directory = Path(temporary).resolve()
+            source = directory / "environment.wysna"
+            source.write_text(code, encoding="utf-8")
+            service = CompilerService()
+            checked = service.check_file(source)
+            payload = self.invoke("--emit-mir", source)
+            module, arena = import_module(payload)
+            emissions = {
+                "ast": service._emit_ast_oracle_for_testing(checked).source,
+                "exchange": CCodeGen(arena).generate(module),
+                "native": self.invoke("--emit-c-mir", source),
+            }
+            seed = service.emit_c(checked).source
+            emissions["hir"] = seed
+            cases = ((None, b"<unset> <no-arg>\n"), ("", b" <no-arg>\n"),
+                     ("Wysna á界", "Wysna á界 <no-arg>\n".encode("utf-8")))
+            for value, expected_output in cases:
+                with self.subTest(value=value), patch.dict(os.environ):
+                    os.environ.pop(variable, None)
+                    if value is not None:
+                        os.environ[variable] = value
+                    reference = self.execute(seed, directory, "environment-hir")
+                    self.assertEqual(reference[0], 0, reference[2])
+                    self.assertEqual(reference[1], expected_output)
+                    for engine, emission in emissions.items():
+                        with self.subTest(value=value, engine=engine):
+                            self.assertEqual(self.execute(emission, directory, "environment-" + engine), reference)
 
     def test_runtime_errors_match_independent_consumers(self):
         cases = [
