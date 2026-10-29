@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """Accept an installed Seed product outside its checkout and host development tools."""
 import argparse
+import hashlib
 import json
 import os
 from pathlib import Path
@@ -59,7 +60,23 @@ def validate(installation, report, expected_commit=None):
         assert created['status'] == 'ok' and len(created['artifacts']) == 3, created
         new_manifest = work / 'new-project' / 'wysna.toml'
         run('new-project-check', ['project', 'check', '--manifest', new_manifest])
+        run('new-project-run', ['project', 'run', '--manifest', new_manifest],
+            expected='Hello, Wysna!\n')
         run('new-project-test', ['project', 'test', '--manifest', new_manifest])
+        project_binary = work / 'new-project-build' / ('app.exe' if os.name == 'nt' else 'app')
+        project_build = json.loads(run(
+            'new-project-build',
+            ['project', 'build', '--manifest', new_manifest, '--output-format=json-v1', '-o', project_binary],
+        ).stdout)
+        assert project_build['status'] == 'ok', project_build
+        assert project_build['target']['profile'] == 'native-cli', project_build
+        binaries = [artifact for artifact in project_build['artifacts']
+                    if artifact['kind'] == 'native_executable']
+        assert len(binaries) == 1, project_build
+        built_binary = Path(binaries[0]['path']).resolve()
+        assert built_binary == project_binary.resolve() and built_binary.is_file(), project_build
+        assert binaries[0]['sha256'] == hashlib.sha256(built_binary.read_bytes()).hexdigest(), project_build
+        run('new-project-built-execution', [], executable=built_binary, expected='Hello, Wysna!\n')
         health = json.loads(run('full-integrity', ['doctor', '--output-format=json-v1']).stdout)
         assert health['result']['verified_files'] == len(manifest['files']), health
         assert health['result']['root'] == str(installation), health
@@ -67,6 +84,10 @@ def validate(installation, report, expected_commit=None):
         assert 'explain' in capabilities['result']['commands'], capabilities
         assert 'doctor' in capabilities['result']['commands'], capabilities
         assert 'doctor' in capabilities['result']['machine_output']['commands'], capabilities
+        profiles = {profile['profile']: profile for profile in capabilities['result']['target_profiles']}
+        assert set(profiles) == {'native-cli', 'wasi-command', 'browser-library'}, profiles
+        assert all(profile['engine'] == 'wysna-seed' and profile['backend'] == 'c99'
+                   for profile in profiles.values()), profiles
         run('api-discovery', ['api', 'std/json', '--output-format=json-v1'])
         source = work / 'JSON á & spaces.wysna'
         source.write_text('import "std/json" as json\n'

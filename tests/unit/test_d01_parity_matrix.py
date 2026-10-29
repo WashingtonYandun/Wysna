@@ -54,6 +54,8 @@ def test_unsupported_reasons_and_milestones():
     print("  [TEST] Explicit tracking reasons for unsupported engine features...")
     profiles = json.loads((ROOT / "tests/engine_profiles.json").read_text())
     features = profiles.get("features", {})
+    assert profiles.get("fixtures", {}).get("tests/runtime/generic_class_methods.wysna") == "generic_class_methods"
+    assert features.get("generic_class_methods") == {}, "Concrete generic class methods must be measured across all engines"
 
     # Core must be supported across all engines
     core = features.get("core", {})

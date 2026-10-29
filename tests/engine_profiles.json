@@ -2,6 +2,7 @@
   "features": {
     "core": {},
     "generics": {},
+    "generic_class_methods": {},
     "checked_modules": {},
     "error_unions": {},
     "functions": {},
@@ -9,6 +10,7 @@
     "regressions": {}
   },
   "fixtures": {
+    "tests/runtime/generic_class_methods.wysna": "generic_class_methods",
     "tests/runtime/generic_domain_err.wysna": "generics",
     "tests/runtime/generic_enum_option.wysna": "generics",
     "tests/runtime/generic_enum_result.wysna": "generics",
