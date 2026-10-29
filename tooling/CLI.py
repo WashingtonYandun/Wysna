@@ -421,6 +421,16 @@ def main(argv=None) -> None:
 
     prog_cmd = "wysna"
 
+    if capability_policy is not None:
+        if link_libraries:
+            usage_error("--link-lib cannot be combined with a capability policy")
+        if (subcmd not in (None, "run") or backend_explicit or engine_explicit
+                or backend != "c99" or engine != "seed"
+                or check_only or fmt_only or show_tokens or show_ast or show_mir
+                or emit_c_path is not None or build_bin_path is not None
+                or emit_llvm_path is not None):
+            usage_error("--allow and --deny are supported only by interpreted run")
+
     if subcmd == "emit-llvm" and backend != "llvm-experimental":
         usage_error("emit-llvm requires --backend=llvm-experimental")
     if backend_explicit and backend == "c99" and subcmd not in ("emit-c", "build"):
@@ -444,16 +454,6 @@ def main(argv=None) -> None:
         if (show_tokens or show_ast or show_mir or fmt_only or fmt_write
                 or emit_c_path is not None or json_diagnostics):
             usage_error("llvm-experimental does not support these diagnostic, C generation, or build options")
-
-    if capability_policy is not None:
-        if link_libraries:
-            usage_error("--link-lib cannot be combined with a capability policy")
-        if (subcmd not in (None, "run") or backend_explicit or engine_explicit
-                or backend != "c99" or engine != "seed"
-                or check_only or fmt_only or show_tokens or show_ast or show_mir
-                or emit_c_path is not None or build_bin_path is not None
-                or emit_llvm_path is not None):
-            usage_error("--allow and --deny are supported only by interpreted run")
 
     if requested_invocation_id is not None and report_json_path is None:
         usage_error("--invocation-id requires --report-json")
