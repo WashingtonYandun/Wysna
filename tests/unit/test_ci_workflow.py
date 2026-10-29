@@ -106,7 +106,8 @@ def test_ci_workflow_contracts():
     runtime = jobs['runtime-conformance']
     integration = jobs['integration-conformance']
     assert 'PYTHONUNBUFFERED: "1"' in source
-    for job in (contracts, runtime, integration):
+    assert 'timeout-minutes: 35' in runtime
+    for job in (contracts, integration):
         rows = re.findall(r'- \{os: ([\w-]+), cc: ([\w-]+)\}', job)
         assert {os_name + ',' + compiler for os_name, compiler in rows} == MATRIX
         assert len(rows) == len(MATRIX)

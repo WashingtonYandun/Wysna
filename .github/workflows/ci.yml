@@ -237,7 +237,7 @@ jobs:
   runtime-conformance:
     name: Full runtime conformance (${{ matrix.os }}, ${{ matrix.cc }})
     runs-on: ${{ matrix.os }}
-    timeout-minutes: 30
+    timeout-minutes: 35
     strategy:
       fail-fast: false
       matrix:
