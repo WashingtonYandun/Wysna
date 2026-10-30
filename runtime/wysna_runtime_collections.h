@@ -53,10 +53,11 @@ static inline WVal wysna_make_range(WVal start, WVal end, bool inclusive) {
 }
 
 static inline WVal wysna_make_tuple(int32_t count, const WVal* elems) {
-    WTupleBuf* t = (WTupleBuf*)wysna_alloc_safe(sizeof(WTupleBuf));
+    size_t items_size = sizeof(WVal) * (size_t)(count > 0 ? count : 1);
+    WTupleBuf* t = (WTupleBuf*)wysna_alloc_safe(sizeof(WTupleBuf) + items_size);
     t->refcount = 1;
     t->len = count;
-    t->items = (WVal*)wysna_alloc_safe(sizeof(WVal) * (count > 0 ? count : 1));
+    t->items = (WVal*)((char*)t + sizeof(WTupleBuf));
     wysna_mem_on_alloc();
     for (int32_t i = 0; i < count; i++) {
         t->items[i] = wysna_clone(elems[i]);

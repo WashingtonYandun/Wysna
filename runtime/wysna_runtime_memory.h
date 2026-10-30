@@ -285,7 +285,6 @@ static WVal* wysna_release_deferred(WVal* slot, int32_t* produced) {
             WVal* out = len > 0 ? (WVal*)malloc(sizeof(WVal) * (size_t)len) : NULL;
             if (len > 0 && !out) { fprintf(stderr, "[W4003] RuntimeError: out of memory\n"); exit(1); }
             for (int32_t i = 0; i < len; i++) out[i] = t->items[i];
-            free(t->items);
             free(t);
             wysna_mem_on_free();
             *produced = len;
