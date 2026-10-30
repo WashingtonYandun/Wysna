@@ -368,6 +368,47 @@ class CCodeGen:
             if kind == 'call':
                 arguments, returned, boxed = self.abi_call(name, args)
                 return [self.write(result, name + '(' + ', '.join(arguments) + ')', boxed=boxed)]
+            if kind == 'runtime':
+                if name in ('wysna_add', 'wysna_sub', 'wysna_mul') and len(operation.args) == 2:
+                    t0 = self.slots[operation.args[0]].type_id
+                    t1 = self.slots[operation.args[1]].type_id
+                    left = self.scalar(operation.args[0])
+                    right = self.scalar(operation.args[1])
+                    op = {'wysna_add': ' + ', 'wysna_sub': ' - ', 'wysna_mul': ' * '}[name]
+                    if t0 == TYPE_INT and t1 == TYPE_INT:
+                        return [self.write(result, f'(int64_t)((uint64_t){left}{op}(uint64_t){right})', boxed=False)]
+                    if t0 == TYPE_FLOAT and t1 == TYPE_FLOAT:
+                        return [self.write(result, f'{left}{op}{right}', boxed=False)]
+                elif name == 'wysna_neg' and len(operation.args) == 1:
+                    t0 = self.slots[operation.args[0]].type_id
+                    operand = self.scalar(operation.args[0])
+                    if t0 == TYPE_INT:
+                        return [self.write(result, f'(int64_t)(0ULL - (uint64_t){operand})', boxed=False)]
+                    if t0 == TYPE_FLOAT:
+                        return [self.write(result, f'-{operand}', boxed=False)]
+                elif name == 'wysna_not' and len(operation.args) == 1:
+                    t0 = self.slots[operation.args[0]].type_id
+                    operand = self.scalar(operation.args[0])
+                    if t0 == TYPE_BOOL:
+                        return [self.write(result, f'!{operand}', boxed=False)]
+                elif name in ('wysna_lt', 'wysna_le', 'wysna_gt', 'wysna_ge') and len(operation.args) == 2:
+                    t0 = self.slots[operation.args[0]].type_id
+                    t1 = self.slots[operation.args[1]].type_id
+                    if (t0 == TYPE_INT and t1 == TYPE_INT) or (t0 == TYPE_FLOAT and t1 == TYPE_FLOAT):
+                        left = self.scalar(operation.args[0])
+                        right = self.scalar(operation.args[1])
+                        op = {'wysna_lt': ' < ', 'wysna_le': ' <= ', 'wysna_gt': ' > ', 'wysna_ge': ' >= '}[name]
+                        return [self.write(result, f'{left}{op}{right}', boxed=False)]
+                elif name in ('wysna_equal', 'wysna_not_equal') and len(operation.args) == 2:
+                    t0 = self.slots[operation.args[0]].type_id
+                    t1 = self.slots[operation.args[1]].type_id
+                    if ((t0 == TYPE_INT and t1 == TYPE_INT) or
+                        (t0 == TYPE_FLOAT and t1 == TYPE_FLOAT) or
+                        (t0 == TYPE_BOOL and t1 == TYPE_BOOL)):
+                        left = self.scalar(operation.args[0])
+                        right = self.scalar(operation.args[1])
+                        op = ' == ' if name == 'wysna_equal' else ' != '
+                        return [self.write(result, f'{left}{op}{right}', boxed=False)]
             if name in ('wysna_builtin_print', 'wysna_builtin_eprint'):
                 args = [str(len(args)), self.array(args)]
             elif name in ('wysna_enum', 'wysna_enum_payload'):

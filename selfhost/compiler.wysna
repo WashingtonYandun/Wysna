@@ -6489,6 +6489,52 @@ fn mir_c_operation(module: MirModule, function: MirFunction, operation: MirOpera
     }
     if kind == "runtime" or kind == "call" {
         let name = if operation.name == "wysna_make_range_inclusive" { "wysna_make_range" } else { operation.name }
+        if kind == "runtime" {
+            if (name == "wysna_add" or name == "wysna_sub" or name == "wysna_mul") and len(operation.args) == 2 {
+                let t0 = function.slots[operation.args[0]].type_id
+                let t1 = function.slots[operation.args[1]].type_id
+                let left = mir_c_name(operation.args[0])
+                let right = mir_c_name(operation.args[1])
+                let op = if name == "wysna_add" { " + " } elif name == "wysna_sub" { " - " } else { " * " }
+                if t0 == 3 and t1 == 3 {
+                    return mir_c_write(function, result, "(int64_t)((uint64_t)" + left + op + "(uint64_t)" + right + ")", false)
+                }
+                if t0 == 4 and t1 == 4 {
+                    return mir_c_write(function, result, left + op + right, false)
+                }
+            }
+            if name == "wysna_neg" and len(operation.args) == 1 {
+                let t0 = function.slots[operation.args[0]].type_id
+                let operand = mir_c_name(operation.args[0])
+                if t0 == 3 { return mir_c_write(function, result, "(int64_t)(0ULL - (uint64_t)" + operand + ")", false) }
+                if t0 == 4 { return mir_c_write(function, result, "-" + operand, false) }
+            }
+            if name == "wysna_not" and len(operation.args) == 1 {
+                let t0 = function.slots[operation.args[0]].type_id
+                let operand = mir_c_name(operation.args[0])
+                if t0 == 2 { return mir_c_write(function, result, "!" + operand, false) }
+            }
+            if (name == "wysna_lt" or name == "wysna_le" or name == "wysna_gt" or name == "wysna_ge") and len(operation.args) == 2 {
+                let t0 = function.slots[operation.args[0]].type_id
+                let t1 = function.slots[operation.args[1]].type_id
+                if (t0 == 3 and t1 == 3) or (t0 == 4 and t1 == 4) {
+                    let left = mir_c_name(operation.args[0])
+                    let right = mir_c_name(operation.args[1])
+                    let op = if name == "wysna_lt" { " < " } elif name == "wysna_le" { " <= " } elif name == "wysna_gt" { " > " } else { " >= " }
+                    return mir_c_write(function, result, left + op + right, false)
+                }
+            }
+            if (name == "wysna_equal" or name == "wysna_not_equal") and len(operation.args) == 2 {
+                let t0 = function.slots[operation.args[0]].type_id
+                let t1 = function.slots[operation.args[1]].type_id
+                if (t0 == 2 and t1 == 2) or (t0 == 3 and t1 == 3) or (t0 == 4 and t1 == 4) {
+                    let left = mir_c_name(operation.args[0])
+                    let right = mir_c_name(operation.args[1])
+                    let op = if name == "wysna_equal" { " == " } else { " != " }
+                    return mir_c_write(function, result, left + op + right, false)
+                }
+            }
+        }
         if name == "wysna_enum" or name == "wysna_enum_payload" {
             let labels = if len(operation.labels) == 2 { operation.labels } else { ["Option", "Some"] }
             let mut prefixed: list[str] = [escape_c_str(labels[0]), escape_c_str(labels[1])]
