@@ -99,14 +99,18 @@ static inline WVal wysna_make_dict(int32_t count, const WVal* keys, const WVal* 
 }
 
 static inline WVal wysna_make_struct(const char* name, int32_t count, const char** keys, const WVal* vals) {
-    WStructBuf* st = (WStructBuf*)wysna_alloc_safe(sizeof(WStructBuf));
+    int32_t cap = count > 0 ? count : 1;
+    size_t keys_size = sizeof(const char*) * (size_t)cap;
+    size_t vals_size = sizeof(WVal) * (size_t)cap;
+    size_t total = sizeof(WStructBuf) + keys_size + vals_size;
+    WStructBuf* st = (WStructBuf*)wysna_alloc_safe(total);
     st->refcount = 1;
     st->control = NULL;
     st->vtable = NULL;
     st->name = name;
     st->len = count;
-    st->keys = (const char**)wysna_alloc_safe(sizeof(const char*) * (count > 0 ? count : 1));
-    st->vals = (WVal*)wysna_alloc_safe(sizeof(WVal) * (count > 0 ? count : 1));
+    st->keys = (const char**)((char*)st + sizeof(WStructBuf));
+    st->vals = (WVal*)((char*)st + sizeof(WStructBuf) + keys_size);
     wysna_mem_on_alloc();
     for (int32_t i = 0; i < count; i++) {
         st->keys[i] = keys[i];
@@ -116,7 +120,11 @@ static inline WVal wysna_make_struct(const char* name, int32_t count, const char
 }
 
 static inline WVal wysna_make_object(const char* name, int32_t count, const char** keys, const WVal* vals) {
-    WStructBuf* st = (WStructBuf*)wysna_alloc_safe(sizeof(WStructBuf));
+    int32_t cap = count > 0 ? count : 1;
+    size_t keys_size = sizeof(const char*) * (size_t)cap;
+    size_t vals_size = sizeof(WVal) * (size_t)cap;
+    size_t total = sizeof(WStructBuf) + keys_size + vals_size;
+    WStructBuf* st = (WStructBuf*)wysna_alloc_safe(total);
     st->refcount = 1;
     st->control = (WWeakControl*)wysna_alloc_safe(sizeof(WWeakControl));
     st->control->strong = 1;
@@ -126,8 +134,8 @@ static inline WVal wysna_make_object(const char* name, int32_t count, const char
     st->vtable = NULL;
     st->name = name;
     st->len = count;
-    st->keys = (const char**)wysna_alloc_safe(sizeof(const char*) * (count > 0 ? count : 1));
-    st->vals = (WVal*)wysna_alloc_safe(sizeof(WVal) * (count > 0 ? count : 1));
+    st->keys = (const char**)((char*)st + sizeof(WStructBuf));
+    st->vals = (WVal*)((char*)st + sizeof(WStructBuf) + keys_size);
     wysna_mem_on_alloc();
     for (int32_t i = 0; i < count; i++) {
         st->keys[i] = keys[i];

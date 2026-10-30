@@ -249,8 +249,6 @@ static WVal* wysna_release_deferred(WVal* slot, int32_t* produced) {
             WVal* out = len > 0 ? (WVal*)malloc(sizeof(WVal) * (size_t)len) : NULL;
             if (len > 0 && !out) { fprintf(stderr, "[W4003] RuntimeError: out of memory\n"); exit(1); }
             for (int32_t i = 0; i < len; i++) out[i] = object->vals[i];
-            free(object->keys);
-            free(object->vals);
             free(object);
             wysna_mem_on_free();
             if (--control->weak == 0) {
@@ -271,8 +269,6 @@ static WVal* wysna_release_deferred(WVal* slot, int32_t* produced) {
             WVal* out = len > 0 ? (WVal*)malloc(sizeof(WVal) * (size_t)len) : NULL;
             if (len > 0 && !out) { fprintf(stderr, "[W4003] RuntimeError: out of memory\n"); exit(1); }
             for (int32_t i = 0; i < len; i++) out[i] = st->vals[i];
-            free(st->keys);
-            free(st->vals);
             free(st);
             wysna_mem_on_free();
             *produced = len;
@@ -555,15 +551,18 @@ static inline void wysna_struct_detach(WVal* v) {
     if (old_b->refcount <= 1) return;
     old_b->refcount--;
     wysna_g_release_count++;
-    WStructBuf* new_b = (WStructBuf*)wysna_alloc_safe(sizeof(WStructBuf));
+    int32_t cap = old_b->len > 0 ? old_b->len : 1;
+    size_t keys_size = sizeof(const char*) * (size_t)cap;
+    size_t vals_size = sizeof(WVal) * (size_t)cap;
+    size_t total = sizeof(WStructBuf) + keys_size + vals_size;
+    WStructBuf* new_b = (WStructBuf*)wysna_alloc_safe(total);
     new_b->refcount = 1;
     new_b->control = NULL;
     new_b->vtable = NULL;
     new_b->name = old_b->name;
     new_b->len = old_b->len;
-    int32_t cap = old_b->len > 0 ? old_b->len : 1;
-    new_b->keys = (const char**)wysna_alloc_safe(sizeof(const char*) * cap);
-    new_b->vals = (WVal*)wysna_alloc_safe(sizeof(WVal) * cap);
+    new_b->keys = (const char**)((char*)new_b + sizeof(WStructBuf));
+    new_b->vals = (WVal*)((char*)new_b + sizeof(WStructBuf) + keys_size);
     wysna_mem_on_alloc();
 
     /* B02: CoW detach telemetry */
@@ -571,7 +570,7 @@ static inline void wysna_struct_detach(WVal* v) {
     wysna_g_cow_copied_slots += old_b->len;
     wysna_g_cow_copied_bytes += (int64_t)((sizeof(const char*) + sizeof(WVal)) * old_b->len);
     wysna_g_cow_allocated_bytes += (int64_t)(sizeof(WStructBuf) + (sizeof(const char*) * cap) + (sizeof(WVal) * cap));
-    wysna_g_cow_alloc_count += 3;
+    wysna_g_cow_alloc_count += 1;
 
     for (int32_t i = 0; i < old_b->len; i++) {
         new_b->keys[i] = old_b->keys[i];
