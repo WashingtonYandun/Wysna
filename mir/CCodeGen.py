@@ -286,8 +286,11 @@ class CCodeGen:
                 condition = self.scalar(term.value)
                 lines.append(f'    if ({condition}) goto bb{term.targets[0]}; else goto bb{term.targets[1]};')
             elif term.kind == 'return':
-                value = self.value(term.value, move=True)
-                expression = self.unbox_expression(value, function.return_type)
+                slot = self.slots[term.value]
+                if slot.storage == 'value':
+                    expression = f'wysna_move(&{self.name(term.value)})'
+                else:
+                    expression = self.name(term.value)
                 lines.append(f'    return {expression};')
             else:
                 lines.append('    wysna_runtime_fail("W9999", "Unreachable MIR block executed");')
@@ -325,12 +328,18 @@ class CCodeGen:
             elif value is None:
                 expression = 'wysna_unit()' if slot.type_id == TYPE_UNIT or data.get('placeholder') else 'wysna_none()'
             elif isinstance(value, bool):
+                if slot.storage == 'boolean':
+                    return [self.write(result, str(value).lower(), boxed=False)]
                 expression = 'wysna_bool(' + str(value).lower() + ')'
             elif isinstance(value, int):
                 number = '(-9223372036854775807LL - 1LL)' if value == -9223372036854775808 else str(value) + 'LL'
+                if slot.storage in ('integer', 'counter'):
+                    return [self.write(result, number, boxed=False)]
                 expression = 'wysna_int(' + number + ')'
             elif isinstance(value, float):
                 literal = repr(value) if math.isfinite(value) else 'NAN' if math.isnan(value) else 'INFINITY' if value > 0 else '-INFINITY'
+                if slot.storage == 'float':
+                    return [self.write(result, literal, boxed=False)]
                 expression = 'wysna_float(' + literal + ')'
             else:
                 if len(value) > 1:
@@ -341,9 +350,13 @@ class CCodeGen:
                 expression = f'wysna_str_n({quote(value)}, {len(value.encode("utf-8"))})'
             return [self.write(result, expression, boxed=self.slots[result].storage != 'predicate')]
         if kind in ('clone', 'narrow'):
+            if self.slots[result].storage != 'value' and self.slots[operation.args[0]].storage != 'value':
+                return [self.write(result, self.name(operation.args[0]), boxed=False)]
             value = args[0] if self.slots[result].storage != 'value' else f'wysna_clone({args[0]})'
             return [self.write(result, value)]
         if kind == 'store':
+            if self.slots[result].storage != 'value' and self.slots[operation.args[0]].storage != 'value':
+                return [self.write(result, self.name(operation.args[0]), boxed=False)]
             if data.get('scalar'):
                 return [self.write(result, self.scalar(operation.args[0]), boxed=False)]
             return [self.write(result, args[0])]
