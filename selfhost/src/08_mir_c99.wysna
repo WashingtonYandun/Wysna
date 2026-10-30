@@ -244,7 +244,16 @@ fn mir_c_operation(module: MirModule, function: MirFunction, operation: MirOpera
                 if callee.name == name {
                     found = true
                     boxed = mir_value_storage(callee.return_type)
-                    for i in 0..len(arguments) { arguments[i] = mir_c_unbox(arguments[i], callee.slots[callee.params[i]].type_id) }
+                    for i in 0..len(arguments) {
+                        let param_type = callee.slots[callee.params[i]].type_id
+                        let arg_id = operation.args[i]
+                        let arg_type = function.slots[arg_id].type_id
+                        if not mir_value_storage(param_type) and not mir_value_storage(arg_type) {
+                            arguments[i] = mir_c_name(arg_id)
+                        } else {
+                            arguments[i] = mir_c_unbox(arguments[i], param_type)
+                        }
+                    }
                 }
             }
             for external in module.externs { if external.name == name { found = true boxed = true } }
