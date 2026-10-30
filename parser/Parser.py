@@ -808,6 +808,10 @@ class Parser:
                         continue
                     self.pos = saved
 
+                if self.check(TokenType.NEWLINE) and self.peek(1).type == TokenType.DOT:
+                    self.advance()
+                    continue
+
                 if self.check(TokenType.LPAREN):
                     # Call expression
                     paren = self.advance()
