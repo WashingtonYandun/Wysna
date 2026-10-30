@@ -132,7 +132,11 @@ typedef struct WysnaRuntimeContext {
 #endif
 } WysnaRuntimeContext;
 
+#ifdef WYSNA_SHARED_RUNTIME
+extern WysnaRuntimeContext wysna_runtime_context;
+#else
 static WysnaRuntimeContext wysna_runtime_context = {0};
+#endif
 #define wysna_g_string_literals (wysna_runtime_context.string_literals)
 #ifdef W_STRING_METRICS
 #define wysna_g_string_scan_steps (wysna_runtime_context.string_scan_steps)
