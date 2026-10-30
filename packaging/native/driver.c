@@ -32,8 +32,8 @@
 
 typedef struct {
     const char *command, *source, *output, *profile;
-    int arguments, include_count, link_count, library_count, profile_set, timeout_set;
-    const char *includes[SDK_LINK_LIMIT], *links[SDK_LINK_LIMIT], *libraries[SDK_LINK_LIMIT];
+    int arguments, include_count, link_count, library_count, library_dir_count, profile_set, timeout_set;
+    const char *includes[SDK_LINK_LIMIT], *links[SDK_LINK_LIMIT], *libraries[SDK_LINK_LIMIT], *library_dirs[SDK_LINK_LIMIT];
     int64_t timeout;
 } SdkOptions;
 typedef struct {
@@ -65,7 +65,7 @@ static void sdk_help(void) {
          "       wysna emit-c|emit-mir SOURCE [-o OUTPUT]\n"
          "       wysna build SOURCE [-o OUTPUT] [--profile dev|release|size]\n"
          "       wysna run SOURCE [--profile dev|release|size] [--timeout-ms N] [-- ARGUMENTS]\n"
-         "Build and run accept --include-dir DIR, --link FILE and --library NAME.\n"
+         "Build and run accept --include-dir DIR, --link FILE, --library-dir DIR and --library NAME.\n"
          "This SDK compiles through verified MIR without Python. See native-sdk.json for its profile.");
 }
 static int sdk_parse(SdkOptions* options, int argc, char** argv) {
@@ -88,6 +88,7 @@ static int sdk_parse(SdkOptions* options, int argc, char** argv) {
             options->timeout = parsed;
         } else if (strcmp(value, "--include-dir") == 0 && options->include_count < SDK_LINK_LIMIT) options->includes[options->include_count++] = argument;
         else if (strcmp(value, "--link") == 0 && options->link_count < SDK_LINK_LIMIT) options->links[options->link_count++] = argument;
+        else if (strcmp(value, "--library-dir") == 0 && options->library_dir_count < SDK_LINK_LIMIT) options->library_dirs[options->library_dir_count++] = argument;
         else if (strcmp(value, "--library") == 0 && options->library_count < SDK_LINK_LIMIT) {
             if (!argument[0]) return 0;
             for (const char* current = argument; *current; current++)
@@ -98,7 +99,7 @@ static int sdk_parse(SdkOptions* options, int argc, char** argv) {
     if (!options->source) return 0;
     if (strcmp(options->profile, "dev") && strcmp(options->profile, "release") && strcmp(options->profile, "size")) return 0;
     int compiles = strcmp(options->command, "build") == 0 || strcmp(options->command, "run") == 0;
-    if (!compiles && (options->include_count || options->link_count || options->library_count || options->profile_set)) return 0;
+    if (!compiles && (options->include_count || options->link_count || options->library_count || options->library_dir_count || options->profile_set)) return 0;
     if (options->timeout_set && strcmp(options->command, "run")) return 0;
     if (options->output && (strcmp(options->command, "check") == 0 || strcmp(options->command, "run") == 0)) return 0;
     return 1;
@@ -197,6 +198,10 @@ static int sdk_build(SdkInvocation* invocation, const SdkOptions* options) {
     for (int index = 0; index < options->link_count; index++) {
         if (!sdk_absolute(invocation->scratch, options->links[index], 1) || !sdk_is_file(invocation->scratch)) return sdk_error("W5002", "Invalid link input", options->links[index]);
         arguments[count++] = sdk_owned(invocation, "", invocation->scratch);
+    }
+    for (int index = 0; index < options->library_dir_count; index++) {
+        if (!sdk_absolute(invocation->scratch, options->library_dirs[index], 1) || !sdk_is_directory(invocation->scratch)) return sdk_error("W5002", "Invalid library directory", options->library_dirs[index]);
+        arguments[count++] = sdk_owned(invocation, "-L", invocation->scratch);
     }
     for (int index = 0; index < options->library_count; index++) arguments[count++] = sdk_owned(invocation, "-l", options->libraries[index]);
 #ifdef _WIN32

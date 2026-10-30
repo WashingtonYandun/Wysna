@@ -154,6 +154,41 @@ def validate(sdk, report, strict_source=False, compiler_source=None):
         run('external-C-adapter-widths-and-stdin', ['run', foreign, '--link', adapter],
             stdout=b'42 65\n', stdin=b'A')
 
+        library_directory = project / 'library directory á with spaces'
+        library_directory.mkdir()
+        library_source = library_directory / 'fixture.c'
+        library_source.write_text('#include <stdint.h>\nint64_t wysna_sdk_library_value(void) { return 42; }\n',
+                                  encoding='utf-8')
+        library_object = library_directory / 'fixture.o'
+        library_archive = library_directory / 'libwysna_sdk_fixture.a'
+        zig = installed / ('toolchain/zig/zig' + suffix)
+        zig_environment = dict(environment, ZIG_LOCAL_CACHE_DIR=str(work / 'fixture local cache'),
+                               ZIG_GLOBAL_CACHE_DIR=str(work / 'fixture global cache'))
+        compiled = subprocess.run([str(zig), 'cc', '-target', manifest['target'], '-c',
+                                   str(library_source), '-o', str(library_object)], cwd=project,
+                                  env=zig_environment, capture_output=True, timeout=180)
+        require(compiled.returncode == 0, ('fixture object', compiled.stderr))
+        archived = subprocess.run([str(zig), 'ar', 'rcs', str(library_archive), str(library_object)],
+                                  cwd=project, env=zig_environment, capture_output=True, timeout=180)
+        require(archived.returncode == 0, ('fixture archive', archived.stderr))
+        library_program = project / 'library-consumer.wysna'
+        library_program.write_text('extern "C" fn wysna_sdk_library_value() -> int64\n'
+                                   'print(wysna_sdk_library_value())\n', encoding='utf-8')
+        run('external-library-search-directory',
+            ['run', library_program, '--library-dir', library_directory.name, '--library', 'wysna_sdk_fixture'],
+            stdout=b'42\n')
+        run('reject-missing-library-directory',
+            ['build', library_program, '--library-dir', project / 'missing-library-directory'],
+            expected=2, error='W5002')
+        run('reject-file-as-library-directory', ['build', library_program, '--library-dir', library_source],
+            expected=2, error='W5002')
+        run('reject-library-directory-for-check', ['check', library_program, '--library-dir', library_directory],
+            expected=2, error='W5002')
+        too_many_library_dirs = ['build', library_program]
+        for _ in range(17):
+            too_many_library_dirs.extend(['--library-dir', library_directory])
+        run('reject-excess-library-directories', too_many_library_dirs, expected=2, error='W5002')
+
         semantics = project / 'semantics.wysna'
         semantics.write_text('struct Box[T] { value: T }\n'
                              'struct Box__0 { label: str }\n'
@@ -217,6 +252,39 @@ def validate(sdk, report, strict_source=False, compiler_source=None):
             run('no-CWD-stdlib-fallback', ['check', source], expected=1, error='W1003')
         finally:
             backup.rename(text)
+        # A missing standard module must never be satisfied by a project-controlled
+        # path, including the extensionless path used by the compiler's old fallback.
+        project_std = project / 'std'
+        project_std.mkdir()
+        (project_std / 'ghost').write_text('pub fn marker() -> str { "shadowed" }\n', encoding='utf-8')
+        shadow = project / 'shadow.wysna'
+        shadow.write_text('import "std/ghost" as ghost\nprint(ghost.marker())\n', encoding='utf-8')
+        run('reject-extensionless-CWD-stdlib-shadow', ['check', shadow], expected=1, error='W1003')
+        escape = installed / 'escape.wysna'
+        escape.write_text('pub fn marker() -> str { "escaped" }\n', encoding='utf-8')
+        try:
+            shadow.write_text('import "std/../escape" as ghost\nprint(ghost.marker())\n', encoding='utf-8')
+            run('reject-stdlib-parent-traversal', ['check', shadow], expected=1, error='W1003')
+        finally:
+            escape.unlink()
+        empty = installed / 'stdlib/empty.wysna'
+        empty.write_text('', encoding='utf-8')
+        try:
+            shadow.write_text('import "std/empty" as empty\nprint("ok")\n', encoding='utf-8')
+            run('accept-empty-standard-module', ['check', shadow], stdout=b'')
+        finally:
+            empty.unlink()
+        if os.name != 'nt':
+            external = project / 'external-module.wysna'
+            external.write_text('pub fn marker() -> str { "escaped" }\n', encoding='utf-8')
+            alias = installed / 'stdlib/escape.wysna'
+            alias.symlink_to(external)
+            try:
+                shadow.write_text('import "std/escape" as ghost\nprint(ghost.marker())\n', encoding='utf-8')
+                run('reject-stdlib-symlink-escape', ['check', shadow], expected=1, error='W1003')
+            finally:
+                alias.unlink()
+
         engine = installed / ('libexec/wysna-compiler' + suffix)
         hidden = engine.with_suffix('.hidden')
         engine.rename(hidden)
