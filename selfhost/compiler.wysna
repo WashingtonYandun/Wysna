@@ -500,7 +500,7 @@ extern "C" fn wysna_host_buffer_get(handle: opaque, index: int) -> int
 extern "C" fn wysna_host_fs_canonical(path: opaque, output: opaque) -> int
 extern "C" fn wysna_host_close(handle: opaque) -> int
 
-fn module_canonical(path: str) -> str {
+fn module_canonical_resolved(path: str) -> str {
     let input = wysna_host_buffer_new()
     let output = wysna_host_buffer_new()
     for byte in bytes(path) { wysna_host_buffer_append(input, byte) }
@@ -519,7 +519,13 @@ fn module_canonical(path: str) -> str {
     }
     wysna_host_close(input)
     wysna_host_close(output)
-    return module_normalize(if size >= 0 { join_strings(parts, "") } else { path })
+    if size < 0 { return "" }
+    return module_normalize(join_strings(parts, ""))
+}
+
+fn module_canonical(path: str) -> str {
+    let resolved = module_canonical_resolved(path)
+    return if resolved == "" { module_normalize(path) } else { resolved }
 }
 
 # An import graph belongs to one source expansion.
@@ -589,6 +595,37 @@ fn module_contains(names: list[str], name: str) -> bool {
     for candidate in names { if candidate == name { return true } }
     return false
 }
+# Standard modules are names under one root, never relative filesystem paths.
+fn module_stdlib_name_safe(requested: str) -> bool {
+    let mut segment = ""
+    for index in 4..len(requested) {
+        let ch = requested[index]
+        if ch == "\\" { return false }
+        if ch == "/" {
+            if segment == "" or segment == "." or segment == ".." { return false }
+            segment = ""
+        } else { segment = segment + ch }
+    }
+    return segment != "" and segment != "." and segment != ".."
+}
+
+# Resolve both paths physically so a symlink in the library cannot escape its root.
+fn module_stdlib_confined(requested: str, resolved: str) -> bool {
+    let relative = slice(requested, 4, len(requested)) + ".wysna"
+    if len(resolved) <= len(relative) { return false }
+    let root = slice(resolved, 0, len(resolved) - len(relative))
+    let canonical_root = module_canonical_resolved(root)
+    let canonical_file = module_canonical_resolved(resolved)
+    if canonical_root == "" or canonical_file == "" { return false }
+    let prefix = if canonical_root == "/" { "/" } else { canonical_root + "/" }
+    return len(canonical_file) > len(prefix) and slice(canonical_file, 0, len(prefix)) == prefix
+}
+
+fn module_file_readable(path: str) -> bool {
+    let content = read_file(path) else error { return false }
+    return true
+}
+
 fn module_stdlib_path(requested: str) -> str {
     let relative = "stdlib/" + slice(requested, 4, len(requested)) + ".wysna"
     let arguments = args()
@@ -598,8 +635,7 @@ fn module_stdlib_path(requested: str) -> str {
     let mut directory = module_directory(module_normalize(arguments[0]))
     while directory != "" {
         let candidate = module_normalize(directory + relative)
-        let content = read_file(candidate) else error { "" }
-        if content != "" { return candidate }
+        if module_file_readable(candidate) { return candidate }
         let parent = module_directory(slice(directory, 0, len(directory) - 1))
         if parent == directory { break }
         directory = parent
@@ -658,11 +694,17 @@ fn module_expand(context: ModuleLoader, src: str, path: str, entry: bool) -> int
             if public_import and len(body) > 0 and body[len(body) - 1].kind == "PUB" { body.pop() }
             let requested = tokens[position + 1].val
             let mut resolved = module_normalize(module_directory(canonical) + requested)
-            if len(requested) >= 4 and slice(requested, 0, 4) == "std/" { resolved = module_stdlib_path(requested) }
-            let mut content = read_file(resolved) else err { "" }
-            if content == "" {
+            let standard = len(requested) >= 4 and slice(requested, 0, 4) == "std/"
+            if standard {
+                if not module_stdlib_name_safe(requested) { report_error_at("W1003", token, "invalid standard module: " + requested) }
+                resolved = module_stdlib_path(requested)
+                if not module_file_readable(resolved) { report_error_at("W1003", token, "module not found: " + requested) }
+                if not module_stdlib_confined(requested, resolved) { report_error_at("W1003", token, "cannot resolve standard module within its root: " + requested) }
+            }
+            let content = read_file(resolved) else err {
+                if standard { report_error_at("W1003", token, "module not found: " + requested) }
                 resolved = module_normalize(requested)
-                content = read_file(resolved) else err { report_error_at("W1003", token, "module not found: " + requested) "" }
+                read_file(resolved) else err { report_error_at("W1003", token, "module not found: " + requested) "" }
             }
             let dependency = module_expand(context, content, resolved, false)
             let mut alias = extract_module_ns(requested)
@@ -759,81 +801,6 @@ fn foreign_type_id(name: str) -> str {
     if name == "float" or name == "double" { return "float" }
     return name
 }
-fn check_delimiters(tokens: list[Token]) -> unit {
-    let mut delim_kinds: list[str] = []
-    let mut delim_tokens: list[Token] = []
-    for tok in tokens {
-        let k = tok.kind
-        if k == "LPAREN" or k == "LBRACE" or k == "LBRACKET" {
-            delim_kinds.append(k)
-            delim_tokens.append(tok)
-        } elif k == "RPAREN" {
-            let dl = len(delim_kinds)
-            if dl == 0 {
-                report_error_at("W0001", tok, "unexpected ')'")
-            }
-            let top = delim_kinds[dl - 1]
-            if top != "LPAREN" {
-                report_error_at("W0001", tok, "mismatched delimiter ')'")
-            }
-            delim_kinds.pop()
-            delim_tokens.pop()
-        } elif k == "RBRACKET" {
-            let dl = len(delim_kinds)
-            if dl == 0 {
-                report_error_at("W0006", tok, "unexpected ']'")
-            }
-            let top = delim_kinds[dl - 1]
-            if top != "LBRACKET" {
-                report_error_at("W0006", tok, "mismatched delimiter ']'")
-            }
-            delim_kinds.pop()
-            delim_tokens.pop()
-        } elif k == "RBRACE" {
-            let dl = len(delim_kinds)
-            if dl == 0 {
-                report_error_at("W0006", tok, "unexpected '}'")
-            }
-            let top = delim_kinds[dl - 1]
-            if top == "LPAREN" {
-                report_error_at("W0006", tok, "expected ')' before '}'")
-            }
-            if top != "LBRACE" {
-                report_error_at("W0006", tok, "mismatched delimiter '}'")
-            }
-            delim_kinds.pop()
-            delim_tokens.pop()
-        }
-    }
-    if len(delim_kinds) > 0 {
-        let top_idx = len(delim_kinds) - 1
-        let top_k = delim_kinds[top_idx]
-        if top_k == "LBRACE" {
-            report_error_at("W0006", delim_tokens[top_idx], "unclosed delimiter '{'")
-        } elif top_k == "LPAREN" {
-            report_error_at("W0006", delim_tokens[top_idx], "unclosed delimiter '('")
-        } elif top_k == "LBRACKET" {
-            report_error_at("W0006", delim_tokens[top_idx], "unclosed delimiter '['")
-        }
-    }
-}
-
-fn check_program(tokens: list[Token], file: str, capture: bool) -> CheckedProgram {
-    check_delimiters(tokens)
-    let context = new SemanticContext(capture)
-    sem_validate(context, tokens)
-    sem_complete_specializations(context)
-    return checked_finish(context, tokens, file)
-}
-
-fn check_source(src: str, in_path: str) -> CheckedProgram {
-    let file = module_canonical(in_path)
-    let checked = check_program(module_tokens(src, file), file, true)
-    for node in checked.nodes { if node.kind == "unsupported" { report_error_at("W2013", node.source, "Compiler native-core-v1 does not support expression " + node.text) } }
-    return checked
-}
-
-fn compile_source(checked: CheckedProgram) -> str { return mir_emit_c(mir_build(checked)) }
 # Session-local node and binding IDs belong to this value's type arena.
 struct CheckedField { name: str, type_id: int, visible: bool }
 struct CheckedVariant { name: str, payloads: list[int] }
@@ -1899,13 +1866,14 @@ fn sem_collect_record(context: SemanticContext, kind: str) {
     context.type_params = previous_type_params
 }
 fn sem_builtin(name: str) -> bool {
-    return name == "join_strings" or name == "print" or name == "eprint" or name == "len" or name == "int" or name == "float" or name == "str" or name == "ord" or name == "chr" or name == "bytes" or name == "slice" or name == "args" or name == "exit" or name == "enumerate" or name == "dict_items" or name == "read_file" or name == "write_file" or name == "Some" or name == "Ok" or name == "Err" or name == "weak" or name == "upgrade"
+    return name == "join_strings" or name == "print" or name == "eprint" or name == "len" or name == "int" or name == "float" or name == "str" or name == "ord" or name == "chr" or name == "bytes" or name == "slice" or name == "args" or name == "env" or name == "unix_time" or name == "exit" or name == "enumerate" or name == "dict_items" or name == "read_file" or name == "write_file" or name == "Some" or name == "Ok" or name == "Err" or name == "weak" or name == "upgrade"
 }
 fn sem_call_builtin(context: SemanticContext, name: str, args: list[int], sources: list[Token], discard: bool) -> int {
     let count = len(args)
     if name == "print" or name == "eprint" { return context.unit_type }
-    if name == "args" {
-        if count != 0 { sem_error(context, "W2005", "args arity") }
+    if name == "args" or name == "unix_time" {
+        if count != 0 { sem_error(context, "W2005", name + " arity") }
+        if name == "unix_time" { return context.integer_type }
         return sem_wrap(context, "list", context.string_type)
     }
     let mut arity = 1
@@ -1957,6 +1925,10 @@ fn sem_call_builtin(context: SemanticContext, name: str, args: list[int], source
         if first_type.kind == "list" { return first }
         report_error_at("W2001", sem_source_at(context, sources, 0), "slice expects str or list")
         return context.string_type
+    }
+    if name == "env" {
+        sem_require_at(context, first, context.string_type, "W2001", sem_source_at(context, sources, 0))
+        return sem_wrap(context, "optional", context.string_type)
     }
     if name == "ord" or name == "bytes" or name == "read_file" or name == "write_file" {
         sem_require_at(context, first, context.string_type, "W2001", sem_source_at(context, sources, 0))
@@ -2558,7 +2530,8 @@ fn sem_expression(context: SemanticContext, minimum: int, allow_struct: bool) ->
     while true {
         let saved = context.pos
         while sem_is(context, "NEWLINE") { sem_take(context) }
-        if not sem_is(context, "ELSE") or not (context.tokens[context.pos + 1].kind == "LBRACE" or context.tokens[context.pos + 1].kind == "IDENT" and context.tokens[context.pos + 2].kind == "LBRACE") { context.pos = saved }
+        if sem_is(context, "DOT") { }
+        elif not sem_is(context, "ELSE") or not (context.tokens[context.pos + 1].kind == "LBRACE" or context.tokens[context.pos + 1].kind == "IDENT" and context.tokens[context.pos + 2].kind == "LBRACE") { context.pos = saved }
 
         let call_token = sem_at(context)
         let call_line = call_token.line
@@ -3835,6 +3808,79 @@ fn sem_complete_specializations(context: SemanticContext) {
     context.substitution_names = names
     context.substitution_types = types
     context.specialization_ancestry = types
+}
+fn check_delimiters(tokens: list[Token]) -> unit {
+    let mut delim_kinds: list[str] = []
+    let mut delim_tokens: list[Token] = []
+    for tok in tokens {
+        let k = tok.kind
+        if k == "LPAREN" or k == "LBRACE" or k == "LBRACKET" {
+            delim_kinds.append(k)
+            delim_tokens.append(tok)
+        } elif k == "RPAREN" {
+            let dl = len(delim_kinds)
+            if dl == 0 {
+                report_error_at("W0001", tok, "unexpected ')'")
+            }
+            let top = delim_kinds[dl - 1]
+            if top != "LPAREN" {
+                report_error_at("W0001", tok, "mismatched delimiter ')'")
+            }
+            delim_kinds.pop()
+            delim_tokens.pop()
+        } elif k == "RBRACKET" {
+            let dl = len(delim_kinds)
+            if dl == 0 {
+                report_error_at("W0006", tok, "unexpected ']'")
+            }
+            let top = delim_kinds[dl - 1]
+            if top != "LBRACKET" {
+                report_error_at("W0006", tok, "mismatched delimiter ']'")
+            }
+            delim_kinds.pop()
+            delim_tokens.pop()
+        } elif k == "RBRACE" {
+            let dl = len(delim_kinds)
+            if dl == 0 {
+                report_error_at("W0006", tok, "unexpected '}'")
+            }
+            let top = delim_kinds[dl - 1]
+            if top == "LPAREN" {
+                report_error_at("W0006", tok, "expected ')' before '}'")
+            }
+            if top != "LBRACE" {
+                report_error_at("W0006", tok, "mismatched delimiter '}'")
+            }
+            delim_kinds.pop()
+            delim_tokens.pop()
+        }
+    }
+    if len(delim_kinds) > 0 {
+        let top_idx = len(delim_kinds) - 1
+        let top_k = delim_kinds[top_idx]
+        if top_k == "LBRACE" {
+            report_error_at("W0006", delim_tokens[top_idx], "unclosed delimiter '{'")
+        } elif top_k == "LPAREN" {
+            report_error_at("W0006", delim_tokens[top_idx], "unclosed delimiter '('")
+        } elif top_k == "LBRACKET" {
+            report_error_at("W0006", delim_tokens[top_idx], "unclosed delimiter '['")
+        }
+    }
+}
+
+fn check_program(tokens: list[Token], file: str, capture: bool) -> CheckedProgram {
+    check_delimiters(tokens)
+    let context = new SemanticContext(capture)
+    sem_validate(context, tokens)
+    sem_complete_specializations(context)
+    return checked_finish(context, tokens, file)
+}
+
+fn check_source(src: str, in_path: str) -> CheckedProgram {
+    let file = module_canonical(in_path)
+    let checked = check_program(module_tokens(src, file), file, true)
+    for node in checked.nodes { if node.kind == "unsupported" { report_error_at("W2013", node.source, "Compiler native-core-v1 does not support expression " + node.text) } }
+    return checked
 }
 # Backend-independent typed CFG and ownership data.
 struct MirLiteral { type_id: int, integer: int, floating: float, boolean: bool, text: str }
@@ -5475,7 +5521,7 @@ fn mir_call(context: MirBuilder, node: CheckedNode) -> int {
         return mir_op(context, "call", returned, arguments, mir_abi_name(function.name), mir_literal_unit(), node.source)
     }
     if node.text == "weak" { return mir_op(context, "runtime", returned, arguments, "wysna_builtin_weak_owned", mir_literal_unit(), node.source) }
-    let builtins: list[str] = ["upgrade", "print", "eprint", "int", "float", "str", "len", "ord", "chr", "slice", "bytes", "args", "exit", "join_strings", "enumerate", "dict_items", "read_file", "write_file"]
+    let builtins: list[str] = ["upgrade", "print", "eprint", "int", "float", "str", "len", "ord", "chr", "slice", "bytes", "args", "env", "unix_time", "exit", "join_strings", "enumerate", "dict_items", "read_file", "write_file"]
     for name in builtins { if node.text == name { return mir_op(context, "runtime", returned, arguments, "wysna_builtin_" + name, mir_literal_unit(), node.source) } }
     mir_unsupported(node.source, "builtin call " + node.text)
     return -1
@@ -5821,7 +5867,11 @@ fn mir_verify_runtime(module: MirModule, operation: MirOperation, slots: list[Mi
         return false
     }
     if name == "wysna_builtin_print" or name == "wysna_builtin_eprint" { return returned == 1 }
+    if name == "wysna_builtin_unix_time" { return len(operation.args) == 0 and returned == 3 }
     if name == "wysna_builtin_args" { return len(operation.args) == 0 and module.types[returned].kind == "list" and module.types[returned].args[0] == 5 }
+    if name == "wysna_builtin_env" {
+        return len(operation.args) == 1 and slots[operation.args[0]].type_id == 5 and mir_is_optional(module.types, returned) and module.types[returned].args[0] == 5
+    }
     if name == "wysna_builtin_read_file" or name == "wysna_builtin_write_file" {
         let expected = if name == "wysna_builtin_read_file" { 1 } else { 2 }
         if len(operation.args) != expected or not mir_is_result(module.types, returned) { return false }
@@ -6342,11 +6392,24 @@ fn mir_c_operation(module: MirModule, function: MirFunction, operation: MirOpera
     if kind == "const" or kind == "default" {
         let literal = operation.value
         let mut value = if literal.type_id == 6 { "wysna_none()" } else { "wysna_unit()" }
-        if literal.type_id == 2 { value = "wysna_bool(" + str(literal.boolean) + ")" }
+        if literal.type_id == 2 {
+            if not mir_value_storage(function.slots[result].type_id) {
+                return mir_c_write(function, result, str(literal.boolean), false)
+            }
+            value = "wysna_bool(" + str(literal.boolean) + ")"
+        }
         elif literal.type_id == 3 {
             let integer = if literal.integer == -9223372036854775808 { "(-9223372036854775807LL - 1LL)" } else { str(literal.integer) + "LL" }
+            if not mir_value_storage(function.slots[result].type_id) {
+                return mir_c_write(function, result, integer, false)
+            }
             value = "wysna_int(" + integer + ")"
-        } elif literal.type_id == 4 { value = "wysna_float(" + str(literal.floating) + ")" }
+        } elif literal.type_id == 4 {
+            if not mir_value_storage(function.slots[result].type_id) {
+                return mir_c_write(function, result, str(literal.floating), false)
+            }
+            value = "wysna_float(" + str(literal.floating) + ")"
+        }
         elif literal.type_id == 5 {
             value = "wysna_literal_str_n(&_literal, " + escape_c_str(literal.text) + ", " + str(len(bytes(literal.text))) + ")"
             return "{ static WStringLiteral _literal = {0}; " + mir_c_write(function, result, value, true) + " }"
@@ -6354,10 +6417,18 @@ fn mir_c_operation(module: MirModule, function: MirFunction, operation: MirOpera
         return mir_c_write(function, result, value, true)
     }
     if kind == "clone" or kind == "narrow" {
+        if not mir_value_storage(function.slots[result].type_id) and not mir_value_storage(function.slots[operation.args[0]].type_id) {
+            return mir_c_write(function, result, mir_c_name(operation.args[0]), false)
+        }
         let value = if mir_value_storage(function.slots[result].type_id) { "wysna_clone(" + arguments[0] + ")" } else { arguments[0] }
         return mir_c_write(function, result, value, true)
     }
-    if kind == "store" { return mir_c_write(function, result, arguments[0], true) }
+    if kind == "store" {
+        if not mir_value_storage(function.slots[result].type_id) and not mir_value_storage(function.slots[operation.args[0]].type_id) {
+            return mir_c_write(function, result, mir_c_name(operation.args[0]), false)
+        }
+        return mir_c_write(function, result, arguments[0], true)
+    }
     if kind == "release" {
         let name = mir_c_name(operation.args[0])
         return "wysna_release(" + name + "); " + name + " = wysna_unit();"
@@ -6371,10 +6442,16 @@ fn mir_c_operation(module: MirModule, function: MirFunction, operation: MirOpera
     }
     if kind == "iterate_value" {
         let counter = mir_c_name(operation.args[1])
-        let mut value = "wysna_int((" + arguments[0] + ").as.i + (int64_t)" + counter + ")"
-        if not operation.value.boolean {
-            value = "wysna_list_iteration_get_owned_at(" + arguments[0] + ", " + counter + ", " + escape_c_str(operation.source.file) + ", " + str(operation.source.line) + ", " + str(operation.source.col) + ")"
+        if operation.value.boolean {
+            let start_slot = function.slots[operation.args[0]]
+            let start_name = mir_c_name(operation.args[0])
+            let start_val = if not mir_value_storage(start_slot.type_id) { start_name } else { "(" + start_name + ").as.i" }
+            if not mir_value_storage(function.slots[result].type_id) {
+                return mir_c_write(function, result, start_val + " + (int64_t)" + counter, false)
+            }
+            return mir_c_write(function, result, "wysna_int(" + start_val + " + (int64_t)" + counter + ")", false)
         }
+        let value = "wysna_list_iteration_get_owned_at(" + arguments[0] + ", " + counter + ", " + escape_c_str(operation.source.file) + ", " + str(operation.source.line) + ", " + str(operation.source.col) + ")"
         return mir_c_write(function, result, value, true)
     }
     if kind == "construct" {
@@ -6416,6 +6493,52 @@ fn mir_c_operation(module: MirModule, function: MirFunction, operation: MirOpera
     }
     if kind == "runtime" or kind == "call" {
         let name = if operation.name == "wysna_make_range_inclusive" { "wysna_make_range" } else { operation.name }
+        if kind == "runtime" {
+            if (name == "wysna_add" or name == "wysna_sub" or name == "wysna_mul") and len(operation.args) == 2 {
+                let t0 = function.slots[operation.args[0]].type_id
+                let t1 = function.slots[operation.args[1]].type_id
+                let left = mir_c_name(operation.args[0])
+                let right = mir_c_name(operation.args[1])
+                let op = if name == "wysna_add" { " + " } elif name == "wysna_sub" { " - " } else { " * " }
+                if t0 == 3 and t1 == 3 {
+                    return mir_c_write(function, result, "(int64_t)((uint64_t)" + left + op + "(uint64_t)" + right + ")", false)
+                }
+                if t0 == 4 and t1 == 4 {
+                    return mir_c_write(function, result, left + op + right, false)
+                }
+            }
+            if name == "wysna_neg" and len(operation.args) == 1 {
+                let t0 = function.slots[operation.args[0]].type_id
+                let operand = mir_c_name(operation.args[0])
+                if t0 == 3 { return mir_c_write(function, result, "(int64_t)(0ULL - (uint64_t)" + operand + ")", false) }
+                if t0 == 4 { return mir_c_write(function, result, "-" + operand, false) }
+            }
+            if name == "wysna_not" and len(operation.args) == 1 {
+                let t0 = function.slots[operation.args[0]].type_id
+                let operand = mir_c_name(operation.args[0])
+                if t0 == 2 { return mir_c_write(function, result, "!" + operand, false) }
+            }
+            if (name == "wysna_lt" or name == "wysna_le" or name == "wysna_gt" or name == "wysna_ge") and len(operation.args) == 2 {
+                let t0 = function.slots[operation.args[0]].type_id
+                let t1 = function.slots[operation.args[1]].type_id
+                if (t0 == 3 and t1 == 3) or (t0 == 4 and t1 == 4) {
+                    let left = mir_c_name(operation.args[0])
+                    let right = mir_c_name(operation.args[1])
+                    let op = if name == "wysna_lt" { " < " } elif name == "wysna_le" { " <= " } elif name == "wysna_gt" { " > " } else { " >= " }
+                    return mir_c_write(function, result, left + op + right, false)
+                }
+            }
+            if (name == "wysna_equal" or name == "wysna_not_equal") and len(operation.args) == 2 {
+                let t0 = function.slots[operation.args[0]].type_id
+                let t1 = function.slots[operation.args[1]].type_id
+                if (t0 == 2 and t1 == 2) or (t0 == 3 and t1 == 3) or (t0 == 4 and t1 == 4) {
+                    let left = mir_c_name(operation.args[0])
+                    let right = mir_c_name(operation.args[1])
+                    let op = if name == "wysna_equal" { " == " } else { " != " }
+                    return mir_c_write(function, result, left + op + right, false)
+                }
+            }
+        }
         if name == "wysna_enum" or name == "wysna_enum_payload" {
             let labels = if len(operation.labels) == 2 { operation.labels } else { ["Option", "Some"] }
             let mut prefixed: list[str] = [escape_c_str(labels[0]), escape_c_str(labels[1])]
@@ -6430,7 +6553,16 @@ fn mir_c_operation(module: MirModule, function: MirFunction, operation: MirOpera
                 if callee.name == name {
                     found = true
                     boxed = mir_value_storage(callee.return_type)
-                    for i in 0..len(arguments) { arguments[i] = mir_c_unbox(arguments[i], callee.slots[callee.params[i]].type_id) }
+                    for i in 0..len(arguments) {
+                        let param_type = callee.slots[callee.params[i]].type_id
+                        let arg_id = operation.args[i]
+                        let arg_type = function.slots[arg_id].type_id
+                        if not mir_value_storage(param_type) and not mir_value_storage(arg_type) {
+                            arguments[i] = mir_c_name(arg_id)
+                        } else {
+                            arguments[i] = mir_c_unbox(arguments[i], param_type)
+                        }
+                    }
                 }
             }
             for external in module.externs { if external.name == name { found = true boxed = true } }
@@ -6463,7 +6595,11 @@ fn mir_c_function(module: MirModule, function: MirFunction) -> str {
         let term = block.terminator
         if term.kind == "goto" { parts.append("    goto bb" + str(term.targets[0]) + ";\n") }
         elif term.kind == "branch" { parts.append("    if (" + mir_c_name(term.value) + ") goto bb" + str(term.targets[0]) + "; else goto bb" + str(term.targets[1]) + ";\n") }
-        elif term.kind == "return" { parts.append("    return " + mir_c_unbox(mir_c_value(function, term.value, true), function.return_type) + ";\n") }
+        elif term.kind == "return" {
+            let name = mir_c_name(term.value)
+            let expression = if mir_value_storage(function.return_type) { "wysna_move(&" + name + ")" } else { name }
+            parts.append("    return " + expression + ";\n")
+        }
         else { parts.append("    wysna_runtime_fail(\"W9999\", \"Unreachable MIR block executed\");\n") }
     }
     parts.append("}\n")
@@ -6489,6 +6625,8 @@ fn mir_emit_c(module: MirModule) -> str {
     parts.append("    wysna_runtime_cleanup();\n    return status;\n}\n")
     return join_strings(parts, "")
 }
+
+fn compile_source(checked: CheckedProgram) -> str { return mir_emit_c(mir_build(checked)) }
 fn run_compiler() -> unit ! IoError {
     let raw_cli = args()
     let mut cli = raw_cli

@@ -22,6 +22,9 @@ def test_newline_statement_boundaries():
     multiline = Parser().parse("let values = [1,\n2]")
     assert len(multiline.body[0].initializer.elements) == 2
 
+    chained = Parser().parse("let result = obj\n    .step_one()\n    .step_two(42)\n    .step_three\nprint(result)")
+    assert len(chained.body) == 2
+
 def test_parser_suite():
     valid_dir = "tests/parser/valid"
     invalid_dir = "tests/parser/invalid"

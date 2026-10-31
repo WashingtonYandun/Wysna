@@ -55,7 +55,11 @@ typedef struct WysnaHostContext {
     int64_t error_code;
     int64_t error_domain;
 } WysnaHostContext;
+#ifdef WYSNA_SHARED_RUNTIME
+extern WysnaHostContext wysna_host_context;
+#else
 static WysnaHostContext wysna_host_context = {NULL, 1, false, 0, 0};
+#endif
 #define wysna_host_entries (wysna_host_context.entries)
 #define wysna_host_next_id (wysna_host_context.next_id)
 #define wysna_host_initialized (wysna_host_context.initialized)
@@ -302,7 +306,11 @@ typedef struct WysnaHttpTransfer {
     int error_kind;
 } WysnaHttpTransfer;
 
+#ifdef WYSNA_SHARED_RUNTIME
+extern bool wysna_http_curl_initialized;
+#else
 static bool wysna_http_curl_initialized = false;
+#endif
 
 static int64_t wysna_host_http_fail(int kind, int64_t code) {
     wysna_host_error_code = code ? code : EIO;

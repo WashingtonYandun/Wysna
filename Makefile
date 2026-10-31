@@ -13,7 +13,7 @@ check:
 
 selfhost:
 	@mkdir -p .wysna_cache
-	./wysna build --selfhost selfhost/compiler.wysna -o .wysna_cache/wysna_selfhost
+	./wysna build --engine=compiler selfhost/compiler.wysna -o .wysna_cache/wysna_selfhost
 	@echo "[OK] Native self-hosted compiler binary ready at .wysna_cache/wysna_selfhost"
 
 install:

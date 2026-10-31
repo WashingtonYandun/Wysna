@@ -48,7 +48,7 @@ int main(void) {
     wysna_struct_detach(&record);
     assert(wysna_g_cow_copied_slots == 0 && wysna_g_cow_copied_bytes == 0);
     assert(wysna_g_cow_allocated_bytes == sizeof(WStructBuf) + sizeof(char*) + sizeof(WVal));
-    assert(wysna_g_cow_alloc_count == 3);
+    assert(wysna_g_cow_alloc_count == 1);
     wysna_release(alias); wysna_release(record);
     WVal rows[3] = {wysna_make_list(2, items), wysna_make_list(2, items), wysna_make_list(2, items)};
     WVal matrix = wysna_make_list(3, rows);

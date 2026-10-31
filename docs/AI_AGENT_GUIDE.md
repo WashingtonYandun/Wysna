@@ -38,15 +38,49 @@ Use `--frozen` on project checks and builds when the project includes a lockfile
 Program arguments belong after `--` for `project run` and are passed as separate
 arguments, without implicit shell parsing.
 
-## Handle diagnostics from their source snapshot
+## Handle diagnostics and self-heal from their source snapshot
 
-Prefer `--output-format=json-v1` for `check` and `project check`. Read each
-diagnostic's code, stage and message. If `primary_span` is present, its offsets
-`start_byte` and `end_byte` are UTF-8 byte offsets into the source identified by
-`source_id`; verify `source_sha256` before editing that snapshot. Do not treat byte
-offsets as Unicode character indexes, and do not guess a location when
-`primary_span` is absent.
+Prefer `--output-format=json-v1` for `check`, `fix`, `schema`, and `project check`.
+The type checker recovers across independent statements, class methods, and generic
+templates to report up to 100 independent diagnostics in a single pass while
+suppressing cascade noise from failed bindings.
+
+Read each diagnostic's `code`, `severity`, `stage`, `message`, `data`, `related`,
+and `fixes`:
+- If `primary_span` is present, its offsets `start_byte` and `end_byte` are UTF-8
+  byte offsets into the source identified by `source_id`; verify `source_sha256`
+  before editing that snapshot. Do not treat byte offsets as Unicode character
+  indexes, and do not guess a location when `primary_span` is absent.
+- `data` carries structured machine facts (`expected`, `found`, `conversion_hint`,
+  `unwrap_hint`, `missing_field`, `help`).
+- `related` points to secondary source spans (such as the immutable `let`
+  declaration on `W3001` or the prior declaration on `W1002`).
+- `fixes` contains SHA-256-guarded byte-range edits (`applicability: "machine"` or
+  `"maybe"`). Run `wysna fix --apply --output-format=json-v1 <file.wysna>` before
+  spending an LLM repair turn to automatically repair identifier/field typos and
+  immutable `let` -> `let mut` bindings.
+
 Re-run the check after editing and require a successful result before building.
+
+## Extract JSON Schemas, Tool Contracts, and Use the MCP Server
+
+Generate JSON Schema (Draft 2020-12) `$defs` for `struct`/`enum` types and LLM
+tool definitions (including verified MIR `effects`, `capabilities`, `pure`, and
+`idempotent` flags) directly from Wysna source:
+
+```sh
+wysna schema --output-format=json-v1 src/main.wysna
+```
+
+For multi-turn agent loops, start the persistent in-memory Model Context Protocol
+server over stdio to avoid Python startup and temporary-file overhead on every check:
+
+```sh
+wysna mcp --root .
+```
+
+The MCP server exposes `wysna_check`, `wysna_fix`, `wysna_fmt`, `wysna_explain`,
+`wysna_schema`, `wysna_api`, and `wysna_capabilities` confined to `--root`.
 
 ## Respect declared limits
 
@@ -58,8 +92,10 @@ Re-run the check after editing and require a successful result before building.
   browser targets are available through that SDK.
 - Effect reports and capability declarations help review programs; they are not
   operating-system sandboxes.
-- The language is designed for predictable human and agent workflows, but Wysna
-  has not been measured against other languages for AI-authored program quality.
+- AI authoring and self-healing repair benchmarks live in `bench/ai_eval/`
+  (`harness.py` and `token_audit.py`); outside this evaluation suite, Wysna
+  has not been measured against other languages for general AI-authored
+  program quality.
 
 See [project workflows](PROJECTS.md), [native SDK](NATIVE_SDK.md),
 [effect contracts](EFFECTS.md), and [Seed distribution](SEED_DISTRIBUTION.md) for

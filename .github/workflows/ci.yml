@@ -53,6 +53,8 @@ jobs:
           tests/unit/test_tool_result.py
           tests/unit/test_capability_policy.py
           tests/unit/test_target_profiles.py
+          tests/unit/test_exit_runtime.py
+          tests/unit/test_package_download.py
 
   native-diagnostics:
     name: Native diagnostics (${{ matrix.os }})
@@ -553,7 +555,7 @@ jobs:
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
       - name: Bootstrap Wysna Compiler through the Windows cache lock
         run: |
-          python main.py build --backend=selfhost tests/runtime/readiness_patterns.wysna -o patterns.exe
+          python main.py build --engine=compiler tests/runtime/readiness_patterns.wysna -o patterns.exe
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           ./patterns.exe
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }

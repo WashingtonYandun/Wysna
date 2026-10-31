@@ -95,7 +95,11 @@ static inline WVal wysna_owned_str(char* data) {
 }
 
 static inline WVal wysna_copy_str(const char* data) {
+    if (!data || *data == '\0') return wysna_str("");
     size_t length = strlen(data);
+    if (length == 1 && (unsigned char)data[0] < 128) {
+        return wysna_ascii_string((uint8_t)data[0]);
+    }
     char* copy = (char*)wysna_alloc_safe(length + 1);
     memcpy(copy, data, length + 1);
     return wysna_owned_str_n(copy, length);

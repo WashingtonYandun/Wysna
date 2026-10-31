@@ -6,6 +6,7 @@ import re
 import sys
 from urllib.parse import unquote, urlparse
 from urllib.request import url2pathname
+from checker.Lints import lint_discarded_expressions
 from common.constants import KEYWORDS
 from compiler.CheckedProgram import SymbolInfo
 from compiler.CompilerService import CompilerService
@@ -75,39 +76,85 @@ class LanguageServer:
         self.compiler = CompilerService()
         self.documents = {}
         self.checked = {}
+        self.fixes = {}
         self.stopping = False
+
+    def _diagnostic_entry(self, item, path, source, severity=1):
+        message = item.message
+        if getattr(item, 'help', None):
+            message += '\nHelp: ' + item.help
+        error_source = self.compiler.source_text(item.file, source)
+        lines = error_source.splitlines(keepends=True)
+        start = sum(map(len, lines[:max(item.line - 1, 0)])) + max(item.col - 1, 0)
+        end = min(start + 1, len(error_source))
+        try:
+            token = next((t for t in Lexer(error_source).tokenize()
+                          if t.line == item.line and t.col == item.col), None)
+            if token and hasattr(token, 'end_offset'):
+                end = token.end_offset
+        except WysnaError:
+            pass
+        if item.file != path:
+            # Dependency errors must not use another file's coordinates in this document.
+            return {'range': {'start': position_at(source, 0), 'end': position_at(source, 0)},
+                    'severity': severity, 'code': item.code, 'source': 'Wysna',
+                    'message': f'{item.file}:{item.line}:{item.col}: {message}'}, []
+        diag_range = {'start': position_at(source, start), 'end': position_at(source, end)}
+        entry = {'range': diag_range, 'severity': severity, 'code': item.code,
+                 'source': 'Wysna', 'message': message}
+        actions = []
+        for fix in getattr(item, 'fixes', ()):
+            text_edits = []
+            for edit in fix.get('edits', ()):
+                edit_line = edit.get('line', 1)
+                edit_col = edit.get('col', 1)
+                old_text = edit.get('old', '')
+                line_start = sum(map(len, lines[:max(edit_line - 1, 0)]))
+                line_end = line_start + len(lines[edit_line - 1].rstrip('\r\n')) if 0 < edit_line <= len(lines) else len(source)
+                col_offset = min(line_start + max(edit_col - 1, 0), line_end)
+                idx = source.find(old_text, col_offset, line_end) if old_text else col_offset
+                if idx < 0:
+                    text_edits = []
+                    break
+                text_edits.append({
+                    'range': {
+                        'start': position_at(source, idx),
+                        'end': position_at(source, idx + len(old_text)),
+                    },
+                    'newText': edit.get('new', ''),
+                })
+            if text_edits:
+                actions.append({
+                    'range': diag_range,
+                    'code': item.code,
+                    'title': fix.get('description', 'Apply fix'),
+                    'applicability': fix.get('applicability', 'maybe'),
+                    'edits': text_edits,
+                })
+        return entry, actions
 
     def publish(self, uri):
         document = self.documents[uri]
         path, source = source_path(uri), document['text']
         diagnostics = []
+        fix_records = []
         self.checked.pop(uri, None)
         try:
-            self.checked[uri] = self.compiler.check(source, path)
+            parsed = self.compiler.parse(source, path, recover=True)
+            checked = self.compiler.check_parsed(parsed)
+            self.checked[uri] = checked
+            warnings = list(lint_discarded_expressions(checked.ast, path))
+            warnings.extend(self.compiler.analyze_reference_cycles(checked))
+            for warning in warnings:
+                entry, actions = self._diagnostic_entry(warning, path, source, severity=2)
+                diagnostics.append(entry)
+                fix_records.extend(actions)
         except WysnaError as error:
-            for error in getattr(error, 'diagnostics', (error,)):
-                message = error.message
-                if getattr(error, 'help', None):
-                    message += '\nHelp: ' + error.help
-                error_source = self.compiler.source_text(error.file, source)
-                lines = error_source.splitlines(keepends=True)
-                start = sum(map(len, lines[:max(error.line - 1, 0)])) + max(error.col - 1, 0)
-                end = min(start + 1, len(error_source))
-                try:
-                    token = next((t for t in Lexer(error_source).tokenize()
-                                  if t.line == error.line and t.col == error.col), None)
-                    if token and hasattr(token, 'end_offset'):
-                        end = token.end_offset
-                except WysnaError:
-                    pass
-                if error.file != path:
-                    # Dependency errors must not use another file's coordinates in this document.
-                    diagnostics.append({'range': {'start': position_at(source, 0), 'end': position_at(source, 0)},
-                                        'severity': 1, 'code': error.code, 'source': 'Wysna',
-                                        'message': f'{error.file}:{error.line}:{error.col}: {message}'})
-                else:
-                    diagnostics.append({'range': {'start': position_at(source, start), 'end': position_at(source, end)},
-                                        'severity': 1, 'code': error.code, 'source': 'Wysna', 'message': message})
+            for item in getattr(error, 'diagnostics', (error,)):
+                entry, actions = self._diagnostic_entry(item, path, source, severity=1)
+                diagnostics.append(entry)
+                fix_records.extend(actions)
+        self.fixes[uri] = fix_records
         self.send({'jsonrpc': '2.0', 'method': 'textDocument/publishDiagnostics',
                    'params': {'uri': uri, 'version': document['version'], 'diagnostics': diagnostics}})
 
@@ -372,6 +419,95 @@ class LanguageServer:
                   'detail': str(symbol.type)} for name, symbol in sorted(symbols.items())]
         return {'isIncomplete': False, 'items': items}
 
+    @staticmethod
+    def _ranges_overlap(first, second):
+        if first is None or second is None:
+            return True
+        f_start = (first['start']['line'], first['start']['character'])
+        f_end = (first['end']['line'], first['end']['character'])
+        s_start = (second['start']['line'], second['start']['character'])
+        s_end = (second['end']['line'], second['end']['character'])
+        return f_start <= s_end and s_start <= f_end
+
+    def code_action(self, uri, range_=None):
+        actions = []
+        for fix in self.fixes.get(uri, ()):
+            if range_ is not None and not self._ranges_overlap(fix['range'], range_):
+                continue
+            actions.append({
+                'title': f"[{fix['code']}] {fix['title']}",
+                'kind': 'quickfix',
+                'isPreferred': fix['applicability'] == 'machine',
+                'edit': {'changes': {uri: fix['edits']}},
+            })
+        return actions
+
+    def signature_help(self, uri, position):
+        document = self.documents.get(uri)
+        if document is None:
+            return None
+        source = document['text']
+        offset = offset_at(source, position)
+        prefix = source[:offset]
+        depth = 0
+        commas = 0
+        open_paren = -1
+        for idx in range(len(prefix) - 1, -1, -1):
+            ch = prefix[idx]
+            if ch in ')]}':
+                depth += 1
+            elif ch in '([{':
+                if depth > 0:
+                    depth -= 1
+                elif ch == '(':
+                    open_paren = idx
+                    break
+                else:
+                    return None
+            elif ch == ',' and depth == 0:
+                commas += 1
+        if open_paren < 0:
+            return None
+        match = re.search(r'([A-Za-z_][A-Za-z0-9_]*)\s*$', prefix[:open_paren])
+        if not match:
+            return None
+        callee = match.group(1)
+        unit = self.checked.get(uri)
+        sig_str = None
+        param_labels = []
+        if unit is not None:
+            for node in unit.program.body:
+                if isinstance(node, FnDecl) and self._source_name(node.name) == callee:
+                    param_labels = [f"{p.name}: {p.type_ann}" for p in node.params]
+                    ret = str(node.return_type) if node.return_type is not None else 'unit'
+                    sig_str = f"fn {callee}({', '.join(param_labels)}) -> {ret}"
+                    break
+            if sig_str is None:
+                location = (prefix.count('\n') + 1, len(prefix.rsplit('\n', 1)[-1]) + 1)
+                sym = unit.visible_symbols(*location).get(callee)
+                if sym is not None and str(sym.type).startswith('fn('):
+                    sig_str = f"{callee}: {sym.type}"
+                    inner = str(sym.type)[3:].split(') ->', 1)[0]
+                    param_labels = [p.strip() for p in inner.split(',') if p.strip()]
+        if sig_str is None:
+            from checker.SymbolTable import create_global_scope
+            sym = create_global_scope().lookup_symbol(callee)
+            if sym is not None and str(sym.type).startswith('fn('):
+                sig_str = f"{callee}: {sym.type}"
+                inner = str(sym.type)[3:].split(') ->', 1)[0]
+                param_labels = [p.strip() for p in inner.split(',') if p.strip()]
+        if sig_str is None:
+            return None
+        active_param = min(commas, max(len(param_labels) - 1, 0))
+        return {
+            'signatures': [{
+                'label': sig_str,
+                'parameters': [{'label': p} for p in param_labels],
+            }],
+            'activeSignature': 0,
+            'activeParameter': active_param,
+        }
+
     def dispatch(self, message):
         method, params = message.get('method'), message.get('params', {})
         result = None
@@ -380,6 +516,8 @@ class LanguageServer:
                                       'definitionProvider': True, 'hoverProvider': True,
                                       'documentFormattingProvider': True,
                                       'referencesProvider': True, 'renameProvider': True,
+                                      'codeActionProvider': True,
+                                      'signatureHelpProvider': {'triggerCharacters': ['(', ',']},
                                       'completionProvider': {'triggerCharacters': ['.']}},
                       'serverInfo': {'name': 'wysna'}}
         elif method == 'shutdown':
@@ -401,6 +539,7 @@ class LanguageServer:
             uri = params['textDocument']['uri']
             self.documents.pop(uri, None)
             self.checked.pop(uri, None)
+            self.fixes.pop(uri, None)
             self.compiler.remove_overlay(source_path(uri))
             for opened in self.documents:
                 self.publish(opened)
@@ -420,6 +559,10 @@ class LanguageServer:
                                  params.get('newName', ''))
         elif method == 'textDocument/formatting':
             result = self.formatting(params['textDocument']['uri'])
+        elif method == 'textDocument/codeAction':
+            result = self.code_action(params['textDocument']['uri'], params.get('range'))
+        elif method == 'textDocument/signatureHelp':
+            result = self.signature_help(params['textDocument']['uri'], params['position'])
         elif 'id' in message:
             self.send({'jsonrpc': '2.0', 'id': message['id'], 'error': {'code': -32601, 'message': 'Method not found'}})
             return True

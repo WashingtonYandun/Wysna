@@ -7,7 +7,7 @@ Verifies:
 3. Specialization worklist states and regular recursion termination.
 4. Direct and mutual structural expansion cycle detection with instantiation chain diagnostics (W2011).
 5. Deterministic topological sorting and PYTHONHASHSEED invariance.
-6. Native C99 execution of specialized generics across AST and HIR backends.
+6. Native C99 execution of specialized generics through the AST oracle and verified HIR/MIR production path.
 """
 
 import os
@@ -216,7 +216,7 @@ def test_deterministic_topological_sorting_and_hashseed():
             env = os.environ.copy()
             env["PYTHONHASHSEED"] = seed
             res = subprocess.run(
-                [sys.executable, "main.py", "emit-c", "--hir", src_path],
+                [sys.executable, "main.py", "emit-c", src_path],
                 cwd=repo_root,
                 capture_output=True,
                 text=True,
@@ -314,7 +314,7 @@ def test_native_c99_execution():
         assert run_hir.returncode == 0, run_hir.stderr
         assert run_hir.stdout == "wawi\n140\n", f"HIR stdout unexpected: {run_hir.stdout!r}"
 
-    print("  [PASS] Native C99 execution across AST and HIR backends with AddressSanitizer")
+    print("  [PASS] Native C99 execution through AST oracle and verified HIR/MIR with AddressSanitizer")
 
 
 def run_all() -> bool:

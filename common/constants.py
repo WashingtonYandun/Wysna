@@ -10,6 +10,7 @@ KEYWORDS = {
     "struct": TokenType.STRUCT,
     "enum": TokenType.ENUM,
     "import": TokenType.IMPORT,
+    "from": TokenType.FROM,
 
     # Object-Oriented (9)
     "class": TokenType.CLASS,

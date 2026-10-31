@@ -562,3 +562,180 @@ fn stringify_value(value: Value) -> str ! JsonError {
 pub fn stringify(value: Value) -> str ! JsonError {
     return stringify_value(value)
 }
+
+pub fn error(offset: int, message: str) -> JsonError {
+    return JsonError { offset: offset, message: message }
+}
+
+pub fn from_int(value: int) -> Value {
+    return Value.Number(str(value))
+}
+
+pub fn from_float(value: float) -> Value {
+    return Value.Number(str(value))
+}
+
+pub fn from_bool(value: bool) -> Value {
+    return Value.Bool(value)
+}
+
+pub fn from_str(value: str) -> Value {
+    return Value.String(value)
+}
+
+pub fn to_str(value: Value) -> str ! JsonError {
+    return match value {
+        Value.String(result) => Ok(result),
+        else => Err(JsonError { offset: 0, message: "expected JSON string" }),
+    }
+}
+
+pub fn to_bool(value: Value) -> bool ! JsonError {
+    return match value {
+        Value.Bool(result) => Ok(result),
+        else => Err(JsonError { offset: 0, message: "expected JSON boolean" }),
+    }
+}
+
+pub fn to_array(value: Value) -> list[Value] ! JsonError {
+    return match value {
+        Value.Array(result) => Ok(result),
+        else => Err(JsonError { offset: 0, message: "expected JSON array" }),
+    }
+}
+
+pub fn to_object(value: Value) -> dict[str, Value] ! JsonError {
+    return match value {
+        Value.Object(result) => Ok(result),
+        else => Err(JsonError { offset: 0, message: "expected JSON object" }),
+    }
+}
+
+pub fn to_int(value: Value) -> int ! JsonError {
+    match value {
+        Value.Number(raw) => {
+            let validated = validate_number(raw)?
+            for index in 0..len(validated) {
+                let ch = validated[index]
+                if ch == "." or ch == "e" or ch == "E" {
+                    return Err(JsonError { offset: index, message: "expected JSON integer without fractional or exponent part" })
+                }
+            }
+            return Ok(int(validated))
+        },
+        else => {
+            return Err(JsonError { offset: 0, message: "expected JSON integer" })
+        },
+    }
+}
+
+pub fn to_float(value: Value) -> float ! JsonError {
+    match value {
+        Value.Number(raw) => {
+            let validated = validate_number(raw)?
+            return Ok(float(validated))
+        },
+        else => {
+            return Err(JsonError { offset: 0, message: "expected JSON number" })
+        },
+    }
+}
+
+pub fn get_required(value: Value, key: str) -> Value ! JsonError {
+    match value {
+        Value.Object(fields) => {
+            let found = fields.get(key)
+            return match found {
+                Some(item) => Ok(item),
+                None => Err(JsonError { offset: 0, message: "missing required JSON field '" + key + "'" }),
+            }
+        },
+        else => {
+            return Err(JsonError { offset: 0, message: "expected JSON object" })
+        },
+    }
+}
+
+pub fn get_str(value: Value, key: str) -> str ! JsonError {
+    return to_str(get_required(value, key)?)
+}
+
+pub fn get_int(value: Value, key: str) -> int ! JsonError {
+    return to_int(get_required(value, key)?)
+}
+
+pub fn get_float(value: Value, key: str) -> float ! JsonError {
+    return to_float(get_required(value, key)?)
+}
+
+pub fn get_bool(value: Value, key: str) -> bool ! JsonError {
+    return to_bool(get_required(value, key)?)
+}
+
+pub fn get_optional_str(value: Value, key: str) -> str? ! JsonError {
+    let empty: str? = none
+    let item = get(value, key)
+    match item {
+        None => {
+            return Ok(empty)
+        },
+        Some(inner) => {
+            if is_null(inner) {
+                return Ok(empty)
+            }
+            let parsed: str? = Some(to_str(inner)?)
+            return Ok(parsed)
+        },
+    }
+}
+
+pub fn get_optional_int(value: Value, key: str) -> int? ! JsonError {
+    let empty: int? = none
+    let item = get(value, key)
+    match item {
+        None => {
+            return Ok(empty)
+        },
+        Some(inner) => {
+            if is_null(inner) {
+                return Ok(empty)
+            }
+            let parsed: int? = Some(to_int(inner)?)
+            return Ok(parsed)
+        },
+    }
+}
+
+pub fn get_optional_float(value: Value, key: str) -> float? ! JsonError {
+    let empty: float? = none
+    let item = get(value, key)
+    match item {
+        None => {
+            return Ok(empty)
+        },
+        Some(inner) => {
+            if is_null(inner) {
+                return Ok(empty)
+            }
+            let parsed: float? = Some(to_float(inner)?)
+            return Ok(parsed)
+        },
+    }
+}
+
+pub fn get_optional_bool(value: Value, key: str) -> bool? ! JsonError {
+    let empty: bool? = none
+    let item = get(value, key)
+    match item {
+        None => {
+            return Ok(empty)
+        },
+        Some(inner) => {
+            if is_null(inner) {
+                return Ok(empty)
+            }
+            let parsed: bool? = Some(to_bool(inner)?)
+            return Ok(parsed)
+        },
+    }
+}

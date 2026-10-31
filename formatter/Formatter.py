@@ -6,7 +6,7 @@ from node.NodeType import (
     Pattern, IdentifierPattern, TuplePattern, EnumPattern, ErrorTypePattern, LiteralPattern, WildcardPattern,
     Block, ExprStmt, Param, FnDecl, StructField, StructDecl, EnumDecl,
     InterfaceMethod, InterfaceDecl, ClassField, MethodDecl, ClassDecl,
-    ImportDecl, LetDecl, WhileStmt, ForStmt, ReturnStmt, BreakStmt, ContinueStmt,
+    ImportDecl, UseDecl, UseSymbol, LetDecl, WhileStmt, ForStmt, ReturnStmt, BreakStmt, ContinueStmt,
     IntLiteral, FloatLiteral, StringLiteral, BoolLiteral, NoneLiteral,
     IdentExpr, ThisExpr, SuperExpr, NewExpr,
     UnaryExpr, BinaryExpr, CoalesceExpr, RangeExpr, PostfixTryExpr, ElseErrExpr,
@@ -129,6 +129,26 @@ class Formatter:
         if isinstance(stmt, ExternFnDecl):
             params = ", ".join(p.name + ": " + self.format_type(p.type_ann) for p in stmt.params)
             return ind + 'extern "C" fn ' + stmt.name + "(" + params + ") -> " + self.format_type(stmt.return_type)
+
+        if isinstance(stmt, UseDecl):
+            path_str = self._escape_str(stmt.path) if ('/' in stmt.path or stmt.path.endswith('.wysna')) else stmt.path
+            if len(stmt.symbols) == 1 and not stmt.is_braced:
+                sym = stmt.symbols[0]
+                sub = f"{sym.subpath}." if sym.subpath else ""
+                alias = f" as {sym.alias}" if sym.alias else ""
+                return f"{ind}from {path_str} use {sub}{sym.name}{alias}"
+            elif len(stmt.symbols) == 0:
+                alias = f" as {stmt.namespace_alias}" if stmt.namespace_alias else ""
+                return f"{ind}from {path_str} use {stmt.namespace}{alias}"
+            else:
+                sym_lines = []
+                inner_ind = self._indent(level + 1)
+                for sym in stmt.symbols:
+                    sub = f"{sym.subpath}." if sym.subpath else ""
+                    alias = f" as {sym.alias}" if sym.alias else ""
+                    sym_lines.append(f"{inner_ind}{sub}{sym.name}{alias},")
+                inner = "\n".join(sym_lines)
+                return f"{ind}from {path_str} use {{\n{inner}\n{ind}}}"
 
         if isinstance(stmt, ImportDecl):
             import os

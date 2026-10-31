@@ -63,14 +63,23 @@ def run_expansion_tests():
                 assert result.diag_code == 'W4003' and result.exit_code != 0, vars(result)
         for backend in ('ast', 'hir'):
             binary = directory / ('ffi_' + backend)
-            built = subprocess.run([sys.executable, str(ROOT / 'main.py'), 'build', str(ROOT / 'tests/ffi/scalars.wysna'),
-                                    '--backend=' + backend, '--link-lib', 'm', '-o', str(binary)], capture_output=True, text=True)
+            if backend == 'ast':
+                built = subprocess.run(
+                    [sys.executable, str(ROOT / 'tests/emit_ast_oracle.py'),
+                     str(ROOT / 'tests/ffi/scalars.wysna'), str(directory / 'ffi_ast.c'),
+                     '--build', str(binary), '--link-lib', 'm'],
+                    capture_output=True, text=True)
+            else:
+                built = subprocess.run(
+                    [sys.executable, str(ROOT / 'main.py'), 'build',
+                     str(ROOT / 'tests/ffi/scalars.wysna'), '--link-lib', 'm', '-o', str(binary)],
+                    capture_output=True, text=True)
             assert built.returncode == 0, built.stderr
             result = subprocess.run([str(binary)], capture_output=True, text=True, env=dict(os.environ, WYSNA_MEM_CHECK='1'))
             assert (result.returncode, result.stdout) == (0, '9.0\n7\n'), result.stderr
         cfg = directory / 'read_cfg.wysna'
         cfg.write_text('fn read_cfg() -> int { return 7 }\nprint(read_cfg())\n')
-        built = subprocess.run([sys.executable, str(ROOT / 'main.py'), 'build', '--backend=selfhost',
+        built = subprocess.run([sys.executable, str(ROOT / 'main.py'), 'build', '--engine=compiler',
                                 str(cfg), '-o', str(directory / 'read_cfg')], capture_output=True, text=True)
         assert built.returncode == 0, built.stderr
         ran = subprocess.run([str(directory / 'read_cfg')], capture_output=True, text=True)

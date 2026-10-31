@@ -19,6 +19,12 @@ class DebugInfo:
                              str(optimized).lower() + ', runtimeVersion: 0, emissionKind: FullDebug)')
         self.version = self.add('!{i32 2, !"Debug Info Version", i32 3}')
         self.dwarf = self.add('!{i32 2, !"Dwarf Version", i32 4}')
+        self._cold_weights = None
+
+    def cold_branch_weights(self):
+        if self._cold_weights is None:
+            self._cold_weights = self.add('!{!"branch_weights", i32 1, i32 1048576}')
+        return self._cold_weights
 
     def add(self, value):
         self.nodes.append(value)

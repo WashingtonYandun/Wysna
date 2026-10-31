@@ -22,7 +22,7 @@ chmod +x "$REPO_ROOT/wysna"
 
 echo "[1/2] Pre-building Stage-2 native self-hosted Wysna compiler..."
 mkdir -p "$REPO_ROOT/.wysna_cache"
-"$REPO_ROOT/wysna" build --selfhost "$REPO_ROOT/selfhost/compiler.wysna" -o "$REPO_ROOT/.wysna_cache/wysna_selfhost"
+"$REPO_ROOT/wysna" build --engine=compiler "$REPO_ROOT/selfhost/compiler.wysna" -o "$REPO_ROOT/.wysna_cache/wysna_selfhost"
 
 echo "[2/2] Installing 'wysna' CLI into $TARGET_DIR..."
 mkdir -p "$TARGET_DIR"

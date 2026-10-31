@@ -1,15 +1,14 @@
 """
-test_c06_default_backend.py - Conformance suite for Milestone C06:
-Default HIR Backend, Explicit Engine Selection, and Oracle Equivalence.
+Conformance checks for compiler engines, output targets, and the AST test oracle.
 
 Invariants verified:
-1. Default backend for emit-c and build is Typed HIR -> HirCCodeGen -> C99.
-2. CLI flags --backend=hir, --backend=ast, --backend=selfhost select engines unambiguously.
-3. Legacy flags (--hir, --selfhost, --ast) remain supported for backward compatibility.
-4. Unknown backends (--backend=invalid) fail with structured error and non-zero exit code.
-5. No silent fallback: HIR errors are reported directly without fallback to AST C.
+1. The default Seed engine emits C99 through verified HIR/MIR.
+2. --engine selects Seed or Compiler; --backend selects C99 or experimental LLVM.
+3. AST C99 emission is available only to internal differential tests.
+4. Former mixed backend selectors fail with migration guidance.
+5. No silent fallback: Seed errors are reported directly without fallback to AST C.
 6. Unit functions with trailing expressions are normalized to HirConstUnit.
-7. Native C99 execution across default HIR backend under Clang AddressSanitizer and UBSan.
+7. Native C99 execution through the default Seed-to-HIR/MIR pipeline under Clang AddressSanitizer and UBSan.
 """
 
 import os
@@ -23,7 +22,7 @@ from checker.TypeInterner import TYPE_UNIT
 from hir.HirBuilder import HirBuilder
 from hir.HirCCodeGen import HirCCodeGen
 from hir.HirNodes import HirExprStmt, HirConstUnit
-from codegen.CCodeGen import CCodeGen
+from compiler.CompilerService import CompilerService
 from main import run_pipeline, get_repo_root
 
 
@@ -32,9 +31,9 @@ def _run_cmd(cmd, cwd=None):
     return res.returncode, res.stdout, res.stderr
 
 
-def test_default_backend_is_hir():
-    """Verify that omitting backend flags selects HirCCodeGen by default."""
-    print("  [TEST] Default backend is Typed HIR C99...")
+def test_default_engine_emits_c99_through_hir():
+    """Verify that the default Seed engine emits C99 from verified HIR/MIR."""
+    print("  [TEST] Default Seed engine emits C99 through verified HIR/MIR...")
     source = """
     fn add(a: int, b: int) -> int {
         return a + b
@@ -54,9 +53,9 @@ def test_default_backend_is_hir():
         assert "wysna_main(" in c_content or "main(" in c_content, "Generated code must include main entrypoint"
 
 
-def test_explicit_backend_flags():
-    """Verify explicit selection between --backend=hir, --backend=ast, and --backend=selfhost."""
-    print("  [TEST] Explicit backend flags (--backend=hir, --backend=ast)...")
+def test_engine_and_backend_contracts():
+    """Verify that engine selection and output-target selection are independent."""
+    print("  [TEST] Explicit compiler engine and output backend contracts...")
     source = """
     struct Point { x: int, y: int }
     let p = Point { x: 3, y: 4 }
@@ -70,31 +69,57 @@ def test_explicit_backend_flags():
         with open(src_path, "w", encoding="utf-8") as f:
             f.write(source)
 
-        # 1. Default (should be HIR)
+        # 1. Default Seed engine and C99 output target.
         c_default = os.path.join(td, "default.c")
         rc, out, err = _run_cmd([sys.executable, wysna_cli, "emit-c", src_path, "-o", c_default], cwd=repo_root)
         assert rc == 0, f"Default emit-c failed: {err}"
 
-        # 2. Explicit --backend=hir
-        c_hir = os.path.join(td, "hir.c")
-        rc, out, err = _run_cmd([sys.executable, wysna_cli, "emit-c", "--backend=hir", src_path, "-o", c_hir], cwd=repo_root)
-        assert rc == 0, f"--backend=hir failed: {err}"
+        c_seed = os.path.join(td, "seed.c")
+        rc, out, err = _run_cmd([sys.executable, wysna_cli, "emit-c", "--engine=seed", src_path, "-o", c_seed], cwd=repo_root)
+        assert rc == 0, f"--engine=seed failed: {err}"
 
-        # 3. Explicit --backend=ast
-        c_ast = os.path.join(td, "ast.c")
-        rc, out, err = _run_cmd([sys.executable, wysna_cli, "emit-c", "--backend=ast", src_path, "-o", c_ast], cwd=repo_root)
-        assert rc == 0, f"--backend=ast failed: {err}"
+        c99 = os.path.join(td, "c99.c")
+        rc, out, err = _run_cmd([sys.executable, wysna_cli, "emit-c", "--backend=c99", src_path, "-o", c99], cwd=repo_root)
+        assert rc == 0, f"--backend=c99 failed: {err}"
 
-        # 4. Compare default vs hir: they must be identical
+        c_compiler = os.path.join(td, "compiler.c")
+        rc, out, err = _run_cmd([sys.executable, wysna_cli, "emit-c", "--engine=compiler", src_path, "-o", c_compiler], cwd=repo_root)
+        assert rc == 0, f"--engine=compiler failed: {err or out}"
+
+        service = CompilerService(project_root=td)
+        checked = service.check_file(src_path)
+        ast_oracle = service._emit_ast_oracle_for_testing(checked).source
+        assert "wysna_main(" in ast_oracle or "main(" in ast_oracle
+
+        # The default Seed engine and explicit C99 target must be reproducible.
         with open(c_default, "r", encoding="utf-8") as f:
             content_default = f.read()
-        with open(c_hir, "r", encoding="utf-8") as f:
-            content_hir = f.read()
-        assert content_default == content_hir, "Default emit-c must match --backend=hir output exactly"
+        with open(c_seed, "r", encoding="utf-8") as f:
+            content_seed = f.read()
+        with open(c99, "r", encoding="utf-8") as f:
+            content_c99 = f.read()
+        assert content_default == content_seed == content_c99, (
+            "Default emit-c must match explicit Seed and C99 selections exactly")
 
-        # 5. Invalid backend flag should cleanly fail
+        for old_selector in ("--backend=hir", "--backend=ast", "--backend=selfhost",
+                             "--hir", "--selfhost", "--ast"):
+            rc, out, err = _run_cmd([sys.executable, wysna_cli, "emit-c", old_selector,
+                                     src_path, "-o", os.path.join(td, "invalid.c")], cwd=repo_root)
+            assert rc == 2, f"{old_selector} must be rejected as an obsolete selector: {err}"
+            assert "--engine" in err or "wysna ast" in err, err
+
+        compiler_check = _run_cmd([sys.executable, wysna_cli, "check", "--engine=compiler",
+                                   src_path], cwd=repo_root)
+        assert compiler_check[0] == 2, compiler_check
+        assert "standalone Compiler SDK" in compiler_check[2]
+        compiler_llvm = _run_cmd([sys.executable, wysna_cli, "emit-c", "--engine=compiler",
+                                  "--backend=llvm-experimental", src_path], cwd=repo_root)
+        assert compiler_llvm[0] == 2, compiler_llvm
+        assert "C99 output backend" in compiler_llvm[2]
+
+        # Unknown output targets fail with a usage error.
         rc, out, err = _run_cmd([sys.executable, wysna_cli, "emit-c", "--backend=invalid_backend", src_path], cwd=repo_root)
-        assert rc != 0, "Invalid backend must exit with non-zero code"
+        assert rc == 2, "Invalid backend must exit with usage status"
         assert "Unknown backend" in err or "Unknown backend" in out, "Must produce error message on invalid backend"
 
 
@@ -129,8 +154,8 @@ def test_unit_function_tail_normalization():
 
 
 def test_native_c99_execution_under_sanitizers():
-    """Verify default HIR build and execution under AddressSanitizer and UndefinedBehaviorSanitizer."""
-    print("  [TEST] Native C99 execution across default HIR under ASan + UBSan...")
+    """Verify the default Seed-to-HIR/MIR-to-C99 pipeline under ASan and UBSan."""
+    print("  [TEST] Native C99 execution through default Seed HIR/MIR under ASan + UBSan...")
     source = """
     enum Tree[T] {
         Leaf(T),
@@ -163,11 +188,11 @@ def test_native_c99_execution_under_sanitizers():
         with open(src_path, "w", encoding="utf-8") as f:
             f.write(source)
 
-        # Build natively using default backend with sanitizers enabled
+        # Build natively using the default engine and output target with sanitizers enabled.
         rc, out, err = _run_cmd([
             sys.executable, wysna_cli, "build", "--sanitize", src_path, "-o", bin_path
         ], cwd=repo_root)
-        assert rc == 0, f"Native build via default HIR backend failed: {err}"
+        assert rc == 0, f"Native build via default Seed HIR/MIR pipeline failed: {err}"
         assert os.path.exists(bin_path), "Target binary must exist"
 
         # Execute binary
@@ -179,15 +204,15 @@ def test_native_c99_execution_under_sanitizers():
 
 def run_all() -> bool:
     print("==================================================")
-    print("Wysna C06 Default HIR Backend Suite")
+    print("Wysna Compiler Engine and Output Target Contract Suite")
     print("==================================================")
     try:
-        test_default_backend_is_hir()
-        test_explicit_backend_flags()
+        test_default_engine_emits_c99_through_hir()
+        test_engine_and_backend_contracts()
         test_unit_function_tail_normalization()
         test_native_c99_execution_under_sanitizers()
         print("==================================================")
-        print("ALL C06 DEFAULT HIR BACKEND TESTS PASSED.")
+        print("ALL ENGINE AND OUTPUT TARGET CONTRACT TESTS PASSED.")
         print("==================================================")
         return True
     except AssertionError as e:

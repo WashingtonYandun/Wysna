@@ -200,7 +200,7 @@ Both `gcc` and `clang` are forced by `;`-terminated C99 variable declarations to
 
 ## 5. Current role
 
-Wysna Seed lowers verified typed HIR to verified MIR for native builds and C emission. The AST backend remains available as a differential oracle (`--backend=ast`). `wysna mir <file.wysna>` prints the verified MIR representation as JSON.
+Wysna Seed lowers verified typed HIR to verified MIR for native builds and C emission. The independent AST C emitter is available only to the internal differential test harness; it is not a production CLI backend. `wysna mir <file.wysna>` prints the verified MIR representation as JSON.
 
 
 ## 6. Verification boundary

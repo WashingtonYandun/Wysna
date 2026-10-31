@@ -144,10 +144,15 @@ class LlvmBackendTests(unittest.TestCase):
                          (reference.returncode, reference.stdout, reference.stderr))
 
     def test_explicit_application_exit_matches_c99(self):
-        for code in (0, 7):
-            service, checked = self.checked('print("before")\nexit(' + str(code) + ')\nprint("unreachable")\n')
+        cases = [
+            (0, 'print("before")\nexit(0)\nprint("unreachable")\n', b'before\n'),
+            (7, 'print("before")\nexit(7)\nprint("unreachable")\n', b'before\n'),
+            (7, 'fn stop() { let values = [1, 2]\nprint(values)\nexit(7) }\nstop()\n', b'[1, 2]\n'),
+        ]
+        for code, source, expected in cases:
+            service, checked = self.checked(source)
             reference = self.c99(service, checked)
-            self.assertEqual((reference.returncode, reference.stdout), (code, b'before\n'))
+            self.assertEqual((reference.returncode, reference.stdout), (code, expected))
             emission = service.emit_llvm(checked)
             build = self.toolchain.build(emission, self.directory / 'exit-program')
             actual = self.execute(build.output_path)
@@ -261,6 +266,33 @@ class LlvmBackendTests(unittest.TestCase):
                 self.toolchain.build(emission, output)
             self.assertEqual(caught.exception.code, 'W5002')
         self.assertEqual(library.read_bytes(), original)
+
+    def test_llvm_codegen_optimizations_and_metadata(self):
+        service, checked = self.checked('let a = 100 / 2\nprint(a)\n')
+        emission = service.emit_llvm(checked)
+        self.assertIn('!prof', emission.source)
+        self.assertIn('!"branch_weights", i32 1, i32 1048576', emission.source)
+        self.assertIn('declare i64 @wysna_llvm_int(ptr nocapture readonly) readonly', emission.source)
+        self.assertIn('declare void @wysna_llvm_fail(ptr nocapture readonly, ptr nocapture readonly, ptr nocapture readonly, i32, i32) cold noreturn', emission.source)
+        self.assertIn('declare i32 @wysna_llvm_range_count(i64, i64, i32) readnone', emission.source)
+        self.assertIn('align 8', emission.source)
+        self.toolchain.verify(emission.source)
+
+        service2, checked2 = self.checked('''
+fn compute(n: int) -> int { n * 2 }
+let a = compute(21)
+let f = float(a)
+let i = int(f)
+print(a, f, i)
+''')
+        emission2 = service2.emit_llvm(checked2)
+        self.assertIn('define internal fastcc i64 @wysna_fn_compute', emission2.source)
+        self.assertIn('nounwind mustprogress', emission2.source)
+        self.assertIn('call fastcc i64 @wysna_fn_compute', emission2.source)
+        self.assertIn('sitofp i64', emission2.source)
+        self.assertIn('fptosi double', emission2.source)
+        self.assertNotIn('call void @wysna_llvm_convert', emission2.source)
+        self.toolchain.verify(emission2.source)
 
     def test_complete_mir_profile_never_falls_back(self):
         for source in ('print([1, 2])', 'class Box { value: int }\nprint(1)',
@@ -404,7 +436,7 @@ class LlvmBackendTests(unittest.TestCase):
                      ['emit-c', '--backend=llvm-experimental'],
                      ['check', '--backend=llvm-experimental', '--sanitize'],
                      ['check', '--backend=llvm-experimental', '--link-lib', 'foreign'],
-                     ['check', '--profile=release'], ['emit-llvm', '--backend=hir'],
+                     ['check', '--profile=release'], ['emit-llvm', '--backend=c99'],
                      ['build', '--backend=llvm-experimental', '--profile=fast']):
             with self.subTest(args=args):
                 result = self.cli(*args, source, '--output-format=json-v1')
@@ -414,7 +446,7 @@ class LlvmBackendTests(unittest.TestCase):
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertEqual(json.loads(result.stdout)['target']['llvm_version'], [20, 1, 8])
         with redirect_stderr(io.StringIO()):
-            self.assertEqual(run_pipeline('print(1)', backend='llvm-experimental', use_selfhost=True), 1)
+            self.assertEqual(run_pipeline('print(1)', backend='llvm-experimental', engine='compiler'), 1)
 
     def test_cli_reuses_one_validated_provider_for_emission_and_linking(self):
         calls = []
@@ -663,6 +695,22 @@ print(inspect(41))
                 self.assertFalse(marker.exists(), 'A detached worker survived cancellation')
                 if not outer_timeout:
                     self.assertEqual(context.stdout.getvalue(), 'timed out\n')
+
+    def test_cli_backend_llvm_alias(self):
+        service, checked = self.checked('print("LLVM ALIAS", 99)')
+        source = checked.source.file
+        result_run = self.cli('run', '--backend=llvm', source)
+        self.assertEqual(result_run.returncode, 0, result_run.stderr)
+        self.assertEqual(result_run.stdout, 'LLVM ALIAS 99\n')
+
+        result_check = self.cli('check', '--backend=llvm', '--stats', source)
+        self.assertEqual(result_check.returncode, 0, result_check.stderr)
+        self.assertIn('"backend": "llvm-experimental"', result_check.stdout)
+
+        output_bin = self.directory / 'alias_prog'
+        result_build = self.cli('build', '--backend=llvm', '--profile=dev', source, '-o', output_bin)
+        self.assertEqual(result_build.returncode, 0, result_build.stderr)
+        self.assertEqual(self.execute(output_bin).stdout, b'LLVM ALIAS 99\n')
 
 
 

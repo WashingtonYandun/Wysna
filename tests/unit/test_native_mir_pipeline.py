@@ -1,9 +1,14 @@
 """Native MIR-to-C99 parity, ownership and rejected phase boundaries."""
+import json
 import os
+import shutil
+import sys
 from pathlib import Path
 import subprocess
 import tempfile
+import time
 import unittest
+from unittest.mock import patch
 
 from common.Platform import compiler_command, executable_name
 from compiler.Bootstrap import ensure_selfhost_compiler_binary
@@ -251,7 +256,7 @@ class NativeMirPipelineTests(unittest.TestCase):
         self.assertEqual(result.returncode, 0, result.stderr)
         return result.stdout
 
-    def execute(self, source, directory, engine):
+    def execute(self, source, directory, engine, arguments=(), *, immediate_exit=False):
         c_path = directory / (engine + ".c")
         executable = directory / executable_name(engine)
         c_path.write_text(source, encoding="utf-8")
@@ -262,7 +267,11 @@ class NativeMirPipelineTests(unittest.TestCase):
                                capture_output=True, text=True, timeout=120)
         self.assertEqual(built.returncode, 0, built.stderr)
         environment = dict(os.environ, WYSNA_MEM_CHECK="1", UBSAN_OPTIONS="halt_on_error=1")
-        completed = subprocess.run([str(executable)], capture_output=True, env=environment, timeout=20)
+        if immediate_exit:
+            # Active frames are intentionally not unwound at explicit process exit.
+            environment["ASAN_OPTIONS"] = "detect_leaks=0"
+        completed = subprocess.run([str(executable), *arguments], capture_output=True,
+                                   env=environment, timeout=20)
         self.assertNotIn(b"runtime error:", completed.stderr)
         self.assertNotIn(b"AddressSanitizer", completed.stderr)
         return completed.returncode, completed.stdout, completed.stderr
@@ -287,6 +296,165 @@ class NativeMirPipelineTests(unittest.TestCase):
                     self.assertEqual(expected[0], 0, expected[2])
                     self.assertEqual(self.execute(CCodeGen(arena).generate(module), directory, "exchange"), expected)
                     self.assertEqual(self.execute(native, directory, "native"), expected)
+
+    def test_exit_preserves_status_with_live_frames_across_emitters(self):
+        code = 'fn stop() { let values = [1, 2]\nprint(values)\nexit(7) }\nstop()\n'
+        with tempfile.TemporaryDirectory(prefix="wysna-explicit-exit-") as temporary:
+            directory = Path(temporary).resolve()
+            source = directory / "exit.wysna"
+            source.write_text(code, encoding="utf-8")
+            service = CompilerService()
+            checked = service.check_file(source)
+            module, arena = import_module(self.invoke("--emit-mir", source))
+            emissions = {
+                "hir": service.emit_c(checked).source,
+                "ast": service._emit_ast_oracle_for_testing(checked).source,
+                "exchange": CCodeGen(arena).generate(module),
+                "native": self.invoke("--emit-c-mir", source),
+            }
+            for engine, emission in emissions.items():
+                with self.subTest(engine=engine):
+                    status, output, error = self.execute(emission, directory, "exit-" + engine, immediate_exit=True)
+                    self.assertEqual(status, 7, error)
+                    self.assertEqual(output, b"[1, 2]\n")
+                    self.assertNotIn(b"Memory leak detected", error)
+
+    def test_automation_consumer_runs_child_and_preserves_exit_status(self):
+        source = ROOT / "examples/automation/src/main.wysna"
+        native = self.invoke("--emit-c-mir", source)
+        with tempfile.TemporaryDirectory(prefix="wysna-automation-") as temporary:
+            directory = Path(temporary).resolve()
+            program = 'import sys; print("child:á界", flush=True); sys.exit(7)'
+            status, output, error = self.execute(native, directory, "automation", (sys.executable, "-c", program), immediate_exit=True)
+            self.assertEqual(status, 7, error)
+            self.assertIn("child:á界".encode("utf-8"), output)
+            self.assertIn(b"starting child at", output)
+            status, output, error = self.execute(native, directory, "automation-no-args", immediate_exit=True)
+            self.assertEqual(status, 2)
+            self.assertIn(b"usage: automation-runner", error)
+
+    def test_cli_uses_installed_stdlib_with_external_compiler_cache(self):
+        with tempfile.TemporaryDirectory(prefix="wysna-outside-checkout-") as temporary:
+            directory = Path(temporary).resolve()
+            source = directory / "example.wysna"
+            source.write_text('import "std/time" as clock\nprint(clock.unix_seconds())\n', encoding="utf-8")
+            fake = directory / "stdlib"
+            fake.mkdir()
+            (fake / "time.wysna").write_text('not valid Wysna', encoding="utf-8")
+            emitted = directory / "program.c"
+            cli = str(ROOT / "main.py")
+            cached = Path(self.compiler).parent
+            fingerprint = json.loads((cached / "bootstrap.json").read_text(encoding="utf-8"))["fingerprint"]
+            cache_home = directory / "external cache"
+            destination = cache_home / "bootstrap" / fingerprint
+            destination.parent.mkdir(parents=True)
+            shutil.copytree(cached, destination)
+            environment = dict(os.environ, WYSNA_CACHE_HOME=str(cache_home))
+            for arguments in (
+                ["emit-c", "--engine=compiler", str(source), "-o", str(emitted)],
+                ["emit-mir", "--implementation", "compiler", str(source)],
+            ):
+                with self.subTest(command=arguments[0]):
+                    result = subprocess.run([sys.executable, cli, *arguments], cwd=directory,
+                                            capture_output=True, text=True, timeout=180, env=environment)
+                    self.assertEqual(result.returncode, 0, result.stderr)
+                    if arguments[0] == "emit-mir":
+                        import_module(result.stdout)
+            self.assertIn("wysna_builtin_unix_time", emitted.read_text(encoding="utf-8"))
+
+    def test_standard_imports_cannot_escape_or_fall_back_to_working_directory(self):
+        with tempfile.TemporaryDirectory(prefix="wysna-stdlib-boundary-") as temporary:
+            directory = Path(temporary).resolve()
+            standard = directory / "installed" / "stdlib"
+            standard.mkdir(parents=True)
+            project = directory / "project"
+            project.mkdir()
+            cwd_std = project / "std"
+            cwd_std.mkdir()
+            (cwd_std / "ghost").write_text('pub fn value() -> int { 1 }\n', encoding="utf-8")
+            (directory / "installed" / "escape.wysna").write_text('pub fn value() -> int { 2 }\n', encoding="utf-8")
+            source = project / "main.wysna"
+            def check(code):
+                source.write_text(code, encoding="utf-8")
+                return subprocess.run([self.compiler, "--stdlib-root", str(standard), "--check-mir", str(source)],
+                                      cwd=project, capture_output=True, text=True, timeout=120)
+            for name in ("std/ghost", "std/../escape", "std//ghost", "std/./ghost"):
+                with self.subTest(name=name):
+                    result = check('import "' + name + '" as m\nprint(m.value())\n')
+                    self.assertNotEqual(result.returncode, 0)
+                    self.assertIn("W1003", result.stderr)
+            (standard / "empty.wysna").write_text('', encoding="utf-8")
+            result = check('import "std/empty" as empty\nprint("ok")\n')
+            self.assertEqual(result.returncode, 0, result.stderr)
+            if os.name != "nt":
+                external = project / "external.wysna"
+                external.write_text('pub fn value() -> int { 3 }\n', encoding="utf-8")
+                (standard / "alias.wysna").symlink_to(external)
+                result = check('import "std/alias" as m\nprint(m.value())\n')
+                self.assertNotEqual(result.returncode, 0)
+                self.assertIn("W1003", result.stderr)
+
+    def test_time_module_returns_current_unix_seconds_across_emitters(self):
+        code = 'import "std/time" as clock\nprint(clock.unix_seconds())\n'
+        with tempfile.TemporaryDirectory(prefix="wysna-native-clock-") as temporary:
+            directory = Path(temporary).resolve()
+            source = directory / "clock.wysna"
+            source.write_text(code, encoding="utf-8")
+            service = CompilerService()
+            checked = service.check_file(source)
+            module, arena = import_module(self.invoke("--emit-mir", source))
+            emissions = {
+                "hir": service.emit_c(checked).source,
+                "ast": service._emit_ast_oracle_for_testing(checked).source,
+                "exchange": CCodeGen(arena).generate(module),
+                "native": self.invoke("--emit-c-mir", source),
+            }
+            for engine, emission in emissions.items():
+                with self.subTest(engine=engine):
+                    before = int(time.time())
+                    status, output, error = self.execute(emission, directory, "clock-" + engine)
+                    after = int(time.time())
+                    self.assertEqual(status, 0, error)
+                    self.assertGreaterEqual(int(output.strip()), before - 1)
+                    self.assertLessEqual(int(output.strip()), after + 1)
+
+    def test_environment_module_preserves_absent_empty_and_utf8_values(self):
+        variable = "WYSNA_NATIVE_PROFILE_TEST"
+        code = ('import "std/environment" as environment\n'
+                'let arguments = environment.arguments()\n'
+                'let label = if len(arguments) > 1 { arguments[1] } else { "<no-arg>" }\n'
+                'print(environment.get("' + variable + '") ?? "<unset>", label)\n')
+        with tempfile.TemporaryDirectory(prefix="wysna-native-environment-") as temporary:
+            directory = Path(temporary).resolve()
+            source = directory / "environment.wysna"
+            source.write_text(code, encoding="utf-8")
+            service = CompilerService()
+            checked = service.check_file(source)
+            payload = self.invoke("--emit-mir", source)
+            module, arena = import_module(payload)
+            emissions = {
+                "ast": service._emit_ast_oracle_for_testing(checked).source,
+                "exchange": CCodeGen(arena).generate(module),
+                "native": self.invoke("--emit-c-mir", source),
+            }
+            seed = service.emit_c(checked).source
+            emissions["hir"] = seed
+            runtime_arguments = ("CLI á界",)
+            cases = ((None, "<unset> CLI á界\n".encode("utf-8")),
+                     ("", " CLI á界\n".encode("utf-8")),
+                     ("Wysna á界", "Wysna á界 CLI á界\n".encode("utf-8")))
+            for value, expected_output in cases:
+                with self.subTest(value=value), patch.dict(os.environ):
+                    os.environ.pop(variable, None)
+                    if value is not None:
+                        os.environ[variable] = value
+                    reference = self.execute(seed, directory, "environment-hir", runtime_arguments)
+                    self.assertEqual(reference[0], 0, reference[2])
+                    self.assertEqual(reference[1], expected_output)
+                    for engine, emission in emissions.items():
+                        with self.subTest(value=value, engine=engine):
+                            self.assertEqual(self.execute(emission, directory, "environment-" + engine,
+                                                          runtime_arguments), reference)
 
     def test_runtime_errors_match_independent_consumers(self):
         cases = [
@@ -324,7 +492,7 @@ class NativeMirPipelineTests(unittest.TestCase):
                     module, arena = import_module(self.invoke("--emit-mir", source))
                     emissions = {
                         "hir": service.emit_c(checked).source,
-                        "ast": service.emit_c(checked, backend="ast").source,
+                        "ast": service._emit_ast_oracle_for_testing(checked).source,
                         "exchange": CCodeGen(arena).generate(module),
                         "native": self.invoke("--emit-c-mir", source),
                     }
@@ -356,6 +524,8 @@ class NativeMirPipelineTests(unittest.TestCase):
 
     def test_native_phase_rejects_invalid_source(self):
         cases = [
+            ('unix_time(1)', "W2005"),
+            ('let value: str = unix_time()', "W2001"),
             ('class Box[T] { value: T\nfn init(v: T) { this.value = v }\nfn set(v: T) { this.value = v } }\nlet b: Box[int] = new Box[int](1)\nb.set("bad")', 'W2001'),
             ('class Box[T] { value: T\nfn init(v: T) { this.value = v }\nfn get() -> T { true } }\nlet b: Box[int] = new Box[int](1)\nprint(b.get())', 'W2004'),
             ('class Box[T] { value: T\nfn init(v: T) {} }\nlet b: Box[int] = new Box[int](1)', 'W3004'),

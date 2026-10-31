@@ -27,6 +27,8 @@ from checker.WysnaType import (
 class EdgeKind(Enum):
     INLINE = "inline"
     INDIRECT = "indirect"
+    STRONG = "strong"
+    WEAK = "weak"
 
 
 class LayoutEdge:
@@ -219,6 +221,132 @@ class LayoutGraph:
             code="W2011"
         )
 
+    def find_strong_class_sccs(self) -> List[List[str]]:
+        """
+        Finds strongly connected components on the subgraph formed exclusively
+        by STRONG class-reference edges using Tarjan's algorithm.
+        Returns cycles of classes that strongly reference each other without
+        weak-reference indirection.
+        """
+        index = 0
+        indices: Dict[str, int] = {}
+        lowlink: Dict[str, int] = {}
+        on_stack: Set[str] = set()
+        stack: List[str] = []
+        cyclic_sccs: List[List[str]] = []
+
+        class_nodes = {name for name, node in self.nodes.items() if node.kind == "class"}
+        strong_adj: Dict[str, List[str]] = {name: [] for name in class_nodes}
+        for name in class_nodes:
+            node = self.nodes[name]
+            for edge in node.edges:
+                if edge.kind == EdgeKind.STRONG and edge.target in class_nodes:
+                    strong_adj[name].append(edge.target)
+
+        def strongconnect(v: str) -> None:
+            nonlocal index
+            indices[v] = index
+            lowlink[v] = index
+            index += 1
+            stack.append(v)
+            on_stack.add(v)
+
+            for w in strong_adj.get(v, []):
+                if w not in indices:
+                    strongconnect(w)
+                    lowlink[v] = min(lowlink[v], lowlink[w])
+                elif w in on_stack:
+                    lowlink[v] = min(lowlink[v], indices[w])
+
+            if lowlink[v] == indices[v]:
+                scc: List[str] = []
+                while True:
+                    w = stack.pop()
+                    on_stack.remove(w)
+                    scc.append(w)
+                    if w == v:
+                        break
+                if len(scc) > 1:
+                    cyclic_sccs.append(scc)
+                elif len(scc) == 1:
+                    node_name = scc[0]
+                    if node_name in strong_adj.get(node_name, []):
+                        cyclic_sccs.append(scc)
+
+        for name in sorted(class_nodes):
+            if name not in indices:
+                strongconnect(name)
+
+        return cyclic_sccs
+
+    def find_strong_cycle_path(self, scc: List[str]) -> Tuple[List[str], List[LayoutEdge]]:
+        """
+        Extracts an elementary directed cycle within a strong class SCC along with its edges.
+        Returns (cycle_path, edge_list).
+        """
+        scc_set = set(scc)
+        if len(scc) == 1:
+            name = scc[0]
+            node = self.nodes.get(name)
+            if node:
+                for edge in node.edges:
+                    if edge.kind == EdgeKind.STRONG and edge.target == name:
+                        return [name, name], [edge]
+
+        start = sorted(scc)[0]
+        queue: List[Tuple[str, List[str], List[LayoutEdge]]] = []
+        node = self.nodes.get(start)
+        if node:
+            for edge in node.edges:
+                if edge.kind == EdgeKind.STRONG and edge.target in scc_set:
+                    queue.append((edge.target, [start, edge.target], [edge]))
+
+        visited: Set[Tuple[str, str]] = set()
+        while queue:
+            curr, path, edge_list = queue.pop(0)
+            if curr == start:
+                return path, edge_list
+            curr_node = self.nodes.get(curr)
+            if curr_node:
+                for edge in curr_node.edges:
+                    if edge.kind == EdgeKind.STRONG and edge.target in scc_set:
+                        next_node = edge.target
+                        if next_node == start:
+                            return path + [start], edge_list + [edge]
+                        if (curr, next_node) not in visited and next_node not in path:
+                            visited.add((curr, next_node))
+                            queue.append((next_node, path + [next_node], edge_list + [edge]))
+
+        # Fallback
+        return scc + [scc[0]], []
+
+    def explain_strong_reference_cycles(self) -> List[Dict[str, Any]]:
+        """
+        Returns structured diagnostic advisories for all detected strong reference cycles
+        among classes, detailing cycle paths, field names, and weak-reference remediation.
+        """
+        sccs = self.find_strong_class_sccs()
+        reports: List[Dict[str, Any]] = []
+        for scc in sccs:
+            path, edge_list = self.find_strong_cycle_path(scc)
+            if edge_list:
+                chain = " -> ".join([f"{e.source}.{e.field_name} ({e.target})" for e in edge_list])
+            else:
+                chain = " -> ".join(path)
+            reports.append({
+                "classes": sorted(scc),
+                "path": path,
+                "edges": edge_list,
+                "is_mutual": len(scc) > 1,
+                "chain": chain,
+                "advisory": (
+                    f"Strong reference cycle detected across classes: {chain}. "
+                    f"Under ARC, mutual strong references cause permanent memory retention. "
+                    f"Consider breaking the cycle by annotating back-references with 'Weak[T]'."
+                )
+            })
+        return reports
+
 
 def build_layout_graph_from_declarations(
     struct_decls: List[StructDecl],
@@ -283,6 +411,26 @@ def build_layout_graph_from_declarations(
             elif isinstance(type_node, AstResultType):
                 graph.add_edge(source_name, "Result", EdgeKind.INDIRECT, field_name, line, col)
 
+    def extract_class_target(type_node: TypeNode) -> Tuple[Optional[str], bool]:
+        if isinstance(type_node, NamedType):
+            if type_node.name in class_names:
+                return type_node.name, False
+        elif isinstance(type_node, GenericType):
+            name_lower = type_node.name.lower()
+            if name_lower == "weak" and type_node.type_args:
+                inner_target, _ = extract_class_target(type_node.type_args[0])
+                if inner_target:
+                    return inner_target, True
+            elif type_node.name in ("Option", "Result", "list") and type_node.type_args:
+                return extract_class_target(type_node.type_args[0])
+            elif type_node.name in class_names:
+                return type_node.name, False
+        elif isinstance(type_node, AstOptionalType):
+            return extract_class_target(type_node.inner)
+        elif isinstance(type_node, AstListType):
+            return extract_class_target(type_node.element_type)
+        return None, False
+
     # 1. Process struct fields
     for s in struct_decls:
         for f in s.fields:
@@ -296,5 +444,15 @@ def build_layout_graph_from_declarations(
                     target_name = getattr(pt, "name", None)
                     if target_name:
                         graph.add_edge(e.name, target_name, EdgeKind.INDIRECT, v.name, v.line, v.col)
+
+    # 3. Process class fields (distinguishing strong ownership from weak references)
+    for c in class_decls:
+        for f in c.fields:
+            target_class, is_weak = extract_class_target(f.type_ann)
+            if target_class and target_class in class_names:
+                edge_kind = EdgeKind.WEAK if is_weak else EdgeKind.STRONG
+                graph.add_edge(c.name, target_class, edge_kind, f.name, f.line, f.col)
+            else:
+                classify_type_node(f.type_ann, c.name, f.name, f.line, f.col)
 
     return graph

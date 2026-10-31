@@ -7,6 +7,7 @@ from typing import Dict, Optional
 # W3xxx: Mutability, Ownership & OOP Encapsulation Diagnostics
 # W4xxx: Runtime Execution Diagnostics
 # W5xxx: Host Toolchain Diagnostics
+# W6xxx: Lints (warnings that never block compilation)
 DIAGNOSTIC_CODES: Dict[str, str] = {
     "W9998": "Compiler accepted a program it cannot lower (compiler bug)",
     "W9999": "Internal compiler invariant violation",
@@ -49,55 +50,14 @@ DIAGNOSTIC_CODES: Dict[str, str] = {
     "W5003": "Source file could not be read",
     "W5004": "Requested output artifact could not be written or read back",
     "W5006": "Capability policy rejected execution",
+    # W6xxx — Lints (warnings; never block compilation)
+    "W6001": "Pure expression statement result is discarded",
+    "W6002": "Strong reference cycle between classes can leak under ARC",
 }
-
-LEGACY_CODE_MAP: Dict[str, str] = {
-    # Lexer legacy codes
-    "E000": "W0001",
-    "E001": "W0001",
-    "E002": "W0002",
-    "E003": "W0003",
-    "E004": "W0004",
-    "E005": "W0005",
-    # Parser legacy codes
-    "E100": "W0001",
-    "P001": "W0001",
-    "P002": "W0001",
-    "P003": "W0006",
-    "P004": "W0006",
-    "P005": "W2002",
-    "P006": "W0006",
-    "P007": "W0006",
-    # TypeChecker / SymbolTable legacy codes
-    "E200": "W2001",
-    "T001": "W1001",
-    "T002": "W1001",
-    "T003": "W2001",
-    "T004": "W3001",
-    "T005": "W2001",
-    "T006": "W2004",
-    "T007": "W2003",
-    "T008": "W1002",
-    "T009": "W2006",
-    "T010": "W2006",
-    "T011": "W2001",
-    "T012": "W3002",
-    "T013": "W2007",
-    "T014": "W1002",
-    "T015": "W2005",
-    "T024": "W2001",
-    "T025": "W2011",
-    # Runtime / Environment legacy codes
-    "E300": "W4003",
-    "E400": "W4003",
-}
-
 
 def normalize_diagnostic_code(code: str, default: str = "W0001") -> str:
     if code in DIAGNOSTIC_CODES:
         return code
-    if code in LEGACY_CODE_MAP:
-        return LEGACY_CODE_MAP[code]
     return default
 
 
@@ -137,7 +97,43 @@ class WysnaError(Exception):
         self.severity = severity
         self.stage = stage
         self.help = help
+        # Machine-readable extras for agents. ``data`` carries structured facts
+        # (for example ``expected``/``found``); ``fixes`` carries candidate edits:
+        # {"description": str, "applicability": "machine"|"maybe"|"manual",
+        #  "edits": [{"line": int, "col": int, "old": str, "new": str}]}.
+        self.data: Dict[str, object] = {}
+        self.fixes: list = []
+        self.related: list = []
         super().__init__(self.__str__())
+
+    def with_data(self, **facts) -> "WysnaError":
+        """Attach structured facts and return self for ``raise`` chaining."""
+        self.data.update(facts)
+        return self
+
+    def with_related(self, message: str, *, line: Optional[int] = None,
+                     col: Optional[int] = None, file: Optional[str] = None) -> "WysnaError":
+        """Attach a secondary location (for example a previous or immutable declaration)."""
+        self.related.append({
+            "message": message,
+            "file": self.file if file is None else file,
+            "line": line,
+            "col": col,
+        })
+        return self
+
+    def with_fix(self, description: str, old: str, new: str, *,
+                 line: Optional[int] = None, col: Optional[int] = None,
+                 applicability: str = "maybe") -> "WysnaError":
+        """Attach one single-edit candidate fix anchored at the diagnostic by default."""
+        self.fixes.append({
+            "description": description,
+            "applicability": applicability,
+            "edits": [{"line": self.line if line is None else line,
+                       "col": self.col if col is None else col,
+                       "old": old, "new": new}],
+        })
+        return self
 
     def __str__(self) -> str:
         return f"[{self.code}] {self.file}:{self.line}:{self.col} - {self.message}"
@@ -201,6 +197,34 @@ class TypeError(WysnaError):
         )
 
 
+class TypeErrors(TypeError):
+    """A bounded batch of independent semantic diagnostics from one check.
+
+    The first diagnostic is the primary one, so callers that only understand a
+    single error keep their behavior; agents read ``diagnostics`` to repair every
+    independent error in a single step.
+    """
+    MAX_DIAGNOSTICS = 100
+
+    def __init__(self, diagnostics):
+        first = diagnostics[0]
+        super().__init__(first.message,
+                         first.line if first.has_location else None,
+                         first.col if first.has_location else None,
+                         first.file, first.code, help=first.help)
+        self.data = dict(first.data)
+        self.fixes = list(first.fixes)
+        self.related = list(first.related)
+        self.start_byte = first.start_byte
+        self.end_byte = first.end_byte
+        self.diagnostics = tuple(diagnostics)
+
+    def to_dict(self):
+        result = super().to_dict()
+        result['diagnostics'] = [error.to_dict() for error in self.diagnostics]
+        return result
+
+
 class EnvironmentError(WysnaError):
     def __init__(self, message: str, line: Optional[int] = None, col: Optional[int] = None, file: str = "<stdin>", code: str = "W4003") -> None:
         super().__init__(
@@ -242,6 +266,11 @@ class ParserErrors(ParserError):
                          first.line if first.has_location else None,
                          first.col if first.has_location else None,
                          first.file, first.code)
+        self.data = dict(first.data)
+        self.fixes = list(first.fixes)
+        self.related = list(first.related)
+        self.start_byte = first.start_byte
+        self.end_byte = first.end_byte
         self.diagnostics = tuple(diagnostics)
 
     def to_dict(self):
