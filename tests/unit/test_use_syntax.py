@@ -1,4 +1,6 @@
 """Comprehensive unit test suite for the AI-predictable import syntax (from ... use ...)."""
+import importlib.util
+import os
 from pathlib import Path
 import subprocess
 import tempfile
@@ -11,6 +13,11 @@ from error.Error import TypeError
 from parser.Parser import Parser
 from formatter.Formatter import Formatter
 from tests.formatter_contract import verify_formatting
+
+HAS_LLVM = (
+    importlib.util.find_spec("llvmlite") is not None
+    or bool(os.environ.get("WYSNA_LLVM_SDK"))
+)
 
 
 class TestUseSyntax(unittest.TestCase):
@@ -79,11 +86,12 @@ print(get_name(du), get_email(au))
             self.assertEqual(res_c.stdout.strip(), "Washo washo@wysofia.com")
 
             # LLVM Backend
-            llvm_out = Path(tmpdir) / "llvm_collision"
-            llvm_res = self.service.emit_llvm(checked)
-            LlvmToolchain(self.repo_root).build(llvm_res, llvm_out)
-            res_llvm = subprocess.run([str(llvm_out)], capture_output=True, text=True, check=True)
-            self.assertEqual(res_llvm.stdout.strip(), "Washo washo@wysofia.com")
+            if HAS_LLVM:
+                llvm_out = Path(tmpdir) / "llvm_collision"
+                llvm_res = self.service.emit_llvm(checked)
+                LlvmToolchain(self.repo_root).build(llvm_res, llvm_out)
+                res_llvm = subprocess.run([str(llvm_out)], capture_output=True, text=True, check=True)
+                self.assertEqual(res_llvm.stdout.strip(), "Washo washo@wysofia.com")
 
     def test_submodule_extraction_native(self):
         self.service.set_overlay("/tmp/app/domain/user.wysna", """
@@ -113,11 +121,12 @@ print(uid + rlvl)
             res_c = subprocess.run([str(c_out)], capture_output=True, text=True, check=True)
             self.assertEqual(res_c.stdout.strip(), "141")
 
-            llvm_out = Path(tmpdir) / "llvm_submod"
-            llvm_res = self.service.emit_llvm(checked)
-            LlvmToolchain(self.repo_root).build(llvm_res, llvm_out)
-            res_llvm = subprocess.run([str(llvm_out)], capture_output=True, text=True, check=True)
-            self.assertEqual(res_llvm.stdout.strip(), "141")
+            if HAS_LLVM:
+                llvm_out = Path(tmpdir) / "llvm_submod"
+                llvm_res = self.service.emit_llvm(checked)
+                LlvmToolchain(self.repo_root).build(llvm_res, llvm_out)
+                res_llvm = subprocess.run([str(llvm_out)], capture_output=True, text=True, check=True)
+                self.assertEqual(res_llvm.stdout.strip(), "141")
 
     def test_whole_module_namespace_import(self):
         self.service.set_overlay("/tmp/app/domain/user.wysna", """
@@ -138,11 +147,12 @@ print(res)
             res_c = subprocess.run([str(c_out)], capture_output=True, text=True, check=True)
             self.assertEqual(res_c.stdout.strip(), "33")
 
-            llvm_out = Path(tmpdir) / "llvm_ns"
-            llvm_res = self.service.emit_llvm(checked)
-            LlvmToolchain(self.repo_root).build(llvm_res, llvm_out)
-            res_llvm = subprocess.run([str(llvm_out)], capture_output=True, text=True, check=True)
-            self.assertEqual(res_llvm.stdout.strip(), "33")
+            if HAS_LLVM:
+                llvm_out = Path(tmpdir) / "llvm_ns"
+                llvm_res = self.service.emit_llvm(checked)
+                LlvmToolchain(self.repo_root).build(llvm_res, llvm_out)
+                res_llvm = subprocess.run([str(llvm_out)], capture_output=True, text=True, check=True)
+                self.assertEqual(res_llvm.stdout.strip(), "33")
 
     def test_stdlib_dot_path_import(self):
         src = """
@@ -165,11 +175,12 @@ if has_sofia {
             res_c = subprocess.run([str(c_out)], capture_output=True, text=True, check=True)
             self.assertEqual(res_c.stdout.strip(), "found sofia")
 
-            llvm_out = Path(tmpdir) / "llvm_stdlib"
-            llvm_res = self.service.emit_llvm(checked)
-            LlvmToolchain(self.repo_root).build(llvm_res, llvm_out)
-            res_llvm = subprocess.run([str(llvm_out)], capture_output=True, text=True, check=True)
-            self.assertEqual(res_llvm.stdout.strip(), "found sofia")
+            if HAS_LLVM:
+                llvm_out = Path(tmpdir) / "llvm_stdlib"
+                llvm_res = self.service.emit_llvm(checked)
+                LlvmToolchain(self.repo_root).build(llvm_res, llvm_out)
+                res_llvm = subprocess.run([str(llvm_out)], capture_output=True, text=True, check=True)
+                self.assertEqual(res_llvm.stdout.strip(), "found sofia")
 
     def test_diagnostic_w1003_with_export_hints(self):
         self.service.set_overlay("/tmp/app/domain/user.wysna", """
@@ -204,11 +215,12 @@ print(s)
             res_c = subprocess.run([str(c_out)], capture_output=True, text=True, check=True)
             self.assertEqual(res_c.stdout.strip(), "49")
 
-            llvm_out = Path(tmpdir) / "llvm_legacy"
-            llvm_res = self.service.emit_llvm(checked)
-            LlvmToolchain(self.repo_root).build(llvm_res, llvm_out)
-            res_llvm = subprocess.run([str(llvm_out)], capture_output=True, text=True, check=True)
-            self.assertEqual(res_llvm.stdout.strip(), "49")
+            if HAS_LLVM:
+                llvm_out = Path(tmpdir) / "llvm_legacy"
+                llvm_res = self.service.emit_llvm(checked)
+                LlvmToolchain(self.repo_root).build(llvm_res, llvm_out)
+                res_llvm = subprocess.run([str(llvm_out)], capture_output=True, text=True, check=True)
+                self.assertEqual(res_llvm.stdout.strip(), "49")
 
 
 if __name__ == "__main__":

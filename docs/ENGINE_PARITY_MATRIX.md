@@ -23,7 +23,7 @@ code coverage.
 
 | Feature Category | Fixtures | Wysna Seed (Interpreter) | Wysna Seed (AST C99) | Wysna Seed (HIR C99) | Wysna Compiler (Self-Hosted) | Status / Milestone |
 | :--- | :---: | :---: | :---: | :---: | :---: | :--- |
-| **`core`** | 158 | ✅ 158/158 | ✅ 158/158 | ✅ 158/158 | ✅ 158/158 | Declared supported |
+| **`core`** | 159 | ✅ 159/159 | ✅ 159/159 | ✅ 159/159 | ✅ 159/159 | Declared supported |
 | **`generics`** | 15 | ✅ 15/15 | ✅ 15/15 | ✅ 15/15 | ✅ 15/15 | Declared supported |
 | **`generic_class_methods`** | 1 | ✅ 1/1 | ✅ 1/1 | ✅ 1/1 | ✅ 1/1 | Declared supported |
 | **`checked_modules`** | 1 | ✅ 1/1 | ✅ 1/1 | ✅ 1/1 | ✅ 1/1 | Declared supported |
@@ -31,7 +31,7 @@ code coverage.
 | **`functions`** | 5 | ✅ 5/5 | ✅ 5/5 | ✅ 5/5 | ✅ 5/5 | Declared supported |
 | **`stdlib`** | 3 | ✅ 3/3 | ✅ 3/3 | ✅ 3/3 | ✅ 3/3 | Declared supported |
 | **`regressions`** | 13 | ✅ 13/13 | ✅ 13/13 | ✅ 13/13 | ✅ 13/13 | Declared supported |
-| **Total Verified** | **204** | **204/204 (100.0%)** | **204/204 (100.0%)** | **204/204 (100.0%)** | **204/204 (100.0%)** | _measured_ |
+| **Total Verified** | **205** | **205/205 (100.0%)** | **205/205 (100.0%)** | **205/205 (100.0%)** | **205/205 (100.0%)** | _measured_ |
 
 <!-- GENERATED TABLE END -->
 

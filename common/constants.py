@@ -11,7 +11,6 @@ KEYWORDS = {
     "enum": TokenType.ENUM,
     "import": TokenType.IMPORT,
     "from": TokenType.FROM,
-    "use": TokenType.USE,
 
     # Object-Oriented (9)
     "class": TokenType.CLASS,

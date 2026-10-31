@@ -755,7 +755,16 @@ class Parser:
                 parts.append(self.expect(TokenType.IDENTIFIER, code="W0006", msg="Expected identifier after '.' in module path").value)
             path = leading_dots + ".".join(parts)
 
-        self.expect(TokenType.USE, code="W0006", msg="Expected 'use' after module path in 'from ... use' statement")
+        if self.check(TokenType.USE) or (self.check(TokenType.IDENTIFIER) and self.at().value == "use"):
+            self.advance()
+        else:
+            raise ParserError(
+                message="Expected 'use' after module path in 'from ... use' statement",
+                line=self.at().line,
+                col=self.at().col,
+                file=self.file,
+                code="W0006",
+            )
 
         symbols: List[UseSymbol] = []
         is_namespace = False
