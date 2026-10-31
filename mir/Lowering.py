@@ -83,8 +83,8 @@ class Lowering:
             self.return_value(value)
         self.finish()
         if optimize:
-            from mir.Ownership import optimize_parameter_reads
-            return optimize_parameter_reads(self.module, self.interner)
+            from mir.Optimizer import optimize as optimize_mir
+            return optimize_mir(self.module, self.interner)
         from mir.Verifier import Verifier
         Verifier(self.interner).verify(self.module)
         return self.module
