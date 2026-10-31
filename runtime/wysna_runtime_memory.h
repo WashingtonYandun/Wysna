@@ -7,6 +7,14 @@
 
 /* Deterministic RC + Copy-on-Write */
 static inline WVal wysna_clone(WVal v) {
+    if (v.tag <= W_BOOL) return v;
+    if (v.tag == W_STR) {
+        if (!v.as.string.owner || v.as.string.owner->refcount == -1) return v;
+        wysna_check_retain_count(v.as.string.owner->refcount, "retain/string");
+        v.as.string.owner->refcount++;
+        wysna_g_retain_count++;
+        return v;
+    }
     if (v.tag == W_POINTER && v.as.handle.owner) {
         wysna_check_retain_count(v.as.handle.owner->refcount, "retain/resource");
         v.as.handle.owner->refcount++;
@@ -14,11 +22,6 @@ static inline WVal wysna_clone(WVal v) {
     } else if (v.tag == W_FUNCTION) {
         wysna_check_retain_count(v.as.function->refcount, "retain/function");
         v.as.function->refcount++;
-        wysna_g_retain_count++;
-    } else if (v.tag == W_STR && v.as.string.owner) {
-        if (v.as.string.owner->refcount == -1) return v;
-        wysna_check_retain_count(v.as.string.owner->refcount, "retain/string");
-        v.as.string.owner->refcount++;
         wysna_g_retain_count++;
     } else if (v.tag == W_LIST && v.as.list) {
         wysna_check_retain_count(v.as.list->refcount, "retain/list");
@@ -165,6 +168,7 @@ static WVal* wysna_release_deferred(WVal* slot, int32_t* produced) {
      */
     WVal v = *slot;
     *produced = 0;
+    if (v.tag <= W_BOOL) return NULL;
     if (v.tag == W_POINTER && v.as.handle.owner) {
         WPointerOwner* owner = v.as.handle.owner;
         wysna_check_refcount(owner->refcount, "release/resource");
