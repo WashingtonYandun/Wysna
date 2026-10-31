@@ -11,9 +11,12 @@ from node.NodeType import (
     InterfaceDecl,
     ClassDecl,
     ImportDecl,
+    UseDecl,
+    UseSymbol,
 )
 from checker.WysnaType import (
     WysnaType,
+    ModuleType,
     StructType,
     EnumType,
     InterfaceType,
@@ -118,12 +121,110 @@ def register_nominal_shells(checker: "TypeChecker", program: Program) -> None:
                 struct_type = StructType(name=stmt.name, fields={})
                 checker.global_scope.define_type(stmt.name, struct_type, line=stmt.line, col=stmt.col, file=checker.file)
 
+        elif isinstance(stmt, UseDecl):
+            resolve_use_declaration(checker, stmt)
+
         elif isinstance(stmt, ImportDecl):
             mod_type = checker._resolve_import(stmt)
             checker.global_scope.define_symbol(
                 Symbol(stmt.namespace, mod_type, is_mut=False, kind="import", line=stmt.line, col=stmt.col),
                 file=checker.file
             )
+
+
+def _bind_symbol_from_unit(checker: "TypeChecker", unit, name: str, bound_name: str, line: int, col: int, module_path: str) -> None:
+    found = False
+    if not hasattr(checker, "imported_symbol_names"):
+        checker.imported_symbol_names = {}
+
+    if name in unit.exports.symbols:
+        sym = unit.exports.symbols[name]
+        checker.imported_symbol_names[bound_name] = sym.name
+        checker.global_scope.define_symbol(
+            Symbol(bound_name, sym.type, is_mut=False, kind=sym.kind, line=line, col=col),
+            file=checker.file
+        )
+        found = True
+
+    if name in unit.exports.types:
+        t = unit.exports.types[name]
+        mangled_type_name = getattr(t, "name", name)
+        checker.imported_symbol_names[bound_name] = mangled_type_name
+        checker.global_scope.define_type(bound_name, t, line=line, col=col, file=checker.file)
+        if isinstance(t, GenericStructTemplate):
+            checker.generic_struct_templates[bound_name] = t
+        elif isinstance(t, GenericFnTemplate):
+            checker.generic_fn_templates[bound_name] = t
+        elif isinstance(t, GenericEnumTemplate):
+            checker.generic_enum_templates[bound_name] = t
+        elif isinstance(t, GenericOopTemplate):
+            checker.generic_oop_templates[bound_name] = t
+        found = True
+
+    if not found:
+        avail = sorted(set(list(unit.exports.symbols.keys()) + list(unit.exports.types.keys())))
+        avail_str = f" Available exports: {', '.join(avail)}" if avail else " The module has no exported symbols."
+        raise TypeError(
+            f"Module '{module_path}' has no exported symbol '{name}'.{avail_str}",
+            file=checker.file, line=line, col=col, code="W1003"
+        )
+
+
+def resolve_use_declaration(checker: "TypeChecker", stmt: UseDecl) -> None:
+    if not hasattr(checker, "imported_symbol_names"):
+        checker.imported_symbol_names = {}
+    checked_modules = []
+
+    base_file = checker.session.find_module_file(stmt.path, checker.file)
+    base_unit = checker.session.load_module_by_path(base_file, checker.file, stmt.line, stmt.col) if base_file else None
+    if base_unit is not None:
+        checked_modules.append(base_unit)
+        stmt.checked_module = base_unit
+
+    for sym_spec in stmt.symbols:
+        bound_name = sym_spec.bound_name
+        name = sym_spec.name
+
+        if sym_spec.subpath is not None:
+            submodule_path = f"{stmt.path}.{sym_spec.subpath}"
+            sub_file = checker.session.find_module_file(submodule_path, checker.file)
+            if sub_file is None:
+                raise TypeError(f"Module not found: '{submodule_path}'", file=checker.file,
+                                line=sym_spec.line, col=sym_spec.col, code="W1003")
+            sub_unit = checker.session.load_module_by_path(sub_file, checker.file, sym_spec.line, sym_spec.col)
+            checked_modules.append(sub_unit)
+            _bind_symbol_from_unit(checker, sub_unit, name, bound_name, sym_spec.line, sym_spec.col, submodule_path)
+        else:
+            if base_unit is not None and (name in base_unit.exports.symbols or name in base_unit.exports.types):
+                _bind_symbol_from_unit(checker, base_unit, name, bound_name, sym_spec.line, sym_spec.col, stmt.path)
+            else:
+                submodule_path = f"{stmt.path}.{name}"
+                sub_file = checker.session.find_module_file(submodule_path, checker.file)
+                if sub_file is not None:
+                    sub_unit = checker.session.load_module_by_path(sub_file, checker.file, sym_spec.line, sym_spec.col)
+                    checked_modules.append(sub_unit)
+                    mod_type = ModuleType(bound_name, sub_unit.exports)
+                    mod_type.checked_module = sub_unit
+                    checker.global_scope.define_symbol(
+                        Symbol(bound_name, mod_type, is_mut=False, kind="import", line=sym_spec.line, col=sym_spec.col),
+                        file=checker.file
+                    )
+                elif base_unit is not None:
+                    avail = sorted(set(list(base_unit.exports.symbols.keys()) + list(base_unit.exports.types.keys())))
+                    avail_str = f" Available exports: {', '.join(avail)}" if avail else " The module has no exported symbols."
+                    raise TypeError(
+                        f"Module '{stmt.path}' has no exported symbol '{name}'.{avail_str}",
+                        file=checker.file, line=sym_spec.line, col=sym_spec.col, code="W1003"
+                    )
+                else:
+                    raise TypeError(
+                        f"Module not found: '{stmt.path}'",
+                        file=checker.file, line=stmt.line, col=stmt.col, code="W1003"
+                    )
+
+    stmt.checked_modules = checked_modules
+    if checked_modules and not getattr(stmt, 'checked_module', None):
+        stmt.checked_module = checked_modules[0]
 
 
 def resolve_declaration_signatures(checker: "TypeChecker", program: Program) -> List[ClassDecl]:

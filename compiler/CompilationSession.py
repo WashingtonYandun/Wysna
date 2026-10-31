@@ -170,7 +170,14 @@ class CompilationSession:
         names = ModuleNames(program, module_id).qualify(program) if imported else {
             node.name: node.name for node in program.body if isinstance(node, DECLARATIONS)}
         for node in program.body:
-            if isinstance(node, A.ImportDecl):
+            if isinstance(node, A.UseDecl):
+                for sym in node.symbols:
+                    bound = sym.bound_name
+                    if bound in names:
+                        raise TypeError('Imported symbol conflicts with a declaration', file=path,
+                                        line=sym.line, col=sym.col, code='T008')
+                    names[bound] = bound
+            elif isinstance(node, A.ImportDecl):
                 if node.namespace in names:
                     raise TypeError('Import namespace conflicts with a declaration', file=path,
                                     line=node.line, col=node.col, code='T008')
@@ -197,8 +204,16 @@ class CompilationSession:
         finally:
             self.active.pop()
         exports = Scope()
-        public_names = {getattr(node, "source_name", getattr(node, "name", getattr(node, "namespace", None)))
-                        for node in original_declarations if getattr(node, "is_exported", False)}
+        public_names = set()
+        for node in original_declarations:
+            if getattr(node, "is_exported", False):
+                if isinstance(node, A.UseDecl):
+                    for sym in node.symbols:
+                        public_names.add(sym.bound_name)
+                else:
+                    name = getattr(node, "source_name", getattr(node, "name", getattr(node, "namespace", None)))
+                    if name:
+                        public_names.add(name)
         for name, emitted in names.items():
             if imported and name not in public_names:
                 continue
@@ -206,9 +221,16 @@ class CompilationSession:
                 exports.symbols[name] = checker.global_scope.symbols[emitted]
             if emitted in checker.global_scope.types:
                 exports.types[name] = checker.global_scope.types[emitted]
-        dependencies = [node.checked_module for node in program.body if isinstance(node, A.ImportDecl)]
+        dependencies = []
+        for node in program.body:
+            if isinstance(node, A.ImportDecl):
+                if hasattr(node, 'checked_modules') and node.checked_modules:
+                    dependencies.extend(node.checked_modules)
+                elif getattr(node, 'checked_module', None):
+                    dependencies.append(node.checked_module)
         unit = CheckedModule(module_id, path, program, checker, exports, self.generation, dependencies, is_entry=not imported)
         unit.names = names
+        unit.imported_symbol_names = getattr(checker, 'imported_symbol_names', {})
         program.session = self
         program.checked_module = unit
         self.modules[path] = unit
@@ -233,41 +255,95 @@ class CompilationSession:
                 if isinstance(child, (A.Node, list)):
                     self.decorate(child, path, module_id)
 
-    def import_module(self, statement, importer):
+    def find_module_file(self, raw_path: str, importer: str) -> Optional[str]:
         if self.project_resolver is not None:
-            candidate = self.project_resolver.resolve_import(statement.path, importer)
-            if candidate is None:
-                raise TypeError(f"Module not found in declared project roots: '{statement.path}'", file=importer,
-                                line=statement.line, col=statement.col, code='W1003')
-            candidate = self.path(str(candidate))
-        else:
-            directory = os.path.dirname(importer) if not importer.startswith('<') else os.getcwd()
-            if statement.path.startswith('std/'):
-                subpath = statement.path[4:]
-                base = Path(__file__).resolve().parent.parent / 'stdlib' / subpath
-                candidate = self.path(str(base.with_suffix('.wysna')))
-            else:
-                candidate = self.path(os.path.join(directory, statement.path))
-                if not os.path.isfile(candidate) and candidate not in self.sources.overlays:
-                    if os.path.isfile(candidate + '.wysna') or (candidate + '.wysna') in self.sources.overlays:
-                        candidate = self.path(candidate + '.wysna')
-            if not os.path.isfile(candidate) and candidate not in self.sources.overlays:
-                candidate = self.path(statement.path)
-                if not os.path.isfile(candidate) and candidate not in self.sources.overlays:
-                    if os.path.isfile(candidate + '.wysna') or (candidate + '.wysna') in self.sources.overlays:
-                        candidate = self.path(candidate + '.wysna')
-        if not os.path.isfile(candidate) and candidate not in self.sources.overlays:
-            raise TypeError(f"Module not found: '{statement.path}'", file=importer,
-                            line=statement.line, col=statement.col, code='W1003')
+            cand = self.project_resolver.resolve_import(raw_path, importer)
+            return self.path(str(cand)) if cand is not None else None
+
+        directory = os.path.dirname(importer) if not importer.startswith('<') else os.getcwd()
+        if raw_path.startswith('std/') or raw_path.startswith('std.'):
+            subpath = raw_path[4:].replace('.', '/')
+            base = Path(__file__).resolve().parent.parent / 'stdlib' / subpath
+            cand = self.path(str(base.with_suffix('.wysna')))
+            if os.path.isfile(cand) or cand in self.sources.overlays:
+                return cand
+            if os.path.isfile(str(base)) or str(base) in self.sources.overlays:
+                return self.path(str(base))
+            return None
+
+        if raw_path.startswith('.'):
+            dot_count = 0
+            while dot_count < len(raw_path) and raw_path[dot_count] == '.':
+                dot_count += 1
+            remainder = raw_path[dot_count:].replace('.', '/')
+            target_dir = directory
+            for _ in range(dot_count - 1):
+                target_dir = os.path.dirname(target_dir)
+            cand = self.path(os.path.join(target_dir, remainder))
+            if os.path.isfile(cand) or cand in self.sources.overlays:
+                return cand
+            if os.path.isfile(cand + '.wysna') or (cand + '.wysna') in self.sources.overlays:
+                return self.path(cand + '.wysna')
+            return None
+
+        # Relative to importer directory
+        cand = self.path(os.path.join(directory, raw_path))
+        if os.path.isfile(cand) or cand in self.sources.overlays:
+            return cand
+        if os.path.isfile(cand + '.wysna') or (cand + '.wysna') in self.sources.overlays:
+            return self.path(cand + '.wysna')
+
+        if '.' in raw_path and not raw_path.endswith('.wysna'):
+            slash_path = raw_path.replace('.', '/')
+            cand = self.path(os.path.join(directory, slash_path))
+            if os.path.isfile(cand) or cand in self.sources.overlays:
+                return cand
+            if os.path.isfile(cand + '.wysna') or (cand + '.wysna') in self.sources.overlays:
+                return self.path(cand + '.wysna')
+
+        # Raw path directly (e.g. from cwd or absolute)
+        cand = self.path(raw_path)
+        if os.path.isfile(cand) or cand in self.sources.overlays:
+            return cand
+        if os.path.isfile(cand + '.wysna') or (cand + '.wysna') in self.sources.overlays:
+            return self.path(cand + '.wysna')
+
+        if '.' in raw_path and not raw_path.endswith('.wysna'):
+            slash_path = raw_path.replace('.', '/')
+            cand = self.path(slash_path)
+            if os.path.isfile(cand) or cand in self.sources.overlays:
+                return cand
+            if os.path.isfile(cand + '.wysna') or (cand + '.wysna') in self.sources.overlays:
+                return self.path(cand + '.wysna')
+            cand_cwd = self.path(os.path.join(os.getcwd(), slash_path))
+            if os.path.isfile(cand_cwd) or cand_cwd in self.sources.overlays:
+                return cand_cwd
+            if os.path.isfile(cand_cwd + '.wysna') or (cand_cwd + '.wysna') in self.sources.overlays:
+                return self.path(cand_cwd + '.wysna')
+
+        return None
+
+    def load_module_by_path(self, candidate: str, importer: str, line: int = 1, col: int = 1):
         if candidate in self.active:
             chain = ' -> '.join(str(self.module_id(path)) for path in self.active + [candidate])
             raise TypeError('Circular import detected: ' + chain, file=importer,
-                            line=statement.line, col=statement.col, code='W1003')
+                            line=line, col=col, code='W1003')
+        if candidate in self.modules:
+            return self.modules[candidate]
         try:
             source = self.sources.read(candidate)
         except OSError as error:
-            raise TypeError(str(error), file=importer, line=statement.line, col=statement.col, code='W1003')
-        unit = self._check_unit(candidate, source)
+            raise TypeError(str(error), file=importer, line=line, col=col, code='W1003')
+        return self._check_unit(candidate, source)
+
+    def import_module(self, statement, importer):
+        candidate = self.find_module_file(statement.path, importer)
+        if candidate is None:
+            msg = f"Module not found: '{statement.path}'"
+            if self.project_resolver is not None:
+                msg = f"Module not found in declared project roots: '{statement.path}'"
+            raise TypeError(msg, file=importer, line=statement.line, col=statement.col, code='W1003')
+        unit = self.load_module_by_path(candidate, importer, statement.line, statement.col)
         statement.checked_module = unit
         module_type = ModuleType(statement.namespace, unit.exports)
         module_type.checked_module = unit
@@ -296,9 +372,9 @@ class CompilationSession:
         if unit.path in self._linked_programs:
             return self._linked_programs[unit.path]
         body, visited, copies = [], set(), {}
-        def rewrite(node):
+        def rewrite(node, symbol_mappings):
             if isinstance(node, list):
-                return [rewrite(child) for child in node]
+                return [rewrite(child, symbol_mappings) for child in node]
             if not isinstance(node, A.Node):
                 return node
             if isinstance(node, A.MemberExpr) and hasattr(node, 'resolved_module_member'):
@@ -307,9 +383,32 @@ class CompilationSession:
                     if field not in ('object', 'property'):
                         setattr(replacement, field, value)
                 return replacement
+            if isinstance(node, A.IdentExpr):
+                if hasattr(node, 'resolved_symbol') and hasattr(node.resolved_symbol, 'name') and node.resolved_symbol.name.startswith(PREFIX):
+                    node.name = node.resolved_symbol.name
+                elif node.name in symbol_mappings:
+                    node.name = symbol_mappings[node.name]
+                if hasattr(node, 'function_reference') and node.function_reference in symbol_mappings:
+                    node.function_reference = symbol_mappings[node.function_reference]
+            elif isinstance(node, (A.NamedType, A.GenericType)):
+                if node.name in symbol_mappings:
+                    node.name = symbol_mappings[node.name]
+            elif isinstance(node, A.StructInitExpr):
+                if node.struct_name in symbol_mappings:
+                    node.struct_name = symbol_mappings[node.struct_name]
+            elif isinstance(node, A.NewExpr):
+                if node.class_name in symbol_mappings:
+                    node.class_name = symbol_mappings[node.class_name]
+            elif isinstance(node, A.EnumPattern):
+                if node.enum_name and node.enum_name in symbol_mappings:
+                    node.enum_name = symbol_mappings[node.enum_name]
+            elif isinstance(node, A.ClassDecl):
+                if isinstance(node.superclass, str) and node.superclass in symbol_mappings:
+                    node.superclass = symbol_mappings[node.superclass]
+                node.interfaces = [symbol_mappings.get(intf, intf) for intf in node.interfaces]
             for field, child in list(vars(node).items()):
                 if isinstance(child, (A.Node, list)):
-                    setattr(node, field, rewrite(child))
+                    setattr(node, field, rewrite(child, symbol_mappings))
             return node
         def collect(current):
             if current.module_id in visited:
@@ -317,7 +416,8 @@ class CompilationSession:
             visited.add(current.module_id)
             for dependency in current.dependencies:
                 collect(dependency)
-            body.extend(rewrite(clone_syntax(node, copies)) for node in current.program.body
+            mappings = getattr(current, 'imported_symbol_names', {})
+            body.extend(rewrite(clone_syntax(node, copies), mappings) for node in current.program.body
                         if not isinstance(node, A.ImportDecl))
         collect(unit)
         linked = A.Program(body)

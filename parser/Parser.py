@@ -10,7 +10,7 @@ from node.NodeType import (
     IdentifierPattern, TuplePattern, EnumPattern, LiteralPattern, WildcardPattern,
     FnDecl, Param, StructDecl, StructField, EnumDecl, VariantDecl,
     InterfaceDecl, InterfaceMethod, ClassDecl, ClassField, MethodDecl,
-    ImportDecl, LetDecl,
+    ImportDecl, UseDecl, UseSymbol, LetDecl,
     WhileStmt, ForStmt, ReturnStmt, BreakStmt, ContinueStmt, ExprStmt,
     IntLiteral, FloatLiteral, StringLiteral, BoolLiteral, NoneLiteral,
     IdentExpr, ThisExpr, SuperExpr, NewExpr,
@@ -409,7 +409,9 @@ class Parser:
             self.expect(TokenType.ARROW)
             returned = self.parse_type()
             return ExternFnDecl(name.value, params, returned, token.line, token.col)
-        if self.check(TokenType.FN) or self.check(TokenType.STRUCT) or self.check(TokenType.ENUM) or self.check(TokenType.INTERFACE) or self.check(TokenType.CLASS) or self.check(TokenType.IMPORT):
+        if (self.check(TokenType.FN) or self.check(TokenType.STRUCT) or self.check(TokenType.ENUM)
+                or self.check(TokenType.INTERFACE) or self.check(TokenType.CLASS)
+                or self.check(TokenType.IMPORT) or self.check(TokenType.FROM)):
             if not allow_top_level:
                 tok = self.at()
                 raise ParserError(
@@ -433,6 +435,8 @@ class Parser:
             return self.parse_class_decl()
         if self.check(TokenType.IMPORT):
             return self.parse_import_decl()
+        if self.check(TokenType.FROM):
+            return self.parse_use_decl()
         if self.check(TokenType.WHILE):
             return self.parse_while_stmt()
         if self.check(TokenType.FOR):
@@ -716,6 +720,109 @@ class Parser:
             self.advance()
             namespace = self.expect(TokenType.IDENTIFIER).value
         return ImportDecl(path=raw_path, namespace=namespace, line=start_tok.line, col=start_tok.col)
+
+    def parse_use_decl(self) -> UseDecl:
+        start_tok = self.expect(TokenType.FROM, code="W0006", msg="Expected 'from'")
+
+        # Module path parsing:
+        # Can be string literal: from "std/text" use ...
+        # OR dot-separated path: from app.domain.user use ...
+        # OR relative dot-path: from .user use ..., from ..domain.user use ...
+        if self.check(TokenType.STR):
+            path_tok = self.advance()
+            path = str(path_tok.value)
+        else:
+            leading_dots = ""
+            while self.check(TokenType.DOT) or self.check(TokenType.DOT_DOT):
+                if self.match(TokenType.DOT_DOT):
+                    leading_dots += ".."
+                else:
+                    self.advance()
+                    leading_dots += "."
+
+            if not self.check(TokenType.IDENTIFIER):
+                tok = self.at()
+                raise ParserError(
+                    message=f"Expected module path after 'from', found '{tok.type.name}'",
+                    line=tok.line,
+                    col=tok.col,
+                    file=self.file,
+                    code="W0006",
+                )
+
+            parts = [self.expect(TokenType.IDENTIFIER).value]
+            while self.match(TokenType.DOT):
+                parts.append(self.expect(TokenType.IDENTIFIER, code="W0006", msg="Expected identifier after '.' in module path").value)
+            path = leading_dots + ".".join(parts)
+
+        self.expect(TokenType.USE, code="W0006", msg="Expected 'use' after module path in 'from ... use' statement")
+
+        symbols: List[UseSymbol] = []
+        is_namespace = False
+        namespace_alias: Optional[str] = None
+        is_braced = False
+
+        if self.match(TokenType.LBRACE):
+            is_braced = True
+            while not self.check(TokenType.RBRACE) and not self.is_at_end():
+                self._skip_statement_separators()
+                if self.check(TokenType.RBRACE):
+                    break
+                sym_start = self.at()
+                parts = [self.expect(TokenType.IDENTIFIER, code="W0006", msg="Expected symbol name in 'use' block").value]
+                while self.match(TokenType.DOT):
+                    parts.append(self.expect(TokenType.IDENTIFIER, code="W0006", msg="Expected identifier after '.'").value)
+
+                if len(parts) > 1:
+                    subpath = ".".join(parts[:-1])
+                    sym_name = parts[-1]
+                else:
+                    subpath = None
+                    sym_name = parts[0]
+
+                alias = None
+                if self.check(TokenType.IDENTIFIER) and self.at().value == "as":
+                    self.advance()
+                    alias = self.expect(TokenType.IDENTIFIER, code="W0006", msg="Expected identifier after 'as'").value
+
+                symbols.append(UseSymbol(name=sym_name, alias=alias, subpath=subpath, line=sym_start.line, col=sym_start.col))
+
+                if not self.match(TokenType.COMMA):
+                    self._skip_statement_separators()
+                    if not self.check(TokenType.RBRACE):
+                        break
+
+            self._skip_statement_separators()
+            self.expect(TokenType.RBRACE, code="W0006", msg="Unterminated 'use' block, expected '}'")
+        else:
+            sym_start = self.at()
+            parts = [self.expect(TokenType.IDENTIFIER, code="W0006", msg="Expected symbol or module name after 'use'").value]
+            while self.match(TokenType.DOT):
+                parts.append(self.expect(TokenType.IDENTIFIER, code="W0006", msg="Expected identifier after '.'").value)
+
+            if len(parts) > 1:
+                subpath = ".".join(parts[:-1])
+                sym_name = parts[-1]
+            else:
+                subpath = None
+                sym_name = parts[0]
+
+            alias = None
+            if self.check(TokenType.IDENTIFIER) and self.at().value == "as":
+                self.advance()
+                alias = self.expect(TokenType.IDENTIFIER, code="W0006", msg="Expected identifier after 'as'").value
+
+            symbols.append(UseSymbol(name=sym_name, alias=alias, subpath=subpath, line=sym_start.line, col=sym_start.col))
+
+        return UseDecl(
+            path=path,
+            symbols=symbols,
+            is_namespace=is_namespace,
+            namespace_alias=namespace_alias,
+            is_braced=is_braced,
+            line=start_tok.line,
+            col=start_tok.col,
+        )
 
     def parse_while_stmt(self) -> WhileStmt:
         start_tok = self.expect(TokenType.WHILE, code="W0006", msg="Expected 'while'")
