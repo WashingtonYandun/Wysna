@@ -3,6 +3,7 @@ import hashlib
 import json
 import os
 from pathlib import Path
+from typing import Optional
 from checker.TypeInterner import TypeInterner
 from checker.SymbolTable import Scope
 from checker.WysnaType import ModuleType

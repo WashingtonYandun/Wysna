@@ -44,7 +44,7 @@ flowchart TD
 
 ---
 
-## Complete Changelog by Architectural Pillar (29 Commits)
+## Complete Changelog by Architectural Pillar (31 Commits)
 
 ### 1. Core Architecture Decoupling & Modular Linking
 * **`b548b2b`** `feat(runtime): decouple runtime context for modular multi-object linking`
@@ -129,6 +129,15 @@ flowchart TD
   * **Fast Calling Convention (`fastcc`):** Internal module functions (`wysna_fn_*`) use `define internal fastcc` and `call fastcc`, enabling direct parameter passing via CPU registers (e.g. `x0..x7` on ARM64) without stack push/pop.
   * **Function Attributes:** Anotates functions with `nounwind` and `mustprogress` for aggressive dead-loop elimination.
   * **Zero-Cost Scalar Casts:** Emits raw LLVM instructions `sitofp i64 to double` and `fptosi double to i64` (1 CPU instruction: `scvtf`/`fcvtzs`), completely bypassing `@wysna_llvm_convert` and heap allocations.
+
+### 9. CI Multi-Version Stability & Python 3.11 Runtime Parity
+* **`9aa67cd`** `fix(ci): make use contextual keyword, sync matrix corpus and guard optional llvm tests`
+  * Contextual keyword handling for `use` ensuring backward compatibility with user identifiers and diagnostics.
+  * Synchronized parity matrix corpus count (159 core, 205 total verified).
+  * Conditional detection of `llvmlite` in unit tests for CI environments lacking optional LLVM wheels.
+* **`42889d4`** `fix(compiler): add missing typing.Optional import in CompilationSession for python 3.11 compatibility`
+  * Resolves module load-time `NameError: name 'Optional' is not defined` on Python 3.11 CI runners (fixing immediate test collection failure across 69 modules).
+  * Validated full conformance (815/815 tests, 100%) and all compiler contracts on CPython 3.11.18.
 
 ---
 
