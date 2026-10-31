@@ -3,22 +3,22 @@ from checker.TypeInterner import TYPE_INT, TYPE_FLOAT, TYPE_BOOL, TYPE_UNIT
 from mir.LlvmAbi import OPERATION_CODES, SCALAR_TYPES, is_managed
 from error.Error import WysnaError
 
-DECLARATIONS = '''declare void @wysna_llvm_none(ptr)
-declare void @wysna_llvm_construct(ptr, i32, ptr, i32, ptr, ptr)
-declare void @wysna_llvm_field(ptr, ptr, i32)
-declare ptr @wysna_llvm_field_ref(ptr, i32)
-declare ptr @wysna_llvm_index_ref(ptr, ptr, ptr, i32, i32)
-declare void @wysna_llvm_tuple_get(ptr, ptr, i32, ptr, i32, i32)
-declare void @wysna_llvm_mutate(ptr, ptr, ptr, i32, ptr, i32, i32)
-declare i32 @wysna_llvm_test(ptr, i32, ptr, ptr, i32)
-declare i32 @wysna_llvm_iteration_length(ptr, ptr, i32, i32)
-declare void @wysna_llvm_iteration_get(ptr, ptr, i32, ptr, i32, i32)
-declare void @wysna_llvm_function(ptr, ptr, ptr)
-declare void @wysna_llvm_invoke(ptr, ptr, i32, ptr)
-declare void @wysna_llvm_virtual(ptr, ptr, i32, i32, ptr)
-declare void @wysna_llvm_set_vtable(ptr, ptr)
-declare i32 @wysna_llvm_entry_status(ptr)
-''' + '\n'.join('declare void @wysna_llvm_rt_' + name + '(ptr, i32, ptr, ptr, ptr, i32, ptr, i32, i32)' for name in sorted(OPERATION_CODES)) + '\n'
+DECLARATIONS = '''declare void @wysna_llvm_none(ptr nocapture)
+declare void @wysna_llvm_construct(ptr nocapture, i32, ptr nocapture readonly, i32, ptr, ptr)
+declare void @wysna_llvm_field(ptr nocapture, ptr nocapture readonly, i32)
+declare ptr @wysna_llvm_field_ref(ptr nocapture, i32)
+declare ptr @wysna_llvm_index_ref(ptr nocapture, ptr nocapture readonly, ptr nocapture readonly, i32, i32)
+declare void @wysna_llvm_tuple_get(ptr nocapture, ptr nocapture readonly, i32, ptr nocapture readonly, i32, i32)
+declare void @wysna_llvm_mutate(ptr nocapture, ptr nocapture, ptr nocapture readonly, i32, ptr nocapture readonly, i32, i32)
+declare i32 @wysna_llvm_test(ptr nocapture readonly, i32, ptr nocapture readonly, ptr nocapture readonly, i32) readonly
+declare i32 @wysna_llvm_iteration_length(ptr nocapture readonly, ptr nocapture readonly, i32, i32) readonly
+declare void @wysna_llvm_iteration_get(ptr nocapture, ptr nocapture readonly, i32, ptr nocapture readonly, i32, i32)
+declare void @wysna_llvm_function(ptr nocapture, ptr, ptr)
+declare void @wysna_llvm_invoke(ptr nocapture, ptr nocapture readonly, i32, ptr nocapture readonly)
+declare void @wysna_llvm_virtual(ptr nocapture, ptr nocapture readonly, i32, i32, ptr nocapture readonly)
+declare void @wysna_llvm_set_vtable(ptr nocapture, ptr)
+declare i32 @wysna_llvm_entry_status(ptr nocapture readonly) readonly
+''' + '\n'.join('declare void @wysna_llvm_rt_' + name + '(ptr nocapture, i32, ptr, ptr nocapture readonly, ptr nocapture readonly, i32, ptr nocapture readonly, i32, i32)' for name in sorted(OPERATION_CODES)) + '\n'
 
 
 class ManagedEmission:

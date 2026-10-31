@@ -267,6 +267,17 @@ class LlvmBackendTests(unittest.TestCase):
             self.assertEqual(caught.exception.code, 'W5002')
         self.assertEqual(library.read_bytes(), original)
 
+    def test_llvm_codegen_optimizations_and_metadata(self):
+        service, checked = self.checked('let a = 100 / 2\nprint(a)\n')
+        emission = service.emit_llvm(checked)
+        self.assertIn('!prof', emission.source)
+        self.assertIn('!"branch_weights", i32 1, i32 1048576', emission.source)
+        self.assertIn('declare i64 @wysna_llvm_int(ptr nocapture readonly) readonly', emission.source)
+        self.assertIn('declare void @wysna_llvm_fail(ptr nocapture readonly, ptr nocapture readonly, ptr nocapture readonly, i32, i32) cold noreturn', emission.source)
+        self.assertIn('declare i32 @wysna_llvm_range_count(i64, i64, i32) readnone', emission.source)
+        self.assertIn('align 8', emission.source)
+        self.toolchain.verify(emission.source)
+
     def test_complete_mir_profile_never_falls_back(self):
         for source in ('print([1, 2])', 'class Box { value: int }\nprint(1)',
                        'print([1, 2, 3][0])'):

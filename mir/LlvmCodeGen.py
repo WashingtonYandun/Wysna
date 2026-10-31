@@ -12,24 +12,24 @@ TYPES = {TYPE_INT: 'i64', TYPE_FLOAT: 'double', TYPE_BOOL: 'i1', TYPE_UNIT: 'voi
 DECLARATIONS = '''declare void @llvm.dbg.declare(metadata, metadata, metadata)
 declare void @wysna_llvm_init(i32, ptr)
 declare void @wysna_llvm_cleanup()
-declare void @wysna_llvm_box_int(ptr, i64)
-declare void @wysna_llvm_box_float(ptr, double)
-declare void @wysna_llvm_box_bool(ptr, i32)
-declare i64 @wysna_llvm_int(ptr)
-declare double @wysna_llvm_float(ptr)
-declare i32 @wysna_llvm_bool(ptr)
-declare void @wysna_llvm_clone(ptr, ptr)
-declare void @wysna_llvm_move(ptr, ptr)
-declare void @wysna_llvm_release(ptr)
-declare void @wysna_llvm_literal(ptr, ptr, ptr, i64)
-declare void @wysna_llvm_print(i32, ptr, i32)
-declare void @wysna_llvm_convert(ptr, ptr, i32)
-declare void @wysna_llvm_concat(ptr, ptr, ptr)
-declare i32 @wysna_llvm_compare(ptr, ptr, i32)
-declare i32 @wysna_llvm_range_count(i64, i64, i32)
-declare void @wysna_llvm_position(ptr, i32, i32)
-declare void @wysna_llvm_fail(ptr, ptr, ptr, i32, i32) noreturn
-declare void @wysna_llvm_exit(i64) noreturn
+declare void @wysna_llvm_box_int(ptr nocapture, i64)
+declare void @wysna_llvm_box_float(ptr nocapture, double)
+declare void @wysna_llvm_box_bool(ptr nocapture, i32)
+declare i64 @wysna_llvm_int(ptr nocapture readonly) readonly
+declare double @wysna_llvm_float(ptr nocapture readonly) readonly
+declare i32 @wysna_llvm_bool(ptr nocapture readonly) readonly
+declare void @wysna_llvm_clone(ptr nocapture, ptr nocapture readonly)
+declare void @wysna_llvm_move(ptr nocapture, ptr nocapture)
+declare void @wysna_llvm_release(ptr nocapture)
+declare void @wysna_llvm_literal(ptr nocapture, ptr, ptr nocapture readonly, i64)
+declare void @wysna_llvm_print(i32, ptr nocapture readonly, i32)
+declare void @wysna_llvm_convert(ptr nocapture, ptr nocapture readonly, i32)
+declare void @wysna_llvm_concat(ptr nocapture, ptr nocapture readonly, ptr nocapture readonly)
+declare i32 @wysna_llvm_compare(ptr nocapture readonly, ptr nocapture readonly, i32) readonly
+declare i32 @wysna_llvm_range_count(i64, i64, i32) readnone
+declare void @wysna_llvm_position(ptr nocapture readonly, i32, i32)
+declare void @wysna_llvm_fail(ptr nocapture readonly, ptr nocapture readonly, ptr nocapture readonly, i32, i32) cold noreturn
+declare void @wysna_llvm_exit(i64) cold noreturn
 '''
 
 
@@ -118,6 +118,13 @@ class LlvmCodeGen:
         return {'integer': 'i64', 'float': 'double', 'boolean': 'i1', 'counter': 'i32',
                 'predicate': 'i1', 'value': '%WysnaValue'}[slot.storage]
 
+    def alignment_for(self, slot):
+        if slot.storage in ('integer', 'float', 'value'):
+            return ALIGNMENT
+        if slot.storage == 'counter':
+            return 4
+        return 1
+
     def load(self, index):
         slot = self.slots[index]
         pointer = self.pointer(index)
@@ -128,7 +135,7 @@ class LlvmCodeGen:
             type_ = 'i32' if slot.type_id == TYPE_BOOL else TYPES.get(slot.type_id, 'ptr')
             value = self.result('call ' + type_ + ' @wysna_llvm_' + name + '(ptr ' + pointer + ')')
             return self.result('icmp ne i32 ' + value + ', 0') if slot.type_id == TYPE_BOOL else value
-        return self.result('load ' + self.physical(index) + ', ptr ' + pointer)
+        return self.result('load ' + self.physical(index) + ', ptr ' + pointer + ', align ' + str(self.alignment_for(slot)))
 
     def write(self, index, value, type_=None):
         slot = self.slots[index]
@@ -144,7 +151,7 @@ class LlvmCodeGen:
             if type_ != physical:
                 operation = 'sext' if physical == 'i64' else 'trunc'
                 value = self.result(operation + ' ' + type_ + ' ' + value + ' to ' + physical)
-            self.emit('store ' + physical + ' ' + value + ', ptr ' + self.pointer(index))
+            self.emit('store ' + physical + ' ' + value + ', ptr ' + self.pointer(index) + ', align ' + str(self.alignment_for(slot)))
 
     def cell(self, offset):
         return self.result('getelementptr [' + str(self.scratch) + ' x %WysnaValue], ptr %scratch, i32 0, i32 ' + str(offset))
@@ -190,9 +197,10 @@ class LlvmCodeGen:
                 self.lines.append('  ' + self.pointer(slot.id) + ' = getelementptr i8, ptr %arg' + str(slot.id) + ', i64 0')
             else:
                 type_ = self.physical(slot.id)
-                self.lines.append('  ' + self.pointer(slot.id) + ' = alloca ' + type_ + ', align ' + str(ALIGNMENT))
+                align = str(self.alignment_for(slot))
+                self.lines.append('  ' + self.pointer(slot.id) + ' = alloca ' + type_ + ', align ' + align)
                 initial = '%arg' + str(slot.id) if slot.parameter else 'zeroinitializer'
-                self.lines.append('  store ' + type_ + ' ' + initial + ', ptr ' + self.pointer(slot.id))
+                self.lines.append('  store ' + type_ + ' ' + initial + ', ptr ' + self.pointer(slot.id) + ', align ' + align)
         if function_debug is not None:
             for binding in function_debug.bindings:
                 variable = self.debug.binding(binding, self.slots[binding.slot], scopes, self.interner)
@@ -400,7 +408,8 @@ class LlvmCodeGen:
         float_ = type_ == TYPE_FLOAT
         zero = self.result(('fcmp oeq double ' + right + ', 0.0') if float_ else ('icmp eq i64 ' + right + ', 0'))
         fault, resume = self.label('division_fault'), self.label('division_resume')
-        self.emit('br i1 ' + zero + ', label %' + fault + ', label %' + resume)
+        weights = ', !prof !' + str(self.debug.cold_branch_weights())
+        self.emit('br i1 ' + zero + ', label %' + fault + ', label %' + resume + weights)
         self.lines.append(fault + ':')
         modulo = operation.data['name'] == 'wysna_mod_at'
         self.fail('W4001', 'Modulo by zero' if modulo else 'Division by zero', operation.source)
