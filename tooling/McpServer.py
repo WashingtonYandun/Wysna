@@ -186,6 +186,7 @@ class McpServer:
                     source,
                     include_all=bool(arguments.get("all")),
                     function_name=arguments.get("function"),
+                    emit_codecs=bool(arguments.get("emit_codecs")),
                     service=self.service,
                 )
             except WysnaError as error:

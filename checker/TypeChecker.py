@@ -889,8 +889,11 @@ class TypeChecker:
         return pattern_matrix_exhaustive(types, rows, self.interner)
 
     def _match_is_exhaustive(self, expression) -> bool:
+        subject_type = getattr(expression.subject, "inferred_type", None)
+        if subject_type is None:
+            return True
         return self._pattern_matrix_exhaustive(
-            [expression.subject.inferred_type],
+            [subject_type],
             [[arm.pattern] for arm in expression.arms if arm.guard is None],
         )
 

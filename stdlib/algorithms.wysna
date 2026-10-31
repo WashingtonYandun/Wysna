@@ -109,3 +109,48 @@ pub fn contains[T](values: list[T], target: T) -> bool {
     }
     return false
 }
+
+pub fn parallel_map[T, R](values: list[T], transform: fn(T) -> R) -> list[R] {
+    let mut result: list[R] = []
+    for index in 0..len(values) {
+        let item_snapshot = values[index]
+        result.append(transform(item_snapshot))
+    }
+    return result
+}
+
+pub fn filter_map[T, R](values: list[T], transform: fn(T) -> R?) -> list[R] {
+    let mut result: list[R] = []
+    for value in values {
+        let mapped = transform(value)
+        match mapped {
+            Some(item) => result.append(item),
+            None => {},
+        }
+    }
+    return result
+}
+
+pub fn partition[T](values: list[T], predicate: fn(T) -> bool) -> tuple[list[T], list[T]] {
+    let mut matching: list[T] = []
+    let mut rejected: list[T] = []
+    for value in values {
+        if predicate(value) {
+            matching.append(value)
+        } else {
+            rejected.append(value)
+        }
+    }
+    return (matching, rejected)
+}
+
+pub fn flat_map[T, R](values: list[T], transform: fn(T) -> list[R]) -> list[R] {
+    let mut result: list[R] = []
+    for value in values {
+        let group = transform(value)
+        for item in group {
+            result.append(item)
+        }
+    }
+    return result
+}
