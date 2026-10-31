@@ -191,6 +191,7 @@ static inline WVal wysna_builtin_slice(WVal s, WVal start, WVal end) {
         int64_t st = start.as.i < 0 ? 0 : start.as.i;
         int64_t en = end.as.i > b->len ? b->len : end.as.i;
         if (en <= st) return wysna_make_list(0, NULL);
+        if (st == 0 && en == b->len) return wysna_clone(s);
         return wysna_make_list((int32_t)(en - st), b->data + st);
     }
     if (s.tag != W_STR) {
@@ -201,6 +202,7 @@ static inline WVal wysna_builtin_slice(WVal s, WVal start, WVal end) {
     int64_t st = start.as.i < 0 ? 0 : start.as.i;
     int64_t en = end.as.i > total_cp ? total_cp : end.as.i;
     if (en <= st || st >= total_cp) return wysna_str("");
+    if (st == 0 && en == total_cp) return wysna_clone(s);
     size_t st_off = 0, dummy_len = 0, en_off = 0;
     wysna_string_offset(s, st, &st_off, &dummy_len);
     if (en == total_cp) {
@@ -219,8 +221,15 @@ static inline WVal wysna_builtin_slice(WVal s, WVal start, WVal end) {
 static inline WVal wysna_builtin_join_strings(WVal parts, WVal separator) {
     if (parts.tag != W_LIST || separator.tag != W_STR)
         wysna_runtime_fail("W4003", "join_strings requires list[str] and str");
+    int32_t count = parts.as.list->len;
+    if (count == 0) return wysna_str("");
+    if (count == 1) {
+        WVal first = parts.as.list->data[0];
+        if (first.tag != W_STR) wysna_runtime_fail("W4003", "join_strings requires string elements");
+        return wysna_clone(first);
+    }
     size_t length = 0;
-    for (int32_t i = 0; i < parts.as.list->len; i++) {
+    for (int32_t i = 0; i < count; i++) {
         WVal part = parts.as.list->data[i];
         if (part.tag != W_STR) wysna_runtime_fail("W4003", "join_strings requires string elements");
         size_t extra = i ? separator.as.string.length : 0;
@@ -228,9 +237,10 @@ static inline WVal wysna_builtin_join_strings(WVal parts, WVal separator) {
             wysna_runtime_fail("W4003", "Joined string is too large");
         length += extra + part.as.string.length;
     }
+    if (length == 0) return wysna_str("");
     char* data = (char*)wysna_alloc_safe(length + 1);
     size_t offset = 0;
-    for (int32_t i = 0; i < parts.as.list->len; i++) {
+    for (int32_t i = 0; i < count; i++) {
         if (i) { memcpy(data + offset, separator.as.string.data, separator.as.string.length); offset += separator.as.string.length; }
         WVal part = parts.as.list->data[i];
         memcpy(data + offset, part.as.string.data, part.as.string.length); offset += part.as.string.length;
