@@ -590,11 +590,27 @@ static inline uint64_t wysna_key_hash(WVal value) {
     return hash;
 }
 static inline int32_t wysna_dict_find(WDictBuf* dict, WVal key) {
+    if (!dict || dict->len == 0 || dict->bucket_count == 0) return -1;
     uint32_t mask = (uint32_t)dict->bucket_count - 1;
     uint32_t slot = (uint32_t)wysna_key_hash(key) & mask;
     while (dict->buckets[slot] >= 0) {
         int32_t index = dict->buckets[slot];
-        if (wysna_eq(dict->keys[index], key)) return index;
+        WVal candidate = dict->keys[index];
+        if (candidate.tag == key.tag) {
+            if (key.tag == W_INT) {
+                if (candidate.as.i == key.as.i) return index;
+            } else if (key.tag == W_STR) {
+                if (candidate.as.string.length == key.as.string.length &&
+                    (candidate.as.string.data == key.as.string.data ||
+                     memcmp(candidate.as.string.data, key.as.string.data, key.as.string.length) == 0)) {
+                    return index;
+                }
+            } else if (key.tag == W_BOOL) {
+                if (candidate.as.b == key.as.b) return index;
+            } else if (wysna_eq(candidate, key)) {
+                return index;
+            }
+        }
         slot = (slot + 1) & mask;
     }
     return -1;
