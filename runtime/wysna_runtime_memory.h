@@ -97,24 +97,122 @@ static inline bool wysna_is_leaf(WVal value) {
 }
 
 static inline void wysna_release(WVal v) {
-    if (wysna_is_leaf(v)) {
-        if (v.tag == W_STR) wysna_release_string(v.as.string.owner);
-        return;
-    }
-    if ((v.tag == W_OK || v.tag == W_ERR) && v.as.box) {
-        WBoxBuf* box = v.as.box;
-        /* Shared boxes and leaf payloads need neither a work list nor child storage. */
-        if (box->refcount != 1 || wysna_is_leaf(box->val)) {
-            wysna_check_refcount(box->refcount, "release/box");
-            wysna_g_release_count++;
-            if (--box->refcount == 0) {
-                WVal inner = box->val;
-                free(box);
-                wysna_mem_on_free();
-                if (inner.tag == W_STR) wysna_release_string(inner.as.string.owner);
+    switch (v.tag) {
+        case W_UNIT:
+        case W_NONE:
+        case W_INT:
+        case W_FLOAT:
+        case W_BOOL:
+            return;
+        case W_STR:
+            wysna_release_string(v.as.string.owner);
+            return;
+        case W_LIST:
+            if (!v.as.list) return;
+            if (v.as.list->refcount > 1) {
+                wysna_check_refcount(v.as.list->refcount, "release/list");
+                wysna_g_release_count++;
+                v.as.list->refcount--;
+                return;
+            }
+            break;
+        case W_TUPLE:
+            if (!v.as.tuple) return;
+            if (v.as.tuple->refcount > 1) {
+                wysna_check_refcount(v.as.tuple->refcount, "release/tuple");
+                wysna_g_release_count++;
+                v.as.tuple->refcount--;
+                return;
+            }
+            break;
+        case W_STRUCT:
+            if (!v.as.st) return;
+            if (v.as.st->refcount > 1) {
+                wysna_check_refcount(v.as.st->refcount, "release/struct_or_object");
+                wysna_g_release_count++;
+                v.as.st->refcount--;
+                return;
+            }
+            break;
+        case W_DICT:
+            if (!v.as.dict) return;
+            if (v.as.dict->refcount > 1) {
+                wysna_check_refcount(v.as.dict->refcount, "release/dict");
+                wysna_g_release_count++;
+                v.as.dict->refcount--;
+                return;
+            }
+            break;
+        case W_OBJECT:
+            if (!v.as.st) return;
+            if (v.as.st->control && v.as.st->control->strong > 1) {
+                wysna_check_refcount(v.as.st->control->strong, "release/object");
+                wysna_g_release_count++;
+                v.as.st->control->strong--;
+                return;
+            }
+            break;
+        case W_POINTER:
+            if (v.as.handle.owner) {
+                WPointerOwner* owner = v.as.handle.owner;
+                wysna_check_refcount(owner->refcount, "release/resource");
+                wysna_g_release_count++;
+                if (--owner->refcount == 0) {
+                    owner->close(owner->address);
+                    free(owner);
+                    wysna_mem_on_free();
+                }
             }
             return;
-        }
+        case W_FUNCTION:
+            if (!v.as.function) return;
+            if (v.as.function->refcount > 1 || v.as.function->environment.tag == W_UNIT) {
+                wysna_check_refcount(v.as.function->refcount, "release/function");
+                wysna_g_release_count++;
+                if (--v.as.function->refcount == 0) {
+                    free(v.as.function);
+                    wysna_mem_on_free();
+                }
+                return;
+            }
+            break;
+        case W_WEAK:
+            if (v.as.weak) {
+                WWeakControl* control = v.as.weak;
+                wysna_check_refcount(control->weak, "release/weak");
+                wysna_g_release_count++;
+                if (--control->weak == 0) {
+                    free(control);
+                    wysna_mem_on_free();
+                }
+            }
+            return;
+        case W_OK:
+        case W_ERR:
+            if (!v.as.box) return;
+            if (v.as.box->refcount != 1 || wysna_is_leaf(v.as.box->val)) {
+                wysna_check_refcount(v.as.box->refcount, "release/box");
+                wysna_g_release_count++;
+                if (--v.as.box->refcount == 0) {
+                    WVal inner = v.as.box->val;
+                    free(v.as.box);
+                    wysna_mem_on_free();
+                    if (inner.tag == W_STR) wysna_release_string(inner.as.string.owner);
+                }
+                return;
+            }
+            break;
+        case W_ENUM:
+            if (!v.as.en.box) return;
+            if (v.as.en.box->refcount > 1) {
+                wysna_check_refcount(v.as.en.box->refcount, "release/enum_box");
+                wysna_g_release_count++;
+                v.as.en.box->refcount--;
+                return;
+            }
+            break;
+        default:
+            break;
     }
     wysna_release_graph(v);
 }
