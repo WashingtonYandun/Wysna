@@ -246,18 +246,20 @@ class CCodeGen:
         slot = self.slots[index]
         return self.unbox_expression(self.name(index), slot.type_id) if slot.storage == 'value' else self.name(index)
 
-    def abi_call(self, name, arg_ids, boxed_arguments):
+    def abi_call(self, name, boxed_arguments, arg_ids=None):
         function = self.functions.get(name)
         if function is None:
             return boxed_arguments, self.module.externs[name]['return_type'], True
         parameters = [function.slots[index].type_id for index in function.params]
         arguments = []
-        for arg_id, boxed_val, param_type in zip(arg_ids, boxed_arguments, parameters):
-            arg_slot = self.slots[arg_id]
-            if arg_slot.storage != 'value' and self.ctype(param_type) != 'WVal':
-                arguments.append(self.name(arg_id))
-            else:
-                arguments.append(self.unbox_expression(boxed_val, param_type))
+        for i, (boxed_val, param_type) in enumerate(zip(boxed_arguments, parameters)):
+            if arg_ids is not None:
+                arg_id = arg_ids[i]
+                arg_slot = self.slots[arg_id]
+                if arg_slot.storage != 'value' and self.ctype(param_type) != 'WVal':
+                    arguments.append(self.name(arg_id))
+                    continue
+            arguments.append(self.unbox_expression(boxed_val, param_type))
         returned = function.return_type
         return arguments, returned, self.ctype(returned) == 'WVal'
 
@@ -372,7 +374,7 @@ class CCodeGen:
         if kind in ('runtime', 'call'):
             name = data['name']
             if kind == 'call':
-                arguments, returned, boxed = self.abi_call(name, operation.args, args)
+                arguments, returned, boxed = self.abi_call(name, args, arg_ids=operation.args)
                 return [self.write(result, name + '(' + ', '.join(arguments) + ')', boxed=boxed)]
             if kind == 'runtime':
                 if name in ('wysna_add', 'wysna_sub', 'wysna_mul') and len(operation.args) == 2:
