@@ -1,0 +1,50 @@
+import "std/text"
+import "std/algorithms" as alg
+
+fn main() -> unit {
+    # 1. Text transformations and queries
+    let greeting = "HeLLo, WoRLD 123!"
+    print(text.to_lower(greeting))
+    print(text.to_upper(greeting))
+    print(text.contains(greeting, "WoRLD"))
+    print(text.contains(greeting, "xyz"))
+    print(text.trim_start("   padded   ") + "|")
+    print(text.trim_end("   padded   ") + "|")
+    print(text.repeat("wy", 4))
+    print(text.repeat("once", 1))
+    print(text.repeat("zero", 0))
+    # 2. Functional algorithms
+    let numbers = [1, 2, 3, 4, 5, 6]
+    let evens = alg.filter[int](numbers, |n: int| {
+        n % 2 == 0
+    })
+    let rev = alg.reverse[int](numbers)
+    print(evens)
+    print(rev)
+    print(alg.any[int](numbers, |n: int| {
+        n > 5
+    }))
+    print(alg.any[int](numbers, |n: int| {
+        n > 100
+    }))
+    print(alg.all[int](numbers, |n: int| {
+        n > 0
+    }))
+    print(alg.all[int](numbers, |n: int| {
+        n > 3
+    }))
+    print(alg.contains[int](numbers, 4), alg.contains[int](numbers, 99))
+    print(alg.find_first[int](numbers, |n: int| {
+        n > 3
+    }))
+    print(alg.find_first[int](numbers, |n: int| {
+        n > 100
+    }))
+    # 3. String list algorithms
+    let words = ["apple", "banana", "cherry"]
+    let b_words = alg.filter[str](words, |w: str| {
+        text.starts_with(w, "b")
+    })
+    print(b_words)
+    print(alg.contains[str](words, "banana"), alg.contains[str](words, "grape"))
+}

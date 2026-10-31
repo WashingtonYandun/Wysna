@@ -41,9 +41,15 @@ Wysna distributes modules under `std/` imported via canonical paths such as `imp
   - `text.starts_with(text, prefix) -> bool`: check prefix.
   - `text.ends_with(text, suffix) -> bool`: check suffix.
   - `text.find(haystack, needle) -> int?`: find codepoint offset, returning `none` if absent.
+  - `text.contains(haystack, needle) -> bool`: check if string contains substring.
   - `text.split(text, separator) -> list[str]`: split text by delimiter.
   - `text.replace(text, target, replacement) -> str`: replace all occurrences.
+  - `text.trim_start(text) -> str`: trim leading ASCII whitespace.
+  - `text.trim_end(text) -> str`: trim trailing ASCII whitespace.
   - `text.trim(text) -> str`: trim leading and trailing ASCII whitespace.
+  - `text.to_lower(text) -> str`: convert ASCII characters to lowercase.
+  - `text.to_upper(text) -> str`: convert ASCII characters to uppercase.
+  - `text.repeat(text, count) -> str`: repeat text count times.
 - `std/path`: file path utilities.
   - `path.join(base, child) -> str`: join paths with directory separator `/`.
   - `path.basename(path) -> str`: extract filename component.
@@ -53,8 +59,14 @@ Wysna distributes modules under `std/` imported via canonical paths such as `imp
   - `io.write_text(path, content) -> unit ! IoError`: write full string to file.
 - `std/algorithms`: functional collection algorithms.
   - `algorithms.map[T, R]` `(values, fn(T) -> R) -> list[R]`: transform list elements.
+  - `algorithms.filter[T]` `(values, fn(T) -> bool) -> list[T]`: filter list elements satisfying predicate.
   - `algorithms.fold[T, R]` `(values, initial, fn(R, T) -> R) -> R`: fold accumulator over list.
+  - `algorithms.reverse[T]` `(values) -> list[T]`: reverse list order.
   - `algorithms.sort[T]` `(values, fn(T, T) -> bool) -> list[T]`: stable merge sort with $O(N \log N)$ complexity.
+  - `algorithms.any[T]` `(values, fn(T) -> bool) -> bool`: check if any element satisfies predicate.
+  - `algorithms.all[T]` `(values, fn(T) -> bool) -> bool`: check if all elements satisfy predicate.
+  - `algorithms.find_first[T]` `(values, fn(T) -> bool) -> T?`: find first element satisfying predicate, returning none if absent.
+  - `algorithms.contains[T]` `(values, target: T) -> bool`: check if list contains target element.
 - `std/bytes`: UTF-8 codec operations.
   - `bytes.encode(text) -> list[int]`: encode UTF-8 string into byte values (0–255).
   - `bytes.decode(bytes) -> str ! Utf8Error`: decode byte values into validated UTF-8 string.

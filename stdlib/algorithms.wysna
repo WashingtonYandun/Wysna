@@ -1,21 +1,32 @@
 pub fn map[T, R](values: list[T], transform: fn(T) -> R) -> list[R] {
     let mut result: list[R] = []
-    for value in values { result.append(transform(value)) }
+    for value in values {
+        result.append(transform(value))
+    }
     return result
 }
+
 pub fn fold[T, R](values: list[T], initial: R, combine: fn(R, T) -> R) -> R {
     let mut result = initial
-    for value in values { result = combine(result, value) }
+    for value in values {
+        result = combine(result, value)
+    }
     return result
 }
+
 pub fn sort[T](values: list[T], before: fn(T, T) -> bool) -> list[T] {
-    if len(values) < 2 { return values }
+    if len(values) < 2 {
+        return values
+    }
     let middle = len(values) / 2
     let mut left: list[T] = []
     let mut right: list[T] = []
     for index in 0..len(values) {
-        if index < middle { left.append(values[index]) }
-        else { right.append(values[index]) }
+        if index < middle {
+            left.append(values[index])
+        } else {
+            right.append(values[index])
+        }
     }
     left = sort[T](left, before)
     right = sort[T](right, before)
@@ -23,10 +34,78 @@ pub fn sort[T](values: list[T], before: fn(T, T) -> bool) -> list[T] {
     let mut i = 0
     let mut j = 0
     while i < len(left) and j < len(right) {
-        if before(right[j], left[i]) { result.append(right[j]) j = j + 1 }
-        else { result.append(left[i]) i = i + 1 }
+        if before(right[j], left[i]) {
+            result.append(right[j])
+            j = j + 1
+        } else {
+            result.append(left[i])
+            i = i + 1
+        }
     }
-    while i < len(left) { result.append(left[i]) i = i + 1 }
-    while j < len(right) { result.append(right[j]) j = j + 1 }
+    while i < len(left) {
+        result.append(left[i])
+        i = i + 1
+    }
+    while j < len(right) {
+        result.append(right[j])
+        j = j + 1
+    }
     return result
+}
+
+pub fn filter[T](values: list[T], predicate: fn(T) -> bool) -> list[T] {
+    let mut result: list[T] = []
+    for value in values {
+        if predicate(value) {
+            result.append(value)
+        }
+    }
+    return result
+}
+
+pub fn reverse[T](values: list[T]) -> list[T] {
+    let mut result: list[T] = []
+    let n = len(values)
+    let mut i = n - 1
+    while i >= 0 {
+        result.append(values[i])
+        i = i - 1
+    }
+    return result
+}
+
+pub fn any[T](values: list[T], predicate: fn(T) -> bool) -> bool {
+    for value in values {
+        if predicate(value) {
+            return true
+        }
+    }
+    return false
+}
+
+pub fn all[T](values: list[T], predicate: fn(T) -> bool) -> bool {
+    for value in values {
+        if not predicate(value) {
+            return false
+        }
+    }
+    return true
+}
+
+pub fn find_first[T](values: list[T], predicate: fn(T) -> bool) -> T? {
+    for value in values {
+        if predicate(value) {
+            return value
+        }
+    }
+    return none
+}
+
+pub fn contains[T](values: list[T], target: T) -> bool {
+    for value in values {
+        if value == target {
+            return true
+        }
+    }
+    return false
 }
