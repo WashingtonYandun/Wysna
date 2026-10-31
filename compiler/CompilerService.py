@@ -198,6 +198,18 @@ class CompilerService:
         """Analyze verified resolved MIR without interpreting, linking or loading FFI."""
         return self.explain_with_foreign_bindings(checked)[0]
 
+    def analyze_reference_cycles(self, checked):
+        """Analyze nominal class declarations for ARC retain cycles and weak-reference health."""
+        self._validate(checked)
+        from checker.LayoutGraph import build_layout_graph_from_declarations
+        from node.NodeType import StructDecl, EnumDecl, ClassDecl
+        graph = build_layout_graph_from_declarations(
+            struct_decls=[s for s in checked.ast.body if isinstance(s, StructDecl)],
+            enum_decls=[s for s in checked.ast.body if isinstance(s, EnumDecl)],
+            class_decls=[s for s in checked.ast.body if isinstance(s, ClassDecl)],
+        )
+        return graph.explain_strong_reference_cycles()
+
     def emit_c(self, checked, *, target_profile=None):
         self._validate(checked)
         browser_library = target_profile == 'browser-library'
