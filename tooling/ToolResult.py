@@ -118,6 +118,12 @@ def source_for_file(source_by_file, filename):
             source = source_by_file.get(candidate)
             if source is not None:
                 return source
+        # A caller may have keyed the snapshot by a symlinked spelling of the same
+        # file (for example /tmp vs /private/tmp on macOS); compare real paths.
+        wanted = os.path.realpath(filename)
+        for key, source in source_by_file.items():
+            if isinstance(key, str) and os.path.realpath(key) == wanted:
+                return source
     except (OSError, TypeError, ValueError):
         pass
     return None
@@ -155,11 +161,89 @@ def _primary_span(filename, line, column, source, *, has_location=True,
     }
 
 
+def _resolve_fixes(fixes, filename, source):
+    """Turn line/column/old-text edits into byte-range edits over one snapshot.
+
+    An edit is dropped, never guessed, when the expected old text is not found on
+    the reported line; an incorrect machine edit is worse than no edit.
+    """
+    if not fixes or source is None or not filename:
+        return []
+    try:
+        source_bytes = source.encode("utf-8")
+    except (AttributeError, UnicodeEncodeError):
+        return []
+    sha = hashlib.sha256(source_bytes).hexdigest()
+    resolved = []
+    for fix in fixes:
+        edits = []
+        for edit in fix.get("edits", ()):
+            start = _character_offset(source, edit.get("line"), edit.get("col"))
+            old = edit.get("old", "")
+            if start is None:
+                edits = None
+                break
+            line_end = start
+            while line_end < len(source) and source[line_end] not in "\r\n":
+                line_end += 1
+            index = source.find(old, start, line_end) if old else start
+            if index < 0:
+                edits = None
+                break
+            start_byte = len(source[:index].encode("utf-8"))
+            edits.append({
+                "source_id": filename,
+                "source_sha256": sha,
+                "start_byte": start_byte,
+                "end_byte": start_byte + len(old.encode("utf-8")),
+                "replacement": edit.get("new", ""),
+            })
+        if edits:
+            resolved.append({
+                "description": fix.get("description", ""),
+                "applicability": fix.get("applicability", "maybe"),
+                "edits": edits,
+            })
+    return resolved
+
+
+def _resolve_related(related, default_filename, source_by_file, span_cache):
+    """Resolve secondary diagnostic locations against the snapshot map."""
+    if not related:
+        return []
+    records = []
+    for item in related:
+        rel_file = item.get("file") or default_filename
+        rel_source = source_for_file(source_by_file, rel_file)
+        line = item.get("line")
+        col = item.get("col")
+        records.append({
+            "message": item.get("message", ""),
+            "line": line,
+            "col": col,
+            "span": _primary_span(
+                rel_file,
+                line,
+                col,
+                rel_source,
+                has_location=line is not None and col is not None,
+                span_cache=span_cache,
+            ),
+        })
+    return records
+
+
 def diagnostic_from_error(error, source_by_file=None, *, span_cache=None):
     """Adapt a legacy compiler diagnostic without inventing an unknown range."""
     source_by_file = source_by_file or {}
     filename = getattr(error, "file", None)
     source = source_for_file(source_by_file, filename)
+    if getattr(error, "stage", None) == "type" and not getattr(error, "data", None):
+        from checker.Suggestions import enrich_from_message
+        enrich_from_message(error)
+    data = dict(getattr(error, "data", None) or {})
+    if getattr(error, "help", None):
+        data["help"] = error.help
 
     return {
         "code": getattr(error, "code", "W9999"),
@@ -176,9 +260,9 @@ def diagnostic_from_error(error, source_by_file=None, *, span_cache=None):
             explicit_end_byte=getattr(error, "end_byte", None),
             span_cache=span_cache,
         ),
-        "related": [],
-        "data": {"help": error.help} if getattr(error, "help", None) else {},
-        "fixes": [],
+        "related": _resolve_related(getattr(error, "related", None), filename, source_by_file, span_cache),
+        "data": data,
+        "fixes": _resolve_fixes(getattr(error, "fixes", None), filename, source),
     }
 
 

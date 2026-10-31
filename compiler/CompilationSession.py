@@ -176,12 +176,12 @@ class CompilationSession:
                     bound = sym.bound_name
                     if bound in names:
                         raise TypeError('Imported symbol conflicts with a declaration', file=path,
-                                        line=sym.line, col=sym.col, code='T008')
+                                        line=sym.line, col=sym.col, code='W1002')
                     names[bound] = bound
             elif isinstance(node, A.ImportDecl):
                 if node.namespace in names:
                     raise TypeError('Import namespace conflicts with a declaration', file=path,
-                                    line=node.line, col=node.col, code='T008')
+                                    line=node.line, col=node.col, code='W1002')
                 names[node.namespace] = node.namespace
         original_declarations = list(program.body)
         checker = checker or TypeChecker(file=path, session=self)
@@ -200,6 +200,8 @@ class CompilationSession:
             for origin, exports_ in modules:
                 for local, emitted in exports_.items():
                     if local != emitted:
+                        for item in getattr(error, 'diagnostics', (error,)):
+                            item.message = item.message.replace(emitted, str(origin) + '::' + local)
                         error.message = error.message.replace(emitted, str(origin) + '::' + local)
             raise
         finally:

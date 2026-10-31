@@ -67,8 +67,34 @@ class Parser:
         self.pos = 0
         self.recover = False
         self.diagnostics = []
+        self._source_text: Optional[str] = None
+
+    def _stamp_error(self, error: ParserError) -> ParserError:
+        """Attach direct UTF-8 byte spans and structured syntax kind to a ParserError."""
+        token = next((t for t in self.tokens if t.line == error.line and t.col == error.col), None)
+        if (token is not None and self._source_text is not None
+                and hasattr(token, "start_offset") and hasattr(token, "end_offset")):
+            try:
+                error.start_byte = len(self._source_text[:token.start_offset].encode("utf-8"))
+                error.end_byte = len(self._source_text[:token.end_offset].encode("utf-8"))
+            except UnicodeEncodeError:
+                pass
+        if not error.data.get("kind"):
+            msg = error.message
+            if msg.startswith("Unexpected token"):
+                error.with_data(kind="unexpected_token",
+                                found=token.type.name if token is not None else None)
+            elif "Unterminated" in msg:
+                error.with_data(kind="unterminated_construct")
+            elif msg.startswith("Expected"):
+                error.with_data(kind="expected_construct",
+                                found=token.type.name if token is not None else None)
+            else:
+                error.with_data(kind="syntax_error")
+        return error
 
     def parse(self, source: str, show_tokens: bool = False, *, tokens=None, recover=False) -> Program:
+        self._source_text = source
         self.tokens = tokens if tokens is not None else Lexer(source, file=self.file).tokenize()
         self.pos = 0
         self.recover = recover
@@ -81,14 +107,18 @@ class Parser:
                 raise ParserErrors(self.diagnostics)
             program.source_text = source
             return program
+        except ParserErrors:
+            raise
+        except ParserError as error:
+            raise self._stamp_error(error)
         except RecursionError:
-            raise ParserError(
+            raise self._stamp_error(ParserError(
                 message="Maximum syntax nesting depth exceeded",
                 line=self.at().line,
                 col=self.at().col,
                 file=self.file,
                 code="W0006",
-            )
+            ))
 
     def produce_ast(self) -> Program:
         start_line = self.at().line
@@ -112,6 +142,7 @@ class Parser:
         except ParserErrors:
             raise
         except ParserError as error:
+            self._stamp_error(error)
             if not self.recover:
                 raise
             self.diagnostics.append(error)
@@ -188,7 +219,9 @@ class Parser:
             return self.advance()
         token = self.at()
         err_msg = msg if msg else f"Expected token '{type_.name}', found '{token.type.name}'"
-        raise ParserError(message=err_msg, line=token.line, col=token.col, file=self.file, code=code)
+        raise ParserError(message=err_msg, line=token.line, col=token.col, file=self.file,
+                          code=code).with_data(kind="expected_token", expected=type_.name,
+                                               found=token.type.name)
 
     # ==========================================
     # Type Annotation Parsing
