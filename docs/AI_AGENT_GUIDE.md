@@ -93,7 +93,9 @@ The MCP server exposes `wysna_check`, `wysna_fix`, `wysna_fmt`, `wysna_explain`,
 - Effect reports and capability declarations help review programs; they are not
   operating-system sandboxes.
 - AI authoring and self-healing repair benchmarks live in `bench/ai_eval/`
-  (`harness.py` and `token_audit.py`).
+  (`harness.py` and `token_audit.py`); outside this evaluation suite, Wysna
+  has not been measured against other languages for general AI-authored
+  program quality.
 
 See [project workflows](PROJECTS.md), [native SDK](NATIVE_SDK.md),
 [effect contracts](EFFECTS.md), and [Seed distribution](SEED_DISTRIBUTION.md) for

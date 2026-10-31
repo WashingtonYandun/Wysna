@@ -148,6 +148,14 @@ flowchart TD
   * Resolves symlinked path discrepancies on macOS so `primary_span` is never `null` on located syntax/type diagnostics.
 * **Static Lints (`W6001`, `W6002`):**
   * Reports discarded pure expressions (including newline-before-minus hazards) and ARC strong reference cycles as non-blocking warnings by default in `wysna check` and LSP.
+* **Interprocedural Effect Resolution & Native `--sandbox` Gate (`EffectAnalysis`, `CapabilityPolicy`):**
+  * Fixed-point interprocedural closure and virtual call-graph propagation (`resolved_calls`, `resolved_effects`, `resolved_capabilities`, `resolved_complete`).
+  * `--sandbox` capability enforcement across `run`, `build`, and `emit-c` (with C99 `#define WYSNA_SANDBOX_ENFORCED 1` and `#define WYSNA_DENY_CAP_<NAME> 1`).
+* **Typed Structural JSON Codecs (`wysna schema --emit-codecs`) & Data-Parallel Agent Primitives (`std/algorithms`):**
+  * Synthesizes type-safe `encode_<T>`, `to_json_<T>`, `decode_<T>`, and `from_json_<T>` functions for nominal `struct` and `enum` declarations using new `std/json` typed accessors (`get_str`, `get_int`, `get_float`, `get_bool`, etc.).
+  * Adds deterministic batch primitives `parallel_map`, `filter_map`, `partition`, and `flat_map` to `std/algorithms`.
+* **MIR Local Copy-on-Write (CoW) Uniqueness Optimization (`mir/Ownership.py`):**
+  * `optimize_local_cow_uniqueness` hoists temporary clone releases (`release(t)`) to immediately after their last read before local mutations (`mutate`/`store_place`), eliminating false $O(N)$ CoW detaches on uniquely-owned local collections and structs.
 * **Agent Tooling (`wysna schema`, `wysna mcp`, `ReplSession`, `LanguageServer`):**
   * `wysna schema` generates JSON Schema Draft 2020-12 `$defs` for `struct`/`enum` and LLM tool definitions enriched with verified MIR `effects`, `capabilities`, `pure`, and `idempotent` metadata.
   * `wysna mcp` provides a persistent in-memory `CompilerService` JSON-RPC 2.0 stdio server with root confinement.

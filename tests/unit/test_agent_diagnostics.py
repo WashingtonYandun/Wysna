@@ -425,3 +425,177 @@ def test_schema_cli_and_mcp_emit_json_schema_and_tool_metadata(tmp_path):
     assert failed is False
     assert [t["name"] for t in mcp_payload["result"]["tools"]] == ["compute_total"]
 
+
+def test_interprocedural_closure_effect_resolution_certifies_pure_higher_order_tools(tmp_path):
+    source = (
+        'import "std/algorithms" as alg\n'
+        "pub fn double_positives(xs: list[int]) -> list[int] {\n"
+        "    let pos = alg.filter[int](xs, |x: int| => x > 0)\n"
+        "    return alg.map[int, int](pos, |x: int| => x * 2)\n"
+        "}\n"
+        "print(len(double_positives([-1, 2, 3])))\n"
+    )
+    path = tmp_path / "higher_order.wysna"
+    path.write_text(source, encoding="utf-8")
+
+    cli_res = run_cli("schema", "--output-format=json-v1", path)
+    assert cli_res.returncode == 0
+    schema = json.loads(cli_res.stdout)["result"]
+    (tool,) = schema["tools"]
+    assert tool["name"] == "double_positives"
+    assert tool["complete_within_model"] is True
+    assert tool["capabilities"] == []
+    assert tool["pure"] is True
+    assert tool["idempotent"] is True
+
+
+def test_sandbox_flag_enforces_capabilities_on_run_emit_c_and_native_build(tmp_path):
+    pure_src = (
+        'import "std/algorithms" as alg\n'
+        "let xs = alg.map[int, int]([1, 2, 3], |x: int| => x + 10)\n"
+        "print(xs[0], xs[2])\n"
+    )
+    pure_path = tmp_path / "pure_agent.wysna"
+    pure_path.write_text(pure_src, encoding="utf-8")
+
+    # 1. Sandboxed run succeeds when closures resolve to allowed stdio capability
+    run_res = run_cli("run", "--sandbox", pure_path)
+    assert run_res.returncode == 0
+    assert run_res.stdout.strip() == "11 13"
+
+    # 2. Sandboxed emit-c injects C99 capability guard macros
+    c_out = tmp_path / "pure_agent.c"
+    emit_res = run_cli("emit-c", "--sandbox", pure_path, "-o", c_out)
+    assert emit_res.returncode == 0
+    c_text = c_out.read_text(encoding="utf-8")
+    assert "#define WYSNA_SANDBOX_ENFORCED 1" in c_text
+    assert "#define WYSNA_DENY_CAP_FILESYSTEM_WRITE 1" in c_text
+
+    # 3. Sandboxed build rejects disallowed filesystem.write capability
+    impure_src = (
+        'fn save() -> unit ! IoError {\n'
+        '    write_file("forbidden.txt", "data")?\n'
+        '}\n'
+        'let _ = save() else err { print(err.message) }\n'
+    )
+    impure_path = tmp_path / "impure_agent.wysna"
+    impure_path.write_text(impure_src, encoding="utf-8")
+    bin_out = tmp_path / "impure_bin"
+    build_res = run_cli("build", "--sandbox", "--output-format=json-v1", impure_path, "-o", bin_out)
+    assert build_res.returncode == 1
+    payload = json.loads(build_res.stdout)
+    assert payload["diagnostics"][0]["code"] == "W5006"
+    assert "filesystem.write" in payload["diagnostics"][0]["message"]
+
+
+def test_schema_emit_codecs_synthesizes_executable_typed_json_round_trip(tmp_path):
+    types_src = (
+        "pub enum Role { Admin, Agent, Guest }\n"
+        "pub enum Action { Ping, Execute(str) }\n"
+        "pub struct TaskSpec {\n"
+        "    id: int,\n"
+        "    title: str,\n"
+        "    active: bool,\n"
+        "    role: Role,\n"
+        "    action: Action,\n"
+        "    tags: list[str],\n"
+        "    note: str?,\n"
+        "}\n"
+    )
+    types_path = tmp_path / "types.wysna"
+    types_path.write_text(types_src, encoding="utf-8")
+
+    res = run_cli("schema", "--emit-codecs", "--output-format=json-v1", types_path)
+    assert res.returncode == 0
+    codecs_src = json.loads(res.stdout)["result"]["codecs_source"]
+    assert "pub fn to_json_TaskSpec" in codecs_src
+    assert "pub fn from_json_TaskSpec" in codecs_src
+
+    prog_src = (
+        'import "std/json"\n'
+        + types_src
+        + "\n"
+        + codecs_src.replace('import "std/json"\n', "")
+        + "\n"
+        "fn main() -> unit ! json.JsonError {\n"
+        "    let item = TaskSpec {\n"
+        "        id: 7,\n"
+        '        title: "audit",\n'
+        "        active: true,\n"
+        "        role: Role.Agent,\n"
+        '        action: Action.Execute("wysna fix"),\n'
+        '        tags: ["a", "b"],\n'
+        '        note: Some("ok"),\n'
+        "    }\n"
+        "    let encoded = to_json_TaskSpec(item)?\n"
+        "    let round = from_json_TaskSpec(encoded)?\n"
+        '    print(round.id, round.title, round.active, len(round.tags), round.note ?? "none")\n'
+        "}\n"
+        "let _ = main() else err { print(err.message) }\n"
+    )
+    prog_path = tmp_path / "round_trip.wysna"
+    prog_path.write_text(prog_src, encoding="utf-8")
+    exec_res = run_cli("run", prog_path)
+    assert exec_res.returncode == 0
+    assert exec_res.stdout.strip() == "7 audit true 2 ok"
+
+
+def test_algorithms_parallel_map_filter_map_partition_and_flat_map(tmp_path):
+    source = (
+        'import "std/algorithms" as alg\n'
+        "let xs = [1, 2, 3, 4]\n"
+        "let sq = alg.parallel_map[int, int](xs, |x: int| => x * x)\n"
+        "let evens_doubled = alg.filter_map[int, int](xs, |x: int| -> int? {\n"
+        "    if x % 2 == 0 { return Some(x * 10) }\n"
+        "    return none\n"
+        "})\n"
+        "let parts = alg.partition[int](xs, |x: int| => x <= 2)\n"
+        "let expanded = alg.flat_map[int, int]([1, 2], |x: int| => [x, x * 10])\n"
+        "match parts {\n"
+        "    (small, large) => print(sq[3], len(evens_doubled), evens_doubled[1], len(small), len(large), len(expanded), expanded[3]),\n"
+        "}\n"
+    )
+    path = tmp_path / "alg_primitives.wysna"
+    path.write_text(source, encoding="utf-8")
+    res = run_cli("run", path)
+    assert res.returncode == 0
+    assert res.stdout.strip() == "16 2 40 2 2 4 20"
+
+
+def test_mir_local_cow_uniqueness_eliminates_false_detaches_on_read_then_mutate(tmp_path):
+    from compiler.CompilerService import CompilerService
+    from compiler.NativeToolchain import NativeToolchain
+
+    source = (
+        "fn main() -> unit {\n"
+        "    let mut xs: list[int] = [10, 20, 30]\n"
+        "    let n = len(xs)\n"
+        "    let first = xs[0]\n"
+        "    xs.append(n + first)\n"
+        "    xs[0] = 99\n"
+        '    eprint("__COW_CHECKPOINT__:unique_local")\n'
+        "    let alias = xs\n"
+        "    xs.append(77)\n"
+        '    eprint("__COW_CHECKPOINT__:with_live_alias")\n'
+        "    print(xs[0], xs[3], len(alias), len(xs))\n"
+        "}\n"
+        "main()\n"
+    )
+    svc = CompilerService()
+    checked = svc.check(source, str(tmp_path / "cow_uniq.wysna"))
+    c_code = svc.emit_c(checked).source
+    bin_path = str(tmp_path / "cow_uniq_bin")
+    NativeToolchain(str(ROOT)).build(c_code, bin_path)
+
+    import os
+    env = dict(os.environ, WYSNA_COW_METRICS="1")
+    proc = subprocess.run([bin_path], env=env, capture_output=True, text=True, timeout=30)
+    assert proc.returncode == 0
+    assert proc.stdout.strip() == "99 13 4 5"
+    stderr_lines = proc.stderr.splitlines()
+    unique_line = next(line for line in stderr_lines if "unique_local" in line)
+    alias_line = next(line for line in stderr_lines if "with_live_alias" in line)
+    assert "detach_list=0" in unique_line
+    assert "detach_list=1" in alias_line
+
+
