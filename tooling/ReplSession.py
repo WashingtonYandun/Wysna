@@ -1,5 +1,7 @@
 """Interactive compilation and execution with a persistent runtime environment."""
 
+import copy
+
 from compiler.CompilerService import CompilerService
 from error.Error import WysnaError
 from formatter.Formatter import Formatter
@@ -49,22 +51,50 @@ class ReplSession:
         self.pending_source = ""
         self.project_root = project_root
         self.modules = {}
+        self.service = CompilerService(project_root=self.project_root)
         self.interpreter = Interpreter(stdout=stdout, file="<repl>")
 
-    def execute(self, source):
+    def snapshot(self):
+        """Capture a restorable checkpoint of session source history and runtime bindings."""
+        env = self.interpreter.global_env
+        return {
+            "history": self.history,
+            "pending_source": self.pending_source,
+            "modules": dict(self.modules),
+            "bindings": copy.deepcopy(env.bindings),
+            "mutables": set(env.mutables),
+        }
+
+    def rollback(self, checkpoint):
+        """Restore session history and runtime environment to a prior ``snapshot()``."""
+        self.history = checkpoint["history"]
+        self.pending_source = checkpoint["pending_source"]
+        self.modules = dict(checkpoint["modules"])
+        env = self.interpreter.global_env
+        env.bindings.clear()
+        env.bindings.update(copy.deepcopy(checkpoint["bindings"]))
+        env.mutables.clear()
+        env.mutables.update(checkpoint["mutables"])
+
+    def execute(self, source, *, transactional=False):
+        checkpoint = self.snapshot() if transactional else None
         self.pending_source = self.history + source + "\n" if source else self.history
         first_line = self.history.count("\n") + 1
-        service = CompilerService(project_root=self.project_root)
-        checked = service.check(self.pending_source, "<repl>")
+        checked = self.service.check(self.pending_source, "<repl>")
         current = {path: snapshot.content_hash for path, snapshot in checked.sources.items()
                    if path != "<repl>"}
         for path, digest in self.modules.items():
             if current.get(path) != digest:
                 raise WysnaError(f"Imported module changed during this session: {path}; use :reload",
                                  file=path, code="W1003", stage="module")
-        value = service.interpret_incremental(checked, self.interpreter,
-                                              first_line=first_line,
-                                              loaded_sources=self.modules)
+        try:
+            value = self.service.interpret_incremental(checked, self.interpreter,
+                                                       first_line=first_line,
+                                                       loaded_sources=self.modules)
+        except WysnaError:
+            if checkpoint is not None:
+                self.rollback(checkpoint)
+            raise
         self.history = self.pending_source
         self.modules = current
         return value
@@ -90,5 +120,6 @@ class ReplSession:
         self.history = candidate.history
         self.pending_source = candidate.pending_source
         self.modules = candidate.modules
+        self.service = candidate.service
         self.interpreter = candidate.interpreter
         return True
