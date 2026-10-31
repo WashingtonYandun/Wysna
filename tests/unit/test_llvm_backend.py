@@ -278,6 +278,22 @@ class LlvmBackendTests(unittest.TestCase):
         self.assertIn('align 8', emission.source)
         self.toolchain.verify(emission.source)
 
+        service2, checked2 = self.checked('''
+fn compute(n: int) -> int { n * 2 }
+let a = compute(21)
+let f = float(a)
+let i = int(f)
+print(a, f, i)
+''')
+        emission2 = service2.emit_llvm(checked2)
+        self.assertIn('define internal fastcc i64 @wysna_fn_compute', emission2.source)
+        self.assertIn('nounwind mustprogress', emission2.source)
+        self.assertIn('call fastcc i64 @wysna_fn_compute', emission2.source)
+        self.assertIn('sitofp i64', emission2.source)
+        self.assertIn('fptosi double', emission2.source)
+        self.assertNotIn('call void @wysna_llvm_convert', emission2.source)
+        self.toolchain.verify(emission2.source)
+
     def test_complete_mir_profile_never_falls_back(self):
         for source in ('print([1, 2])', 'class Box { value: int }\nprint(1)',
                        'print([1, 2, 3][0])'):

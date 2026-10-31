@@ -179,7 +179,8 @@ class ManagedEmission:
         if is_managed(returned):
             parameters.insert(0, 'ptr %out')
         type_ = SCALAR_TYPES.get(returned, 'void')
-        call = 'call ' + type_ + ' @' + name + '(' + ', '.join(parameters) + ')'
+        cc = 'fastcc ' if name != 'wysna_program' else ''
+        call = 'call ' + cc + type_ + ' @' + name + '(' + ', '.join(parameters) + ')'
         lines.append('  ' + ('%returned = ' if returned in SCALAR_TYPES else '') + call)
         if returned in SCALAR_TYPES:
             method = {TYPE_INT: 'int', TYPE_FLOAT: 'float', TYPE_BOOL: 'bool'}[returned]
