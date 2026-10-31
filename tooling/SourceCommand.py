@@ -116,8 +116,10 @@ def run_pipeline(
     try:
         if engine not in ("seed", "compiler"):
             raise WysnaError("--engine must be seed or compiler", code="W5002", stage="options")
+        if backend in ("llvm", "llvm-experimental"):
+            backend = "llvm-experimental"
         if backend not in ("c99", "llvm-experimental"):
-            raise WysnaError("--backend must be c99 or llvm-experimental", code="W5002", stage="options")
+            raise WysnaError("--backend must be c99, llvm, or llvm-experimental", code="W5002", stage="options")
         if backend == "llvm-experimental":
             if (engine != "seed" or show_tokens or show_ast or show_mir
                     or fmt_only or fmt_write or emit_c_path is not None

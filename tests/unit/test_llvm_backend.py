@@ -680,6 +680,22 @@ print(inspect(41))
                 if not outer_timeout:
                     self.assertEqual(context.stdout.getvalue(), 'timed out\n')
 
+    def test_cli_backend_llvm_alias(self):
+        service, checked = self.checked('print("LLVM ALIAS", 99)')
+        source = checked.source.file
+        result_run = self.cli('run', '--backend=llvm', source)
+        self.assertEqual(result_run.returncode, 0, result_run.stderr)
+        self.assertEqual(result_run.stdout, 'LLVM ALIAS 99\n')
+
+        result_check = self.cli('check', '--backend=llvm', '--stats', source)
+        self.assertEqual(result_check.returncode, 0, result_check.stderr)
+        self.assertIn('"backend": "llvm-experimental"', result_check.stdout)
+
+        output_bin = self.directory / 'alias_prog'
+        result_build = self.cli('build', '--backend=llvm', '--profile=dev', source, '-o', output_bin)
+        self.assertEqual(result_build.returncode, 0, result_build.stderr)
+        self.assertEqual(self.execute(output_bin).stdout, b'LLVM ALIAS 99\n')
+
 
 
 if __name__ == '__main__':

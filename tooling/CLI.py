@@ -118,10 +118,10 @@ def print_help(prog: Optional[str] = None) -> None:
     print("Experimental tools (see docs/SCOPE.md for their contracts):")
     print(f"  {prog} service serve --worker <bin> --database <db> # Local bounded HTTP/JSON pilot")
     print(f"  {prog} emit-llvm <file.wysna> [-o <out.ll>] # Native-command LLVM IR (Seed)")
-    print(f"  {prog} run --backend=llvm-experimental [--sanitize] [--timeout-ms <N>] <file.wysna> [-- args...]")
-    print(f"  {prog} build --backend=llvm-experimental --profile=dev|release|size <file.wysna> [-o <bin>]")
+    print(f"  {prog} run [--backend=c99|llvm] [--sanitize] [--timeout-ms <N>] <file.wysna> [-- args...]")
+    print(f"  {prog} build [--backend=c99|llvm] [--profile=dev|release|size] <file.wysna> [-o <bin>]")
     print("  Engines: seed (full Seed profile, default) or compiler (native-core-v1; emit-c/build only here).")
-    print("  Backends: c99 (default) or llvm-experimental. The AST emitter is a test oracle, not a CLI backend.")
+    print("  Backends: c99 (default) or llvm (alias: llvm-experimental). The AST emitter is a test oracle, not a CLI backend.")
     print("Source-checkout maintenance:")
     print(f"  {prog} test [--differential [N]] [--fuzz [N]]            # Run conformance, differential, or fuzz suite")
     print(f"  {prog} bench [--update-baseline]                         # Run Seed/Compiler performance benchmark harness")
@@ -354,11 +354,11 @@ def main(argv=None) -> None:
             if b_val in ("hir", "ast", "selfhost"):
                 usage_error(f"--backend={b_val} mixes compiler engine selection with output targets; "
                             "use --engine=seed|compiler. The AST oracle is test-only.")
-            if b_val in ("c99", "llvm-experimental"):
-                backend = b_val
+            if b_val in ("c99", "llvm", "llvm-experimental"):
+                backend = "llvm-experimental" if b_val == "llvm" else b_val
                 backend_explicit = True
             else:
-                usage_error(f"Unknown backend '{b_val}'. Valid backends: c99, llvm-experimental")
+                usage_error(f"Unknown backend '{b_val}'. Valid backends: c99, llvm, llvm-experimental")
         elif arg == "--timeout-ms":
             i += 1
             if i >= len(args) or not args[i].isdigit() or not 1 <= int(args[i]) <= 600000:
