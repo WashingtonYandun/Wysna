@@ -76,7 +76,7 @@ def bootstrap_compiler(repo_root, output_directory):
         command = compiler_command()
         built = subprocess.run(command + ["-std=c99", "-O1", "-I" + str(root),
                                str(path)] + math_flags + native_stack_link_args(command) + ["-o", str(binary)],
-                               capture_output=True, text=True, timeout=120, cwd=root)
+                               capture_output=True, text=True, timeout=240, cwd=root)
         if built.returncode:
             from error.Error import ToolchainError
             raise ToolchainError("Bootstrap C compilation failed: " + built.stdout + built.stderr)
@@ -86,7 +86,7 @@ def bootstrap_compiler(repo_root, output_directory):
     for stage in range(3):
         emitted = directory / ("compiler" + str(stage) + ".c")
         subprocess.run([str(binary), str(source_path), str(emitted)], check=True,
-                       capture_output=True, text=True, timeout=120, cwd=root)
+                       capture_output=True, text=True, timeout=240, cwd=root)
         if stage < 2:
             binary = compile_c(emitted, "stage" + str(stage + 1))
     hashes = tuple(_sha256(directory / ("compiler" + str(stage) + ".c")) for stage in range(3))
