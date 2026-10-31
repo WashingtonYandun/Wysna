@@ -236,6 +236,10 @@ static inline WVal wysna_builtin_slice(WVal s, WVal start, WVal end) {
         wysna_string_offset(s, en, &en_off, &dummy_len);
     }
     size_t blen = en_off - st_off;
+    if (blen == 0) return wysna_str("");
+    if (blen == 1 && (unsigned char)s.as.string.data[st_off] < 128) {
+        return wysna_ascii_string((uint8_t)s.as.string.data[st_off]);
+    }
     char* buf = (char*)wysna_alloc_safe(blen + 1);
     memcpy(buf, s.as.string.data + st_off, blen);
     buf[blen] = '\0';
@@ -383,6 +387,13 @@ static inline WVal wysna_builtin_read_file(WVal path) {
             free(data); return wysna_io_error("Invalid UTF-8 file");
         }
         offset += step;
+    }
+    if (length == 0) {
+        free(data);
+        return wysna_ok(wysna_str(""));
+    }
+    if (capacity > length + 256) {
+        data = (char*)wysna_realloc_safe(data, length + 1);
     }
     return wysna_ok(wysna_owned_str_n(data, length));
 }
