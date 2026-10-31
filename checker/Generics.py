@@ -3,7 +3,7 @@ from copy import copy
 
 from checker.OopGenerics import GenericOopTemplate, specialize as specialize_oop
 from checker.WysnaType import FunctionType, TypeParamType
-from error.Error import TypeError
+from error.Error import TypeError, WysnaError
 from node.NodeType import clone_ast
 
 
@@ -13,16 +13,26 @@ class GenericDefinitionChecker:
     def __init__(self, checker):
         self.checker = checker
 
+    def _run_recovering(self, action):
+        known = len(getattr(self.checker, "_collected_errors", ()))
+        try:
+            action()
+        except WysnaError as error:
+            if hasattr(self.checker, "_record_error"):
+                self.checker._record_error(error, known)
+            else:
+                raise
+
     def check_all(self):
         for template in self.checker.generic_fn_templates.values():
-            self.check_function(template)
+            self._run_recovering(lambda t=template: self.check_function(t))
         for template in self.checker.generic_struct_templates.values():
-            self.check_structure(template)
+            self._run_recovering(lambda t=template: self.check_structure(t))
         for template in self.checker.generic_enum_templates.values():
-            self.check_enumeration(template)
+            self._run_recovering(lambda t=template: self.check_enumeration(t))
         for template in list(self.checker.global_scope.types.values()):
             if isinstance(template, GenericOopTemplate):
-                self.check_oop_type(template)
+                self._run_recovering(lambda t=template: self.check_oop_type(t))
 
     def _symbolic_substitutions(self, template):
         checker = self.checker

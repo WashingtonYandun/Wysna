@@ -50,10 +50,26 @@ def _write_json_v1(command, status, exit_code, *, errors=(), source_by_file=None
 
 
 
+def _warning_records(cycle_warnings, lint_warnings, file_name, sources):
+    """Protocol records for non-blocking findings of a successful check."""
+    records = []
+    span_cache = {}
+    for warning in lint_warnings:
+        records.append(diagnostic_from_error(warning, sources, span_cache=span_cache))
+    for cycle in cycle_warnings:
+        record = diagnostic_record("W6002", "lint", cycle["message"], severity="warning",
+                                   filename=file_name)
+        record["data"] = {"kind": "reference_cycle", "classes": cycle["classes"],
+                          "help": cycle["advisory"]}
+        records.append(record)
+    return records
+
+
 def _sources_for_diagnostics(file_name, source_code, service=None):
     sources = {
         file_name: source_code,
         os.path.abspath(file_name): source_code,
+        os.path.realpath(file_name): source_code,
     }
     if service is not None:
         sources.update(service.source_texts())
@@ -224,7 +240,8 @@ def run_pipeline(
                                       untrusted_bindings=bindings)
 
         cycle_warnings = []
-        if warn_cycles:
+        lint_warnings = []
+        if warn_cycles or check_only:
             cycle_reports = service.analyze_reference_cycles(checked)
             for adv in cycle_reports:
                 chain = " -> ".join(adv["classes"]) + f" -> {adv['classes'][0]}"
@@ -232,10 +249,19 @@ def run_pipeline(
                 cycle_warnings.append({"message": msg, "advisory": adv["advisory"], "classes": adv["classes"]})
                 print(f"warning[W-ARC]: {msg}", file=sys.stderr)
                 print(f"  advisory: {adv['advisory']}", file=sys.stderr)
+        if check_only:
+            from checker.Lints import lint_discarded_expressions
+            lint_warnings = lint_discarded_expressions(checked.ast, file_name)
+            lint_sources = _sources_for_diagnostics(file_name, source_code, service)
+            for warning in lint_warnings:
+                print("warning" + render_diagnostic(warning, lint_sources, span_cache={}),
+                      file=sys.stderr)
 
         if check_only:
             if json_v1:
-                _write_json_v1(tool_command, "ok", 0)
+                warning_records = _warning_records(cycle_warnings, lint_warnings, file_name,
+                                                   _sources_for_diagnostics(file_name, source_code, service))
+                _write_json_v1(tool_command, "ok", 0, extra_diagnostics=warning_records)
                 return 0
             if show_stats:
                 stat_obj = {

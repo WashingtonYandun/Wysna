@@ -13,6 +13,7 @@ from checker.WysnaType import (
     AnyType,
 )
 from error.Error import TypeError
+from checker.Suggestions import suggest
 
 if TYPE_CHECKING:
     from checker.TypeChecker import TypeChecker
@@ -97,13 +98,13 @@ def check_struct_init_expr(checker: "TypeChecker", expr: StructInitExpr, is_stat
 
     for f in expr.fields:
         if f.name not in struct_t.fields:
-            raise TypeError(
+            raise suggest(TypeError(
                 message=f"Struct '{expr.struct_name}' has no field '{f.name}'",
                 line=f.line,
                 col=f.col,
                 file=checker.file,
                 code="W3002"
-            )
+            ), f.name, struct_t.fields)
         expected_f_type = struct_t.fields[f.name]
         actual_f_type = checker._check_expr(f.value)
         if not checker.type_relations.is_assignable(actual_f_type, expected_f_type):

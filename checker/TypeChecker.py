@@ -32,6 +32,7 @@ from checker.WysnaType import (
     TypeParamType, GenericStructTemplate, GenericFnTemplate, GenericEnumTemplate,
 )
 from checker.SymbolTable import Scope, Symbol, create_global_scope
+from checker.Suggestions import enrich_from_message, suggest, visible_names
 from checker.TypeInterner import TypeInterner
 from checker.TypeRelations import TypeRelations
 from checker.Generics import GenericDefinitionChecker
@@ -41,7 +42,7 @@ from checker.GenericState import (
     MAX_SPECIALIZATION_COMPLEXITY, _mangle_type_static, mangle_generic_name,
     type_strictly_contains, _type_contains,
 )
-from error.Error import TypeError
+from error.Error import TypeError, TypeErrors, WysnaError
 from checker.LayoutGraph import LayoutGraph, build_layout_graph_from_declarations
 
 
@@ -91,6 +92,11 @@ class TypeChecker:
         self._active_type_subst: Optional[Dict[str, WysnaType]] = None
         self.telemetry: MonomorphizationTelemetry = MonomorphizationTelemetry()
         self._checking_generic_definition = None
+        # Independent semantic errors found while checking one program. Checking
+        # recovers at statement granularity so an agent sees every independent
+        # error in a single pass instead of one error per compiler invocation.
+        self._collected_errors: List[WysnaError] = []
+        self._poisoned_names: Set[str] = set()
 
         # Canonical built-in Option[T] template
         opt_decl = EnumDecl(
@@ -124,7 +130,81 @@ class TypeChecker:
     def check(self, program: Program) -> None:
         self.session.check_program(program, self)
 
+    # Mutable checker context that an aborted statement may leave half-updated.
+    _RECOVERY_STATE = (
+        "current_scope", "loop_depth", "current_fn_ret_type", "expected_type",
+        "_monomorphize_depth", "_active_type_subst", "_checking_generic_definition",
+        "_lambda_return_inference", "_collecting_declarations",
+    )
+
+    def _snapshot_state(self) -> Dict[str, Any]:
+        snapshot = {name: getattr(self, name) for name in self._RECOVERY_STATE if hasattr(self, name)}
+        snapshot["_instantiation_stack"] = list(self._instantiation_stack)
+        return snapshot
+
+    def _restore_state(self, snapshot: Dict[str, Any]) -> None:
+        for name, value in snapshot.items():
+            setattr(self, name, value)
+
+    def _check_stmt_recovering(self, stmt: Stmt) -> None:
+        """Check one statement; record its error and continue with the next one."""
+        known = len(self._collected_errors)
+        snapshot = self._snapshot_state()
+        try:
+            self._check_stmt(stmt)
+        except WysnaError as error:
+            self._restore_state(snapshot)
+            self._record_error(error, known)
+            if isinstance(stmt, LetDecl):
+                self._poison_binding(stmt)
+
+    def _record_error(self, error: WysnaError, known_before: int) -> None:
+        """Keep an error unless it is only a consequence of an earlier one."""
+        if self._is_cascade(error, known_before):
+            return
+        duplicate = any((e.code, e.line, e.col, e.message) == (error.code, error.line, error.col, error.message)
+                        for e in self._collected_errors)
+        if duplicate:
+            return
+        self._collected_errors.append(enrich_from_message(error))
+        if len(self._collected_errors) >= TypeErrors.MAX_DIAGNOSTICS:
+            self._raise_collected_errors()
+
+    def _is_cascade(self, error: WysnaError, known_before: int) -> bool:
+        if (error.code == "W2004" and "missing return statement" in error.message
+                and len(self._collected_errors) > known_before):
+            return True  # a skipped statement made the function look as if it lacks a return
+        if error.code == "W1001":
+            return any(f"'{name}'" in error.message for name in self._poisoned_names)
+        return False
+
+    def _poison_binding(self, stmt: LetDecl) -> None:
+        """Keep later uses of a failed ``let`` from producing misleading follow-up errors."""
+        scope = self.current_scope
+        if stmt.name in scope.symbols:
+            return
+        if stmt.type_ann is not None:
+            try:
+                declared = self._resolve_type_node(stmt.type_ann)
+                scope.define_symbol(
+                    Symbol(stmt.name, declared, is_mut=stmt.is_mut, kind="var",
+                           line=stmt.line, col=stmt.col),
+                    file=self.file)
+                return
+            except WysnaError:
+                pass
+        self._poisoned_names.add(stmt.name)
+
+    def _raise_collected_errors(self) -> None:
+        errors = self._collected_errors
+        if not errors:
+            return
+        self._collected_errors = []
+        raise errors[0] if len(errors) == 1 else TypeErrors(errors)
+
     def _check_program(self, program: Program) -> None:
+        self._collected_errors = []
+        self._poisoned_names = set()
         # Reserve builtin identities and their specialization namespaces.
         for declaration in program.body:
             if isinstance(declaration, (StructDecl, EnumDecl, ClassDecl, InterfaceDecl)):
@@ -158,8 +238,12 @@ class TypeChecker:
                     self._resolve_constraint_interface(constraint, parameter.line, parameter.col)
 
         # Pass 2: Typecheck bodies & statements
-        GenericDefinitionChecker(self).check_all()
+        try:
+            GenericDefinitionChecker(self).check_all()
+        except WysnaError as error:
+            self._record_error(error, len(self._collected_errors))
         self._pass2_check_program(program)
+        self._raise_collected_errors()
 
         # Filter out uninstantiated generic templates and insert monomorphized declarations
         filtered_body: List[Stmt] = []
@@ -244,7 +328,7 @@ class TypeChecker:
 
     def _pass2_check_program(self, program: Program) -> None:
         for stmt in program.body:
-            self._check_stmt(stmt)
+            self._check_stmt_recovering(stmt)
 
     def _clone_generic_definition(self, template, substitutions):
         declaration = clone_ast(template.ast_decl)
@@ -376,6 +460,7 @@ class TypeChecker:
         self.current_class = cls_type
         try:
             for m in stmt.methods:
+                known = len(self._collected_errors)
                 fn_type = cls_type.init_type if m.name == "init" else cls_type.methods[m.name].fn_type
                 assert fn_type is not None
                 fn_scope = Scope(parent=self.current_scope, is_function_scope=True)
@@ -414,6 +499,8 @@ class TypeChecker:
                                 file=self.file,
                                 code="W2004"
                             )
+                except WysnaError as error:
+                    self._record_error(error, known)
                 finally:
                     self.current_scope = old_scope
                     self.current_fn_ret_type = old_ret_type
@@ -587,7 +674,7 @@ class TypeChecker:
 
         try:
             for s in block.statements:
-                self._check_stmt(s)
+                self._check_stmt_recovering(s)
             if block.tail_expr:
                 return self._check_expr(block.tail_expr, is_statement_context=is_statement_context)
             return None
@@ -1410,13 +1497,14 @@ class TypeChecker:
                         file=self.file,
                         code="W2001"
                     )
-                raise TypeError(
+                raise suggest(TypeError(
                     message=f"Unknown type '{node.name}'",
                     line=node.line,
                     col=node.col,
                     file=self.file,
                     code="W1001"
-                )
+                ), node.name, [*visible_names(self.current_scope, "types"),
+                               *self.generic_struct_templates, *self.generic_enum_templates])
             if isinstance(resolved, (GenericStructTemplate, GenericEnumTemplate, GenericOopTemplate)):
                 raise TypeError(
                     message=f"Generic type '{node.name}' requires type arguments",
