@@ -114,6 +114,7 @@ def run_pipeline(
     optimization_profile=None,
     run_timeout_ms=None,
     capability_policy=None,
+    sandbox: bool = False,
     warn_cycles: bool = False,
 ) -> int:
     if tool_command is None:
@@ -147,7 +148,15 @@ def run_pipeline(
         if capability_policy is not None and link_libraries:
             raise WysnaError("--link-lib cannot be combined with a capability policy",
                              code="W5002", stage="options")
-        if capability_policy is not None and (
+        if sandbox:
+            if (engine != "seed" or check_only or fmt_only or show_tokens
+                    or show_ast or show_mir or emit_llvm_path is not None):
+                raise WysnaError("--sandbox is supported only by run, build, and emit-c on the Seed engine",
+                                 code="W5002", stage="options")
+            if capability_policy is None:
+                from tooling.CapabilityPolicy import DEFAULT_SANDBOX_CAPABILITIES
+                capability_policy = ("allow", DEFAULT_SANDBOX_CAPABILITIES)
+        elif capability_policy is not None and (
                 backend != "c99" or engine != "seed"
                 or check_only or fmt_only or show_tokens or show_ast or show_mir
                 or emit_c_path is not None or build_bin_path is not None
@@ -233,11 +242,21 @@ def run_pipeline(
             return 0
 
         if capability_policy is not None:
-            from tooling.CapabilityPolicy import enforce_capability_policy
+            from tooling.CapabilityPolicy import (
+                enforce_capability_policy,
+                enforce_resolved_capability_policy,
+            )
             report, bindings = service.explain_with_foreign_bindings(checked)
-            enforce_capability_policy(report, capability_policy[0],
-                                      capability_policy[1], file_name,
-                                      untrusted_bindings=bindings)
+            if sandbox:
+                enforce_resolved_capability_policy(
+                    report, capability_policy[0], capability_policy[1], file_name,
+                    untrusted_bindings=bindings,
+                )
+            else:
+                enforce_capability_policy(
+                    report, capability_policy[0], capability_policy[1], file_name,
+                    untrusted_bindings=bindings,
+                )
 
         cycle_warnings = []
         lint_warnings = []
@@ -304,6 +323,9 @@ def run_pipeline(
             else:
                 emission = service.emit_c(checked)
                 c_code = emission.source
+                if sandbox and capability_policy is not None:
+                    from tooling.CapabilityPolicy import generate_c_capability_guards
+                    c_code = generate_c_capability_guards(capability_policy[0], capability_policy[1]) + c_code
                 codegen_telemetry = dict(emission.telemetry)
                 phase_ms = emission.timing_ms
                 hir_ms = phase_ms.get("hir")

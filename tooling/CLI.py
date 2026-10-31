@@ -205,6 +205,7 @@ def main(argv=None) -> None:
     optimization_profile = None
     run_timeout_ms = None
     capability_policy = None
+    sandbox = False
     show_mir = False
     subcmd: Optional[str] = None
     file_to_run: Optional[str] = None
@@ -414,6 +415,8 @@ def main(argv=None) -> None:
                 capability_policy = (mode, parse_capabilities(value))
             except ValueError as error:
                 usage_error(str(error))
+        elif arg == "--sandbox":
+            sandbox = True
         elif arg == "--link-lib":
             i += 1
             if i >= len(args) or args[i].startswith("-"):
@@ -436,7 +439,17 @@ def main(argv=None) -> None:
 
     prog_cmd = "wysna"
 
-    if capability_policy is not None:
+    if sandbox:
+        if link_libraries:
+            usage_error("--link-lib cannot be combined with --sandbox")
+        if (subcmd not in (None, "run", "build", "emit-c") or engine != "seed"
+                or check_only or fmt_only or show_tokens or show_ast or show_mir
+                or emit_llvm_path is not None):
+            usage_error("--sandbox is supported only by run, build, and emit-c on the Seed engine")
+        if capability_policy is None:
+            from tooling.CapabilityPolicy import DEFAULT_SANDBOX_CAPABILITIES
+            capability_policy = ("allow", DEFAULT_SANDBOX_CAPABILITIES)
+    elif capability_policy is not None:
         if link_libraries:
             usage_error("--link-lib cannot be combined with a capability policy")
         if (subcmd not in (None, "run") or backend_explicit or engine_explicit
@@ -625,6 +638,7 @@ def main(argv=None) -> None:
             optimization_profile=optimization_profile,
             run_timeout_ms=run_timeout_ms,
             capability_policy=capability_policy,
+            sandbox=sandbox,
             backend=backend,
             engine=engine,
             sanitize=sanitize,
