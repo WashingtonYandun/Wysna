@@ -98,6 +98,7 @@ def run_pipeline(
     optimization_profile=None,
     run_timeout_ms=None,
     capability_policy=None,
+    warn_cycles: bool = False,
 ) -> int:
     if tool_command is None:
         if check_only:
@@ -220,6 +221,16 @@ def run_pipeline(
                                       capability_policy[1], file_name,
                                       untrusted_bindings=bindings)
 
+        cycle_warnings = []
+        if warn_cycles:
+            cycle_reports = service.analyze_reference_cycles(checked)
+            for adv in cycle_reports:
+                chain = " -> ".join(adv["classes"]) + f" -> {adv['classes'][0]}"
+                msg = f"strong reference cycle detected in nominal classes: {chain}"
+                cycle_warnings.append({"message": msg, "advisory": adv["advisory"], "classes": adv["classes"]})
+                print(f"warning[W-ARC]: {msg}", file=sys.stderr)
+                print(f"  advisory: {adv['advisory']}", file=sys.stderr)
+
         if check_only:
             if json_v1:
                 _write_json_v1(tool_command, "ok", 0)
@@ -239,9 +250,14 @@ def run_pipeline(
                         "peak_rss_kb": peak_rss_kb(),
                     }
                 }
+                if cycle_warnings:
+                    stat_obj["warnings"] = cycle_warnings
                 print(json.dumps(stat_obj, indent=2))
             elif json_diagnostics:
-                print(json.dumps({"status": "ok", "file": file_name, "diagnostics": []}, indent=2))
+                diag_obj = {"status": "ok", "file": file_name, "diagnostics": []}
+                if cycle_warnings:
+                    diag_obj["warnings"] = cycle_warnings
+                print(json.dumps(diag_obj, indent=2))
             else:
                 print(f"[OK] Check passed for {file_name}")
             return 0

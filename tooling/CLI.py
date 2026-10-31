@@ -105,7 +105,7 @@ def print_help(prog: Optional[str] = None) -> None:
     print(f"  {prog} repl                                    # Start interactive REPL")
     print(f"  {prog} [run] [--stats] [--report-json <path>] [--invocation-id <id>] <file.wysna> [-- args...] # Execute Wysna source file")
     print(f"  {prog} run --deny=<cap,...>|--allow=<cap,...> <file.wysna> # Static capability gate before interpretation")
-    print(f"  {prog} check [--json|--output-format=json-v1] [--stats] <file.wysna>   # Static typecheck without execution")
+    print(f"  {prog} check [--json|--output-format=json-v1] [--warn-cycles] [--stats] <file.wysna>   # Static typecheck without execution")
     print(f"  {prog} fmt [--write] [--output-format=json-v1] <file.wysna> # Canonical deterministic formatter")
     print(f"  {prog} build [--engine=seed|compiler] [--backend=llvm-experimental] [--profile=dev|release|size] [--output-format=json-v1] <file.wysna> [-o <bin>] # Compile a native binary")
     print(f"  {prog} version                                   # Show compiler version")
@@ -178,6 +178,7 @@ def main(argv=None) -> None:
     show_tokens = False
     show_ast = False
     check_only = False
+    warn_cycles = False
     json_diagnostics = False
     show_stats = False
     fmt_only = False
@@ -311,6 +312,8 @@ def main(argv=None) -> None:
             usage_error("--ast is not a compiler backend; use 'wysna ast <file>' to inspect syntax")
         elif arg in ("--check", "-c"):
             check_only = True
+        elif arg == "--warn-cycles":
+            warn_cycles = True
         elif arg == "--json":
             json_diagnostics = True
         elif arg == "--output-format=json-v1":
@@ -621,6 +624,7 @@ def main(argv=None) -> None:
                 **({"terminate": _capture_application_exit} if report_state is not None else {}),
             ),
             json_v1=json_v1,
+            warn_cycles=warn_cycles,
             tool_command=command_for_output,
             report_state=report_state,
         )

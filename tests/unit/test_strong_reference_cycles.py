@@ -169,6 +169,38 @@ class StrongReferenceCyclesTests(unittest.TestCase):
         self.assertIn("Parent", advisories[0]["classes"])
         self.assertIn("Child", advisories[0]["classes"])
 
+    def test_cli_warn_cycles_flag(self):
+        import subprocess
+        import sys
+        import tempfile
+        from pathlib import Path
+        from common.Paths import get_repo_root
+
+        root = Path(get_repo_root())
+        source = (
+            "class Parent {\n"
+            "    public child: Child?\n"
+            "    fn init() { this.child = none }\n"
+            "}\n"
+            "class Child {\n"
+            "    public parent: Parent?\n"
+            "    fn init() { this.parent = none }\n"
+            "}\n"
+        )
+        with tempfile.TemporaryDirectory(prefix="wysna-cycles-cli-") as tmpdir:
+            file_path = Path(tmpdir) / "main.wysna"
+            file_path.write_text(source, encoding="utf-8")
+            result = subprocess.run(
+                [sys.executable, str(root / "main.py"), "check", "--warn-cycles", str(file_path)],
+                capture_output=True,
+                text=True,
+                timeout=15,
+            )
+            self.assertEqual(result.returncode, 0)
+            self.assertIn("[OK] Check passed", result.stdout)
+            self.assertIn("warning[W-ARC]", result.stderr)
+            self.assertIn("Child -> Parent -> Child", result.stderr.replace("Parent -> Child -> Parent", "Child -> Parent -> Child"))
+
 
 if __name__ == "__main__":
     unittest.main()
