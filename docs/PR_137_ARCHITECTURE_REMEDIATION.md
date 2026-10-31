@@ -139,6 +139,21 @@ flowchart TD
   * Resolves module load-time `NameError: name 'Optional' is not defined` on Python 3.11 CI runners (fixing immediate test collection failure across 69 modules).
   * Validated full conformance (815/815 tests, 100%) and all compiler contracts on CPython 3.11.18.
 
+### 10. Agent-First Protocol, Multi-Error Recovery & Self-Healing Tooling
+* **Multi-Error Recovery (`TypeChecker`, `GenericDefinitionChecker`):**
+  * Recovers across statements, class methods, and generic templates to emit up to 100 independent diagnostics per pass (`TypeErrors`), suppressing cascade noise via `_poison_binding` and `_is_cascade`.
+  * Tightens uninstantiated generic definition checking to reject concrete operand domain mismatches (`x + true`, `y - "str"`) at definition time.
+* **Structured Diagnostics & Deterministic Auto-Fix (`wysna fix`, `Suggestions.py`, `ToolResult.py`):**
+  * Populates `data` (`expected`, `found`, `conversion_hint`, `unwrap_hint`, `missing_field`), `related` declaration spans (`W1002`, `W3001`), and SHA-256-verified byte-range `fixes[]` (identifier/field/type typos and `let` -> `let mut` upgrades).
+  * Resolves symlinked path discrepancies on macOS so `primary_span` is never `null` on located syntax/type diagnostics.
+* **Static Lints (`W6001`, `W6002`):**
+  * Reports discarded pure expressions (including newline-before-minus hazards) and ARC strong reference cycles as non-blocking warnings by default in `wysna check` and LSP.
+* **Agent Tooling (`wysna schema`, `wysna mcp`, `ReplSession`, `LanguageServer`):**
+  * `wysna schema` generates JSON Schema Draft 2020-12 `$defs` for `struct`/`enum` and LLM tool definitions enriched with verified MIR `effects`, `capabilities`, `pure`, and `idempotent` metadata.
+  * `wysna mcp` provides a persistent in-memory `CompilerService` JSON-RPC 2.0 stdio server with root confinement.
+  * `ReplSession` reuses a persistent `CompilerService` and adds `snapshot()`/`rollback()` + `execute(..., transactional=True)`.
+  * `LanguageServer` adds `textDocument/codeAction` (QuickFix) and `textDocument/signatureHelp`.
+
 ---
 
 ## Quality & Conformance Checklist
