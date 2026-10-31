@@ -139,10 +139,16 @@ fn mir_c_operation(module: MirModule, function: MirFunction, operation: MirOpera
     }
     if kind == "iterate_value" {
         let counter = mir_c_name(operation.args[1])
-        let mut value = "wysna_int((" + arguments[0] + ").as.i + (int64_t)" + counter + ")"
-        if not operation.value.boolean {
-            value = "wysna_list_iteration_get_owned_at(" + arguments[0] + ", " + counter + ", " + escape_c_str(operation.source.file) + ", " + str(operation.source.line) + ", " + str(operation.source.col) + ")"
+        if operation.value.boolean {
+            let start_slot = function.slots[operation.args[0]]
+            let start_name = mir_c_name(operation.args[0])
+            let start_val = if not mir_value_storage(start_slot.type_id) { start_name } else { "(" + start_name + ").as.i" }
+            if not mir_value_storage(function.slots[result].type_id) {
+                return mir_c_write(function, result, start_val + " + (int64_t)" + counter, false)
+            }
+            return mir_c_write(function, result, "wysna_int(" + start_val + " + (int64_t)" + counter + ")", false)
         }
+        let value = "wysna_list_iteration_get_owned_at(" + arguments[0] + ", " + counter + ", " + escape_c_str(operation.source.file) + ", " + str(operation.source.line) + ", " + str(operation.source.col) + ")"
         return mir_c_write(function, result, value, true)
     }
     if kind == "construct" {

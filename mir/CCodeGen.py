@@ -483,8 +483,14 @@ class CCodeGen:
             return [self.write(result, self.name(operation.args[0]) + ' < ' + bound, boxed=False)]
         if kind == 'iterate_value':
             index = self.name(operation.args[1])
-            value = f'wysna_int(({args[0]}).as.i + (int64_t){index})' if data['range'] else (f'wysna_list_iteration_get_owned_at({args[0]}, {index}, '
-                        f'{quote(source.file)}, {source.line}, {source.col})')
+            if data['range']:
+                start_slot = self.slots[operation.args[0]]
+                start_name = self.name(operation.args[0])
+                start_val = start_name if start_slot.storage != 'value' else f'({start_name}).as.i'
+                if self.slots[result].storage != 'value':
+                    return [self.write(result, f'{start_val} + (int64_t){index}', boxed=False)]
+                return [self.write(result, f'wysna_int({start_val} + (int64_t){index})', boxed=False)]
+            value = f'wysna_list_iteration_get_owned_at({args[0]}, {index}, {quote(source.file)}, {source.line}, {source.col})'
             return [self.write(result, value)]
         if kind == 'test':
             test = data['kind']
