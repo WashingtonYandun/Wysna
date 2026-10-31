@@ -12,6 +12,8 @@ static inline WVal wysna_add(WVal a, WVal b) {
     if (a.tag == W_STR && b.tag == W_STR) {
         size_t la = a.as.string.length;
         size_t lb = b.as.string.length;
+        if (la == 0) return wysna_clone(b);
+        if (lb == 0) return wysna_clone(a);
         char* res = (char*)wysna_alloc_safe(la + lb + 1);
         memcpy(res, a.as.string.data, la);
         memcpy(res + la, b.as.string.data, lb);
