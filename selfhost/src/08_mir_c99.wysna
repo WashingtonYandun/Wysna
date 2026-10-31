@@ -316,3 +316,5 @@ fn mir_emit_c(module: MirModule) -> str {
     parts.append("    wysna_runtime_cleanup();\n    return status;\n}\n")
     return join_strings(parts, "")
 }
+
+fn compile_source(checked: CheckedProgram) -> str { return mir_emit_c(mir_build(checked)) }

@@ -801,81 +801,6 @@ fn foreign_type_id(name: str) -> str {
     if name == "float" or name == "double" { return "float" }
     return name
 }
-fn check_delimiters(tokens: list[Token]) -> unit {
-    let mut delim_kinds: list[str] = []
-    let mut delim_tokens: list[Token] = []
-    for tok in tokens {
-        let k = tok.kind
-        if k == "LPAREN" or k == "LBRACE" or k == "LBRACKET" {
-            delim_kinds.append(k)
-            delim_tokens.append(tok)
-        } elif k == "RPAREN" {
-            let dl = len(delim_kinds)
-            if dl == 0 {
-                report_error_at("W0001", tok, "unexpected ')'")
-            }
-            let top = delim_kinds[dl - 1]
-            if top != "LPAREN" {
-                report_error_at("W0001", tok, "mismatched delimiter ')'")
-            }
-            delim_kinds.pop()
-            delim_tokens.pop()
-        } elif k == "RBRACKET" {
-            let dl = len(delim_kinds)
-            if dl == 0 {
-                report_error_at("W0006", tok, "unexpected ']'")
-            }
-            let top = delim_kinds[dl - 1]
-            if top != "LBRACKET" {
-                report_error_at("W0006", tok, "mismatched delimiter ']'")
-            }
-            delim_kinds.pop()
-            delim_tokens.pop()
-        } elif k == "RBRACE" {
-            let dl = len(delim_kinds)
-            if dl == 0 {
-                report_error_at("W0006", tok, "unexpected '}'")
-            }
-            let top = delim_kinds[dl - 1]
-            if top == "LPAREN" {
-                report_error_at("W0006", tok, "expected ')' before '}'")
-            }
-            if top != "LBRACE" {
-                report_error_at("W0006", tok, "mismatched delimiter '}'")
-            }
-            delim_kinds.pop()
-            delim_tokens.pop()
-        }
-    }
-    if len(delim_kinds) > 0 {
-        let top_idx = len(delim_kinds) - 1
-        let top_k = delim_kinds[top_idx]
-        if top_k == "LBRACE" {
-            report_error_at("W0006", delim_tokens[top_idx], "unclosed delimiter '{'")
-        } elif top_k == "LPAREN" {
-            report_error_at("W0006", delim_tokens[top_idx], "unclosed delimiter '('")
-        } elif top_k == "LBRACKET" {
-            report_error_at("W0006", delim_tokens[top_idx], "unclosed delimiter '['")
-        }
-    }
-}
-
-fn check_program(tokens: list[Token], file: str, capture: bool) -> CheckedProgram {
-    check_delimiters(tokens)
-    let context = new SemanticContext(capture)
-    sem_validate(context, tokens)
-    sem_complete_specializations(context)
-    return checked_finish(context, tokens, file)
-}
-
-fn check_source(src: str, in_path: str) -> CheckedProgram {
-    let file = module_canonical(in_path)
-    let checked = check_program(module_tokens(src, file), file, true)
-    for node in checked.nodes { if node.kind == "unsupported" { report_error_at("W2013", node.source, "Compiler native-core-v1 does not support expression " + node.text) } }
-    return checked
-}
-
-fn compile_source(checked: CheckedProgram) -> str { return mir_emit_c(mir_build(checked)) }
 # Session-local node and binding IDs belong to this value's type arena.
 struct CheckedField { name: str, type_id: int, visible: bool }
 struct CheckedVariant { name: str, payloads: list[int] }
@@ -3884,6 +3809,79 @@ fn sem_complete_specializations(context: SemanticContext) {
     context.substitution_types = types
     context.specialization_ancestry = types
 }
+fn check_delimiters(tokens: list[Token]) -> unit {
+    let mut delim_kinds: list[str] = []
+    let mut delim_tokens: list[Token] = []
+    for tok in tokens {
+        let k = tok.kind
+        if k == "LPAREN" or k == "LBRACE" or k == "LBRACKET" {
+            delim_kinds.append(k)
+            delim_tokens.append(tok)
+        } elif k == "RPAREN" {
+            let dl = len(delim_kinds)
+            if dl == 0 {
+                report_error_at("W0001", tok, "unexpected ')'")
+            }
+            let top = delim_kinds[dl - 1]
+            if top != "LPAREN" {
+                report_error_at("W0001", tok, "mismatched delimiter ')'")
+            }
+            delim_kinds.pop()
+            delim_tokens.pop()
+        } elif k == "RBRACKET" {
+            let dl = len(delim_kinds)
+            if dl == 0 {
+                report_error_at("W0006", tok, "unexpected ']'")
+            }
+            let top = delim_kinds[dl - 1]
+            if top != "LBRACKET" {
+                report_error_at("W0006", tok, "mismatched delimiter ']'")
+            }
+            delim_kinds.pop()
+            delim_tokens.pop()
+        } elif k == "RBRACE" {
+            let dl = len(delim_kinds)
+            if dl == 0 {
+                report_error_at("W0006", tok, "unexpected '}'")
+            }
+            let top = delim_kinds[dl - 1]
+            if top == "LPAREN" {
+                report_error_at("W0006", tok, "expected ')' before '}'")
+            }
+            if top != "LBRACE" {
+                report_error_at("W0006", tok, "mismatched delimiter '}'")
+            }
+            delim_kinds.pop()
+            delim_tokens.pop()
+        }
+    }
+    if len(delim_kinds) > 0 {
+        let top_idx = len(delim_kinds) - 1
+        let top_k = delim_kinds[top_idx]
+        if top_k == "LBRACE" {
+            report_error_at("W0006", delim_tokens[top_idx], "unclosed delimiter '{'")
+        } elif top_k == "LPAREN" {
+            report_error_at("W0006", delim_tokens[top_idx], "unclosed delimiter '('")
+        } elif top_k == "LBRACKET" {
+            report_error_at("W0006", delim_tokens[top_idx], "unclosed delimiter '['")
+        }
+    }
+}
+
+fn check_program(tokens: list[Token], file: str, capture: bool) -> CheckedProgram {
+    check_delimiters(tokens)
+    let context = new SemanticContext(capture)
+    sem_validate(context, tokens)
+    sem_complete_specializations(context)
+    return checked_finish(context, tokens, file)
+}
+
+fn check_source(src: str, in_path: str) -> CheckedProgram {
+    let file = module_canonical(in_path)
+    let checked = check_program(module_tokens(src, file), file, true)
+    for node in checked.nodes { if node.kind == "unsupported" { report_error_at("W2013", node.source, "Compiler native-core-v1 does not support expression " + node.text) } }
+    return checked
+}
 # Backend-independent typed CFG and ownership data.
 struct MirLiteral { type_id: int, integer: int, floating: float, boolean: bool, text: str }
 struct MirSlot { type_id: int, name: str, parameter: bool, origin: int, predicate: bool, counter: bool }
@@ -6621,6 +6619,8 @@ fn mir_emit_c(module: MirModule) -> str {
     parts.append("    wysna_runtime_cleanup();\n    return status;\n}\n")
     return join_strings(parts, "")
 }
+
+fn compile_source(checked: CheckedProgram) -> str { return mir_emit_c(mir_build(checked)) }
 fn run_compiler() -> unit ! IoError {
     let raw_cli = args()
     let mut cli = raw_cli
