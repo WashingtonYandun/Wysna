@@ -5,7 +5,8 @@
 <h1 align="center">Wysna</h1>
 
 <p align="center">
-  <strong>Predictable automation, written by people and AI agents.</strong>
+  <strong>The Statically Typed, Agent-First Programming Language.</strong><br />
+  <em>Predictable automation, high-speed execution, and native safety for autonomous AI agents and systems engineering.</em>
 </p>
 
 <p align="center">
@@ -16,26 +17,34 @@
     <img src="https://img.shields.io/badge/version-0.6.0-blue?style=flat-square" alt="Version 0.6.0" />
   </a>
   <a href="LICENSE">
-    <img src="https://img.shields.io/badge/license-MIT-green?style=flat-square" alt="MIT license" />
+    <img src="https://img.shields.io/badge/license-Apache--2.0-blue?style=flat-square" alt="Apache 2.0 license" />
   </a>
   <img src="https://img.shields.io/badge/platforms-Windows%20x64%20%7C%20macOS%20arm64%20%7C%20Linux%20x64-lightgrey?style=flat-square" alt="Windows x64, macOS arm64 and Linux x64" />
 </p>
 
 <p align="center">
   <a href="#why-wysna">Why Wysna</a> ·
+  <a href="#why-wysna-for-ai-agents">Agent-First Matrix</a> ·
   <a href="#quick-start">Quick start</a> ·
   <a href="#language-tour">Language tour</a> ·
   <a href="#toolchain">Toolchain</a> ·
   <a href="#status-and-scope">Status</a> ·
+  <a href="WYSNA_SINTAXIS.md">Syntax Manual</a> ·
   <a href="#documentation">Docs</a>
 </p>
 
 ---
 
-Wysna is an experimental, statically typed language for **CLI tools, scripting and
-native programs**. It combines explicit error channels, deterministic reference
-counting and copy-on-write values with tools that inspect and validate programs
-before they run.
+Wysna is an independent, statically typed programming language engineered from first
+principles for the **AI Agent era**. It bridges the gap between high-level scripting
+and low-level native performance (C99 and LLVM), delivering the deterministic safety,
+strict execution quotas, token economy, and zero-turn self-healing loops that autonomous
+agents need to write, verify, and run production software reliably.
+
+> [!TIP]
+> **Canonical Language Reference:** Consult [**`WYSNA_SINTAXIS.md`**](WYSNA_SINTAXIS.md) for the
+> complete, 16-pillar syntax manual covering imports, pattern matching, contracts,
+> effect handlers, unboxed scalar buffers, and structured concurrency.
 
 > [!WARNING]
 > **Wysna 0.6.0 is a pre-1.0 release** with documented language, platform and
@@ -57,6 +66,30 @@ before they run.
 | **One install for the core** | The Seed distribution carries private CPython and Zig, so core CLI, projects, formatter and LSP work without host Python, a virtual environment or a C SDK. |
 | **Tools for humans and agents** | Scriptable commands, JSON Schema export, and versioned `json-v1` envelopes let editors, scripts and AI agents inspect and bound programs before execution. |
 | **Native first, portable by design** | Native C99 is the default. WASI is a declared target; browser libraries and LLVM are explicit, bounded experiments. |
+
+## Why Wysna for AI Agents
+
+While traditional programming languages were designed solely for human ergonomics, Wysna is engineered from the compiler front-end to runtime for **autonomous machine code generation**:
+
+| Capability | Python | Rust | Go | **Wysna (Agent-First)** |
+| :--- | :---: | :---: | :---: | :---: |
+| **Self-Healing Diagnostics** | ❌ Runtime crash tracebacks | ⚠️ Complex lifetime borrow errors | ❌ Unstructured human text | ✅ **Machine `json-v1` facts & `wysna fix`** |
+| **Token Economy (BPE)** | ⚠️ Verbose runtime boilerplate | ❌ Heavy lifetime annotations (`'a`) | ⚠️ Repetitive `if err != nil` | ✅ **~18% fewer BPE tokens (`from...use`, `?`)** |
+| **Execution Budgets (Quotas)** | ❌ Unbounded execution (infinite loops) | ❌ Requires external OS process limits | ❌ Manual context propagation | ✅ **Built-in `--max-steps` & `--max-heap-mb` (`W4004`)** |
+| **Effect Cassettes & Replay** | ❌ Fragile runtime monkey-patching | ❌ Complex trait mocking overhead | ❌ Heavy manual interface injection | ✅ **`--record-trace` & offline `--replay-trace`** |
+| **Contracts & Tool Calling** | ❌ Runtime validation (Pydantic/eval) | ❌ Third-party procedural macros | ❌ Not supported natively | ✅ **First-class `requires`/`ensures` + `wysna schema`** |
+| **Memory Architecture** | ❌ Tracing GC latency spikes | ⚠️ High LLM reasoning failure rate | ❌ Stop-the-world GC pauses | ✅ **Deterministic ARC + CoW (unboxed scalar lists)** |
+| **Native Compilation** | ❌ Slow bytecode / JIT warmup | ✅ Native machine code | ✅ Native machine code | ✅ **Native C99 / LLVM (<35KB standalone binaries)** |
+| **Agent Protocol Support** | ❌ Requires external SDKs / daemons | ❌ Requires external SDKs / daemons | ❌ Requires external SDKs / daemons | ✅ **Built-in `wysna mcp` daemon over stdio** |
+
+```mermaid
+flowchart LR
+    A["Autonomous Agent<br/>(Generates Wysna)"] --> B["wysna check<br/>(Multi-Error json-v1)"]
+    B -->|0-Turn Machine Repair| C["wysna fix --apply<br/>(SHA-256 Verified Edits)"]
+    C --> D["wysna schema<br/>(Draft 2020-12 Tool Bounds)"]
+    D --> E["wysna run / build<br/>(--max-steps & --max-heap-mb)"]
+    E -->|Safe Execution| F["Verified Output &<br/>Offline Effect Replay"]
+```
 
 ## Quick start
 
@@ -334,11 +367,12 @@ and [scope](docs/SCOPE.md) for the full boundary.
 
 | Start here | Go deeper |
 | :--- | :--- |
-| [Scope and status](docs/SCOPE.md) | [Compiler architecture](docs/COMPILER_ARCHITECTURE.md) |
-| [Seed distribution](docs/SEED_DISTRIBUTION.md) | [MIR design](docs/MIR_DESIGN.md) |
-| [Projects and tests](docs/PROJECTS.md) | [Effect reports](docs/EFFECTS.md) |
-| [Standard library](docs/STDLIB.md) | [Known limits](docs/KNOWN_LIMITS.md) |
-| [Language specification](SPEC.md) | [Engine parity](docs/ENGINE_PARITY_MATRIX.md) |
+| [Syntax manual](WYSNA_SINTAXIS.md) | [Compiler architecture](docs/COMPILER_ARCHITECTURE.md) |
+| [AI agent guide](docs/AI_AGENT_GUIDE.md) | [MIR design](docs/MIR_DESIGN.md) |
+| [Scope and status](docs/SCOPE.md) | [Effect reports](docs/EFFECTS.md) |
+| [Seed distribution](docs/SEED_DISTRIBUTION.md) | [Known limits](docs/KNOWN_LIMITS.md) |
+| [Projects and tests](docs/PROJECTS.md) | [Engine parity](docs/ENGINE_PARITY_MATRIX.md) |
+| [Standard library](docs/STDLIB.md) | [Language specification](SPEC.md) |
 | [Examples](examples/language) | [Changelog](CHANGELOG.md) |
 
 The full [documentation index](docs/README.md) covers ownership, FFI, the native SDK,
@@ -382,4 +416,4 @@ described in [SECURITY.md](SECURITY.md).
 
 ## License
 
-MIT © 2024–2026 Washington Yandún. See [LICENSE](LICENSE).
+Apache-2.0 © 2024–2026 Washington Yandún. See [LICENSE](LICENSE) and [NOTICE](NOTICE).
