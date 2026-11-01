@@ -15,6 +15,7 @@ recommended installation, supported workflows, experiments and security limits.
 - [Effect and capability reports](EFFECTS.md): read-only `wysna explain`, model, trust, schema, and limits.
 - [Engine support](ENGINE_PARITY_MATRIX.md): tested fixture coverage across Wysna Seed and Wysna Compiler.
 - [Known limits](KNOWN_LIMITS.md): supported boundaries and deferred language decisions.
+- [Full language capabilities & debt audit](FULL_LANGUAGE_CAPABILITIES_AND_DEBT_AUDIT.md): comprehensive end-to-end feature inventory, architectural limits, and technical debt analysis.
 
 ## Tooling and distribution
 
