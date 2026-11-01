@@ -12,6 +12,8 @@ static inline WVal wysna_add(WVal a, WVal b) {
     if (a.tag == W_STR && b.tag == W_STR) {
         size_t la = a.as.string.length;
         size_t lb = b.as.string.length;
+        if (la == 0) return wysna_clone(b);
+        if (lb == 0) return wysna_clone(a);
         char* res = (char*)wysna_alloc_safe(la + lb + 1);
         memcpy(res, a.as.string.data, la);
         memcpy(res + la, b.as.string.data, lb);
@@ -77,10 +79,20 @@ static inline WVal wysna_neg(WVal a) {
     exit(1);
 }
 
+static inline int wysna_string_compare(WVal a, WVal b) {
+    if (a.as.string.data == b.as.string.data && a.as.string.length == b.as.string.length) return 0;
+    size_t la = a.as.string.length;
+    size_t lb = b.as.string.length;
+    size_t min_len = la < lb ? la : lb;
+    int cmp = memcmp(a.as.string.data, b.as.string.data, min_len);
+    if (cmp != 0) return cmp;
+    return (la < lb) ? -1 : ((la > lb) ? 1 : 0);
+}
+
 static inline WVal wysna_lt(WVal a, WVal b) {
     if (a.tag == W_INT && b.tag == W_INT) return wysna_bool(a.as.i < b.as.i);
     if (a.tag == W_FLOAT && b.tag == W_FLOAT) return wysna_bool(a.as.f < b.as.f);
-    if (a.tag == W_STR && b.tag == W_STR) return wysna_bool(strcmp(a.as.string.data, b.as.string.data) < 0);
+    if (a.tag == W_STR && b.tag == W_STR) return wysna_bool(wysna_string_compare(a, b) < 0);
     fprintf(stderr, "[W4003] RuntimeError: Invalid operand types for comparison (tags %d, %d)\n", a.tag, b.tag);
     exit(1);
 }
@@ -88,7 +100,7 @@ static inline WVal wysna_lt(WVal a, WVal b) {
 static inline WVal wysna_le(WVal a, WVal b) {
     if (a.tag == W_INT && b.tag == W_INT) return wysna_bool(a.as.i <= b.as.i);
     if (a.tag == W_FLOAT && b.tag == W_FLOAT) return wysna_bool(a.as.f <= b.as.f);
-    if (a.tag == W_STR && b.tag == W_STR) return wysna_bool(strcmp(a.as.string.data, b.as.string.data) <= 0);
+    if (a.tag == W_STR && b.tag == W_STR) return wysna_bool(wysna_string_compare(a, b) <= 0);
     fprintf(stderr, "[W4003] RuntimeError: Invalid operand types for comparison (tags %d, %d)\n", a.tag, b.tag);
     exit(1);
 }
@@ -96,7 +108,7 @@ static inline WVal wysna_le(WVal a, WVal b) {
 static inline WVal wysna_gt(WVal a, WVal b) {
     if (a.tag == W_INT && b.tag == W_INT) return wysna_bool(a.as.i > b.as.i);
     if (a.tag == W_FLOAT && b.tag == W_FLOAT) return wysna_bool(a.as.f > b.as.f);
-    if (a.tag == W_STR && b.tag == W_STR) return wysna_bool(strcmp(a.as.string.data, b.as.string.data) > 0);
+    if (a.tag == W_STR && b.tag == W_STR) return wysna_bool(wysna_string_compare(a, b) > 0);
     fprintf(stderr, "[W4003] RuntimeError: Invalid operand types for comparison (tags %d, %d)\n", a.tag, b.tag);
     exit(1);
 }
@@ -104,7 +116,7 @@ static inline WVal wysna_gt(WVal a, WVal b) {
 static inline WVal wysna_ge(WVal a, WVal b) {
     if (a.tag == W_INT && b.tag == W_INT) return wysna_bool(a.as.i >= b.as.i);
     if (a.tag == W_FLOAT && b.tag == W_FLOAT) return wysna_bool(a.as.f >= b.as.f);
-    if (a.tag == W_STR && b.tag == W_STR) return wysna_bool(strcmp(a.as.string.data, b.as.string.data) >= 0);
+    if (a.tag == W_STR && b.tag == W_STR) return wysna_bool(wysna_string_compare(a, b) >= 0);
     fprintf(stderr, "[W4003] RuntimeError: Invalid operand types for comparison (tags %d, %d)\n", a.tag, b.tag);
     exit(1);
 }

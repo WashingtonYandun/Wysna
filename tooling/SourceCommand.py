@@ -50,10 +50,26 @@ def _write_json_v1(command, status, exit_code, *, errors=(), source_by_file=None
 
 
 
+def _warning_records(cycle_warnings, lint_warnings, file_name, sources):
+    """Protocol records for non-blocking findings of a successful check."""
+    records = []
+    span_cache = {}
+    for warning in lint_warnings:
+        records.append(diagnostic_from_error(warning, sources, span_cache=span_cache))
+    for cycle in cycle_warnings:
+        record = diagnostic_record("W6002", "lint", cycle["message"], severity="warning",
+                                   filename=file_name)
+        record["data"] = {"kind": "reference_cycle", "classes": cycle["classes"],
+                          "help": cycle["advisory"]}
+        records.append(record)
+    return records
+
+
 def _sources_for_diagnostics(file_name, source_code, service=None):
     sources = {
         file_name: source_code,
         os.path.abspath(file_name): source_code,
+        os.path.realpath(file_name): source_code,
     }
     if service is not None:
         sources.update(service.source_texts())
@@ -98,6 +114,8 @@ def run_pipeline(
     optimization_profile=None,
     run_timeout_ms=None,
     capability_policy=None,
+    sandbox: bool = False,
+    warn_cycles: bool = False,
 ) -> int:
     if tool_command is None:
         if check_only:
@@ -115,8 +133,10 @@ def run_pipeline(
     try:
         if engine not in ("seed", "compiler"):
             raise WysnaError("--engine must be seed or compiler", code="W5002", stage="options")
+        if backend in ("llvm", "llvm-experimental"):
+            backend = "llvm-experimental"
         if backend not in ("c99", "llvm-experimental"):
-            raise WysnaError("--backend must be c99 or llvm-experimental", code="W5002", stage="options")
+            raise WysnaError("--backend must be c99, llvm, or llvm-experimental", code="W5002", stage="options")
         if backend == "llvm-experimental":
             if (engine != "seed" or show_tokens or show_ast or show_mir
                     or fmt_only or fmt_write or emit_c_path is not None
@@ -128,7 +148,15 @@ def run_pipeline(
         if capability_policy is not None and link_libraries:
             raise WysnaError("--link-lib cannot be combined with a capability policy",
                              code="W5002", stage="options")
-        if capability_policy is not None and (
+        if sandbox:
+            if (engine != "seed" or check_only or fmt_only or show_tokens
+                    or show_ast or show_mir or emit_llvm_path is not None):
+                raise WysnaError("--sandbox is supported only by run, build, and emit-c on the Seed engine",
+                                 code="W5002", stage="options")
+            if capability_policy is None:
+                from tooling.CapabilityPolicy import DEFAULT_SANDBOX_CAPABILITIES
+                capability_policy = ("allow", DEFAULT_SANDBOX_CAPABILITIES)
+        elif capability_policy is not None and (
                 backend != "c99" or engine != "seed"
                 or check_only or fmt_only or show_tokens or show_ast or show_mir
                 or emit_c_path is not None or build_bin_path is not None
@@ -214,15 +242,45 @@ def run_pipeline(
             return 0
 
         if capability_policy is not None:
-            from tooling.CapabilityPolicy import enforce_capability_policy
+            from tooling.CapabilityPolicy import (
+                enforce_capability_policy,
+                enforce_resolved_capability_policy,
+            )
             report, bindings = service.explain_with_foreign_bindings(checked)
-            enforce_capability_policy(report, capability_policy[0],
-                                      capability_policy[1], file_name,
-                                      untrusted_bindings=bindings)
+            if sandbox:
+                enforce_resolved_capability_policy(
+                    report, capability_policy[0], capability_policy[1], file_name,
+                    untrusted_bindings=bindings,
+                )
+            else:
+                enforce_capability_policy(
+                    report, capability_policy[0], capability_policy[1], file_name,
+                    untrusted_bindings=bindings,
+                )
+
+        cycle_warnings = []
+        lint_warnings = []
+        if warn_cycles or check_only:
+            cycle_reports = service.analyze_reference_cycles(checked)
+            for adv in cycle_reports:
+                chain = " -> ".join(adv["classes"]) + f" -> {adv['classes'][0]}"
+                msg = f"strong reference cycle detected in nominal classes: {chain}"
+                cycle_warnings.append({"message": msg, "advisory": adv["advisory"], "classes": adv["classes"]})
+                print(f"warning[W-ARC]: {msg}", file=sys.stderr)
+                print(f"  advisory: {adv['advisory']}", file=sys.stderr)
+        if check_only:
+            from checker.Lints import lint_discarded_expressions
+            lint_warnings = lint_discarded_expressions(checked.ast, file_name)
+            lint_sources = _sources_for_diagnostics(file_name, source_code, service)
+            for warning in lint_warnings:
+                print("warning" + render_diagnostic(warning, lint_sources, span_cache={}),
+                      file=sys.stderr)
 
         if check_only:
             if json_v1:
-                _write_json_v1(tool_command, "ok", 0)
+                warning_records = _warning_records(cycle_warnings, lint_warnings, file_name,
+                                                   _sources_for_diagnostics(file_name, source_code, service))
+                _write_json_v1(tool_command, "ok", 0, extra_diagnostics=warning_records)
                 return 0
             if show_stats:
                 stat_obj = {
@@ -239,9 +297,14 @@ def run_pipeline(
                         "peak_rss_kb": peak_rss_kb(),
                     }
                 }
+                if cycle_warnings:
+                    stat_obj["warnings"] = cycle_warnings
                 print(json.dumps(stat_obj, indent=2))
             elif json_diagnostics:
-                print(json.dumps({"status": "ok", "file": file_name, "diagnostics": []}, indent=2))
+                diag_obj = {"status": "ok", "file": file_name, "diagnostics": []}
+                if cycle_warnings:
+                    diag_obj["warnings"] = cycle_warnings
+                print(json.dumps(diag_obj, indent=2))
             else:
                 print(f"[OK] Check passed for {file_name}")
             return 0
@@ -260,6 +323,9 @@ def run_pipeline(
             else:
                 emission = service.emit_c(checked)
                 c_code = emission.source
+                if sandbox and capability_policy is not None:
+                    from tooling.CapabilityPolicy import generate_c_capability_guards
+                    c_code = generate_c_capability_guards(capability_policy[0], capability_policy[1]) + c_code
                 codegen_telemetry = dict(emission.telemetry)
                 phase_ms = emission.timing_ms
                 hir_ms = phase_ms.get("hir")

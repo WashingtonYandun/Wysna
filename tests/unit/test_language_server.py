@@ -222,6 +222,35 @@ class LanguageServerTests(unittest.TestCase):
         })
         self.assertEqual(self.diagnostics(self.main_uri), [])
 
+    def test_code_action_and_signature_help_and_warnings(self):
+        typo_source = 'struct U { name: str }\nfn f(u: U) -> str { return u.nme }\n'
+        typo_uri = (self.root / 'typo.wysna').as_uri()
+        self.open(typo_uri, typo_source)
+        actions = self.server.code_action(typo_uri)
+        self.assertEqual(len(actions), 1)
+        self.assertEqual(actions[0]['kind'], 'quickfix')
+        self.assertTrue(actions[0]['isPreferred'])
+        edit = actions[0]['edit']['changes'][typo_uri][0]
+        self.assertEqual(edit['newText'], 'name')
+
+        sig_source = 'fn add(a: int, b: str) -> int { return a }\nfn main() { print(add(1, "x")) }\n'
+        sig_uri = (self.root / 'sig.wysna').as_uri()
+        self.open(sig_uri, sig_source)
+        pos = position_at(sig_source, sig_source.index('add(1, ') + len('add(1, '))
+        help_res = self.server.signature_help(sig_uri, pos)
+        self.assertIsNotNone(help_res)
+        self.assertEqual(help_res['activeParameter'], 1)
+        self.assertIn('fn add(a: int, b: str) -> int', help_res['signatures'][0]['label'])
+
+        warn_source = 'fn f(a: int, b: int) -> int {\n    let x = a\n    -b\n    return x\n}\n'
+        warn_uri = (self.root / 'warn.wysna').as_uri()
+        self.open(warn_uri, warn_source)
+        diags = self.diagnostics(warn_uri)
+        self.assertEqual(len(diags), 1)
+        self.assertEqual(diags[0]['code'], 'W6001')
+        self.assertEqual(diags[0]['severity'], 2)
+        self.assertIn(warn_uri, self.server.checked)
+
     @staticmethod
     def _by_uri(locations):
         grouped = {}

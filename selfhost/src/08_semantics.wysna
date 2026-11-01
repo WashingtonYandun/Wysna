@@ -1188,7 +1188,8 @@ fn sem_expression(context: SemanticContext, minimum: int, allow_struct: bool) ->
     while true {
         let saved = context.pos
         while sem_is(context, "NEWLINE") { sem_take(context) }
-        if not sem_is(context, "ELSE") or not (context.tokens[context.pos + 1].kind == "LBRACE" or context.tokens[context.pos + 1].kind == "IDENT" and context.tokens[context.pos + 2].kind == "LBRACE") { context.pos = saved }
+        if sem_is(context, "DOT") { }
+        elif not sem_is(context, "ELSE") or not (context.tokens[context.pos + 1].kind == "LBRACE" or context.tokens[context.pos + 1].kind == "IDENT" and context.tokens[context.pos + 2].kind == "LBRACE") { context.pos = saved }
 
         let call_token = sem_at(context)
         let call_line = call_token.line

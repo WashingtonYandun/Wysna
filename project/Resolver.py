@@ -148,8 +148,8 @@ class ProjectResolver:
 
     def resolve_import(self, import_path, importer):
         """Return one physical module path, or None. CWD is never consulted."""
-        if import_path.startswith("std/"):
-            relative = import_path[4:]
+        if import_path.startswith("std/") or import_path.startswith("std."):
+            relative = import_path[4:].replace(".", "/")
             parts = relative.split("/")
             if (relative.startswith("/") or "\\" in relative or ":" in relative
                     or any(part in ("", ".", "..") for part in parts)):
@@ -175,6 +175,8 @@ class ProjectResolver:
         elif (import_path.startswith("/") or "\\" in import_path or ":" in import_path
               or any(part in ("", ".", "..") for part in import_path.split("/"))):
             return None
+        elif "." in module_path and not module_path.endswith(".wysna"):
+            module_path = module_path.replace(".", "/")
 
         importer_path = Path(importer).resolve()
         try:

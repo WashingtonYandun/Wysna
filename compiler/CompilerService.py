@@ -198,23 +198,41 @@ class CompilerService:
         """Analyze verified resolved MIR without interpreting, linking or loading FFI."""
         return self.explain_with_foreign_bindings(checked)[0]
 
+    def analyze_reference_cycles(self, checked):
+        """Analyze nominal class declarations for ARC retain cycles and weak-reference health."""
+        self._validate(checked)
+        from checker.LayoutGraph import build_layout_graph_from_declarations
+        from node.NodeType import StructDecl, EnumDecl, ClassDecl
+        graph = build_layout_graph_from_declarations(
+            struct_decls=[s for s in checked.ast.body if isinstance(s, StructDecl)],
+            enum_decls=[s for s in checked.ast.body if isinstance(s, EnumDecl)],
+            class_decls=[s for s in checked.ast.body if isinstance(s, ClassDecl)],
+        )
+        return graph.explain_strong_reference_cycles()
+
     def emit_c(self, checked, *, target_profile=None):
         self._validate(checked)
         browser_library = target_profile == 'browser-library'
-        from hir.HirCCodeGen import HirCCodeGen
+        from mir.Lowering import Lowering
+        from mir.CCodeGen import CCodeGen
         started = time.perf_counter()
-        module = self.lower_hir(checked)
-        lowered = time.perf_counter()
-        generator = HirCCodeGen(checked._interner, file_path=checked.source.file)
-        source = generator.generate(module, library_mode=browser_library)
+        hir_module = self.lower_hir(checked)
+        lowered_hir = time.perf_counter()
+        mir_module = Lowering(checked._interner, checked.source.file).lower(
+            hir_module, call_entrypoint=False if browser_library else None,
+        )
+        mir_module.library_mode = bool(browser_library)
+        lowered_mir = time.perf_counter()
+        generator = CCodeGen(checked._interner)
+        source = generator.generate(mir_module)
         source = self._enable_http_runtime(source)
         emitted = time.perf_counter()
         return EmissionResult(source, generator.telemetry.to_dict(),
-                              {'hir': (lowered - started) * 1000,
-                               'mir': generator.phase_ms['mir'],
-                               'c_emit': generator.phase_ms['c_emit'],
-                               'codegen': (emitted - lowered) * 1000},
-                              tuple(getattr(generator, 'abi_exports', ())))
+                              {'hir': (lowered_hir - started) * 1000,
+                               'mir': (lowered_mir - lowered_hir) * 1000,
+                               'c_emit': (emitted - lowered_mir) * 1000,
+                               'codegen': (emitted - lowered_hir) * 1000},
+                              tuple(generator.abi_exports))
 
     def _emit_ast_oracle_for_testing(self, checked):
         """Emit through the independent AST oracle for differential tests only."""

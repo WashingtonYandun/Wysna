@@ -530,7 +530,12 @@ fn compile(source: str) {
        - `W5002`: Invalid command usage or option.
        - `W5003`: Source file could not be read.
        - `W5004`: Requested output artifact could not be written or read back.
-   - `wysna check --json <file.wysnaysna>` outputs deterministic machine-readable JSON:
+       - `W5005`: Native compiler or linker failure.
+       - `W5006`: Capability policy violation or incomplete static effect analysis.
+     - **`W6xxx` — Static Lint & Memory-Hygiene Warnings:**
+       - `W6001`: Pure expression statement result is discarded (including newline-before-unary-minus hazards).
+       - `W6002`: Strong reference cycle between classes can leak under ARC (`LayoutGraph` SCC analysis).
+   - `wysna check --json <file.wysna>` outputs deterministic machine-readable JSON:
    ```json
    {
      "code": "W2001",
@@ -579,6 +584,8 @@ fn compile(source: str) {
 
    ```text
    wysna check --output-format=json-v1 src/main.wysna
+   wysna fix --apply --output-format=json-v1 src/main.wysna
+   wysna schema --output-format=json-v1 src/main.wysna
    wysna fmt --output-format=json-v1 src/main.wysna
    wysna emit-c --output-format=json-v1 src/main.wysna -o build/main.c
    wysna build --output-format=json-v1 src/main.wysna -o build/main

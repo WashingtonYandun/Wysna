@@ -71,5 +71,3 @@ fn check_source(src: str, in_path: str) -> CheckedProgram {
     for node in checked.nodes { if node.kind == "unsupported" { report_error_at("W2013", node.source, "Compiler native-core-v1 does not support expression " + node.text) } }
     return checked
 }
-
-fn compile_source(checked: CheckedProgram) -> str { return mir_emit_c(mir_build(checked)) }

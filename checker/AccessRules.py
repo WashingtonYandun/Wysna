@@ -32,6 +32,7 @@ from checker.WysnaType import (
     TypeParamType,
 )
 from error.Error import TypeError
+from checker.Suggestions import suggest, suggest_mutable, visible_names
 
 if TYPE_CHECKING:
     from checker.TypeChecker import TypeChecker
@@ -105,21 +106,21 @@ def check_assignment_expr(checker: "TypeChecker", expr: AssignmentExpr, is_state
     if isinstance(expr.target, IdentExpr):
         sym = checker.current_scope.lookup_symbol(expr.target.name)
         if sym is None:
-            raise TypeError(
+            raise suggest(TypeError(
                 message=f"Unknown identifier '{expr.target.name}'",
                 line=expr.target.line,
                 col=expr.target.col,
                 file=checker.file,
                 code="W1001"
-            )
+            ), expr.target.name, visible_names(checker.current_scope))
         if not sym.is_mut:
-            raise TypeError(
+            raise suggest_mutable(TypeError(
                 message=f"Cannot assign to immutable binding '{sym.name}'",
                 line=expr.line,
                 col=expr.col,
                 file=checker.file,
                 code="W3001"
-            )
+            ), sym, checker.file)
         if not checker.type_relations.is_assignable(val_t, sym.type):
             raise TypeError(
                 message=f"Type mismatch: cannot assign value of type '{val_t}' to variable '{sym.name}' of type '{sym.type}'",
@@ -139,13 +140,13 @@ def check_assignment_expr(checker: "TypeChecker", expr: AssignmentExpr, is_state
         # Target value root must be a mutable binding (unless rooted in a reference-type class)
         sym = checker._find_value_root_symbol(expr.target.object)
         if sym and not sym.is_mut:
-            raise TypeError(
+            raise suggest_mutable(TypeError(
                 message=f"Cannot mutate elements of immutable binding '{sym.name}'",
                 line=expr.line,
                 col=expr.col,
                 file=checker.file,
                 code="W3001"
-            )
+            ), sym, checker.file)
         obj_t = checker._check_expr(expr.target.object)
         idx_t = checker._check_expr(expr.target.index)
         if isinstance(obj_t, ListType):
@@ -208,13 +209,13 @@ def check_assignment_expr(checker: "TypeChecker", expr: AssignmentExpr, is_state
         if isinstance(obj_t, ClassType):
             f_info = obj_t.fields.get(expr.target.property)
             if f_info is None:
-                raise TypeError(
+                raise suggest(TypeError(
                     message=f"Class '{obj_t.name}' has no field '{expr.target.property}'",
                     line=expr.target.line,
                     col=expr.target.col,
                     file=checker.file,
                     code="W3002"
-                )
+                ), expr.target.property, obj_t.fields)
             if not f_info.is_public and (checker.current_class is None or checker.current_class.name != f_info.owner_class):
                 raise TypeError(
                     message=f"Cannot access private field '{expr.target.property}' of class '{f_info.owner_class}'",
@@ -239,13 +240,13 @@ def check_assignment_expr(checker: "TypeChecker", expr: AssignmentExpr, is_state
 
         sym = checker._find_value_root_symbol(expr.target.object)
         if sym and not sym.is_mut:
-            raise TypeError(
+            raise suggest_mutable(TypeError(
                 message=checker._immutable_binding_message(sym, "mutate a field"),
                 line=expr.line,
                 col=expr.col,
                 file=checker.file,
                 code="W3001"
-            )
+            ), sym, checker.file)
         if not isinstance(obj_t, StructType):
             raise TypeError(
                 message=f"Cannot assign to field of non-struct '{obj_t}'",
@@ -255,13 +256,13 @@ def check_assignment_expr(checker: "TypeChecker", expr: AssignmentExpr, is_state
                 code="W3002"
             )
         if expr.target.property not in obj_t.fields:
-            raise TypeError(
+            raise suggest(TypeError(
                 message=f"Struct '{obj_t.name}' has no field '{expr.target.property}'",
                 line=expr.target.line,
                 col=expr.target.col,
                 file=checker.file,
                 code="W3002"
-            )
+            ), expr.target.property, obj_t.fields)
         field_t = obj_t.fields[expr.target.property]
         if not checker.type_relations.is_assignable(val_t, field_t):
             raise TypeError(
@@ -364,24 +365,24 @@ def check_member_expr(checker: "TypeChecker", expr: MemberExpr, is_statement_con
                 )
             return m_info.fn_type
 
-        raise TypeError(
+        raise suggest(TypeError(
             message=f"Class '{obj_t.name}' has no member '{expr.property}'",
             line=expr.line,
             col=expr.col,
             file=checker.file,
             code="W3002"
-        )
+        ), expr.property, [*obj_t.fields, *obj_t.methods])
 
     if isinstance(obj_t, InterfaceType):
         if expr.property in obj_t.methods:
             return obj_t.methods[expr.property]
-        raise TypeError(
+        raise suggest(TypeError(
             message=f"Interface '{obj_t.name}' has no method '{expr.property}'",
             line=expr.line,
             col=expr.col,
             file=checker.file,
             code="W3002"
-        )
+        ), expr.property, obj_t.methods)
 
     if isinstance(obj_t, TypeParamType):
         constraint = obj_t.constraint
@@ -401,13 +402,13 @@ def check_member_expr(checker: "TypeChecker", expr: MemberExpr, is_statement_con
 
     if isinstance(obj_t, StructType):
         if expr.property not in obj_t.fields:
-            raise TypeError(
+            raise suggest(TypeError(
                 message=f"Struct '{obj_t.name}' has no field '{expr.property}'",
                 line=expr.line,
                 col=expr.col,
                 file=checker.file,
                 code="W3002"
-            )
+            ), expr.property, obj_t.fields)
         return obj_t.fields[expr.property]
 
     if isinstance(obj_t, ListType):

@@ -36,6 +36,16 @@ class Scope:
                 col=symbol.col,
                 file=file,
                 code="W1002"
+            ).with_data(
+                kind="duplicate_declaration",
+                symbol=symbol.name,
+                previous_line=prev.line,
+                previous_col=prev.col,
+            ).with_related(
+                f"'{symbol.name}' previously declared here",
+                line=prev.line,
+                col=prev.col,
+                file=getattr(prev, "file", None) or file,
             )
         symbol.file = file
         self.symbols[symbol.name] = symbol

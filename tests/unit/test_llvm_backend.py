@@ -267,6 +267,33 @@ class LlvmBackendTests(unittest.TestCase):
             self.assertEqual(caught.exception.code, 'W5002')
         self.assertEqual(library.read_bytes(), original)
 
+    def test_llvm_codegen_optimizations_and_metadata(self):
+        service, checked = self.checked('let a = 100 / 2\nprint(a)\n')
+        emission = service.emit_llvm(checked)
+        self.assertIn('!prof', emission.source)
+        self.assertIn('!"branch_weights", i32 1, i32 1048576', emission.source)
+        self.assertIn('declare i64 @wysna_llvm_int(ptr nocapture readonly) readonly', emission.source)
+        self.assertIn('declare void @wysna_llvm_fail(ptr nocapture readonly, ptr nocapture readonly, ptr nocapture readonly, i32, i32) cold noreturn', emission.source)
+        self.assertIn('declare i32 @wysna_llvm_range_count(i64, i64, i32) readnone', emission.source)
+        self.assertIn('align 8', emission.source)
+        self.toolchain.verify(emission.source)
+
+        service2, checked2 = self.checked('''
+fn compute(n: int) -> int { n * 2 }
+let a = compute(21)
+let f = float(a)
+let i = int(f)
+print(a, f, i)
+''')
+        emission2 = service2.emit_llvm(checked2)
+        self.assertIn('define internal fastcc i64 @wysna_fn_compute', emission2.source)
+        self.assertIn('nounwind mustprogress', emission2.source)
+        self.assertIn('call fastcc i64 @wysna_fn_compute', emission2.source)
+        self.assertIn('sitofp i64', emission2.source)
+        self.assertIn('fptosi double', emission2.source)
+        self.assertNotIn('call void @wysna_llvm_convert', emission2.source)
+        self.toolchain.verify(emission2.source)
+
     def test_complete_mir_profile_never_falls_back(self):
         for source in ('print([1, 2])', 'class Box { value: int }\nprint(1)',
                        'print([1, 2, 3][0])'):
@@ -668,6 +695,22 @@ print(inspect(41))
                 self.assertFalse(marker.exists(), 'A detached worker survived cancellation')
                 if not outer_timeout:
                     self.assertEqual(context.stdout.getvalue(), 'timed out\n')
+
+    def test_cli_backend_llvm_alias(self):
+        service, checked = self.checked('print("LLVM ALIAS", 99)')
+        source = checked.source.file
+        result_run = self.cli('run', '--backend=llvm', source)
+        self.assertEqual(result_run.returncode, 0, result_run.stderr)
+        self.assertEqual(result_run.stdout, 'LLVM ALIAS 99\n')
+
+        result_check = self.cli('check', '--backend=llvm', '--stats', source)
+        self.assertEqual(result_check.returncode, 0, result_check.stderr)
+        self.assertIn('"backend": "llvm-experimental"', result_check.stdout)
+
+        output_bin = self.directory / 'alias_prog'
+        result_build = self.cli('build', '--backend=llvm', '--profile=dev', source, '-o', output_bin)
+        self.assertEqual(result_build.returncode, 0, result_build.stderr)
+        self.assertEqual(self.execute(output_bin).stdout, b'LLVM ALIAS 99\n')
 
 
 

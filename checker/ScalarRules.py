@@ -26,6 +26,7 @@ from checker.WysnaType import (
     TypeParamType,
 )
 from error.Error import TypeError
+from checker.Suggestions import suggest, visible_names
 
 if TYPE_CHECKING:
     from checker.TypeChecker import TypeChecker
@@ -97,13 +98,13 @@ def check_ident_expr(checker: "TypeChecker", expr: IdentExpr, is_statement_conte
             concrete_args = [TypeParamType(p.name if hasattr(p, "name") else str(p), owner=tmpl.name)
                              for p in tmpl.type_params]
             return checker._monomorphize_enum(tmpl, concrete_args, expr.line, expr.col)
-    raise TypeError(
+    raise suggest(TypeError(
         message=f"Unknown identifier '{expr.name}'",
         line=expr.line,
         col=expr.col,
         file=checker.file,
         code="W1001"
-    )
+    ), expr.name, visible_names(checker.current_scope))
 
 
 def check_unary_expr(checker: "TypeChecker", expr: UnaryExpr, is_statement_context: bool = False) -> WysnaType:
@@ -146,11 +147,29 @@ def check_binary_expr(checker: "TypeChecker", expr: BinaryExpr, is_statement_con
     if (checker._checking_generic_definition and
             (isinstance(lhs_t, TypeParamType) or isinstance(rhs_t, TypeParamType)) and
             op not in ("==", "!=")):
-        checker.type_relations.record_operation(op, (lhs_t, rhs_t), file=checker.file,
-                                             line=expr.line, col=expr.col)
-        if op in ("and", "or", "<", "<=", ">", ">="):
-            return BoolType
-        return lhs_t if isinstance(lhs_t, TypeParamType) else rhs_t
+        allowed_concrete = {
+            "+": (IntType, FloatType, StrType),
+            "-": (IntType, FloatType),
+            "*": (IntType, FloatType),
+            "/": (IntType, FloatType),
+            "<": (IntType, FloatType),
+            "<=": (IntType, FloatType),
+            ">": (IntType, FloatType),
+            ">=": (IntType, FloatType),
+            "%": (IntType,),
+            "and": (BoolType,),
+            "or": (BoolType,),
+        }.get(op, ())
+        concrete_ok = all(
+            isinstance(t, TypeParamType) or t in allowed_concrete
+            for t in (lhs_t, rhs_t)
+        )
+        if concrete_ok:
+            checker.type_relations.record_operation(op, (lhs_t, rhs_t), file=checker.file,
+                                                 line=expr.line, col=expr.col)
+            if op in ("and", "or", "<", "<=", ">", ">="):
+                return BoolType
+            return lhs_t if isinstance(lhs_t, TypeParamType) else rhs_t
 
     if op == "+":
         if lhs_t == IntType and rhs_t == IntType:

@@ -1,3 +1,4 @@
+import os
 from typing import Any, List, Optional, Union
 
 class Node:
@@ -514,6 +515,50 @@ class ImportDecl(Stmt):
             "kind": "ImportDecl",
             "path": self.path,
             "namespace": self.namespace,
+            "line": self.line,
+            "col": self.col
+        }
+
+
+class UseSymbol(Node):
+    def __init__(self, name: str, alias: Optional[str] = None, subpath: Optional[str] = None, line: int = 1, col: int = 1):
+        super().__init__(line, col)
+        self.name = name
+        self.alias = alias
+        self.subpath = subpath
+
+    @property
+    def bound_name(self) -> str:
+        return self.alias if self.alias else self.name
+
+    def to_dict(self) -> dict:
+        return {
+            "kind": "UseSymbol",
+            "name": self.name,
+            "alias": self.alias,
+            "subpath": self.subpath,
+            "line": self.line,
+            "col": self.col
+        }
+
+
+class UseDecl(ImportDecl):
+    def __init__(self, path: str, symbols: List[UseSymbol], is_namespace: bool = False, namespace_alias: Optional[str] = None, is_braced: bool = True, line: int = 1, col: int = 1):
+        base = path.split(".")[-1] if "." in path else os.path.basename(path).split(".")[0]
+        super().__init__(path=path, namespace=namespace_alias or base, line=line, col=col)
+        self.symbols = symbols
+        self.is_namespace = is_namespace
+        self.namespace_alias = namespace_alias
+        self.is_braced = is_braced
+
+    def to_dict(self) -> dict:
+        return {
+            "kind": "UseDecl",
+            "path": self.path,
+            "symbols": [s.to_dict() for s in self.symbols],
+            "is_namespace": self.is_namespace,
+            "namespace_alias": self.namespace_alias,
+            "is_braced": self.is_braced,
             "line": self.line,
             "col": self.col
         }
