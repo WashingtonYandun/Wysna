@@ -12,8 +12,8 @@
   <a href="https://github.com/WashingtonYandun/Wysna/actions/workflows/ci.yml">
     <img src="https://github.com/WashingtonYandun/Wysna/actions/workflows/ci.yml/badge.svg?branch=develop" alt="CI status on develop" />
   </a>
-  <a href="https://github.com/WashingtonYandun/Wysna/releases/tag/v0.5.0">
-    <img src="https://img.shields.io/badge/version-0.5.0-blue?style=flat-square" alt="Version 0.5.0" />
+  <a href="https://github.com/WashingtonYandun/Wysna/releases/tag/v0.6.0">
+    <img src="https://img.shields.io/badge/version-0.6.0-blue?style=flat-square" alt="Version 0.6.0" />
   </a>
   <a href="LICENSE">
     <img src="https://img.shields.io/badge/license-MIT-green?style=flat-square" alt="MIT license" />
@@ -38,7 +38,7 @@ counting and copy-on-write values with tools that inspect and validate programs
 before they run.
 
 > [!WARNING]
-> **Wysna 0.5.0 is a pre-1.0 release** with documented language, platform and
+> **Wysna 0.6.0 is a pre-1.0 release** with documented language, platform and
 > security limits. Its Windows, macOS and Linux installers are unsigned; the macOS
 > package is not notarized, so operating systems may display security warnings.
 > Read [scope and status](docs/SCOPE.md) before relying on Wysna for critical work.
@@ -63,7 +63,7 @@ before they run.
 ### Install the Seed distribution
 
 The recommended installation is the **complete Seed distribution**. Download the
-installer for your host from the [Wysna 0.5.0 release](https://github.com/WashingtonYandun/Wysna/releases/tag/v0.5.0).
+installer for your host from the [Wysna 0.6.0 release](https://github.com/WashingtonYandun/Wysna/releases/tag/v0.6.0).
 The release includes SHA-256 manifests and per-platform provenance records.
 
 | Host | Package | Launcher |
@@ -72,7 +72,7 @@ The release includes SHA-256 manifests and per-platform provenance records.
 | macOS arm64 | `.pkg` | `/usr/local/bin/wysna` |
 | Linux x64 | `.deb` / `.rpm` | `/usr/bin/wysna` |
 
-The 0.5.0 release includes the Windows `.exe`, macOS `.pkg`, and Linux `.deb` and
+The 0.6.0 release includes the Windows `.exe`, macOS `.pkg`, and Linux `.deb` and
 `.rpm` installers. They are unsigned, and the macOS package is not notarized. See
 [Seed distribution](docs/SEED_DISTRIBUTION.md) for installation, repair, update,
 uninstall and dependency details. Other hosts can use the source checkout described
@@ -272,7 +272,7 @@ universal parity.
 | Area | Status |
 | :--- | :--- |
 | Native CLI, scripting, projects, formatter, LSP core, effect reports | **Supported** for the declared profiles; host and package limits are recorded in [scope](docs/SCOPE.md). |
-| Seed distribution with private CPython and Zig | **0.5.0 release**; unsigned installers are qualified per source commit. |
+| Seed distribution with private CPython and Zig | **0.6.0 release**; unsigned installers are qualified per source commit. |
 | Deterministic execution quotas & effect cassette replay | **Supported** across interpreter, native C99, and LLVM backends. |
 | Structured deterministic concurrency | **Supported** for data-parallel batching and HTTP dispatch (`std/algorithms`, `std/http`). |
 | WASI command profile | **Declared target** with a Wasmtime boundary, fuel, memory limits and explicit preopens. |

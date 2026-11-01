@@ -1,6 +1,6 @@
 # Wysna Language Specification
 
-> **Status:** This specification defines the Wysna `0.5.0` release candidate. Sections 1–11 describe the normative grammar; sections 12–14 describe implementation contracts.
+> **Status:** This specification defines the Wysna `0.6.0` release candidate. Sections 1–11 describe the normative grammar; sections 12–14 describe implementation contracts.
 >
 > **Implementations:** `Wysna Seed` is the reference implementation that determines whether a program is valid. `Wysna Compiler` is an independent self-hosted compiler; its supported subset is measured against the public release corpus. The parity matrix documents this boundary in [docs/ENGINE_PARITY_MATRIX.md](docs/ENGINE_PARITY_MATRIX.md).
 >
@@ -625,7 +625,7 @@ Selective imports reduce token overhead and nesting depth for AI agents, while m
      "tool_exit_code": 0,
      "process_exit_code": 0,
      "execution": null,
-     "toolchain": {"compiler": "0.5.0"},
+     "toolchain": {"compiler": "0.6.0"},
      "target": {"profile": "native-cli", "triple": null},
      "diagnostics": [],
      "artifacts": [],
