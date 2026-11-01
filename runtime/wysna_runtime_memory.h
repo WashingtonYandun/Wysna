@@ -115,6 +115,16 @@ static inline void wysna_release(WVal v) {
                 v.as.list->refcount--;
                 return;
             }
+            if (v.as.list->scalar_only) {
+                WListBuf* b = v.as.list;
+                wysna_check_refcount(b->refcount, "release/list");
+                wysna_g_release_count++;
+                b->refcount = -1;
+                free(b->data);
+                free(b);
+                wysna_mem_on_free();
+                return;
+            }
             break;
         case W_TUPLE:
             if (!v.as.tuple) return;
@@ -300,6 +310,13 @@ static WVal* wysna_release_deferred(WVal* slot, int32_t* produced) {
         b->refcount--;
         if (b->refcount == 0) {
             b->refcount = -1;
+            if (b->scalar_only) {
+                free(b->data);
+                free(b);
+                wysna_mem_on_free();
+                *produced = 0;
+                return NULL;
+            }
             WVal* out = b->len > 0 ? (WVal*)malloc(sizeof(WVal) * (size_t)b->len) : NULL;
             int32_t len = b->len;
             if (len > 0 && !out) { fprintf(stderr, "[W4003] RuntimeError: out of memory\n"); exit(1); }
@@ -546,6 +563,7 @@ static inline void wysna_list_detach(WVal* v) {
     new_b->refcount = 1;
     new_b->len = old_b->len;
     new_b->cap = old_b->cap > 0 ? old_b->cap : 4;
+    new_b->scalar_only = old_b->scalar_only;
     new_b->data = (WVal*)wysna_alloc_safe(sizeof(WVal) * new_b->cap);
     wysna_mem_on_alloc();
 
@@ -556,8 +574,14 @@ static inline void wysna_list_detach(WVal* v) {
     wysna_g_cow_allocated_bytes += (int64_t)(sizeof(WListBuf) + (sizeof(WVal) * new_b->cap));
     wysna_g_cow_alloc_count += 2;
 
-    for (int32_t i = 0; i < old_b->len; i++) {
-        new_b->data[i] = wysna_clone(old_b->data[i]);
+    if (old_b->scalar_only) {
+        if (old_b->len > 0) {
+            memcpy(new_b->data, old_b->data, sizeof(WVal) * (size_t)old_b->len);
+        }
+    } else {
+        for (int32_t i = 0; i < old_b->len; i++) {
+            new_b->data[i] = wysna_clone(old_b->data[i]);
+        }
     }
     v->as.list = new_b;
 }

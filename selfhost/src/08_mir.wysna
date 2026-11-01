@@ -306,7 +306,7 @@ fn mir_operation_json(operation: MirOperation) -> str {
         }
         if operation.name == "wysna_enum_payload_owned" { data = data + ",\"variant\":" + mir_quote(operation.labels[1]) }
         if operation.name == "wysna_make_range" or operation.name == "wysna_make_range_inclusive" { data = data + ",\"inclusive\":" + str(operation.name == "wysna_make_range_inclusive") }
-        if operation.name == "wysna_div_at" or operation.name == "wysna_mod_at" or operation.name == "wysna_index_get_owned_at" { data = data + ",\"source\":true" }
+        if operation.name == "wysna_div_at" or operation.name == "wysna_mod_at" or operation.name == "wysna_index_get_owned_at" or operation.name == "wysna_builtin_contract_assert_at" { data = data + ",\"source\":true" }
         data = data + "}"
     }
     if operation.opcode == "store_place" or operation.opcode == "mutate" {

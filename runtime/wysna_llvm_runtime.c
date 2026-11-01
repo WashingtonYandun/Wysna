@@ -16,6 +16,7 @@ typedef char WysnaLlvmInvokeSize[(sizeof(WInvoke) == sizeof(void*)) ? 1 : -1];
 typedef char WysnaLlvmPointerSize[(sizeof(void*) == 8) ? 1 : -1];
 
 void wysna_llvm_init(int32_t argc, char** argv) { wysna_init_args(argc, argv); }
+void wysna_llvm_step_tick(void) { wysna_step_tick(); }
 void wysna_llvm_cleanup(void) { wysna_runtime_cleanup(); }
 void wysna_llvm_box_int(void* out, int64_t value) { wysna_assign(out, wysna_int(value)); }
 void wysna_llvm_box_float(void* out, double value) { wysna_assign(out, wysna_float(value)); }

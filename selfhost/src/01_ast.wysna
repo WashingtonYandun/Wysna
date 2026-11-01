@@ -10,7 +10,7 @@ struct Token {
 struct SemType { kind: str, name: str, args: list[int] }
 struct SemGenericType { name: str, kind: str, params: list[str] }
 struct SemVar { name: str, type_id: int, mutable: bool, depth: int, binding: int }
-struct SemFunction { abi_params: list[str], abi_return: str, name: str, params: list[str], type_params: list[str], constraints: list[str], type_id: int, body: int, end: int, owner: str, visible: bool }
+struct SemFunction { abi_params: list[str], abi_return: str, name: str, params: list[str], type_params: list[str], constraints: list[str], type_id: int, body: int, end: int, owner: str, visible: bool, contract_start: int }
 struct SemField { owner: str, name: str, type_id: int, visible: bool }
 struct SemClass { name: str, parent: str, interfaces: list[str] }
 struct SemValue { type_id: int, root: str, writable: int, terminates: bool, node: int }

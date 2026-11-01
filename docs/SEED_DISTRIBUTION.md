@@ -25,7 +25,7 @@ Build the wheel first, then assemble into a new directory:
 ```sh
 python -m build --wheel --outdir dist/wheel
 python tools/package_distribution.py \
-  --wheel dist/wheel/wysna-0.5.0-py3-none-any.whl \
+  --wheel dist/wheel/wysna-0.6.0-py3-none-any.whl \
   --output dist/wysna-seed \
   --source-commit "$(git rev-parse HEAD)"
 ```
@@ -112,7 +112,7 @@ the bundled toolchain.
   test installation, repair, upgrade from an explicitly synthetic previous build,
   installed tools/application, and uninstallation. RPM is exercised in Fedora 44;
   Debian packages use the Ubuntu runner. Qualification belongs to each CI commit.
-  The public [0.5.0 release](https://github.com/WashingtonYandun/Wysna/releases/tag/v0.5.0)
+  The public [0.6.0 release](https://github.com/WashingtonYandun/Wysna/releases/tag/v0.6.0)
   attaches the accepted Windows, macOS and Linux installers, SHA-256 manifests and
   provenance records for its exact source commit. The installers are unsigned; the
   macOS package is not notarized. Operating systems may display security warnings.
@@ -137,7 +137,7 @@ Windows retains its per-user wizard and registered uninstaller.
 provenance. `--signing-identity` signs only the macOS Installer package.
 `--notarization-profile` requires that signature, submits the package with
 `notarytool`, staples the ticket and validates it. Neither option signs every
-embedded binary. The 0.5.0 release does not include signed or notarized installers.
+embedded binary. The 0.6.0 release does not include signed or notarized installers.
 
 Run the standalone acceptance tool outside the checkout:
 

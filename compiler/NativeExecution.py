@@ -27,8 +27,13 @@ def run_native(executable, context, timeout_ms=None):
     capture_error = not _has_descriptor(context.stderr)
     capture_input = not _has_descriptor(context.stdin)
     input_text = context.stdin.read() if capture_input else None
+    child_env = dict(context.env)
+    if getattr(context, 'max_steps', None):
+        child_env['WYSNA_MAX_STEPS'] = str(context.max_steps)
+    if getattr(context, 'max_heap_bytes', None):
+        child_env['WYSNA_MAX_HEAP_BYTES'] = str(context.max_heap_bytes)
     process = subprocess.Popen([os.fspath(executable), *context.argv[1:]], cwd=context.cwd,
-                               env=dict(context.env), text=True, start_new_session=True,
+                               env=child_env, text=True, start_new_session=True,
                                stdin=subprocess.PIPE if capture_input else context.stdin,
                                stdout=subprocess.PIPE if capture_out else context.stdout,
                                stderr=subprocess.PIPE if capture_error else context.stderr)

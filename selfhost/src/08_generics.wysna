@@ -85,7 +85,7 @@ fn sem_specialize_arguments(context: SemanticContext, template_id: int, argument
         name = sem_nominal_specialization_name(owner, arguments) + "." + slice(template.name, len(template.owner), len(template.name))
     }
     if sem_function(context, name) >= 0 { report_error_at("W1002", source, "reserved specialization identity collision") }
-    context.functions.append(SemFunction { abi_params: template.abi_params, abi_return: template.abi_return, name: name, params: template.params, type_params: empty, constraints: empty, type_id: sem_intern(context, "function", "", parts), body: template.body, end: template.end, owner: template.owner, visible: false })
+    context.functions.append(SemFunction { abi_params: template.abi_params, abi_return: template.abi_return, name: name, params: template.params, type_params: empty, constraints: empty, type_id: sem_intern(context, "function", "", parts), body: template.body, end: template.end, owner: template.owner, visible: false, contract_start: template.contract_start })
     let mut ancestry = context.specialization_ancestry
     ancestry.append(len(context.specializations))
     context.specializations.append(SemSpecialization { template: template_id, arguments: arguments, function: id, ancestry: ancestry })

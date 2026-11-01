@@ -288,6 +288,7 @@ static inline WVal wysna_builtin_bytes(WVal s) {
     b->refcount = 1;
     b->len = (int32_t)slen;
     b->cap = slen > 4 ? (int32_t)slen : 4;
+    b->scalar_only = true;
     b->data = (WVal*)wysna_alloc_safe(sizeof(WVal) * b->cap);
     wysna_mem_on_alloc();
     for (size_t i = 0; i < slen; i++) {
@@ -306,6 +307,7 @@ static inline WVal wysna_builtin_enumerate(WVal list_val) {
     b->refcount = 1;
     b->len = src->len;
     b->cap = src->len > 4 ? src->len : 4;
+    b->scalar_only = false;
     b->data = (WVal*)wysna_alloc_safe(sizeof(WVal) * b->cap);
     wysna_mem_on_alloc();
     for (int32_t i = 0; i < src->len; i++) {
@@ -325,6 +327,7 @@ static inline WVal wysna_builtin_dict_items(WVal dict_val) {
     b->refcount = 1;
     b->len = d->len;
     b->cap = d->len > 4 ? d->len : 4;
+    b->scalar_only = false;
     b->data = (WVal*)wysna_alloc_safe(sizeof(WVal) * b->cap);
     wysna_mem_on_alloc();
     for (int32_t i = 0; i < d->len; i++) {
@@ -504,6 +507,7 @@ static inline WVal wysna_builtin_args(void) {
     b->refcount = 1;
     b->len = (int32_t)wysna_g_argc;
     b->cap = wysna_g_argc > 4 ? (int32_t)wysna_g_argc : 4;
+    b->scalar_only = false;
     b->data = (WVal*)wysna_alloc_safe(sizeof(WVal) * b->cap);
     wysna_mem_on_alloc();
     for (int i = 0; i < wysna_g_argc; i++) {
@@ -573,6 +577,23 @@ static inline WVal wysna_builtin_unix_time(void) {
     time_t current = time(NULL);
     if (current == (time_t)-1) wysna_runtime_fail("W4003", "unable to read the system clock");
     return wysna_int((int64_t)current);
+}
+
+static inline WVal wysna_builtin_contract_assert(WVal cond, WVal msg) {
+    if (cond.tag != W_BOOL || !cond.as.b) {
+        const char* text = (msg.tag == W_STR && msg.as.string.data) ? msg.as.string.data : "Contract violation";
+        wysna_runtime_fail("W4005", "%s", text);
+    }
+    return wysna_unit();
+}
+
+static inline WVal wysna_builtin_contract_assert_at(WVal cond, WVal msg, const char* file, int32_t line, int32_t col) {
+    if (cond.tag != W_BOOL || !cond.as.b) {
+        wysna_runtime_set_position(file, line, col);
+        const char* text = (msg.tag == W_STR && msg.as.string.data) ? msg.as.string.data : "Contract violation";
+        wysna_runtime_fail("W4005", "%s", text);
+    }
+    return wysna_unit();
 }
 
 #endif /* WYSNA_RUNTIME_BUILTINS_H */

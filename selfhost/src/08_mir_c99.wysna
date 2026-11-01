@@ -265,7 +265,7 @@ fn mir_c_operation(module: MirModule, function: MirFunction, operation: MirOpera
             for external in module.externs { if external.name == name { found = true boxed = true } }
             if not found { report_error_at("W9999", operation.source, "verified MIR call target missing during C99 emission") }
         } elif name == "wysna_builtin_print" or name == "wysna_builtin_eprint" { arguments = [str(len(arguments)), mir_c_array(arguments)] }
-        if name == "wysna_div_at" or name == "wysna_mod_at" or name == "wysna_index_get_owned_at" {
+        if name == "wysna_div_at" or name == "wysna_mod_at" or name == "wysna_index_get_owned_at" or name == "wysna_builtin_contract_assert_at" {
             arguments.append(escape_c_str(operation.source.file))
             arguments.append(str(operation.source.line))
             arguments.append(str(operation.source.col))

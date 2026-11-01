@@ -32,6 +32,7 @@ typedef struct {
     int32_t refcount;
     int32_t len;
     int32_t cap;
+    bool scalar_only;
     WVal* data;
 } WListBuf;
 
@@ -125,6 +126,11 @@ typedef struct WysnaRuntimeContext {
     int64_t cow_copied_bytes;
     int64_t cow_alloc_count;
     int64_t cow_allocated_bytes;
+    int64_t steps_executed;
+    int64_t max_steps;
+    int64_t heap_bytes_allocated;
+    int64_t max_heap_bytes;
+    bool quotas_initialized;
     int argc;
     char** argv;
 #ifdef _WIN32
@@ -299,8 +305,58 @@ static inline void wysna_check_retain_count(int32_t rc, const char* op) {
     wysna_check_refcount(rc, op);
 }
 
+static inline void wysna_init_quotas(void) {
+    if (wysna_runtime_context.quotas_initialized) return;
+    wysna_runtime_context.quotas_initialized = true;
+#ifdef WYSNA_DEFAULT_MAX_STEPS
+    wysna_runtime_context.max_steps = (int64_t)(WYSNA_DEFAULT_MAX_STEPS);
+#endif
+#ifdef WYSNA_DEFAULT_MAX_HEAP_BYTES
+    wysna_runtime_context.max_heap_bytes = (int64_t)(WYSNA_DEFAULT_MAX_HEAP_BYTES);
+#endif
+    const char* steps_env = getenv("WYSNA_MAX_STEPS");
+    if (steps_env && steps_env[0] != '\0') {
+        int64_t val = (int64_t)strtoll(steps_env, NULL, 10);
+        if (val > 0) wysna_runtime_context.max_steps = val;
+    }
+    const char* heap_env = getenv("WYSNA_MAX_HEAP_BYTES");
+    if (heap_env && heap_env[0] != '\0') {
+        int64_t val = (int64_t)strtoll(heap_env, NULL, 10);
+        if (val > 0) wysna_runtime_context.max_heap_bytes = val;
+    } else {
+        const char* mb_env = getenv("WYSNA_MAX_HEAP_MB");
+        if (mb_env && mb_env[0] != '\0') {
+            int64_t val = (int64_t)strtoll(mb_env, NULL, 10);
+            if (val > 0) wysna_runtime_context.max_heap_bytes = val * 1024LL * 1024LL;
+        }
+    }
+}
+
+static inline void wysna_step_tick(void) {
+    if (!wysna_runtime_context.quotas_initialized) wysna_init_quotas();
+    if (wysna_runtime_context.max_steps > 0) {
+        wysna_runtime_context.steps_executed++;
+        if (wysna_runtime_context.steps_executed > wysna_runtime_context.max_steps) {
+            wysna_runtime_fail("W4004", "Execution step quota exceeded (limit: %" PRId64 " steps)",
+                               wysna_runtime_context.max_steps);
+        }
+    }
+}
+
+static inline void wysna_charge_heap_bytes(size_t size) {
+    if (!wysna_runtime_context.quotas_initialized) wysna_init_quotas();
+    if (wysna_runtime_context.max_heap_bytes > 0 && size > 0) {
+        wysna_runtime_context.heap_bytes_allocated += (int64_t)size;
+        if (wysna_runtime_context.heap_bytes_allocated > wysna_runtime_context.max_heap_bytes) {
+            wysna_runtime_fail("W4004", "Execution heap memory quota exceeded (limit: %" PRId64 " bytes)",
+                               wysna_runtime_context.max_heap_bytes);
+        }
+    }
+}
+
 static inline void* wysna_alloc_safe(size_t size) {
     if (size == 0) return NULL;
+    wysna_charge_heap_bytes(size);
     void* ptr = malloc(size);
     if (!ptr) {
         fprintf(stderr, "[W4003] RuntimeError: Out of memory (failed to allocate %zu bytes)\n", size);
@@ -314,6 +370,7 @@ static inline void* wysna_realloc_safe(void* old_ptr, size_t new_size) {
         free(old_ptr);
         return NULL;
     }
+    wysna_charge_heap_bytes(new_size);
     void* ptr = realloc(old_ptr, new_size);
     if (!ptr) {
         fprintf(stderr, "[W4003] RuntimeError: Out of memory (failed to reallocate %zu bytes)\n", new_size);
