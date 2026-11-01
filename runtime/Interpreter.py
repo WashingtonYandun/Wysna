@@ -1,7 +1,10 @@
+import concurrent.futures
+import os
+import sys
+import threading
+from typing import Any, Dict, List, Optional, TextIO, Tuple
 from common.ExpressionDispatch import reject_unknown_node
 from runtime.ExpressionRules import EXPRESSION_RULES
-import sys
-from typing import Any, Dict, List, Optional, TextIO, Tuple
 from error.Error import WysnaRuntimeError
 from checker.WysnaType import IntType, FloatType, BoolType, StrType, StructType, EnumType
 from node.NodeType import (
@@ -55,11 +58,40 @@ class Interpreter:
         self.heap_bytes_allocated: int = 0
         self.max_heap_bytes: Optional[int] = self.execution_context.max_heap_bytes
         self.struct_decls: Dict[str, StructDecl] = {}
+        self._quota_lock = threading.Lock()
+
+    def parallel_worker_dispatch(self, func: Any, items: List[WysnaValue]) -> List[WysnaValue]:
+        if not items:
+            return []
+        if len(items) == 1:
+            if isinstance(func, WysnaFunction):
+                return [self.call_function(func, [items[0]])]
+            elif isinstance(func, WysnaBoundMethod):
+                return [self.call_bound_method(func, [items[0]])]
+            elif callable(func):
+                return [func(items[0])]
+            else:
+                raise WysnaRuntimeError(f"Cannot dispatch worker for '{func}'", file=self.file)
+        worker_count = min(os.cpu_count() or 4, len(items), 8)
+        with concurrent.futures.ThreadPoolExecutor(max_workers=worker_count) as executor:
+            def _invoke(item):
+                if isinstance(func, WysnaFunction):
+                    return self.call_function(func, [item])
+                elif isinstance(func, WysnaBoundMethod):
+                    return self.call_bound_method(func, [item])
+                elif callable(func):
+                    return func(item)
+                else:
+                    raise WysnaRuntimeError(f"Cannot dispatch worker for '{func}'", file=self.file)
+            futures = [executor.submit(_invoke, item) for item in items]
+            return [f.result() for f in futures]
 
     def _tick_step(self, node: Any = None) -> None:
         if self.max_steps is not None:
-            self.steps_executed += 1
-            if self.steps_executed > self.max_steps:
+            with self._quota_lock:
+                self.steps_executed += 1
+                exceeded = self.steps_executed > self.max_steps
+            if exceeded:
                 raise WysnaRuntimeError(
                     message=f"Execution step quota exceeded (limit: {self.max_steps} steps)",
                     line=getattr(node, "line", None),
@@ -70,8 +102,10 @@ class Interpreter:
 
     def _charge_heap_bytes(self, num_bytes: int, node: Any = None) -> None:
         if self.max_heap_bytes is not None and num_bytes > 0:
-            self.heap_bytes_allocated += num_bytes
-            if self.heap_bytes_allocated > self.max_heap_bytes:
+            with self._quota_lock:
+                self.heap_bytes_allocated += num_bytes
+                exceeded = self.heap_bytes_allocated > self.max_heap_bytes
+            if exceeded:
                 raise WysnaRuntimeError(
                     message=f"Execution heap memory quota exceeded (limit: {self.max_heap_bytes} bytes)",
                     line=getattr(node, "line", None),

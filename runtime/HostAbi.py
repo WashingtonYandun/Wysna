@@ -1,10 +1,12 @@
 """Reference implementation of the internal, checked scalar/opaque resource ABI."""
 import atexit
+import concurrent.futures
 import errno
 import os
 from pathlib import Path
 import signal
 import subprocess
+import threading
 from urllib.parse import urlsplit
 
 _entries = {}
@@ -13,35 +15,53 @@ _error_code = 0
 _error_domain = 0
 _process_jobs = {}
 _active_trace = None
+_host_lock = threading.RLock()
+
+
+def parallel_worker_dispatch(worker_callable, items, max_workers=None):
+    """Deterministic, thread-safe parallel worker dispatch over items."""
+    if not items:
+        return []
+    if len(items) == 1:
+        return [worker_callable(items[0])]
+    worker_count = max_workers or min(os.cpu_count() or 4, len(items), 8)
+    with concurrent.futures.ThreadPoolExecutor(max_workers=worker_count) as executor:
+        futures = [executor.submit(worker_callable, item) for item in items]
+        return [f.result() for f in futures]
 
 
 def set_effect_trace(trace):
     global _active_trace
-    _active_trace = trace
+    with _host_lock:
+        _active_trace = trace
 
 
 def failure(error):
     global _error_code, _error_domain
-    _error_code = getattr(error, 'winerror', None) or getattr(error, 'errno', None) or errno.EIO
-    _error_domain = 2 if getattr(error, 'winerror', None) else 1
+    with _host_lock:
+        _error_code = getattr(error, 'winerror', None) or getattr(error, 'errno', None) or errno.EIO
+        _error_domain = 2 if getattr(error, 'winerror', None) else 1
     return -1
 
 
 def allocate(kind, value):
     global _next_id
-    handle = _next_id
-    _next_id += 1
-    _entries[handle] = (kind, value)
-    return handle
+    with _host_lock:
+        handle = _next_id
+        _next_id += 1
+        _entries[handle] = (kind, value)
+        return handle
 
 
 def find(handle, kind):
-    entry = _entries.get(handle)
-    return entry[1] if entry and entry[0] == kind else None
+    with _host_lock:
+        entry = _entries.get(handle)
+        return entry[1] if entry and entry[0] == kind else None
 
 
 def close(handle):
-    entry = _entries.pop(handle, None)
+    with _host_lock:
+        entry = _entries.pop(handle, None)
     if entry and entry[0] == 'file':
         if isinstance(entry[1], dict):
             return 0
@@ -53,7 +73,9 @@ def close(handle):
 
 
 def cleanup():
-    for handle in list(_entries):
+    with _host_lock:
+        handles = list(_entries)
+    for handle in handles:
         close(handle)
 
 
