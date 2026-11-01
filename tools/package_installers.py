@@ -192,7 +192,7 @@ def package_linux(bundle, output, record, temporary, formats):
         spec = rpm / 'SPECS/wysna.spec'
         spec.write_text('%global debug_package %{nil}\n%global __os_install_post %{nil}\n%global _build_id_links none\n'
             'Name: wysna\nVersion: ' + record['version'] + '\nRelease: 1\nSummary: Wysna language and private toolchain\n'
-            'License: MIT AND Python-2.0 AND Apache-2.0 WITH LLVM-exception\n'
+            'License: Apache-2.0 AND Python-2.0 AND Apache-2.0 WITH LLVM-exception\n'
             'URL: https://github.com/WashingtonYandun/Wysna\nBuildArch: x86_64\nAutoReqProv: no\nRequires: glibc >= 2.28\n'
             'Recommends: libcurl-devel >= 8.3\nRecommends: sqlite-devel\n'
             '%description\nWysna compiler, project and editor tools with private Python and Zig.\n'
