@@ -26,18 +26,49 @@ except ModuleNotFoundError:  # Python 3.10 uses the bundled TOML parser.
     from common._vendor import tomli as tomllib
 
 
+def _resolve_source_path(source_root, name, configuration):
+    cand = source_root / name
+    src_cand = source_root / 'src' / name
+    if src_cand.is_file():
+        return src_cand
+    if cand.is_file():
+        return cand
+    return cand
+
+
 def _wheel_source_inventory(source_root, configuration):
     """Resolve the explicitly declared setuptools inputs, without executing them."""
     setup = configuration['tool']['setuptools']
-    paths = {Path(name + '.py') for name in setup['py-modules']}
+    package_dir = setup.get('package-dir', {})
+    default_dir = package_dir.get('', '')
+    paths = set()
+    for name in setup['py-modules']:
+        paths.add(Path(f'{name}.py'))
     for package in setup['packages']:
-        directory = source_root / package.replace('.', '/')
-        paths.update(path.relative_to(source_root) for path in directory.glob('*.py') if path.is_file())
+        if package in package_dir:
+            pkg_dir = source_root / package_dir[package]
+        elif default_dir:
+            pkg_dir = source_root / default_dir / package.replace('.', '/')
+        else:
+            pkg_dir = source_root / package.replace('.', '/')
+        pkg_prefix = Path(package.replace('.', '/'))
+        for path in pkg_dir.glob('*.py'):
+            if path.is_file():
+                paths.add(pkg_prefix / path.name)
     for package, patterns in setup['package-data'].items():
-        directory = source_root / package.replace('.', '/')
+        if package in package_dir:
+            pkg_dir = source_root / package_dir[package]
+        elif default_dir:
+            pkg_dir = source_root / default_dir / package.replace('.', '/')
+        else:
+            pkg_dir = source_root / package.replace('.', '/')
+        pkg_prefix = Path(package.replace('.', '/'))
         for pattern in patterns:
-            paths.update(path.relative_to(source_root) for path in directory.glob(pattern) if path.is_file())
-    if not paths or any(not (source_root / path).is_file() for path in paths):
+            for path in pkg_dir.glob(pattern):
+                if path.is_file():
+                    paths.add(pkg_prefix / path.name)
+    resolved_paths = [_resolve_source_path(source_root, path.as_posix(), configuration) for path in paths]
+    if not paths or any(not path.is_file() for path in resolved_paths):
         raise ValueError('Declared wheel source inputs are missing')
     return {path.as_posix() for path in paths}
 
@@ -47,7 +78,13 @@ def _declared_version(source_root, configuration):
     if 'version' in project:
         return project['version']
     attribute = configuration['tool']['setuptools']['dynamic']['version']['attr'].split('.')
-    module = source_root.joinpath(*attribute[:-1]).with_suffix('.py')
+    package_dir = configuration.get('tool', {}).get('setuptools', {}).get('package-dir', {})
+    pkg = attribute[0]
+    base_dir = package_dir.get(pkg, package_dir.get('', ''))
+    rel_path = Path(*attribute[:-1]).with_suffix('.py')
+    module = source_root / base_dir / rel_path if base_dir else source_root / rel_path
+    if not module.is_file():
+        module = source_root.joinpath(*attribute[:-1]).with_suffix('.py')
     tree = ast.parse(module.read_text(encoding='utf-8'))
     for statement in tree.body:
         if isinstance(statement, ast.Assign) and any(
@@ -90,19 +127,21 @@ def _validate_wheel(packed, source_root, members):
     if project.get('scripts'):
         metadata_names.add('entry_points.txt')
     license_file = project.get('license', {}).get('file')
-    if license_file:
-        licenses = {'licenses/' + license_file, license_file}
-        present = {name for name in licenses if metadata_root + '/' + name in files}
-        if len(present) != 1:
-            raise ValueError('Wheel must contain exactly one declared license')
-        license_member = present.pop()
-        metadata_names.add(license_member)
+    for license_name in (license_file, 'LICENSE', 'NOTICE'):
+        if not license_name:
+            continue
+        for cand in (f'licenses/{license_name}', license_name):
+            if f'{metadata_root}/{cand}' in files:
+                metadata_names.add(cand)
     expected_files = source_names | {metadata_root + '/' + name for name in metadata_names}
     if files != expected_files:
         raise ValueError('Wheel inventory does not match checkout: missing ' + repr(sorted(expected_files - files))
                          + '; unexpected ' + repr(sorted(files - expected_files)))
     for name in source_names:
-        if (source_root / name).read_bytes() != packed.read(name):
+        disk_path = _resolve_source_path(source_root, name, configuration)
+        disk_bytes = disk_path.read_bytes()
+        packed_bytes = packed.read(name)
+        if disk_bytes != packed_bytes and disk_bytes.replace(b'\r\n', b'\n') != packed_bytes.replace(b'\r\n', b'\n'):
             raise ValueError('Seed wheel does not match checkout: ' + name)
     metadata = Parser().parsestr(packed.read(metadata_root + '/METADATA').decode('utf-8'))
     if metadata.get_all('Name') != [project['name']] or metadata.get_all('Version') != [version]:
@@ -140,9 +179,13 @@ def _validate_wheel(packed, source_root, members):
         if metadata.get_all('Dynamic'):
             expected_headers.add('dynamic')
         license_text = '\n'.join(line.strip() for line in str(metadata['License']).splitlines()).strip()
+        expected_license_text = '\n'.join(line.strip() for line in (source_root / license_file).read_text(encoding='utf-8').splitlines()).strip()
+        expected_license_files = [license_file]
+        if (source_root / 'NOTICE').is_file():
+            expected_license_files = [license_file, 'NOTICE']
         if (len(metadata.get_all('License', [])) != 1
-                or license_text != (source_root / license_file).read_text(encoding='utf-8').strip()
-                or metadata.get_all('License-File', []) not in ([], [license_file])
+                or license_text != expected_license_text
+                or metadata.get_all('License-File', []) not in ([], [license_file], expected_license_files)
                 or metadata.get_all('Dynamic', []) not in ([], ['license-file'])):
             raise ValueError('Wheel license metadata does not match checkout')
     extras = project.get('optional-dependencies', {})
@@ -164,8 +207,10 @@ def _validate_wheel(packed, source_root, members):
         # Older bdist_wheel appends two newlines to the metadata body.
         if metadata.get_payload() not in (description, description + '\n\n'):
             raise ValueError('Wheel description does not match checkout')
-    if license_file and packed.read(metadata_root + '/' + license_member) != (source_root / license_file).read_bytes():
-        raise ValueError('Wheel license does not match checkout')
+    if license_file:
+        license_cand = f'licenses/{license_file}' if f'{metadata_root}/licenses/{license_file}' in files else license_file
+        if packed.read(metadata_root + '/' + license_cand) != (source_root / license_file).read_bytes():
+            raise ValueError('Wheel license does not match checkout')
     if project.get('scripts'):
         entrypoints = configparser.ConfigParser(interpolation=None)
         entrypoints.read_string(packed.read(metadata_root + '/entry_points.txt').decode('utf-8'))

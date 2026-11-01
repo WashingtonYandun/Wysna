@@ -13,7 +13,11 @@ import tempfile
 from xml.etree import ElementTree
 
 ROOT = Path(__file__).resolve().parents[1]
-sys.path.insert(0, str(ROOT))
+SRC = ROOT / 'src'
+if str(SRC) not in sys.path:
+    sys.path.insert(0, str(SRC))
+if str(ROOT) not in sys.path:
+    sys.path.insert(0, str(ROOT))
 from tools.package_components import sha256
 
 MAC_BASE = Path('/Library/Application Support/Wysna')

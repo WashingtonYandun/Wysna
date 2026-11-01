@@ -56,9 +56,10 @@ def test_verifier_rejects_non_addressable_assignment():
 
 
 def test_bootstrap_tracks_extracted_semantics():
-    required = {'checker/ConstructorFlow.py', 'checker/ClosureConversion.py',
-                'checker/PatternCoverage.py', 'common/ControlFlow.py',
-                'compiler/CompilationSession.py', 'codegen/VirtualDispatch.py'}
+    prefix = 'src/' if (ROOT / 'src').exists() else ''
+    required = {f'{prefix}checker/ConstructorFlow.py', f'{prefix}checker/ClosureConversion.py',
+                f'{prefix}checker/PatternCoverage.py', f'{prefix}common/ControlFlow.py',
+                f'{prefix}compiler/CompilationSession.py', f'{prefix}codegen/VirtualDispatch.py'}
     assert required <= set(SELFHOST_BOOTSTRAP_INPUTS)
 
 
