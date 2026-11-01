@@ -24,10 +24,10 @@ def _manifest():
 [package]
 name = "wasi-smoke"
 version = "0.1.0"
-language = "0.5"
+language = "0.6"
 
 [toolchain]
-compiler = "0.5.0"
+compiler = "0.6.0"
 stdlib = "bundled"
 
 [sources]

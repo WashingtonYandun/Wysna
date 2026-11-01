@@ -136,7 +136,7 @@ class EffectAnalysisTests(unittest.TestCase):
             source.write_text('print(1)\n')
             manifest = root/'wysna.toml'
             manifest.write_text('manifest_version = 1\n[package]\nname = "effects-test"\nversion = "0.1.0"\n'
-                'language = "0.5"\n[toolchain]\ncompiler = "0.5.0"\nstdlib = "bundled"\n'
+                'language = "0.6"\n[toolchain]\ncompiler = "0.6.0"\nstdlib = "bundled"\n'
                 '[sources]\nroot = "src"\n[targets.app]\nentry = "src/main.wysna"\nprofile = "native-cli"\n')
             ProjectResolver.load(manifest).write_lock()
             output = io.StringIO()

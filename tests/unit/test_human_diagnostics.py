@@ -204,7 +204,7 @@ def test_project_check_reports_imported_source_excerpt(tmp_path):
     source_dir.mkdir()
     (tmp_path / "wysna.toml").write_text(
         'manifest_version = 1\n[package]\nname = "example"\nversion = "0.1.0"\n'
-        'language = "0.5"\n[toolchain]\ncompiler = "0.5.0"\nstdlib = "bundled"\n'
+        'language = "0.6"\n[toolchain]\ncompiler = "0.6.0"\nstdlib = "bundled"\n'
         '[sources]\nroot = "src"\n[targets.app]\nentry = "src/main.wysna"\n'
         'profile = "native-cli"\n', encoding="utf-8")
     (source_dir / "main.wysna").write_text('import "bad.wysna"\n', encoding="utf-8")
