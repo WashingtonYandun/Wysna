@@ -118,6 +118,32 @@ if the session has no declarations. Otherwise, use `:reset` and import again.
 
 ## Language tour
 
+### Agent-First selective imports
+
+Wysna provides structured, token-dense symbol imports designed for AI agents and developer ergonomics:
+
+```wysna-agent
+from std.json use {
+    number,
+    null,
+    object,
+    stringify,
+}
+
+let value = number("42") else error { null() }
+let output = stringify(object({"answer": value})) else error { "{}" }
+print(output)
+```
+
+`from ... use { ... }` brings declared symbols directly into the current scope, eliminating repetitive namespace prefixes and reducing token consumption in LLM context windows (~13%–22% fewer tokens). For hierarchical submodules, symbol aliasing prevents naming collisions:
+
+```wysna-agent
+from app.domain.user use { User as DomainUser, get_name }
+from app.infrastructure.auth use { User as AuthUser, get_email }
+```
+
+Whole-module namespace imports (`import "std/json"` or `import "std/algorithms" as alg`) remain fully supported across both Wysna Seed and the self-hosted compiler for unified qualification.
+
 ### Explicit error channels
 
 ```wysna

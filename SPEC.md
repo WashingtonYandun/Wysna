@@ -473,41 +473,102 @@ cleanup. This runtime is single-threaded.
 
 ## 9. Module System
 
-Wysna provides two complementary forms for modular decomposition and code reuse:
+Wysna provides two distinct, formal mechanisms for modular decomposition and symbol resolution:
 
-### 9.1 Namespace Import (`import`)
+### 9.1 Primary Agent-First Selective Import (`from ... use ...`)
 
-Modules are imported using file path strings. By default, the imported module automatically binds to a namespace derived from the file's base name (without extension):
+The primary, canonical mechanism for code modularity in Wysna is the selective `from ... use ...` statement. It brings declared symbols directly into the current lexical scope, eliminating redundant qualification prefixes, reducing LLM token context overhead, and avoiding deep syntactic nesting.
+
+#### 9.1.1 Destructuring Braced Imports
+Multiple exported symbols are imported using a braced block. Each entry can declare an optional local alias with `as`, and trailing commas are canonically preserved by `wysna fmt`:
 
 ```wysna
-import "lexer.wysna"
-import "parser.wysna"
-
-fn compile(source: str) {
-    let tokens = lexer.tokenize(source)
-    let ast = parser.parse(tokens)
+from std.text use {
+    contains,
+    to_lower,
+    split as text_split,
 }
+
+let lowered = to_lower("WYSOFIA")
+let parts = text_split(lowered, " ")
 ```
 
-An explicit namespace alias can be specified with `as`:
+#### 9.1.2 Single Symbol and Aliased Imports
+When importing a single symbol without braces, the symbol name immediately follows `use`:
+
+```wysna
+from app.domain.user use User
+from app.infrastructure.auth use User as AuthUser
+
+let domain_user = User { id: 10 }
+let auth_user = AuthUser { token: "secret" }
+```
+
+#### 9.1.3 Submodule and Namespace Extraction
+A submodule or hierarchical namespace can be imported directly or qualified through dot paths:
+
+```wysna
+from app.domain use user
+from app.domain use {
+    auth.Role,
+    user.User,
+    user.UserRepository,
+}
+
+let result = user.calculate(42)
+```
+
+#### 9.1.4 Path Designators
+The module path in `from <path> use ...` supports three canonical formats:
+1. **Dot-separated identifier paths:** `from app.domain.user use User`, `from std.json use { number, null }`
+2. **Relative dot paths:** `from .sibling use Helper`, `from ..shared.models use Model`
+3. **Quoted filesystem paths:** `from "std/json" use { object, stringify }`, `from "utils/math.wysna" use square`
+
+---
+
+### 9.2 Bootstrap & Whole-Module Namespace Import (`import`)
+
+The whole-module `import` statement binds an entire file or standard module under a unified qualifier namespace. It represents the foundational bootstrap module mechanism shared identically across both **Wysna Seed** and the **Wysna Self-Hosted Compiler (`selfhost/`)**:
+
+#### 9.2.1 Default Namespace Binding
+Modules are imported using a quoted string path. By default, the imported module binds to an immutable namespace derived from the file's base name (excluding `.wysna`):
+
+```wysna
+import "std/json"
+import "lexer.wysna"
+
+let value = json.number("42") else error { json.null() }
+let tokens = lexer.tokenize("let x = 10")
+```
+
+#### 9.2.2 Explicit Namespace Aliases
+An explicit namespace identifier can be specified with `as`:
 
 ```wysna
 import "std/algorithms" as alg
 
-let items = alg.reverse([1, 2, 3])
+let items = alg.parallel_map[int, int] ([1, 2, 3], |n: int| => n * n)
 ```
 
-### 9.2 Selective Symbol Import (`from ... use ...`)
-
-Symbols exported with `pub` can be imported directly into the current scope without module prefixing using `from ... use ...`:
+#### 9.2.3 Re-exporting Imports (`pub import`)
+Modules may re-export imported dependencies using `pub import`:
 
 ```wysna
-from "std/text" use trim, split
-from "std/json" use { Value, parse }
-from "std/math" use sqrt as square_root
+pub import "std/path"
 ```
 
-Selective imports reduce token overhead and nesting depth for AI agents, while maintaining unambiguous scoping and compile-time resolution.
+---
+
+### 9.3 Engine Parity Boundary
+
+| Capability | Wysna Seed (Python Reference) | Wysna Compiler (Self-Hosted Native) |
+| :--- | :---: | :---: |
+| `import "<path>"` (Default Namespace) | ✅ Soportado (C99 & LLVM) | ✅ Soportado (`native-core-v1`) |
+| `import "<path>" as <alias>` | ✅ Soportado (C99 & LLVM) | ✅ Soportado (`native-core-v1`) |
+| `pub import "<path>"` (Re-export) | ✅ Soportado | ✅ Soportado |
+| `from <path> use { sym1, sym2 }` | ✅ Soportado (C99 & LLVM) | ⏳ Límite de perfil (previsto v0.7.0) |
+| `from <path> use sym as alias` | ✅ Soportado (C99 & LLVM) | ⏳ Límite de perfil (previsto v0.7.0) |
+| `from <path> use sub.sym` | ✅ Soportado (C99 & LLVM) | ⏳ Límite de perfil (previsto v0.7.0) |
 
 ---
 

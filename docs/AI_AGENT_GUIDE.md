@@ -82,6 +82,23 @@ wysna mcp --root .
 The MCP server exposes `wysna_check`, `wysna_fix`, `wysna_fmt`, `wysna_explain`,
 `wysna_schema`, `wysna_api`, and `wysna_capabilities` confined to `--root`.
 
+## Agent-First Imports & Token Optimization
+
+When generating Wysna code, agents should prefer the selective `from ... use { ... }` syntax over namespace qualification:
+
+```wysna
+from std.text use {
+    contains,
+    to_lower,
+    split as text_split,
+}
+```
+
+- **Token Economy:** Direct symbol importing avoids repetitive `module.` qualifiers, saving ~13%–22% BPE tokens in dense multi-step logic.
+- **Canonical Formatting:** Multiple symbols must be enclosed in braces `{ ... }` with trailing commas; single symbols can be unbraced (`from std.math use sqrt`).
+- **Disambiguation:** If symbol names clash across imported modules, assign local aliases using `as` (`User as DomainUser`).
+- **Bootstrap Namespace Parity:** When targeting the minimal `native-core-v1` self-hosted compiler profile, use whole-module namespace imports (`import "std/json"`).
+
 ## Execution Quotas, Effect Cassettes, and First-Class Contracts
 
 To safeguard agent loops against runaway execution and unrepeatable I/O side-effects:
