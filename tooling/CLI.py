@@ -206,6 +206,10 @@ def main(argv=None) -> None:
     run_timeout_ms = None
     capability_policy = None
     sandbox = False
+    max_steps: Optional[int] = None
+    max_heap_bytes: Optional[int] = None
+    record_trace_path: Optional[str] = None
+    replay_trace_path: Optional[str] = None
     show_mir = False
     subcmd: Optional[str] = None
     file_to_run: Optional[str] = None
@@ -417,6 +421,71 @@ def main(argv=None) -> None:
                 usage_error(str(error))
         elif arg == "--sandbox":
             sandbox = True
+        elif arg == "--max-steps" or arg.startswith("--max-steps="):
+            if max_steps is not None:
+                usage_error("--max-steps may be specified only once")
+            if "=" in arg:
+                raw_val = arg.split("=", 1)[1]
+            else:
+                i += 1
+                if i >= len(args):
+                    usage_error("--max-steps requires a positive integer")
+                raw_val = args[i]
+            if not raw_val.isdigit() or int(raw_val) < 1:
+                usage_error("--max-steps requires a positive integer >= 1")
+            max_steps = int(raw_val)
+        elif arg == "--max-heap-mb" or arg.startswith("--max-heap-mb="):
+            if max_heap_bytes is not None:
+                usage_error("--max-heap-mb / --max-heap-bytes may be specified only once")
+            if "=" in arg:
+                raw_val = arg.split("=", 1)[1]
+            else:
+                i += 1
+                if i >= len(args):
+                    usage_error("--max-heap-mb requires a positive integer")
+                raw_val = args[i]
+            if not raw_val.isdigit() or int(raw_val) < 1:
+                usage_error("--max-heap-mb requires a positive integer >= 1")
+            max_heap_bytes = int(raw_val) * 1024 * 1024
+        elif arg == "--max-heap-bytes" or arg.startswith("--max-heap-bytes="):
+            if max_heap_bytes is not None:
+                usage_error("--max-heap-mb / --max-heap-bytes may be specified only once")
+            if "=" in arg:
+                raw_val = arg.split("=", 1)[1]
+            else:
+                i += 1
+                if i >= len(args):
+                    usage_error("--max-heap-bytes requires a positive integer")
+                raw_val = args[i]
+            if not raw_val.isdigit() or int(raw_val) < 1:
+                usage_error("--max-heap-bytes requires a positive integer >= 1")
+            max_heap_bytes = int(raw_val)
+        elif arg == "--record-trace" or arg.startswith("--record-trace="):
+            if record_trace_path is not None:
+                usage_error("--record-trace may be specified only once")
+            if "=" in arg:
+                raw_path = arg.split("=", 1)[1]
+            else:
+                i += 1
+                if i >= len(args) or args[i].startswith("-"):
+                    usage_error("--record-trace requires a file path")
+                raw_path = args[i]
+            if not raw_path:
+                usage_error("--record-trace requires a file path")
+            record_trace_path = raw_path
+        elif arg == "--replay-trace" or arg.startswith("--replay-trace="):
+            if replay_trace_path is not None:
+                usage_error("--replay-trace may be specified only once")
+            if "=" in arg:
+                raw_path = arg.split("=", 1)[1]
+            else:
+                i += 1
+                if i >= len(args) or args[i].startswith("-"):
+                    usage_error("--replay-trace requires a file path")
+                raw_path = args[i]
+            if not raw_path:
+                usage_error("--replay-trace requires a file path")
+            replay_trace_path = raw_path
         elif arg == "--link-lib":
             i += 1
             if i >= len(args) or args[i].startswith("-"):
@@ -438,6 +507,15 @@ def main(argv=None) -> None:
         i += 1
 
     prog_cmd = "wysna"
+
+    if record_trace_path is not None and replay_trace_path is not None:
+        usage_error("--record-trace and --replay-trace are mutually exclusive")
+    if (record_trace_path is not None or replay_trace_path is not None) and (
+            subcmd not in (None, "run") or check_only or fmt_only or show_tokens or show_ast or show_mir):
+        usage_error("--record-trace and --replay-trace are supported only by run")
+    if (max_steps is not None or max_heap_bytes is not None) and (
+            subcmd not in (None, "run", "build", "emit-c") or check_only or fmt_only or show_tokens or show_ast or show_mir):
+        usage_error("--max-steps, --max-heap-mb, and --max-heap-bytes are supported only by run, build, and emit-c")
 
     if sandbox:
         if link_libraries:
@@ -639,6 +717,10 @@ def main(argv=None) -> None:
             run_timeout_ms=run_timeout_ms,
             capability_policy=capability_policy,
             sandbox=sandbox,
+            max_steps=max_steps,
+            max_heap_bytes=max_heap_bytes,
+            record_trace_path=record_trace_path,
+            replay_trace_path=replay_trace_path,
             backend=backend,
             engine=engine,
             sanitize=sanitize,
@@ -647,6 +729,8 @@ def main(argv=None) -> None:
             execution_context=ExecutionContext.for_program(
                 prog_cmd,
                 program_args,
+                max_steps=max_steps,
+                max_heap_bytes=max_heap_bytes,
                 **({"terminate": _capture_application_exit} if report_state is not None else {}),
             ),
             json_v1=json_v1,

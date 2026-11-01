@@ -50,8 +50,78 @@ class Interpreter:
             stdout=self.stdout,
             execution_context=self.execution_context,
         )
+        self.steps_executed: int = 0
+        self.max_steps: Optional[int] = self.execution_context.max_steps
+        self.heap_bytes_allocated: int = 0
+        self.max_heap_bytes: Optional[int] = self.execution_context.max_heap_bytes
+        self.struct_decls: Dict[str, StructDecl] = {}
+
+    def _tick_step(self, node: Any = None) -> None:
+        if self.max_steps is not None:
+            self.steps_executed += 1
+            if self.steps_executed > self.max_steps:
+                raise WysnaRuntimeError(
+                    message=f"Execution step quota exceeded (limit: {self.max_steps} steps)",
+                    line=getattr(node, "line", None),
+                    col=getattr(node, "col", None),
+                    file=self.file,
+                    code="W4004",
+                )
+
+    def _charge_heap_bytes(self, num_bytes: int, node: Any = None) -> None:
+        if self.max_heap_bytes is not None and num_bytes > 0:
+            self.heap_bytes_allocated += num_bytes
+            if self.heap_bytes_allocated > self.max_heap_bytes:
+                raise WysnaRuntimeError(
+                    message=f"Execution heap memory quota exceeded (limit: {self.max_heap_bytes} bytes)",
+                    line=getattr(node, "line", None),
+                    col=getattr(node, "col", None),
+                    file=self.file,
+                    code="W4004",
+                )
+
+    def _charge_heap_for_expr(self, expr: Expr, value: WysnaValue) -> None:
+        if self.max_heap_bytes is None:
+            return
+        if isinstance(expr, ListExpr) and isinstance(value, WysnaList):
+            self._charge_heap_bytes(max(4, len(value.storage.data)) * 16 + 24, expr)
+        elif isinstance(expr, DictExpr) and isinstance(value, WysnaDict):
+            self._charge_heap_bytes(max(8, len(value.storage.data)) * 32 + 32, expr)
+        elif isinstance(expr, StructInitExpr) and isinstance(value, WysnaStructInstance):
+            self._charge_heap_bytes(len(value.storage.data) * 24 + 32, expr)
+        elif isinstance(expr, NewExpr) and isinstance(value, WysnaObjectInstance):
+            self._charge_heap_bytes(len(value.fields) * 24 + 32, expr)
+        elif isinstance(expr, BinaryExpr) and isinstance(value, WysnaStr):
+            self._charge_heap_bytes(len(value.value.encode("utf-8")) + 24, expr)
+
+    def check_struct_contracts(self, struct_name: str, fields_map: Dict[str, WysnaValue], env: Environment, fallback_node: Any = None) -> None:
+        decl = self.struct_decls.get(struct_name)
+        if decl is None:
+            return
+        check_env = Environment(parent=env)
+        for fname, fval in fields_map.items():
+            check_env.declare(fname, fval, is_mut=False)
+        for sf in decl.fields:
+            for req_expr in getattr(sf, "requires", ()):
+                req_val = self.eval_expr(req_expr, check_env)
+                if not isinstance(req_val, WysnaBool) or not req_val.value:
+                    raise WysnaRuntimeError(
+                        message=f"Contract violation: field '{struct_name}.{sf.name}' requires clause failed",
+                        line=getattr(req_expr, "line", getattr(fallback_node, "line", None)),
+                        col=getattr(req_expr, "col", getattr(fallback_node, "col", None)),
+                        file=self.file,
+                        code="W4005",
+                    )
 
     def interpret(self, program: Program) -> WysnaValue:
+        from runtime.HostAbi import set_effect_trace
+        set_effect_trace(self.execution_context.effect_trace)
+        try:
+            return self._interpret_inner(program)
+        finally:
+            set_effect_trace(None)
+
+    def _interpret_inner(self, program: Program) -> WysnaValue:
         if not hasattr(program, "session") and any(isinstance(node, ImportDecl) for node in program.body):
             from checker.TypeChecker import TypeChecker
             TypeChecker(file=self.file).check(program)
@@ -73,6 +143,8 @@ class Interpreter:
                             WysnaEnumValue(stmt.name, v_name),
                             is_mut=False
                         )
+            elif isinstance(stmt, StructDecl):
+                self.struct_decls[stmt.name] = stmt
             elif isinstance(stmt, ClassDecl):
                 methods_map = {m.name: m for m in stmt.methods}
                 self.global_env.declare(
@@ -146,6 +218,7 @@ class Interpreter:
     # ==========================================
 
     def eval_stmt(self, stmt: Stmt, env: Environment) -> WysnaValue:
+        self._tick_step(stmt)
         if isinstance(stmt, ExprStmt):
             return self.eval_expr(stmt.expr, env)
 
@@ -156,6 +229,7 @@ class Interpreter:
 
         if isinstance(stmt, WhileStmt):
             while True:
+                self._tick_step(stmt)
                 cond_val = self.eval_expr(stmt.condition, env)
                 if not isinstance(cond_val, WysnaBool) or not cond_val.value:
                     break
@@ -187,6 +261,7 @@ class Interpreter:
                 )
 
             for item in elements:
+                self._tick_step(stmt)
                 loop_env = Environment(parent=env)
                 self.bind_pattern(stmt.pattern, item, loop_env)
                 try:
@@ -249,6 +324,8 @@ class Interpreter:
     def eval_expr(self, expr: Expr, env: Environment) -> WysnaValue:
         handler = EXPRESSION_RULES.handler_for(expr, self.file)
         value = handler(self, expr, env)
+        if self.max_heap_bytes is not None:
+            self._charge_heap_for_expr(expr, value)
         return WysnaOk(value) if hasattr(expr, "force_result_wrap_id") else value
 
     def range_bounds(self, expression, env):
@@ -397,6 +474,7 @@ class Interpreter:
         return instance
 
     def call_class_method(self, defining_cls: WysnaClassDef, method_decl: MethodDecl, receiver: WysnaObjectInstance, args: List[WysnaValue]) -> WysnaValue:
+        self._tick_step(method_decl)
         if len(args) != len(method_decl.params):
             raise WysnaRuntimeError(
                 message=f"Method '{defining_cls.name}.{method_decl.name}' expected {len(method_decl.params)} arguments, got {len(args)}",
@@ -414,6 +492,17 @@ class Interpreter:
         for param, arg in zip(method_decl.params, args):
             call_env.declare(param.name, arg, is_mut=False)
 
+        for req_expr in getattr(method_decl, "requires", ()):
+            req_val = self.eval_expr(req_expr, call_env)
+            if not isinstance(req_val, WysnaBool) or not req_val.value:
+                raise WysnaRuntimeError(
+                    message=f"Contract violation: requires clause failed in '{defining_cls.name}.{method_decl.name}'",
+                    line=req_expr.line,
+                    col=req_expr.col,
+                    file=self.file,
+                    code="W4005",
+                )
+
         ret_val: WysnaValue
         try:
             ret_val = self.eval_block(method_decl.body, call_env)
@@ -422,7 +511,23 @@ class Interpreter:
         except PropagationSignal as prop:
             ret_val = prop.value
 
-        return self._wrap_result_value(ret_val, method_decl.return_type)
+        wrapped = self._wrap_result_value(ret_val, method_decl.return_type)
+        ensures_list = getattr(method_decl, "ensures", ())
+        if ensures_list and not isinstance(wrapped, WysnaErr):
+            ens_env = Environment(parent=call_env)
+            result_binding = wrapped.value if isinstance(wrapped, WysnaOk) else wrapped
+            ens_env.declare("result", result_binding, is_mut=False)
+            for ens_expr in ensures_list:
+                ens_val = self.eval_expr(ens_expr, ens_env)
+                if not isinstance(ens_val, WysnaBool) or not ens_val.value:
+                    raise WysnaRuntimeError(
+                        message=f"Contract violation: ensures clause failed in '{defining_cls.name}.{method_decl.name}'",
+                        line=ens_expr.line,
+                        col=ens_expr.col,
+                        file=self.file,
+                        code="W4005",
+                    )
+        return wrapped
 
     def _wrap_result_value(self, ret_val: WysnaValue, ret_type: Any) -> WysnaValue:
         from node.NodeType import ResultType as AstResultType
@@ -435,6 +540,7 @@ class Interpreter:
         return WysnaOk(ret_val)
 
     def call_function(self, func: WysnaFunction, args: List[WysnaValue]) -> WysnaValue:
+        self._tick_step(func.decl)
         if hasattr(func, "captured_environment"):
             args = [func.captured_environment] + args
         if len(args) != len(func.decl.params):
@@ -449,6 +555,17 @@ class Interpreter:
         for param, arg in zip(func.decl.params, args):
             call_env.declare(param.name, arg, is_mut=False)
 
+        for req_expr in getattr(func.decl, "requires", ()):
+            req_val = self.eval_expr(req_expr, call_env)
+            if not isinstance(req_val, WysnaBool) or not req_val.value:
+                raise WysnaRuntimeError(
+                    message=f"Contract violation: requires clause failed in '{func.decl.name}'",
+                    line=req_expr.line,
+                    col=req_expr.col,
+                    file=self.file,
+                    code="W4005",
+                )
+
         ret_val: WysnaValue
         try:
             ret_val = self.eval_block(func.decl.body, call_env)
@@ -457,7 +574,23 @@ class Interpreter:
         except PropagationSignal as prop:
             ret_val = prop.value
 
-        return self._wrap_result_value(ret_val, func.decl.return_type)
+        wrapped = self._wrap_result_value(ret_val, func.decl.return_type)
+        ensures_list = getattr(func.decl, "ensures", ())
+        if ensures_list and not isinstance(wrapped, WysnaErr):
+            ens_env = Environment(parent=call_env)
+            result_binding = wrapped.value if isinstance(wrapped, WysnaOk) else wrapped
+            ens_env.declare("result", result_binding, is_mut=False)
+            for ens_expr in ensures_list:
+                ens_val = self.eval_expr(ens_expr, ens_env)
+                if not isinstance(ens_val, WysnaBool) or not ens_val.value:
+                    raise WysnaRuntimeError(
+                        message=f"Contract violation: ensures clause failed in '{func.decl.name}'",
+                        line=ens_expr.line,
+                        col=ens_expr.col,
+                        file=self.file,
+                        code="W4005",
+                    )
+        return wrapped
 
 
     def call_bound_method(self, bound: WysnaBoundMethod, args: List[WysnaValue]) -> WysnaValue:
@@ -473,6 +606,7 @@ class Interpreter:
             if method == "append":
                 if len(args) != 1:
                     raise WysnaRuntimeError("append() takes 1 argument", file=self.file)
+                self._charge_heap_bytes(16)
                 receiver.append(args[0])
                 return WysnaUnit()
             if method == "pop":

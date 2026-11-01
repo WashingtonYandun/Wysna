@@ -323,6 +323,7 @@ def evaluate_assignment_expr(interpreter: "Interpreter", expr: AssignmentExpr, e
             return val
         if isinstance(obj, WysnaStructInstance):
             obj.set_field(target.property, val)
+            interpreter.check_struct_contracts(obj.struct_name, obj.storage.data, env, expr)
             return val
         raise WysnaRuntimeError(f"Cannot assign to property of '{type(obj).__name__}'", line=target.line, col=target.col, file=interpreter.file)
 
@@ -420,6 +421,7 @@ def evaluate_struct_init_expr(interpreter: "Interpreter", expr: StructInitExpr, 
     definition = getattr(expr, "inferred_type", None)
     field_order = getattr(definition, "fields", field_dict)
     ordered = {name: field_dict[name] for name in field_order}
+    interpreter.check_struct_contracts(expr.struct_name, ordered, env, expr)
     return WysnaStructInstance(expr.struct_name, fields=ordered)
 
 

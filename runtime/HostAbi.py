@@ -12,6 +12,12 @@ _next_id = 1
 _error_code = 0
 _error_domain = 0
 _process_jobs = {}
+_active_trace = None
+
+
+def set_effect_trace(trace):
+    global _active_trace
+    _active_trace = trace
 
 
 def failure(error):
@@ -37,6 +43,8 @@ def find(handle, kind):
 def close(handle):
     entry = _entries.pop(handle, None)
     if entry and entry[0] == 'file':
+        if isinstance(entry[1], dict):
+            return 0
         try:
             entry[1].close()
         except OSError as error:
@@ -63,14 +71,36 @@ def path_text(handle):
 
 
 def file_open(handle, mode):
+    global _error_code, _error_domain
     path = path_text(handle)
     if path is None or mode not in (0, 1, 2):
         failure(OSError(errno.EINVAL, 'invalid path or mode'))
         return 0
+    if _active_trace is not None and _active_trace.is_replaying:
+        ok, payload = _active_trace.replay('host.file_open', [path, mode])
+        if not ok:
+            if isinstance(payload, dict):
+                _error_code = int(payload.get('error_code', errno.ENOENT))
+                _error_domain = int(payload.get('error_domain', 1))
+            else:
+                failure(OSError(errno.ENOENT, str(payload)))
+            return 0
+        return allocate('file', {'replayed_path': path, 'mode': mode})
     try:
-        return allocate('file', open(path, ('rb', 'wb', 'ab')[mode]))
+        opened = open(path, ('rb', 'wb', 'ab')[mode])
+        if _active_trace is not None and _active_trace.is_recording:
+            _active_trace.record('host.file_open', [path, mode], ok=True, result={'status': 'opened'})
+        return allocate('file', opened)
     except OSError as error:
         failure(error)
+        if _active_trace is not None and _active_trace.is_recording:
+            _active_trace.record(
+                'host.file_open',
+                [path, mode],
+                ok=False,
+                result={'error_code': _error_code, 'error_domain': _error_domain},
+                error=str(error),
+            )
         return 0
 
 
@@ -93,30 +123,65 @@ def buffer_append(handle, value):
 
 
 def file_read(file_handle, buffer_handle, count):
+    global _error_code, _error_domain
     file, buffer = find(file_handle, 'file'), find(buffer_handle, 'buffer')
     if file is None or buffer is None:
         return failure(OSError(errno.EBADF, 'closed handle'))
     if not 0 < count <= 16777216:
         return failure(OSError(errno.EINVAL, 'invalid read bound'))
+    file_path = file.get('replayed_path', '') if isinstance(file, dict) else getattr(file, 'name', '')
+    if _active_trace is not None and _active_trace.is_replaying:
+        ok, payload = _active_trace.replay('host.file_read', [file_path, count])
+        if not ok:
+            if isinstance(payload, dict):
+                _error_code = int(payload.get('error_code', errno.EIO))
+                _error_domain = int(payload.get('error_domain', 1))
+                return -1
+            return failure(OSError(errno.EIO, str(payload)))
+        raw_bytes = bytes.fromhex(payload['hex']) if isinstance(payload, dict) else str(payload).encode('utf-8')
+        buffer[:] = raw_bytes
+        return len(buffer)
     try:
         buffer[:] = file.read(count)
+        if _active_trace is not None and _active_trace.is_recording:
+            _active_trace.record('host.file_read', [file_path, count], ok=True, result={'hex': bytes(buffer).hex()})
         return len(buffer)
     except (OSError, ValueError) as error:
-        return failure(error)
+        res = failure(error)
+        if _active_trace is not None and _active_trace.is_recording:
+            _active_trace.record('host.file_read', [file_path, count], ok=False, error=str(error))
+        return res
 
 
 def file_write(file_handle, buffer_handle):
+    global _error_code, _error_domain
     file, buffer = find(file_handle, 'file'), find(buffer_handle, 'buffer')
     if file is None or buffer is None:
         return failure(OSError(errno.EBADF, 'closed handle'))
+    file_path = file.get('replayed_path', '') if isinstance(file, dict) else getattr(file, 'name', '')
+    hex_data = bytes(buffer).hex()
+    if _active_trace is not None and _active_trace.is_replaying:
+        ok, payload = _active_trace.replay('host.file_write', [file_path, hex_data])
+        if not ok:
+            if isinstance(payload, dict):
+                _error_code = int(payload.get('error_code', errno.EIO))
+                _error_domain = int(payload.get('error_domain', 1))
+                return -1
+            return failure(OSError(errno.EIO, str(payload)))
+        return 0
     try:
         written = file.write(buffer)
         if written != len(buffer):
             return failure(OSError(errno.EIO, 'short write'))
         file.flush()
+        if _active_trace is not None and _active_trace.is_recording:
+            _active_trace.record('host.file_write', [file_path, hex_data], ok=True, result=0)
         return 0
     except (OSError, ValueError) as error:
-        return failure(error)
+        res = failure(error)
+        if _active_trace is not None and _active_trace.is_recording:
+            _active_trace.record('host.file_write', [file_path, hex_data], ok=False, error=str(error))
+        return res
 
 
 def filesystem(first, second, operation):
@@ -124,14 +189,29 @@ def filesystem(first, second, operation):
     other = path_text(second) if operation == 4 else None
     if text is None or (operation == 4 and other is None):
         return failure(OSError(errno.EINVAL, 'invalid path'))
+    if _active_trace is not None and _active_trace.is_replaying:
+        ok, payload = _active_trace.replay('host.filesystem', [text, other, operation])
+        if not ok:
+            return failure(OSError(errno.ENOENT, str(payload)))
+        return int(payload)
     path = Path(text)
     try:
         if operation in (0, 1):
             try:
                 status = path.stat()
             except FileNotFoundError as error:
-                return 0 if operation == 0 else failure(error)
-            return 1 if operation == 0 else status.st_size
+                if operation == 0:
+                    if _active_trace is not None and _active_trace.is_recording:
+                        _active_trace.record('host.filesystem', [text, other, operation], ok=True, result=0)
+                    return 0
+                res = failure(error)
+                if _active_trace is not None and _active_trace.is_recording:
+                    _active_trace.record('host.filesystem', [text, other, operation], ok=False, error=str(error))
+                return res
+            ret = 1 if operation == 0 else status.st_size
+            if _active_trace is not None and _active_trace.is_recording:
+                _active_trace.record('host.filesystem', [text, other, operation], ok=True, result=ret)
+            return ret
         if operation == 2:
             path.mkdir()
         elif operation == 3:
@@ -140,9 +220,14 @@ def filesystem(first, second, operation):
             os.replace(path, other)
         else:
             return -1
+        if _active_trace is not None and _active_trace.is_recording:
+            _active_trace.record('host.filesystem', [text, other, operation], ok=True, result=0)
         return 0
     except (OSError, ValueError) as error:
-        return failure(error)
+        res = failure(error)
+        if _active_trace is not None and _active_trace.is_recording:
+            _active_trace.record('host.filesystem', [text, other, operation], ok=False, error=str(error))
+        return res
 
 
 def canonical_path(path_handle, output_handle):
@@ -153,14 +238,27 @@ def canonical_path(path_handle, output_handle):
     output = find(output_handle, 'buffer')
     if path is None or output is None or len(output):
         return failure(OSError(errno.EINVAL, 'invalid canonical path buffers'))
-    try:
-        encoded = str(Path(path).resolve(strict=True)).encode('utf-8')
+    if _active_trace is not None and _active_trace.is_replaying:
+        ok, payload = _active_trace.replay('host.canonical_path', [path])
+        if not ok:
+            return failure(OSError(errno.ENOENT, str(payload)))
+        encoded = str(payload).encode('utf-8')
         output.extend(encoded)
+        return len(encoded)
+    try:
+        resolved = str(Path(path).resolve(strict=True))
+        encoded = resolved.encode('utf-8')
+        output.extend(encoded)
+        if _active_trace is not None and _active_trace.is_recording:
+            _active_trace.record('host.canonical_path', [path], ok=True, result=resolved)
         return len(encoded)
     except UnicodeError:
         return failure(OSError(errno.EILSEQ, 'canonical path is not UTF-8'))
     except (OSError, ValueError) as error:
-        return failure(error)
+        res = failure(error)
+        if _active_trace is not None and _active_trace.is_recording:
+            _active_trace.record('host.canonical_path', [path], ok=False, error=str(error))
+        return res
 
 
 def claim(raw):
@@ -336,16 +434,6 @@ def http_request(url_handle, method_handle, request_headers_handle, request_body
         return _http_failure(_HTTP_INVALID_REQUEST, errno.EINVAL)
 
     try:
-        import pycurl
-    except ImportError:
-        return _http_failure(_HTTP_UNAVAILABLE, getattr(errno, 'ENOSYS', errno.EIO))
-    try:
-        if int(pycurl.version_info()[2]) < 0x080300:
-            return _http_failure(_HTTP_UNAVAILABLE, getattr(errno, 'EPROTONOSUPPORT', errno.EIO))
-    except (AttributeError, IndexError, TypeError, ValueError):
-        return _http_failure(_HTTP_UNAVAILABLE, getattr(errno, 'EPROTONOSUPPORT', errno.EIO))
-
-    try:
         url = bytes(url_bytes).decode('ascii')
         method = bytes(method_bytes).decode('ascii')
         parsed = urlsplit(url)
@@ -361,6 +449,37 @@ def http_request(url_handle, method_handle, request_headers_handle, request_body
         headers = _http_request_headers(bytes(request_headers))
     except (UnicodeError, ValueError, OverflowError):
         return _http_failure(_HTTP_INVALID_REQUEST, errno.EINVAL)
+
+    trace_args = [
+        method,
+        url,
+        bytes(request_headers).hex(),
+        bytes(request_body).hex(),
+        timeout_ms,
+        max_response_bytes,
+    ]
+    if _active_trace is not None and _active_trace.is_replaying:
+        ok, payload = _active_trace.replay('host.http_request', trace_args)
+        if not ok:
+            if isinstance(payload, dict):
+                return _http_failure(
+                    int(payload.get('kind', _HTTP_TRANSPORT)),
+                    int(payload.get('error_code', errno.EIO)),
+                )
+            return _http_failure(_HTTP_TRANSPORT, errno.EIO)
+        response_headers[:] = bytes.fromhex(payload.get('headers_hex', ''))
+        response_body[:] = bytes.fromhex(payload.get('body_hex', ''))
+        return int(payload['status'])
+
+    try:
+        import pycurl
+    except ImportError:
+        return _http_failure(_HTTP_UNAVAILABLE, getattr(errno, 'ENOSYS', errno.EIO))
+    try:
+        if int(pycurl.version_info()[2]) < 0x080300:
+            return _http_failure(_HTTP_UNAVAILABLE, getattr(errno, 'EPROTONOSUPPORT', errno.EIO))
+    except (AttributeError, IndexError, TypeError, ValueError):
+        return _http_failure(_HTTP_UNAVAILABLE, getattr(errno, 'EPROTONOSUPPORT', errno.EIO))
 
     response_headers_output = bytearray()
     response_body_output = bytearray()
@@ -442,6 +561,17 @@ def http_request(url_handle, method_handle, request_headers_handle, request_body
             return _http_failure(_HTTP_INVALID_RESPONSE, errno.EPROTO)
         response_headers[:] = response_headers_output
         response_body[:] = response_body_output
+        if _active_trace is not None and _active_trace.is_recording:
+            _active_trace.record(
+                'host.http_request',
+                trace_args,
+                ok=True,
+                result={
+                    'status': status,
+                    'headers_hex': bytes(response_headers_output).hex(),
+                    'body_hex': bytes(response_body_output).hex(),
+                },
+            )
         return status
     except pycurl.error as error:
         curl_code = error.args[0] if error.args and isinstance(error.args[0], int) else errno.EIO
@@ -503,6 +633,11 @@ def process_run(executable_handle, arguments_handle, timeout_ms, *, cwd=None, en
             arguments.append(raw_argument.decode('utf-8'))
             if offset > 16777216:
                 return failure(OSError(errno.E2BIG, 'argument block exceeds its limit'))
+        if _active_trace is not None and _active_trace.is_replaying:
+            ok, payload = _active_trace.replay('host.process_run', [executable, arguments, timeout_ms])
+            if not ok:
+                return failure(OSError(errno.EIO, str(payload)))
+            return int(payload)
         process = subprocess.Popen(
             [executable, *arguments], cwd=cwd,
             env=dict(env) if env is not None else None,
@@ -513,15 +648,24 @@ def process_run(executable_handle, arguments_handle, timeout_ms, *, cwd=None, en
         try:
             try:
                 exit_code = int(process.wait(timeout=timeout_ms / 1000))
-                return 128 + abs(exit_code) if exit_code < 0 else exit_code
+                final_code = 128 + abs(exit_code) if exit_code < 0 else exit_code
+                if _active_trace is not None and _active_trace.is_recording:
+                    _active_trace.record('host.process_run', [executable, arguments, timeout_ms], ok=True, result=final_code)
+                return final_code
             except subprocess.TimeoutExpired:
                 terminate_process_tree(process, force_group=True)
                 process.wait()
-                return failure(TimeoutError(errno.ETIMEDOUT, 'process timed out'))
+                res = failure(TimeoutError(errno.ETIMEDOUT, 'process timed out'))
+                if _active_trace is not None and _active_trace.is_recording:
+                    _active_trace.record('host.process_run', [executable, arguments, timeout_ms], ok=False, error='process timed out')
+                return res
         finally:
             release_process_tree(process)
     except (OSError, UnicodeError, ValueError) as error:
-        return failure(error)
+        res = failure(error)
+        if _active_trace is not None and _active_trace.is_recording:
+            _active_trace.record('host.process_run', [executable, arguments, timeout_ms], ok=False, error=str(error))
+        return res
 
 
 FUNCTIONS = {

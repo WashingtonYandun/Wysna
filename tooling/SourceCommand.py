@@ -115,6 +115,10 @@ def run_pipeline(
     run_timeout_ms=None,
     capability_policy=None,
     sandbox: bool = False,
+    max_steps: Optional[int] = None,
+    max_heap_bytes: Optional[int] = None,
+    record_trace_path: Optional[str] = None,
+    replay_trace_path: Optional[str] = None,
     warn_cycles: bool = False,
 ) -> int:
     if tool_command is None:
@@ -326,6 +330,13 @@ def run_pipeline(
                 if sandbox and capability_policy is not None:
                     from tooling.CapabilityPolicy import generate_c_capability_guards
                     c_code = generate_c_capability_guards(capability_policy[0], capability_policy[1]) + c_code
+                quota_defs = []
+                if max_steps is not None:
+                    quota_defs.append(f"#define WYSNA_DEFAULT_MAX_STEPS {max_steps}LL")
+                if max_heap_bytes is not None:
+                    quota_defs.append(f"#define WYSNA_DEFAULT_MAX_HEAP_BYTES {max_heap_bytes}LL")
+                if quota_defs:
+                    c_code = "\n".join(quota_defs) + "\n" + c_code
                 codegen_telemetry = dict(emission.telemetry)
                 phase_ms = emission.timing_ms
                 hir_ms = phase_ms.get("hir")
@@ -396,6 +407,22 @@ def run_pipeline(
                 return 0
 
         # 5. Runtime Interpretation
+        if (max_steps is not None or max_heap_bytes is not None
+                or record_trace_path is not None or replay_trace_path is not None):
+            from dataclasses import replace
+            from runtime.EffectTrace import EffectTrace
+            ctx = execution_context or ExecutionContext.from_process()
+            trace_obj = ctx.effect_trace
+            if replay_trace_path is not None:
+                trace_obj = EffectTrace.replayer(replay_trace_path)
+            elif record_trace_path is not None:
+                trace_obj = EffectTrace.recorder(record_trace_path)
+            execution_context = replace(
+                ctx,
+                max_steps=max_steps if max_steps is not None else ctx.max_steps,
+                max_heap_bytes=max_heap_bytes if max_heap_bytes is not None else ctx.max_heap_bytes,
+                effect_trace=trace_obj,
+            )
         if show_stats:
             print(json.dumps({
                 "status": "ok",
