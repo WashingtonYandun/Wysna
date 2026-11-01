@@ -293,7 +293,9 @@ class FnDecl(Stmt):
         body: Block,
         type_params: Optional[List[Any]] = None,
         line: int = 1,
-        col: int = 1
+        col: int = 1,
+        requires: Optional[List['Expr']] = None,
+        ensures: Optional[List['Expr']] = None,
     ):
         super().__init__(line, col)
         self.name = name
@@ -301,6 +303,8 @@ class FnDecl(Stmt):
         self.return_type = return_type
         self.body = body
         self.type_params = type_params or []
+        self.requires = list(requires) if requires else []
+        self.ensures = list(ensures) if ensures else []
 
     def to_dict(self) -> dict:
         d = {
@@ -314,16 +318,24 @@ class FnDecl(Stmt):
         }
         if self.type_params:
             d["type_params"] = [p.to_dict() if hasattr(p, "to_dict") else p for p in self.type_params]
+        if self.requires:
+            d["requires"] = [r.to_dict() for r in self.requires]
+        if self.ensures:
+            d["ensures"] = [e.to_dict() for e in self.ensures]
         return d
 
 class StructField(Node):
-    def __init__(self, name: str, type_ann: TypeNode, line: int = 1, col: int = 1):
+    def __init__(self, name: str, type_ann: TypeNode, line: int = 1, col: int = 1, requires: Optional[List['Expr']] = None):
         super().__init__(line, col)
         self.name = name
         self.type_ann = type_ann
+        self.requires = list(requires) if requires else []
 
     def to_dict(self) -> dict:
-        return {"kind": "StructField", "name": self.name, "type_ann": self.type_ann.to_dict(), "line": self.line, "col": self.col}
+        d = {"kind": "StructField", "name": self.name, "type_ann": self.type_ann.to_dict(), "line": self.line, "col": self.col}
+        if self.requires:
+            d["requires"] = [r.to_dict() for r in self.requires]
+        return d
 
 class StructDecl(Stmt):
     def __init__(
@@ -399,14 +411,25 @@ class EnumDecl(Stmt):
         return d
 
 class InterfaceMethod(Node):
-    def __init__(self, name: str, params: List[Param], return_type: TypeNode, line: int = 1, col: int = 1):
+    def __init__(
+        self,
+        name: str,
+        params: List[Param],
+        return_type: TypeNode,
+        line: int = 1,
+        col: int = 1,
+        requires: Optional[List['Expr']] = None,
+        ensures: Optional[List['Expr']] = None,
+    ):
         super().__init__(line, col)
         self.name = name
         self.params = params
         self.return_type = return_type
+        self.requires = list(requires) if requires else []
+        self.ensures = list(ensures) if ensures else []
 
     def to_dict(self) -> dict:
-        return {
+        d = {
             "kind": "InterfaceMethod",
             "name": self.name,
             "params": [p.to_dict() for p in self.params],
@@ -414,6 +437,11 @@ class InterfaceMethod(Node):
             "line": self.line,
             "col": self.col
         }
+        if self.requires:
+            d["requires"] = [r.to_dict() for r in self.requires]
+        if self.ensures:
+            d["ensures"] = [e.to_dict() for e in self.ensures]
+        return d
 
 class InterfaceDecl(Stmt):
     def __init__(self, name: str, methods: List[InterfaceMethod], line: int = 1, col: int = 1, type_params=None):
@@ -450,16 +478,29 @@ class ClassField(Node):
         }
 
 class MethodDecl(Node):
-    def __init__(self, name: str, params: List[Param], return_type: TypeNode, body: Block, is_public: bool = True, line: int = 1, col: int = 1):
+    def __init__(
+        self,
+        name: str,
+        params: List[Param],
+        return_type: TypeNode,
+        body: Block,
+        is_public: bool = True,
+        line: int = 1,
+        col: int = 1,
+        requires: Optional[List['Expr']] = None,
+        ensures: Optional[List['Expr']] = None,
+    ):
         super().__init__(line, col)
         self.name = name
         self.params = params
         self.return_type = return_type
         self.body = body
         self.is_public = is_public
+        self.requires = list(requires) if requires else []
+        self.ensures = list(ensures) if ensures else []
 
     def to_dict(self) -> dict:
-        return {
+        d = {
             "kind": "MethodDecl",
             "name": self.name,
             "params": [p.to_dict() for p in self.params],
@@ -469,6 +510,11 @@ class MethodDecl(Node):
             "line": self.line,
             "col": self.col
         }
+        if self.requires:
+            d["requires"] = [r.to_dict() for r in self.requires]
+        if self.ensures:
+            d["ensures"] = [e.to_dict() for e in self.ensures]
+        return d
 
 class ClassDecl(Stmt):
     def __init__(

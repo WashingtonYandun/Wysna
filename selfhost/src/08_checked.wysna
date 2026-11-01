@@ -34,6 +34,7 @@ class SemanticContext {
     generic_types: list[SemGenericType]
     type_params: list[str]
     active_constraints: list[str]
+    active_ensures_tokens: list[int]
     variables: list[SemVar]
     functions: list[SemFunction]
     fields: list[SemField]
@@ -78,6 +79,8 @@ class SemanticContext {
         this.type_params = initial_type_params
         let initial_active_constraints: list[str] = []
         this.active_constraints = initial_active_constraints
+        let initial_active_ensures: list[int] = []
+        this.active_ensures_tokens = initial_active_ensures
         let initial_variables: list[SemVar] = []
         this.variables = initial_variables
         let initial_functions: list[SemFunction] = []

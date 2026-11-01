@@ -8,8 +8,8 @@ Only the latest minor release line receives security updates and backports.
 
 | Version | Supported | Security status |
 | --- | --- | --- |
-| 0.5.0 | ⏳ | Unpublished candidate; official support begins after passing cross-platform CI |
-| 0.4.0a1 | ❌ | Superseded by the Wysna 0.5.0 candidate |
+| 0.6.0 | ⏳ | Current release candidate; official support begins after passing cross-platform CI |
+| 0.5.0 | ❌ | Superseded by the Wysna 0.6.0 candidate |
 | 0.3.0.dev1 | ❌ | Superseded by the Wysna 0.4.0 alpha line |
 | 0.2.x | ❌ | Superseded by Wysna 0.3.0 |
 | 0.1.x | ❌ | Historical version without support |

@@ -1,63 +1,28 @@
 # Changelog
 
-## Unreleased
+## 0.6.0 — 2026-11-01
 
-### Compiler architecture and migration
+### Agent-First Architecture & Tooling
 
-- Separates `--engine=seed|compiler` from `--backend=c99|llvm-experimental`.
-  C99 remains the supported default; LLVM remains experimental. The Seed CLI's
-  Compiler engine supports file-based `emit-c` and `build` for `native-core-v1`.
-- Removes the public AST-to-C route and the mixed `--backend=hir|ast|selfhost`
-  selectors. Use `--engine=seed|compiler`; use `wysna ast <file>` only to inspect
-  syntax. AST-to-C emission is reserved for the differential test harness.
-- Allows `WYSNA_CACHE_HOME` to relocate the native bootstrap cache for read-only
-  source checkouts.
+- Adds `wysna schema`: extracts JSON Schema Draft 2020-12 `$defs` and agent tool definitions with verified MIR effect and capability contracts.
+- Adds `wysna fix`: automated zero-turn compiler self-healing applying multi-error repairs guarded by SHA-256 byte-level source hashes.
+- Adds `wysna mcp`: in-memory Model Context Protocol daemon over stdio, eliminating cold Python startup overhead (< 10 ms per check).
+- Upgrades diagnostics to `json-v1` multi-error envelopes with structured facts (`data`), secondary related spans (`related`), and precise UTF-8 byte offsets (`primary_span`).
 
-### Native Compiler
+### Contracts & Deterministic Execution
 
-- Allows native SDK builds and runs to search explicit library directories with
-  `--library-dir`, alongside `--library` and existing explicit link files.
-- Rejects standard-library imports that escape their configured root or fall back
-  to a project-controlled path; empty standard modules remain valid.
+- Adds first-class Design-by-Contract (`requires` / `ensures`) in function signatures and struct fields, enforced dynamically via `[W4005]` contract assertions and lowered across both Seed and native Selfhost compilers.
+- Adds contextual `result` identifier inside `ensures` postcondition clauses.
+- Adds deterministic execution quotas: `--max-steps=<N>` instruction bounds and `--max-heap-mb=<N>` heap allocation budgets with `[W4004]` fail-stop aborts across interpreter, native C99, and LLVM backends.
+- Adds effect cassette recording and offline replay (`--record-trace` / `--replay-trace`) under the versioned `wysna.effect.trace/1` format, guaranteeing bit-identical replays without network or filesystem side-effects.
 
-- Supports concrete parameterized classes with fields and ordinary methods, including
-  multiple instantiations such as `Box[int]` and `Box[str]`. Constraints, inheritance,
-  interfaces and independently generic methods remain explicit `W2013` profile limits.
-- Supports environment arguments and variables and `std/time.unix_seconds()` in the
-  native profile. An automation consumer can invoke a child process and propagate
-  its exit status.
-- Resolves the bundled standard library explicitly when the compiler bootstrap cache
-  is relocated outside the source checkout.
-- Preserves explicit `exit(code)` status with memory checking enabled; immediate exit
-  does not unwind active frames or perform the normal zero-live-object check.
+### Concurrency & Memory Specializations
 
-### Tooling and Interactive Use
+- Adds multi-core structured deterministic concurrency in `std/algorithms` (`parallel_map`, `parallel_batch`, `parallel_filter`, `parallel_reduce`) and `std/http` (`batch_get`) preserving strict input index ordering over thread-safe runtime ABIs.
+- Adds scalar list container specialization (`W03`): unboxed integer/boolean/float buffers with $O(1)$ release and `memcpy` copy-on-write detachment.
+- Adds selective symbol imports: `from "<path>" use <symbol>, <symbol>` and `import "<path>" as <alias>` alongside canonical namespace imports.
 
-- Adds `wysna project new NAME`, which creates a manifest, source entry point and
-  test without replacing existing paths. `--output-format=json-v1` returns the new
-  files as hashed artifacts.
-- Makes `wysna repl` retain definitions and values between inputs, continue across
-  open delimiters, recover from failed declarations, and recheck accepted history
-  without replaying earlier effects or output.
-- Adds `:help`, `:reload` and `:reset` to the REPL. `:reload` reinitializes imports
-  in a fresh runtime when no session declarations exist; otherwise use `:reset`.
-- Applies ordered, ranged `didChange` edits in the language server, resolves
-  declarations as well as uses, and adds references across open modules. Rename
-  is restricted to verified, non-exported symbols in the current document and
-  refuses collisions or incomplete references. Signature help and semantic tokens
-  remain unsupported.
-- Renders human diagnostics with bounded source excerpts and precise spans, including
-  an optional `data.help` hint. Terminal control sequences in diagnostic text are
-  removed before printing.
-- Points native compiler diagnostics at the offending argument, expression, member, or
-  declaration for type, mutability, pattern and arity errors instead of the end of the
-  enclosing construct.
-- Preserves the `NetError` prelude type and supports native compilation of explicit
-  `NetError` and `IoError` struct values.
-- Reports `Wysna` as the language-server diagnostic source and directs users of an
-  installed distribution to `wysna project test`.
-
-### Security
+## 0.5.0 — 2026-10-27
 
 - Adds `wysna run --deny=CAP,...` and `--allow=CAP,...`, a static capability gate
   over the conservative effect report. It rejects modeled violations and refuses

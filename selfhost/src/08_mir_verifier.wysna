@@ -105,6 +105,7 @@ fn mir_verify_runtime(module: MirModule, operation: MirOperation, slots: list[Mi
         return input.kind == "dict" and second == input.args[0] and output.kind == "optional" and output.args[0] == input.args[1]
     }
     if name == "wysna_builtin_join_strings" { return module.types[first].kind == "list" and module.types[first].args[0] == 5 and second == 5 and returned == 5 }
+    if name == "wysna_builtin_contract_assert_at" { return first == 2 and second == 5 and returned == 1 }
     if name == "wysna_equal" or name == "wysna_not_equal" { return returned == 2 and mir_equality(module, first, second) }
     if first != second or mir_is_result(module.types, first) { return false }
     if name == "wysna_add" and first == 5 { return returned == 5 }

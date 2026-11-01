@@ -136,7 +136,7 @@ def validate(installation, report, expected_commit=None):
         (project / 'tests').mkdir()
         manifest_path = project / 'wysna.toml'
         manifest_path.write_text('manifest_version = 1\n[package]\nname = "installed-acceptance"\n'
-            'version = "0.1.0"\nlanguage = "0.5"\n[toolchain]\ncompiler = "' + manifest['version'] +
+            'version = "0.1.0"\nlanguage = "' + ".".join(manifest['version'].split(".")[:2]) + '"\n[toolchain]\ncompiler = "' + manifest['version'] +
             '"\nstdlib = "bundled"\n[sources]\nroot = "src"\n[targets.app]\n'
             'entry = "src/main.wysna"\nprofile = "native-cli"\n'
             '[[tests]]\nname = "installed-argv"\nentry = "tests/argv.wysna"\ntimeout_ms = 10000\n', encoding='utf-8')

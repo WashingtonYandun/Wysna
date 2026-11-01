@@ -44,6 +44,8 @@ DIAGNOSTIC_CODES: Dict[str, str] = {
     "W4001": "Division or modulo by zero",
     "W4002": "Index or key out of bounds",
     "W4003": "Runtime execution error",
+    "W4004": "Execution quota exceeded (steps or heap memory)",
+    "W4005": "Contract violation (requires or ensures clause failed)",
     # W5xxx — Host Toolchain
     "W5001": "C compiler command unavailable or invalid",
     "W5002": "Invalid command usage or option",
@@ -246,6 +248,10 @@ class WysnaRuntimeError(WysnaError):
                 norm_code = "W4001"
             elif "out of bounds" in msg_low or "empty list" in msg_low or "key not found" in msg_low:
                 norm_code = "W4002"
+            elif "quota exceeded" in msg_low:
+                norm_code = "W4004"
+            elif "contract violation" in msg_low:
+                norm_code = "W4005"
         super().__init__(
             message=message,
             line=line,

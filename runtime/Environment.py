@@ -319,11 +319,21 @@ def create_global_environment(stdout: Optional[TextIO] = None,
         arg = args[0]
         if not isinstance(arg, WysnaStr):
             raise WysnaRuntimeError("read_file() expects str path")
+        trace = getattr(context, "effect_trace", None)
+        if trace is not None and trace.is_replaying:
+            ok, payload = trace.replay("builtin.read_file", [arg.value])
+            if ok:
+                return WysnaOk(WysnaStr(str(payload)))
+            return WysnaErr(WysnaStructInstance("IoError", fields={"message": WysnaStr(str(payload))}))
         try:
             with open(context.resolve_path(arg.value), 'r', encoding='utf-8', newline='') as f:
                 content = f.read()
+            if trace is not None and trace.is_recording:
+                trace.record("builtin.read_file", [arg.value], ok=True, result=content)
             return WysnaOk(WysnaStr(content))
         except Exception as e:
+            if trace is not None and trace.is_recording:
+                trace.record("builtin.read_file", [arg.value], ok=False, error=str(e))
             return WysnaErr(WysnaStructInstance("IoError", fields={"message": WysnaStr(str(e))}))
 
     def write_file_fn(args: List[WysnaValue]) -> WysnaValue:
@@ -332,11 +342,21 @@ def create_global_environment(stdout: Optional[TextIO] = None,
         p_arg, c_arg = args[0], args[1]
         if not isinstance(p_arg, WysnaStr) or not isinstance(c_arg, WysnaStr):
             raise WysnaRuntimeError("write_file() expects str path and str content")
+        trace = getattr(context, "effect_trace", None)
+        if trace is not None and trace.is_replaying:
+            ok, payload = trace.replay("builtin.write_file", [p_arg.value, c_arg.value])
+            if ok:
+                return WysnaOk(WysnaUnit())
+            return WysnaErr(WysnaStructInstance("IoError", fields={"message": WysnaStr(str(payload))}))
         try:
             with open(context.resolve_path(p_arg.value), 'w', encoding='utf-8') as f:
                 f.write(c_arg.value)
+            if trace is not None and trace.is_recording:
+                trace.record("builtin.write_file", [p_arg.value, c_arg.value], ok=True, result=True)
             return WysnaOk(WysnaUnit())
         except Exception as e:
+            if trace is not None and trace.is_recording:
+                trace.record("builtin.write_file", [p_arg.value, c_arg.value], ok=False, error=str(e))
             return WysnaErr(WysnaStructInstance("IoError", fields={"message": WysnaStr(str(e))}))
 
     def args_fn(args_list: List[WysnaValue]) -> WysnaValue:
@@ -345,13 +365,34 @@ def create_global_environment(stdout: Optional[TextIO] = None,
     def env_fn(args_list: List[WysnaValue]) -> WysnaValue:
         if len(args_list) != 1 or not isinstance(args_list[0], WysnaStr):
             raise WysnaRuntimeError("env() expects one str variable name")
-        value = context.env.get(args_list[0].value)
+        key = args_list[0].value
+        trace = getattr(context, "effect_trace", None)
+        if trace is not None and trace.is_replaying:
+            _, value = trace.replay("builtin.env", [key])
+        else:
+            value = context.env.get(key)
+            if trace is not None and trace.is_recording:
+                trace.record("builtin.env", [key], ok=True, result=value)
         return WysnaEnumValue("Option", "Some", [WysnaStr(value)]) if value is not None else WysnaNone()
 
     def unix_time_fn(args_list: List[WysnaValue]) -> WysnaValue:
         if args_list:
             raise WysnaRuntimeError("unix_time() takes no arguments")
-        return WysnaInt(int(time.time()))
+        trace = getattr(context, "effect_trace", None)
+        if trace is not None and trace.is_replaying:
+            _, ts = trace.replay("builtin.unix_time", [])
+            return WysnaInt(int(ts))
+        ts = int(time.time())
+        if trace is not None and trace.is_recording:
+            trace.record("builtin.unix_time", [], ok=True, result=ts)
+        return WysnaInt(ts)
+
+    def contract_assert_fn(args_list: List[WysnaValue]) -> WysnaValue:
+        if len(args_list) != 2 or not isinstance(args_list[0], WysnaBool) or not isinstance(args_list[1], WysnaStr):
+            raise WysnaRuntimeError("__wysna_contract_assert() expects (bool, str)")
+        if not args_list[0].value:
+            raise WysnaRuntimeError(args_list[1].value, code="W4005")
+        return WysnaUnit()
 
     def some_fn(args: List[WysnaValue]) -> WysnaValue:
         if len(args) != 1:
@@ -396,6 +437,7 @@ def create_global_environment(stdout: Optional[TextIO] = None,
     env.declare("args", WysnaNativeFunction("args", args_fn), is_mut=False)
     env.declare("env", WysnaNativeFunction("env", env_fn), is_mut=False)
     env.declare("unix_time", WysnaNativeFunction("unix_time", unix_time_fn), is_mut=False)
+    env.declare("__wysna_contract_assert", WysnaNativeFunction("__wysna_contract_assert", contract_assert_fn), is_mut=False)
 
     env.declare("weak", WysnaNativeFunction("weak", weak_fn), is_mut=False)
     env.declare("upgrade", WysnaNativeFunction("upgrade", upgrade_fn), is_mut=False)

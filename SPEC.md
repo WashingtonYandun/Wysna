@@ -1,6 +1,6 @@
 # Wysna Language Specification
 
-> **Status:** This specification defines the Wysna `0.5.0` release candidate. Sections 1–11 describe the normative grammar; sections 12–14 describe implementation contracts.
+> **Status:** This specification defines the Wysna `0.6.0` release candidate. Sections 1–11 describe the normative grammar; sections 12–14 describe implementation contracts.
 >
 > **Implementations:** `Wysna Seed` is the reference implementation that determines whether a program is valid. `Wysna Compiler` is an independent self-hosted compiler; its supported subset is measured against the public release corpus. The parity matrix documents this boundary in [docs/ENGINE_PARITY_MATRIX.md](docs/ENGINE_PARITY_MATRIX.md).
 >
@@ -22,8 +22,8 @@
 The language defines the following reserved keywords:
 
 ```text
-DECLARATIONS (6):
-fn        let       mut       struct    enum      import
+DECLARATIONS (8):
+fn        let       mut       struct    enum      import    from      use
 
 OBJECT-ORIENTED (9):
 class     interface extends   implements new       this      super     public    private
@@ -473,18 +473,102 @@ cleanup. This runtime is single-threaded.
 
 ## 9. Module System
 
-Modules are imported using file path strings. The imported module automatically binds to a namespace derived from the file's base name:
+Wysna provides two distinct, formal mechanisms for modular decomposition and symbol resolution:
+
+### 9.1 Primary Agent-First Selective Import (`from ... use ...`)
+
+The primary, canonical mechanism for code modularity in Wysna is the selective `from ... use ...` statement. It brings declared symbols directly into the current lexical scope, eliminating redundant qualification prefixes, reducing LLM token context overhead, and avoiding deep syntactic nesting.
+
+#### 9.1.1 Destructuring Braced Imports
+Multiple exported symbols are imported using a braced block. Each entry can declare an optional local alias with `as`, and trailing commas are canonically preserved by `wysna fmt`:
 
 ```wysna
-import "lexer.wysna"
-import "parser.wysna"
-
-fn compile(source: str) {
-    let tokens = lexer.tokenize(source)
-    let ast = parser.parse(tokens)
+from std.text use {
+    contains,
+    to_lower,
+    split as text_split,
 }
+
+let lowered = to_lower("WYSOFIA")
+let parts = text_split(lowered, " ")
 ```
-* No auxiliary keywords (`as`, `from`) are required.
+
+#### 9.1.2 Single Symbol and Aliased Imports
+When importing a single symbol without braces, the symbol name immediately follows `use`:
+
+```wysna
+from app.domain.user use User
+from app.infrastructure.auth use User as AuthUser
+
+let domain_user = User { id: 10 }
+let auth_user = AuthUser { token: "secret" }
+```
+
+#### 9.1.3 Submodule and Namespace Extraction
+A submodule or hierarchical namespace can be imported directly or qualified through dot paths:
+
+```wysna
+from app.domain use user
+from app.domain use {
+    auth.Role,
+    user.User,
+    user.UserRepository,
+}
+
+let result = user.calculate(42)
+```
+
+#### 9.1.4 Path Designators
+The module path in `from <path> use ...` supports three canonical formats:
+1. **Dot-separated identifier paths:** `from app.domain.user use User`, `from std.json use { number, null }`
+2. **Relative dot paths:** `from .sibling use Helper`, `from ..shared.models use Model`
+3. **Quoted filesystem paths:** `from "std/json" use { object, stringify }`, `from "utils/math.wysna" use square`
+
+---
+
+### 9.2 Bootstrap & Whole-Module Namespace Import (`import`)
+
+The whole-module `import` statement binds an entire file or standard module under a unified qualifier namespace. It represents the foundational bootstrap module mechanism shared identically across both **Wysna Seed** and the **Wysna Self-Hosted Compiler (`selfhost/`)**:
+
+#### 9.2.1 Default Namespace Binding
+Modules are imported using a quoted string path. By default, the imported module binds to an immutable namespace derived from the file's base name (excluding `.wysna`):
+
+```wysna
+import "std/json"
+import "lexer.wysna"
+
+let value = json.number("42") else error { json.null() }
+let tokens = lexer.tokenize("let x = 10")
+```
+
+#### 9.2.2 Explicit Namespace Aliases
+An explicit namespace identifier can be specified with `as`:
+
+```wysna
+import "std/algorithms" as alg
+
+let items = alg.parallel_map[int, int] ([1, 2, 3], |n: int| => n * n)
+```
+
+#### 9.2.3 Re-exporting Imports (`pub import`)
+Modules may re-export imported dependencies using `pub import`:
+
+```wysna
+pub import "std/path"
+```
+
+---
+
+### 9.3 Engine Parity Boundary
+
+| Capability | Wysna Seed (Python Reference) | Wysna Compiler (Self-Hosted Native) |
+| :--- | :---: | :---: |
+| `import "<path>"` (Default Namespace) | ✅ Soportado (C99 & LLVM) | ✅ Soportado (`native-core-v1`) |
+| `import "<path>" as <alias>` | ✅ Soportado (C99 & LLVM) | ✅ Soportado (`native-core-v1`) |
+| `pub import "<path>"` (Re-export) | ✅ Soportado | ✅ Soportado |
+| `from <path> use { sym1, sym2 }` | ✅ Soportado (C99 & LLVM) | ⏳ Límite de perfil (previsto v0.7.0) |
+| `from <path> use sym as alias` | ✅ Soportado (C99 & LLVM) | ⏳ Límite de perfil (previsto v0.7.0) |
+| `from <path> use sub.sym` | ✅ Soportado (C99 & LLVM) | ⏳ Límite de perfil (previsto v0.7.0) |
 
 ---
 
@@ -525,6 +609,8 @@ fn compile(source: str) {
        - `W4001`: Division or modulo by zero
        - `W4002`: Index or key out of bounds
        - `W4003`: Runtime execution error
+       - `W4004`: Deterministic execution quota exceeded (instruction steps or heap memory budget)
+       - `W4005`: Contract assertion failure (precondition `requires` or postcondition `ensures` violation)
      - **`W5xxx` — Host Toolchain Diagnostics:**
        - `W5001`: C compiler command unavailable or invalid. This is an environment error, not a source type error or compiler invariant failure.
        - `W5002`: Invalid command usage or option.
@@ -600,7 +686,7 @@ fn compile(source: str) {
      "tool_exit_code": 0,
      "process_exit_code": 0,
      "execution": null,
-     "toolchain": {"compiler": "0.5.0"},
+     "toolchain": {"compiler": "0.6.0"},
      "target": {"profile": "native-cli", "triple": null},
      "diagnostics": [],
      "artifacts": [],

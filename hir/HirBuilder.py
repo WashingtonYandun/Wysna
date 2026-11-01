@@ -37,6 +37,7 @@ from hir.HirNodes import (
 BUILTIN_NAMES = {
     "weak", "upgrade", "print", "eprint", "len", "range", "ord", "chr", "slice", "str", "int", "float", "bool",
     "join_strings", "bytes", "args", "env", "unix_time", "exit", "enumerate", "dict_items", "read_file", "write_file",
+    "contract_assert", "__wysna_contract_assert",
 }
 
 
@@ -69,6 +70,13 @@ class HirBuilder:
         self.symbol_counter = 0
         self.scopes: List[Dict[str, SymbolId]] = [{}]
         self.assign_temp_counter = 0
+        self.struct_decls_by_name: Dict[str, StructDecl] = {}
+        self.structs_with_contracts: Set[str] = set()
+        self._in_struct_contract_helper: bool = False
+        self._in_method: bool = False
+        self._current_ensures: List[Expr] = []
+        self._current_ret_tid: int = TYPE_UNIT
+        self._current_owner_name: str = ""
 
     def _push_scope(self) -> None:
         self.scopes.append({})
@@ -212,6 +220,9 @@ class HirBuilder:
                 self.classes.add(stmt.name)
             elif isinstance(stmt, StructDecl):
                 self.structs.add(stmt.name)
+                self.struct_decls_by_name[stmt.name] = stmt
+                if any(getattr(f, "requires", None) for f in stmt.fields):
+                    self.structs_with_contracts.add(stmt.name)
             elif isinstance(stmt, EnumDecl):
                 self.enums.add(stmt.name)
                 payloads = {variant.name: [self._get_type_id_from_node(type_) for type_ in variant.payload_types]
@@ -243,6 +254,8 @@ class HirBuilder:
         for stmt in program.body:
             if isinstance(stmt, StructDecl):
                 struct_decls.append(self._lower_struct_decl(stmt))
+                if stmt.name in self.structs_with_contracts:
+                    fn_decls.append(self._synthesize_struct_contract_fn(stmt))
             elif isinstance(stmt, EnumDecl):
                 enum_decls.append(self._lower_enum_decl(stmt))
             elif isinstance(stmt, InterfaceDecl):
@@ -329,6 +342,161 @@ class HirBuilder:
             span=self._span(decl)
         )
 
+    def _make_contract_assert(self, cond_hir: HirExpr, msg: str, span: Span) -> HirStmt:
+        msg_hir = HirConstStr(msg, TYPE_STR, span)
+        call_hir = HirBuiltinCall(
+            "contract_assert",
+            [cond_hir, msg_hir],
+            TYPE_UNIT,
+            span,
+            target=BuiltinCallTarget("contract_assert"),
+        )
+        return HirExprStmt(call_hir, span)
+
+    def _build_ensures_stmts_and_ret(self, val_hir: HirExpr, span: Span) -> Tuple[List[HirStmt], HirExpr]:
+        return_entry = self.interner.get_entry(self._current_ret_tid)
+        if return_entry.tag == "result":
+            ok_tid = return_entry.data[0]
+            if isinstance(val_hir, HirCoerce) and val_hir.kind == "wrap_ok":
+                self._push_scope()
+                res_sym = self._declare_symbol("result")
+                let_stmt = HirLet("result", ok_tid, False, val_hir.expr, span, symbol_id=res_sym)
+                assert_stmts = [
+                    self._make_contract_assert(
+                        self._lower_expr(ens),
+                        f"Postcondition ('ensures') failed in '{self._current_owner_name}'",
+                        self._span(ens),
+                    )
+                    for ens in self._current_ensures
+                ]
+                ret_ref = HirCoerce(
+                    HirLocalRef("result", ok_tid, span, symbol_id=res_sym),
+                    self._current_ret_tid,
+                    kind="wrap_ok",
+                    span=span,
+                )
+                self._pop_scope()
+                return [let_stmt, *assert_stmts], ret_ref
+            if val_hir.type_id == ok_tid:
+                self._push_scope()
+                res_sym = self._declare_symbol("result")
+                let_stmt = HirLet("result", ok_tid, False, val_hir, span, symbol_id=res_sym)
+                assert_stmts = [
+                    self._make_contract_assert(
+                        self._lower_expr(ens),
+                        f"Postcondition ('ensures') failed in '{self._current_owner_name}'",
+                        self._span(ens),
+                    )
+                    for ens in self._current_ensures
+                ]
+                ret_ref = HirLocalRef("result", ok_tid, span, symbol_id=res_sym)
+                self._pop_scope()
+                return [let_stmt, *assert_stmts], ret_ref
+            self._push_scope()
+            raw_sym = self._declare_symbol("__wysna_ret_result")
+            let_stmt = HirLet("__wysna_ret_result", self._current_ret_tid, False, val_hir, span, symbol_id=raw_sym)
+            self._push_scope()
+            res_sym = self._declare_symbol("result")
+            ok_pat = HirEnumPattern(
+                "Result",
+                "Ok",
+                0,
+                [HirBindingPattern("result", ok_tid, span, symbol_id=res_sym)],
+                self._current_ret_tid,
+                span,
+                variant_id=VariantId(0, "Ok"),
+            )
+            assert_stmts = [
+                self._make_contract_assert(
+                    self._lower_expr(ens),
+                    f"Postcondition ('ensures') failed in '{self._current_owner_name}'",
+                    self._span(ens),
+                )
+                for ens in self._current_ensures
+            ]
+            ok_arm = HirMatchArm(ok_pat, HirBlock(assert_stmts, span, tail_expr=HirConstUnit(TYPE_UNIT, span)), span)
+            self._pop_scope()
+            err_arm = HirMatchArm(
+                HirWildcardPattern(self._current_ret_tid, span),
+                HirBlock([], span, tail_expr=HirConstUnit(TYPE_UNIT, span)),
+                span,
+            )
+            match_expr = HirMatch(
+                HirLocalRef("__wysna_ret_result", self._current_ret_tid, span, symbol_id=raw_sym),
+                [ok_arm, err_arm],
+                TYPE_UNIT,
+                span,
+            )
+            ret_ref = HirLocalRef("__wysna_ret_result", self._current_ret_tid, span, symbol_id=raw_sym)
+            self._pop_scope()
+            return [let_stmt, HirExprStmt(match_expr, span)], ret_ref
+
+        self._push_scope()
+        res_sym = self._declare_symbol("result")
+        let_stmt = HirLet("result", self._current_ret_tid, False, val_hir, span, symbol_id=res_sym)
+        assert_stmts = [
+            self._make_contract_assert(
+                self._lower_expr(ens),
+                f"Postcondition ('ensures') failed in '{self._current_owner_name}'",
+                self._span(ens),
+            )
+            for ens in self._current_ensures
+        ]
+        ret_ref = HirLocalRef("result", self._current_ret_tid, span, symbol_id=res_sym)
+        self._pop_scope()
+        return [let_stmt, *assert_stmts], ret_ref
+
+    def _synthesize_struct_contract_fn(self, decl: StructDecl) -> HirFnDecl:
+        span = self._span(decl)
+        struct_tid = self.interner.mk_struct(decl.name)
+        self._push_scope()
+        old_in_helper = self._in_struct_contract_helper
+        self._in_struct_contract_helper = True
+        try:
+            params: List[HirParam] = []
+            field_refs: List[Tuple[str, HirExpr]] = []
+            for f in decl.fields:
+                f_tid = self._get_type_id_from_node(getattr(f, "type_ann", getattr(f, "type_annotation", None)))
+                f_sym = self._declare_symbol(f.name)
+                f_span = self._span(f)
+                params.append(HirParam(f.name, f_tid, f_span, symbol_id=f_sym))
+                field_refs.append((f.name, HirLocalRef(f.name, f_tid, f_span, symbol_id=f_sym)))
+            self_sym = self._declare_symbol("self")
+            stmts: List[HirStmt] = [
+                HirLet(
+                    "self",
+                    struct_tid,
+                    False,
+                    HirConstructStruct(decl.name, field_refs, struct_tid, span),
+                    span,
+                    symbol_id=self_sym,
+                )
+            ]
+            for f in decl.fields:
+                for req in getattr(f, "requires", None) or ():
+                    cond_hir = self._lower_expr(req)
+                    msg = f"Struct field contract ('requires') failed on '{decl.name}.{f.name}'"
+                    stmts.append(self._make_contract_assert(cond_hir, msg, self._span(req)))
+            body_hir = HirBlock(
+                stmts,
+                span,
+                tail_expr=HirLocalRef("self", struct_tid, span, symbol_id=self_sym),
+            )
+            return HirFnDecl(
+                name=f"__wysna_struct_init_{decl.name}",
+                params=params,
+                return_type_id=struct_tid,
+                body=body_hir,
+                is_fallible=False,
+                err_type_name="",
+                is_method=False,
+                is_public=False,
+                span=span,
+            )
+        finally:
+            self._in_struct_contract_helper = old_in_helper
+            self._pop_scope()
+
     def _lower_fn_decl(self, decl: FnDecl) -> HirFnDecl:
         if isinstance(decl, ExternFnDecl):
             self._push_scope()
@@ -351,17 +519,43 @@ class HirBuilder:
             for p in decl.params
         ]
         ret_tid = self._get_type_id_from_node(decl.return_type) if decl.return_type else TYPE_UNIT
-        body_hir = self._lower_block(decl.body)
-        self._pop_scope()
-        return_entry = self.interner.get_entry(ret_tid)
-        if return_entry.tag == "result" and return_entry.data[0] == TYPE_UNIT:
-            self._discard_unit_result_tail(body_hir)
-        if ret_tid == TYPE_UNIT:
-            if body_hir.tail_expr is not None and body_hir.tail_expr.type_id != TYPE_UNIT:
-                body_hir.statements.append(HirExprStmt(body_hir.tail_expr, body_hir.tail_expr.span))
-                body_hir.tail_expr = HirConstUnit(TYPE_UNIT, body_hir.tail_expr.span)
-            elif body_hir.tail_expr is None:
-                body_hir.tail_expr = HirConstUnit(TYPE_UNIT, body_hir.span)
+        req_stmts = [
+            self._make_contract_assert(
+                self._lower_expr(req),
+                f"Precondition ('requires') failed in '{decl.name}'",
+                self._span(req),
+            )
+            for req in getattr(decl, "requires", None) or ()
+        ]
+        old_ensures = self._current_ensures
+        old_ret_tid = self._current_ret_tid
+        old_owner = self._current_owner_name
+        self._current_ensures = list(getattr(decl, "ensures", None) or ())
+        self._current_ret_tid = ret_tid
+        self._current_owner_name = decl.name
+        try:
+            body_hir = self._lower_block(decl.body)
+            if req_stmts:
+                body_hir.statements = req_stmts + body_hir.statements
+            return_entry = self.interner.get_entry(ret_tid)
+            if return_entry.tag == "result" and return_entry.data[0] == TYPE_UNIT:
+                self._discard_unit_result_tail(body_hir)
+            if ret_tid == TYPE_UNIT:
+                if body_hir.tail_expr is not None and body_hir.tail_expr.type_id != TYPE_UNIT:
+                    body_hir.statements.append(HirExprStmt(body_hir.tail_expr, body_hir.tail_expr.span))
+                    body_hir.tail_expr = HirConstUnit(TYPE_UNIT, body_hir.tail_expr.span)
+                elif body_hir.tail_expr is None:
+                    body_hir.tail_expr = HirConstUnit(TYPE_UNIT, body_hir.span)
+            if self._current_ensures and body_hir.tail_expr is not None:
+                if not (decl.body.tail_expr is None and body_hir.statements and isinstance(body_hir.statements[-1], HirReturn)):
+                    ens_stmts, ret_ref = self._build_ensures_stmts_and_ret(body_hir.tail_expr, body_hir.tail_expr.span)
+                    body_hir.statements.extend(ens_stmts)
+                    body_hir.tail_expr = ret_ref
+        finally:
+            self._current_ensures = old_ensures
+            self._current_ret_tid = old_ret_tid
+            self._current_owner_name = old_owner
+            self._pop_scope()
 
         is_fallible = False
         err_type_name = ""
@@ -413,17 +607,46 @@ class HirBuilder:
             for p in decl.params
         ]
         ret_tid = self._get_type_id_from_node(decl.return_type) if decl.return_type else TYPE_UNIT
-        body_hir = self._lower_block(decl.body)
-        self._pop_scope()
-        return_entry = self.interner.get_entry(ret_tid)
-        if return_entry.tag == "result" and return_entry.data[0] == TYPE_UNIT:
-            self._discard_unit_result_tail(body_hir)
-        if ret_tid == TYPE_UNIT:
-            if body_hir.tail_expr is not None and body_hir.tail_expr.type_id != TYPE_UNIT:
-                body_hir.statements.append(HirExprStmt(body_hir.tail_expr, body_hir.tail_expr.span))
-                body_hir.tail_expr = HirConstUnit(TYPE_UNIT, body_hir.tail_expr.span)
-            elif body_hir.tail_expr is None:
-                body_hir.tail_expr = HirConstUnit(TYPE_UNIT, body_hir.span)
+        old_in_method = self._in_method
+        old_ensures = self._current_ensures
+        old_ret_tid = self._current_ret_tid
+        old_owner = self._current_owner_name
+        self._in_method = True
+        self._current_ensures = list(getattr(decl, "ensures", None) or ())
+        self._current_ret_tid = ret_tid
+        self._current_owner_name = decl.name
+        try:
+            req_stmts = [
+                self._make_contract_assert(
+                    self._lower_expr(req),
+                    f"Precondition ('requires') failed in '{decl.name}'",
+                    self._span(req),
+                )
+                for req in getattr(decl, "requires", None) or ()
+            ]
+            body_hir = self._lower_block(decl.body)
+            if req_stmts:
+                body_hir.statements = req_stmts + body_hir.statements
+            return_entry = self.interner.get_entry(ret_tid)
+            if return_entry.tag == "result" and return_entry.data[0] == TYPE_UNIT:
+                self._discard_unit_result_tail(body_hir)
+            if ret_tid == TYPE_UNIT:
+                if body_hir.tail_expr is not None and body_hir.tail_expr.type_id != TYPE_UNIT:
+                    body_hir.statements.append(HirExprStmt(body_hir.tail_expr, body_hir.tail_expr.span))
+                    body_hir.tail_expr = HirConstUnit(TYPE_UNIT, body_hir.tail_expr.span)
+                elif body_hir.tail_expr is None:
+                    body_hir.tail_expr = HirConstUnit(TYPE_UNIT, body_hir.span)
+            if self._current_ensures and body_hir.tail_expr is not None:
+                if not (decl.body.tail_expr is None and body_hir.statements and isinstance(body_hir.statements[-1], HirReturn)):
+                    ens_stmts, ret_ref = self._build_ensures_stmts_and_ret(body_hir.tail_expr, body_hir.tail_expr.span)
+                    body_hir.statements.extend(ens_stmts)
+                    body_hir.tail_expr = ret_ref
+        finally:
+            self._in_method = old_in_method
+            self._current_ensures = old_ensures
+            self._current_ret_tid = old_ret_tid
+            self._current_owner_name = old_owner
+            self._pop_scope()
 
         is_fallible = False
         err_type_name = ""
@@ -451,7 +674,14 @@ class HirBuilder:
         self._push_scope()
         stmts: List[HirStmt] = []
         for statement in block.statements:
-            stmts.append(self._lower_stmt(statement))
+            if isinstance(statement, ReturnStmt) and self._current_ensures:
+                rspan = self._span(statement)
+                val_hir = self._lower_expr(statement.value) if statement.value is not None else HirConstUnit(TYPE_UNIT, rspan)
+                ens_stmts, ret_ref = self._build_ensures_stmts_and_ret(val_hir, rspan)
+                stmts.extend(ens_stmts)
+                stmts.append(HirReturn(ret_ref, rspan))
+            else:
+                stmts.append(self._lower_stmt(statement))
         tail_hir = self._lower_expr(block.tail_expr) if block.tail_expr is not None else None
         self._pop_scope()
         return HirBlock(stmts, self._span(block), tail_expr=tail_hir)
@@ -555,6 +785,8 @@ class HirBuilder:
             if hasattr(expr, "resolved_enum_name"):
                 en_name = expr.resolved_enum_name
                 return self._construct_enum(en_name, expr.name, 0, tid or self.interner.mk_enum(en_name), span)
+            if expr.name == "self" and self._in_method and not any("self" in sc for sc in self.scopes[1:]):
+                return HirThisRef(tid, span)
             sym = self._resolve_symbol(expr.name)
             return HirLocalRef(expr.name, tid, span, symbol_id=sym)
         elif isinstance(expr, ThisExpr):
@@ -577,6 +809,12 @@ class HirBuilder:
         elif isinstance(expr, StructInitExpr):
             s_name = getattr(expr, "struct_name", getattr(expr, "name", "Struct"))
             fields_hir = [(f.name, self._lower_expr(f.value)) for f in expr.fields]
+            if s_name in self.structs_with_contracts and not self._in_struct_contract_helper:
+                s_decl = self.struct_decls_by_name.get(s_name)
+                fields_by_name = dict(fields_hir)
+                ordered_args = [fields_by_name[f.name] for f in s_decl.fields] if s_decl else [v for _, v in fields_hir]
+                fn_name = f"__wysna_struct_init_{s_name}"
+                return HirDirectCall(fn_name, ordered_args, tid or self.interner.mk_struct(s_name), span, target=DirectCallTarget(fn_name))
             return HirConstructStruct(s_name, fields_hir, tid, span)
         elif isinstance(expr, ListExpr):
             elems_hir = [self._lower_expr(e) for e in expr.elements]
@@ -635,6 +873,9 @@ class HirBuilder:
             # Check if this call is a struct construction: StructName(...)
             elif isinstance(expr.callee, IdentExpr) and expr.callee.name in self.structs:
                 args_hir = [self._lower_expr(a) for a in raw_args]
+                if expr.callee.name in self.structs_with_contracts and not self._in_struct_contract_helper:
+                    fn_name = f"__wysna_struct_init_{expr.callee.name}"
+                    return HirDirectCall(fn_name, args_hir, tid or self.interner.mk_struct(expr.callee.name), span, target=DirectCallTarget(fn_name))
                 sdef = self.interner.struct_defs.get(expr.callee.name)
                 field_names = list(sdef.fields.keys()) if sdef else []
                 fields = [(field_names[i] if i < len(field_names) else f"f{i}", args_hir[i]) for i in range(len(args_hir))]

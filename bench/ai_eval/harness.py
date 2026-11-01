@@ -23,9 +23,10 @@ from bench.ai_eval.models import (
     TaskTestCase,
 )
 from bench.ai_eval.providers import LlmProvider
+from common.Version import WYSNA_VERSION
 
 
-SYSTEM_PROMPT = """You are an expert programmer writing software in Wysna v0.5.0, a statically-typed systems programming language with value semantics and copy-on-write collections.
+SYSTEM_PROMPT = f"""You are an expert programmer writing software in Wysna v{WYSNA_VERSION}, a statically-typed systems programming language with value semantics and copy-on-write collections.
 
 Key Wysna Grammar and Rules:
 1. Entrypoint: `fn main() -> unit { ... }`
@@ -474,7 +475,7 @@ class EvaluationHarness:
         denom = supported_count if supported_count > 0 else 1
         return EvaluationSummary(
             timestamp=time.strftime("%Y-%m-%d %H:%M:%S UTC", time.gmtime()),
-            compiler_version="0.5.0",
+            compiler_version=WYSNA_VERSION,
             compiler_commit=git_commit,
             provider_name=provider_name,
             model_name=model_name,

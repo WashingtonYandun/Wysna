@@ -107,6 +107,10 @@ class Instantiator:
                 Param(p.name, checker._substitute_type_node(p.type_ann, subst), line=p.line, col=p.col)
                 for p in cloned_fn.params
             ]
+            for req in getattr(cloned_fn, "requires", []):
+                checker._substitute_ast_types(req, subst)
+            for ens in getattr(cloned_fn, "ensures", []):
+                checker._substitute_ast_types(ens, subst)
             checker._substitute_ast_types(cloned_fn.body, subst)
 
             p_types = [checker._resolve_type_node(p.type_ann) for p in cloned_fn.params]
@@ -230,10 +234,14 @@ class Instantiator:
                 subst_ann = checker._substitute_type_node(f.type_ann, subst)
                 f_type = checker._resolve_type_node(subst_ann)
                 fields_dict[f.name] = f_type
-                new_fields.append(StructField(name=f.name, type_ann=subst_ann, line=f.line, col=f.col))
+                f_reqs = [clone_ast(r) for r in getattr(f, "requires", [])]
+                for r in f_reqs:
+                    checker._substitute_ast_types(r, subst)
+                new_fields.append(StructField(name=f.name, type_ann=subst_ann, line=f.line, col=f.col, requires=f_reqs))
             struct_t.fields = fields_dict
 
             concrete_decl = StructDecl(name=mangled, fields=new_fields, type_params=[], line=template.ast_decl.line, col=template.ast_decl.col)
+            checker._check_struct_contracts(concrete_decl)
             checker.monomorphized_struct_decls.append(concrete_decl)
 
             # Synthesize constructor function: fn mangled(f1, f2, ...) -> mangled
