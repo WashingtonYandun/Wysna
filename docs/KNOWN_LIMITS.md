@@ -107,7 +107,7 @@ macOS arm64, Linux x64 and Windows x64; it needs no virtual environment or host 
 Its launcher verifies the required components before importing Seed, and
 `wysna doctor` verifies the complete installed file index. External FFI libraries are
 not included. CI validates the Windows, macOS and Linux installer lifecycles on their
-respective hosts, including installation and removal. The published 0.5.0 installers
+respective hosts, including installation and removal. The published 0.6.0 installers
 are unsigned; CI acceptance does not establish manual acceptance on every machine.
 Missing Wysna Compiler sources produce `W2013` before any bootstrap-cache write. Wysna
 Seed native builds require a host C99 toolchain; an unavailable or invalid compiler command produces
@@ -221,12 +221,12 @@ networking require the acceptance contracts in [Service foundations](SERVICE_FOU
 
 ---
 
-## 8. Audit Findings Still Open in 0.5.0
+## 8. Audit Findings Still Open in 0.6.0
 
 Identity cleanup and newline separators do not close every architectural finding. These
 limits remain part of the published scope:
 
-| Finding | Status in 0.5.0 | Remaining work |
+| Finding | Status in 0.6.0 | Remaining work |
 | :--- | :--- | :--- |
 | W01 · Compiler architecture | Seed uses AST/HIR/MIR; Compiler uses one checked-node → verified MIR → C99 pipeline under `native-core-v1` and ships a native SDK with CLI parity (`--version`, `--check`, `--check-json`) and contract assertions. Constrained parameterized classes, parameterized classes with independently generic methods, inheritance or interfaces, parameterized interfaces, unresolved generic nominal values, library-mode exports and WASM targets remain explicit profile limits. | Extend the Compiler MIR/profile to those constructs and keep independent parity and installed-acceptance gates. |
 | W03 · Value size | Scalar list buffers (`list[int]`, `list[bool]`, `list[float]`) feature $O(1)$ release and `memcpy` CoW fast paths with unboxed MIR access. On a 64-bit ABI, general heterogeneous `WVal` occupies 32 bytes. | Measure a compact 16B/8B representation for general heterogeneous values with explicit runtime and FFI compatibility. |

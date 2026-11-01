@@ -133,7 +133,7 @@ is not enough; all other FFI is reported as `ffi.native` plus `unknown`.
 ```json
 {
   "schema_version": "wysna.effect-report/1",
-  "compiler_version": "0.5.0",
+  "compiler_version": "0.6.0",
   "analysis_scope": "lowered-concrete-MIR",
   "model": "wysna.effects-model/1",
   "entry_point": "wysna_program",
