@@ -368,7 +368,6 @@ def _run_suite_in_repo(repo_root: str) -> None:
     print(f"Runtime execution:   {runtime_passed}/{len(runtime_files)}")
 
     # 7. Native C99 Backend Tests (Wysna Seed) & 8. Self-Hosting Wysna Compiler Stage-2 Suite
-    repo_root = os.path.dirname(os.path.abspath(__file__))
     c99_targets = [f for f in runtime_files if os.path.exists(os.path.join(runtime_dir, f[:-6] + ".expected"))]
     c99_passed = 0
     bootstrap_ok = False
