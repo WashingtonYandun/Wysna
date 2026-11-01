@@ -10,7 +10,7 @@ struct Token {
 struct SemType { kind: str, name: str, args: list[int] }
 struct SemGenericType { name: str, kind: str, params: list[str] }
 struct SemVar { name: str, type_id: int, mutable: bool, depth: int, binding: int }
-struct SemFunction { abi_params: list[str], abi_return: str, name: str, params: list[str], type_params: list[str], constraints: list[str], type_id: int, body: int, end: int, owner: str, visible: bool }
+struct SemFunction { abi_params: list[str], abi_return: str, name: str, params: list[str], type_params: list[str], constraints: list[str], type_id: int, body: int, end: int, owner: str, visible: bool, contract_start: int }
 struct SemField { owner: str, name: str, type_id: int, visible: bool }
 struct SemClass { name: str, parent: str, interfaces: list[str] }
 struct SemValue { type_id: int, root: str, writable: int, terminates: bool, node: int }
@@ -837,6 +837,7 @@ class SemanticContext {
     generic_types: list[SemGenericType]
     type_params: list[str]
     active_constraints: list[str]
+    active_ensures_tokens: list[int]
     variables: list[SemVar]
     functions: list[SemFunction]
     fields: list[SemField]
@@ -881,6 +882,8 @@ class SemanticContext {
         this.type_params = initial_type_params
         let initial_active_constraints: list[str] = []
         this.active_constraints = initial_active_constraints
+        let initial_active_ensures: list[int] = []
+        this.active_ensures_tokens = initial_active_ensures
         let initial_variables: list[SemVar] = []
         this.variables = initial_variables
         let initial_functions: list[SemFunction] = []
@@ -1775,12 +1778,30 @@ fn sem_collect_function(context: SemanticContext, owner: str, visible: bool) {
     let mut abi_return = "unit"
     if sem_match(context, "ARROW") { abi_return = sem_at(context).val returned = sem_type(context) }
     types.append(returned)
+    sem_skip_separators(context)
+    let mut contract_start = -1
+    let contract_token = sem_at(context)
+    if contract_token.kind == "IDENT" and (contract_token.val == "requires" or contract_token.val == "ensures") {
+        contract_start = context.pos
+        let mut depth_p = 0
+        let mut depth_b = 0
+        while not sem_is(context, "EOF") {
+            if sem_is(context, "LPAREN") { depth_p = depth_p + 1 }
+            elif sem_is(context, "RPAREN") { if depth_p > 0 { depth_p = depth_p - 1 } }
+            elif sem_is(context, "LBRACKET") { depth_b = depth_b + 1 }
+            elif sem_is(context, "RBRACKET") { if depth_b > 0 { depth_b = depth_b - 1 } }
+            elif sem_is(context, "LBRACE") and depth_p == 0 and depth_b == 0 { break }
+            elif sem_is(context, "SEMI") and depth_p == 0 and depth_b == 0 { break }
+            sem_take(context)
+        }
+    }
+    sem_skip_separators(context)
     let signature = sem_intern(context, "function", "", types)
     let mut body = -1
     let mut end = context.pos
     if sem_is(context, "LBRACE") { body = context.pos end = sem_skip_block(context) }
     context.type_params = previous_type_params
-    context.functions.append(SemFunction { abi_params: abi_params, abi_return: abi_return, name: name, params: params, type_params: type_params, constraints: constraints, type_id: signature, body: body, end: end, owner: owner, visible: visible })
+    context.functions.append(SemFunction { abi_params: abi_params, abi_return: abi_return, name: name, params: params, type_params: type_params, constraints: constraints, type_id: signature, body: body, end: end, owner: owner, visible: visible, contract_start: contract_start })
 }
 fn sem_collect_record(context: SemanticContext, kind: str) {
     sem_take(context)
@@ -1857,6 +1878,18 @@ fn sem_collect_record(context: SemanticContext, kind: str) {
             let field = sem_expect(context, "IDENT").val
             sem_expect(context, "COLON")
             let field_type = sem_type(context)
+            if sem_at(context).kind == "IDENT" and sem_at(context).val == "requires" {
+                let mut depth_p = 0
+                let mut depth_b = 0
+                while not sem_is(context, "EOF") {
+                    if sem_is(context, "LPAREN") { depth_p = depth_p + 1 }
+                    elif sem_is(context, "RPAREN") { if depth_p > 0 { depth_p = depth_p - 1 } }
+                    elif sem_is(context, "LBRACKET") { depth_b = depth_b + 1 }
+                    elif sem_is(context, "RBRACKET") { if depth_b > 0 { depth_b = depth_b - 1 } }
+                    elif (sem_is(context, "COMMA") or sem_is(context, "RBRACE")) and depth_p == 0 and depth_b == 0 { break }
+                    sem_take(context)
+                }
+            }
             context.fields.append(SemField { owner: name, name: field, type_id: field_type, visible: visible })
             sem_match(context, "COMMA")
         }
@@ -1866,11 +1899,15 @@ fn sem_collect_record(context: SemanticContext, kind: str) {
     context.type_params = previous_type_params
 }
 fn sem_builtin(name: str) -> bool {
-    return name == "join_strings" or name == "print" or name == "eprint" or name == "len" or name == "int" or name == "float" or name == "str" or name == "ord" or name == "chr" or name == "bytes" or name == "slice" or name == "args" or name == "env" or name == "unix_time" or name == "exit" or name == "enumerate" or name == "dict_items" or name == "read_file" or name == "write_file" or name == "Some" or name == "Ok" or name == "Err" or name == "weak" or name == "upgrade"
+    return name == "join_strings" or name == "print" or name == "eprint" or name == "len" or name == "int" or name == "float" or name == "str" or name == "ord" or name == "chr" or name == "bytes" or name == "slice" or name == "args" or name == "env" or name == "unix_time" or name == "exit" or name == "enumerate" or name == "dict_items" or name == "read_file" or name == "write_file" or name == "Some" or name == "Ok" or name == "Err" or name == "weak" or name == "upgrade" or name == "contract_assert"
 }
 fn sem_call_builtin(context: SemanticContext, name: str, args: list[int], sources: list[Token], discard: bool) -> int {
     let count = len(args)
     if name == "print" or name == "eprint" { return context.unit_type }
+    if name == "contract_assert" {
+        if count != 2 { sem_error(context, "W2005", "contract_assert arity") }
+        return context.unit_type
+    }
     if name == "args" or name == "unix_time" {
         if count != 0 { sem_error(context, "W2005", name + " arity") }
         if name == "unix_time" { return context.integer_type }
@@ -3155,7 +3192,30 @@ fn sem_block(context: SemanticContext, statement: bool) -> SemFlow {
             if context.return_type < 0 { context.return_type = value }
             sem_require_at(context, value, context.return_type, "W2004", return_source)
             sem_complete_constructor(context)
-            statements.append(sem_node(context, "return", context.unit_type, statement_source, "", [returned_node], -1, -1))
+            if len(context.active_ensures_tokens) > 0 and context.capture_nodes {
+                let saved_pos = context.pos
+                let ens_scope = sem_enter_scope(context)
+                let result_var = sem_declare(context, "result", value, false)
+                let result_let = sem_node(context, "let", context.unit_type, statement_source, "result", [returned_node], result_var, -1)
+                statements.append(result_let)
+                for ens_pos in context.active_ensures_tokens {
+                    context.pos = ens_pos
+                    sem_skip_separators(context)
+                    sem_take(context)
+                    let ens_src = sem_at(context)
+                    let cond_val = sem_expression(context, 0, false)
+                    let msg_text = "Postcondition ('ensures') failed in '" + context.current_function + "'"
+                    let msg_node = sem_node(context, "string", context.string_type, ens_src, msg_text, [], -1, -1)
+                    let assert_node = sem_node(context, "call", context.unit_type, ens_src, "contract_assert", [cond_val.node, msg_node], -1, -1)
+                    statements.append(assert_node)
+                }
+                let res_ref = sem_node(context, "binding", value, return_source, "result", [], result_var, -1)
+                statements.append(sem_node(context, "return", context.unit_type, statement_source, "", [res_ref], -1, -1))
+                sem_leave_scope(context, ens_scope)
+                context.pos = saved_pos
+            } else {
+                statements.append(sem_node(context, "return", context.unit_type, statement_source, "", [returned_node], -1, -1))
+            }
             terminates = true
             tail = context.unit_type
         } elif sem_match(context, "WHILE") {
@@ -3279,10 +3339,80 @@ fn sem_check_function(context: SemanticContext, function: SemFunction) {
             if context.tokens[context.pos + 1].kind != "SUPER" or context.tokens[context.pos + 2].kind != "DOT" or context.tokens[context.pos + 3].val != "init" { sem_error(context, "W3004", "super.init must be first") }
         }
     }
+    let mut req_assert_nodes: list[int] = []
+    let mut ens_start_tokens: list[int] = []
+    if function.contract_start >= 0 and function.contract_start < function.body {
+        let contract_pos = context.pos
+        context.pos = function.contract_start
+        while context.pos < function.body and not sem_is(context, "EOF") and not sem_is(context, "LBRACE") {
+            sem_skip_separators(context)
+            if context.pos >= function.body or sem_is(context, "LBRACE") { break }
+            if sem_at(context).kind == "IDENT" and sem_at(context).val == "requires" {
+                sem_take(context)
+                let req_src = sem_at(context)
+                let cond_val = sem_expression(context, 0, false)
+                sem_require_at(context, cond_val.type_id, context.boolean_type, "W2001", req_src)
+                let msg_text = "Precondition ('requires') failed in '" + function.name + "'"
+                let msg_node = sem_node(context, "string", context.string_type, req_src, msg_text, [], -1, -1)
+                let assert_node = sem_node(context, "call", context.unit_type, req_src, "contract_assert", [cond_val.node, msg_node], -1, -1)
+                req_assert_nodes.append(assert_node)
+            } elif sem_at(context).kind == "IDENT" and sem_at(context).val == "ensures" {
+                let ens_tok_pos = context.pos
+                ens_start_tokens.append(ens_tok_pos)
+                sem_take(context)
+                let ens_scope = sem_enter_scope(context)
+                let _res = sem_declare(context, "result", context.return_type, false)
+                let ens_src = sem_at(context)
+                let cond_val = sem_expression(context, 0, false)
+                sem_require_at(context, cond_val.type_id, context.boolean_type, "W2001", ens_src)
+                sem_leave_scope(context, ens_scope)
+            } else {
+                break
+            }
+        }
+        context.pos = contract_pos
+    }
+    let previous_ensures = context.active_ensures_tokens
+    context.active_ensures_tokens = ens_start_tokens
+    context.pos = function.body
     let flow = sem_block(context, sem_unit_return(context, context.return_type))
+    context.active_ensures_tokens = previous_ensures
     if not flow.terminates {
         sem_require_tail_at(context, flow.type_id, context.return_type, context.tokens[function.body])
         if sem_kind(context, context.return_type) == "result" and sem_unit_return(context, context.return_type) { sem_mark_unit_tail(context, flow.node) }
+    }
+    if len(req_assert_nodes) > 0 and context.capture_nodes and flow.node >= 0 {
+        let mut new_children: list[int] = []
+        for a_node in req_assert_nodes { new_children.append(a_node) }
+        for old_child in context.nodes[flow.node].children { new_children.append(old_child) }
+        context.nodes[flow.node].children = new_children
+    }
+    if not flow.terminates and len(ens_start_tokens) > 0 and context.capture_nodes and flow.node >= 0 {
+        if len(context.nodes[flow.node].children) > 0 and flow.type_id != context.unit_type {
+            let last_idx = len(context.nodes[flow.node].children) - 1
+            let tail_child = context.nodes[flow.node].children[last_idx]
+            let saved_pos = context.pos
+            let tail_src = context.tokens[function.body]
+            let ens_scope = sem_enter_scope(context)
+            let result_var = sem_declare(context, "result", flow.type_id, false)
+            let result_let = sem_node(context, "let", context.unit_type, tail_src, "result", [tail_child], result_var, -1)
+            context.nodes[flow.node].children[last_idx] = result_let
+            for ens_pos in ens_start_tokens {
+                context.pos = ens_pos
+                sem_skip_separators(context)
+                sem_take(context)
+                let ens_src = sem_at(context)
+                let cond_val = sem_expression(context, 0, false)
+                let msg_text = "Postcondition ('ensures') failed in '" + function.name + "'"
+                let msg_node = sem_node(context, "string", context.string_type, ens_src, msg_text, [], -1, -1)
+                let assert_node = sem_node(context, "call", context.unit_type, ens_src, "contract_assert", [cond_val.node, msg_node], -1, -1)
+                context.nodes[flow.node].children.append(assert_node)
+            }
+            let res_ref = sem_node(context, "binding", flow.type_id, tail_src, "result", [], result_var, -1)
+            context.nodes[flow.node].children.append(res_ref)
+            sem_leave_scope(context, ens_scope)
+            context.pos = saved_pos
+        }
     }
     sem_complete_constructor(context)
     if context.capture_nodes {
@@ -3769,7 +3899,7 @@ fn sem_specialize_arguments(context: SemanticContext, template_id: int, argument
         name = sem_nominal_specialization_name(owner, arguments) + "." + slice(template.name, len(template.owner), len(template.name))
     }
     if sem_function(context, name) >= 0 { report_error_at("W1002", source, "reserved specialization identity collision") }
-    context.functions.append(SemFunction { abi_params: template.abi_params, abi_return: template.abi_return, name: name, params: template.params, type_params: empty, constraints: empty, type_id: sem_intern(context, "function", "", parts), body: template.body, end: template.end, owner: template.owner, visible: false })
+    context.functions.append(SemFunction { abi_params: template.abi_params, abi_return: template.abi_return, name: name, params: template.params, type_params: empty, constraints: empty, type_id: sem_intern(context, "function", "", parts), body: template.body, end: template.end, owner: template.owner, visible: false, contract_start: template.contract_start })
     let mut ancestry = context.specialization_ancestry
     ancestry.append(len(context.specializations))
     context.specializations.append(SemSpecialization { template: template_id, arguments: arguments, function: id, ancestry: ancestry })
@@ -4190,7 +4320,7 @@ fn mir_operation_json(operation: MirOperation) -> str {
         }
         if operation.name == "wysna_enum_payload_owned" { data = data + ",\"variant\":" + mir_quote(operation.labels[1]) }
         if operation.name == "wysna_make_range" or operation.name == "wysna_make_range_inclusive" { data = data + ",\"inclusive\":" + str(operation.name == "wysna_make_range_inclusive") }
-        if operation.name == "wysna_div_at" or operation.name == "wysna_mod_at" or operation.name == "wysna_index_get_owned_at" { data = data + ",\"source\":true" }
+        if operation.name == "wysna_div_at" or operation.name == "wysna_mod_at" or operation.name == "wysna_index_get_owned_at" or operation.name == "wysna_builtin_contract_assert_at" { data = data + ",\"source\":true" }
         data = data + "}"
     }
     if operation.opcode == "store_place" or operation.opcode == "mutate" {
@@ -5521,6 +5651,7 @@ fn mir_call(context: MirBuilder, node: CheckedNode) -> int {
         return mir_op(context, "call", returned, arguments, mir_abi_name(function.name), mir_literal_unit(), node.source)
     }
     if node.text == "weak" { return mir_op(context, "runtime", returned, arguments, "wysna_builtin_weak_owned", mir_literal_unit(), node.source) }
+    if node.text == "contract_assert" or node.text == "__wysna_contract_assert" { return mir_op(context, "runtime", returned, arguments, "wysna_builtin_contract_assert_at", mir_literal_unit(), node.source) }
     let builtins: list[str] = ["upgrade", "print", "eprint", "int", "float", "str", "len", "ord", "chr", "slice", "bytes", "args", "env", "unix_time", "exit", "join_strings", "enumerate", "dict_items", "read_file", "write_file"]
     for name in builtins { if node.text == name { return mir_op(context, "runtime", returned, arguments, "wysna_builtin_" + name, mir_literal_unit(), node.source) } }
     mir_unsupported(node.source, "builtin call " + node.text)
@@ -5942,6 +6073,7 @@ fn mir_verify_runtime(module: MirModule, operation: MirOperation, slots: list[Mi
         return input.kind == "dict" and second == input.args[0] and output.kind == "optional" and output.args[0] == input.args[1]
     }
     if name == "wysna_builtin_join_strings" { return module.types[first].kind == "list" and module.types[first].args[0] == 5 and second == 5 and returned == 5 }
+    if name == "wysna_builtin_contract_assert_at" { return first == 2 and second == 5 and returned == 1 }
     if name == "wysna_equal" or name == "wysna_not_equal" { return returned == 2 and mir_equality(module, first, second) }
     if first != second or mir_is_result(module.types, first) { return false }
     if name == "wysna_add" and first == 5 { return returned == 5 }
@@ -6568,7 +6700,7 @@ fn mir_c_operation(module: MirModule, function: MirFunction, operation: MirOpera
             for external in module.externs { if external.name == name { found = true boxed = true } }
             if not found { report_error_at("W9999", operation.source, "verified MIR call target missing during C99 emission") }
         } elif name == "wysna_builtin_print" or name == "wysna_builtin_eprint" { arguments = [str(len(arguments)), mir_c_array(arguments)] }
-        if name == "wysna_div_at" or name == "wysna_mod_at" or name == "wysna_index_get_owned_at" {
+        if name == "wysna_div_at" or name == "wysna_mod_at" or name == "wysna_index_get_owned_at" or name == "wysna_builtin_contract_assert_at" {
             arguments.append(escape_c_str(operation.source.file))
             arguments.append(str(operation.source.line))
             arguments.append(str(operation.source.col))

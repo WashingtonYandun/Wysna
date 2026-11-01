@@ -333,14 +333,15 @@ fn main() {
     let batched = algorithms.parallel_batch[int, int](xs, 2, square)
     let evens = algorithms.parallel_filter[int](xs, is_even)
     let total = algorithms.parallel_reduce[int, int](xs, 0, square, add)
-    print(batched[4], len(evens), total)
+    let items = http.batch_get(["http://127.0.0.1:9/a", "http://127.0.0.1:9/b"])
+    print(batched[4], len(evens), total, len(items), items[0].ok, items[1].ok)
 }
 """
     service = CompilerService()
     checked = service.check(source, "parallel_algo.wysna")
     buf = io.StringIO()
     service.interpret(checked, stdout=buf)
-    assert buf.getvalue().strip() == "25 2 55"
+    assert buf.getvalue().strip() == "25 2 55 2 false false"
 
 
 # ============================================================================
@@ -387,3 +388,51 @@ def test_native_run_enforces_contracts(tmp_path, backend):
     result = _native(tmp_path, source, backend)
     assert result.returncode != 0
     assert "W4005" in result.stderr + result.stdout
+
+
+def test_selfhost_checks_valid_contracts_successfully(tmp_path):
+    prog = tmp_path / "contract_ok.wysna"
+    prog.write_text("fn withdraw(amount: int, current: int) -> int\n"
+                    "    requires amount > 0\n"
+                    "    requires amount <= current\n"
+                    "    ensures result >= 0 and result == current - amount\n"
+                    "{\n"
+                    "    return current - amount\n"
+                    "}\n"
+                    "fn main() { print(withdraw(20, 50)) }\n",
+                    encoding="utf-8")
+    result = _wysna("run", "selfhost/compiler.wysna", "--", "--check", str(prog))
+    assert result.returncode == 0
+    assert "Checked" in result.stdout
+
+
+def test_selfhost_rejects_non_bool_contract(tmp_path):
+    prog = tmp_path / "contract_bad.wysna"
+    prog.write_text("fn f(x: int) -> int requires x + 1 { return x }\nfn main() { print(f(1)) }\n",
+                    encoding="utf-8")
+    result = _wysna("run", "selfhost/compiler.wysna", "--", "--check", str(prog))
+    assert result.returncode != 0
+    assert "W2001" in result.stderr + result.stdout
+
+
+def test_selfhost_emitted_c_enforces_contracts(tmp_path):
+    prog = tmp_path / "contract_viol.wysna"
+    prog.write_text("fn bad_inc(x: int) -> int\n"
+                    "    requires x > 0\n"
+                    "    ensures result > x\n"
+                    "{\n"
+                    "    return x - 1\n"
+                    "}\n"
+                    "fn main() { print(bad_inc(5)) }\n",
+                    encoding="utf-8")
+    c_out = tmp_path / "contract_viol.c"
+    res = _wysna("run", "selfhost/compiler.wysna", "--", "--emit-c-mir", str(prog), str(c_out))
+    assert res.returncode == 0
+    bin_out = tmp_path / "contract_viol.bin"
+    cc = subprocess.run(["clang", "-std=c99", "-I.", str(c_out), "-lm", "-o", str(bin_out)],
+                        cwd=_REPO, capture_output=True, text=True)
+    assert cc.returncode == 0, cc.stderr
+    run_bin = subprocess.run([str(bin_out)], capture_output=True, text=True)
+    assert run_bin.returncode != 0
+    assert "W4005" in run_bin.stderr + run_bin.stdout
+    assert "Postcondition ('ensures') failed in 'bad_inc'" in run_bin.stderr + run_bin.stdout
