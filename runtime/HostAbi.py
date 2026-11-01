@@ -690,6 +690,31 @@ def process_run(executable_handle, arguments_handle, timeout_ms, *, cwd=None, en
         return res
 
 
+def crypto_sha256(input_handle, output_handle):
+    import hashlib
+    inp = find(input_handle, 'buffer')
+    out = find(output_handle, 'buffer')
+    if inp is None or out is None:
+        return failure(ValueError("Invalid buffer handle"))
+    digest = hashlib.sha256(bytes(inp)).digest()
+    out.clear()
+    out.extend(digest)
+    return 0
+
+
+def crypto_hmac_sha256(key_handle, message_handle, output_handle):
+    import hmac, hashlib
+    k = find(key_handle, 'buffer')
+    m = find(message_handle, 'buffer')
+    out = find(output_handle, 'buffer')
+    if k is None or m is None or out is None:
+        return failure(ValueError("Invalid buffer handle"))
+    digest = hmac.new(bytes(k), bytes(m), hashlib.sha256).digest()
+    out.clear()
+    out.extend(digest)
+    return 0
+
+
 FUNCTIONS = {
     'wysna_host_last_error': lambda: _error_code,
     'wysna_host_last_error_domain': lambda: _error_domain,
@@ -711,4 +736,6 @@ FUNCTIONS = {
     'wysna_host_fs_canonical': canonical_path,
     'wysna_host_process_run': process_run,
     'wysna_host_http_request': http_request,
+    'wysna_host_crypto_sha256': crypto_sha256,
+    'wysna_host_crypto_hmac_sha256': crypto_hmac_sha256,
 }

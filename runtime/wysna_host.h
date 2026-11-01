@@ -277,6 +277,7 @@ static int64_t wysna_host_fs(void* first, void* second, int64_t operation) {
 
 #include "wysna_host_process.h"
 #include "wysna_host_paths.h"
+#include "wysna_host_crypto.h"
 
 #if defined(WYSNA_HAS_HTTP) && !defined(__wasi__)
 #include <curl/curl.h>

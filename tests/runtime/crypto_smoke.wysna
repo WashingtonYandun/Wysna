@@ -1,0 +1,41 @@
+import "std/crypto"
+
+fn main() {
+    # 1. NIST Test Vector: SHA-256("abc")
+    # Expected: ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad
+    let h1 = crypto.sha256("abc") else err {
+        eprint("crypto.sha256 failed:", err.message)
+        exit(1)
+        ""
+    }
+    if h1 != "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad" {
+        eprint("SHA-256 vector 1 failed, got:", h1)
+        exit(1)
+    }
+
+    # 2. NIST Test Vector: SHA-256("")
+    # Expected: e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855
+    let h2 = crypto.sha256("") else err {
+        eprint("crypto.sha256 empty failed:", err.message)
+        exit(1)
+        ""
+    }
+    if h2 != "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855" {
+        eprint("SHA-256 vector 2 failed, got:", h2)
+        exit(1)
+    }
+
+    # 3. HMAC-SHA256 Test Vector: key = "key", message = "The quick brown fox jumps over the lazy dog"
+    # Expected: f7bc83f430538424b13298e6aa6fb143ef4d59a14946175997479dbc2d1a3cd8
+    let hmac1 = crypto.hmac_sha256("key", "The quick brown fox jumps over the lazy dog") else err {
+        eprint("crypto.hmac_sha256 failed:", err.message)
+        exit(1)
+        ""
+    }
+    if hmac1 != "f7bc83f430538424b13298e6aa6fb143ef4d59a14946175997479dbc2d1a3cd8" {
+        eprint("HMAC-SHA256 vector failed, got:", hmac1)
+        exit(1)
+    }
+
+    print("CRYPTO_OK")
+}

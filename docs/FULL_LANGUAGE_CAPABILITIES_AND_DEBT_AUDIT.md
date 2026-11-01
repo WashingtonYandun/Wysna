@@ -214,6 +214,7 @@ All standard library modules live under `stdlib/*.wysna`:
 | **`std/process`** | `run`, `ProcessResult` | Spawns external system processes with captured stdout, stderr, and exit codes. |
 | **`std/http`** | `get`, `post`, `batch_get` | High-level HTTP client with JSON payload support and deterministic multi-request dispatch. |
 | **`std/resources`**| Scoped resource tracking | Manages file descriptors and external handles to ensure cleanup at last reference. |
+| **`std/crypto`** | `sha256`, `sha256_bytes`, `hmac_sha256`, `hmac_sha256_bytes`, `bytes_to_hex` | Cryptographic hashing and message authentication primitives; standard FIPS 180-4 and RFC 2104 implementation with zero external dependencies. |
 | **`std/environment`**| `arguments`, `get` | Accesses CLI arguments and host environment variables. |
 | **`std/time`** | `unix_seconds` | Returns 64-bit UTC epoch timestamp. |
 | **`std/test`** | `expect`, `expect_equal_int`, `expect_equal_text` | Minimalist zero-dependency unit assertion framework. |
@@ -338,7 +339,7 @@ Despite the architectural achievements of v0.6.0, an exhaustive audit reveals cl
 
 | Limitation | Technical Description | Root Cause / File | Impact / Workaround |
 | :--- | :--- | :--- | :--- |
-| **No Cryptography or Hashing Modules** | `stdlib/` lacks cryptographic primitives (SHA-256, HMAC, AES, RSA, secure random). | `docs/STDLIB.md` | Projects requiring encryption or hashing must link external C libraries via FFI. |
+| **Cryptography Module Scope** | `stdlib/crypto` implements FIPS 180-4 SHA-256 and RFC 2104 HMAC-SHA256 (closed in v0.6.1 / PR #146). Symmetric/asymmetric ciphers (AES, RSA, ChaCha20) remain open for future increments. | `stdlib/crypto.wysna`<br>`runtime/wysna_host_crypto.h` | Basic hashing and authentication are fully operational; full encryption suites require external FFI or future modules. |
 | **No Full Unicode Normalization** | `std/text` only implements ASCII `to_lower` / `to_upper`. It lacks Unicode normalization (NFC, NFD) and language-specific collation. | `stdlib/text.wysna` | Multi-language text sorting and case conversions are limited to ASCII code points. |
 | **Minimal Stub Modules** | Several standard modules are minimalist wrappers: `std/time` has only 3 lines (`unix_seconds`), `std/environment` has 7 lines, and `std/io` has 6 lines. | `stdlib/time.wysna`<br>`stdlib/environment.wysna` | Comprehensive date/time manipulation (timezones, durations, formatting) is absent. |
 
@@ -351,6 +352,144 @@ Despite the architectural achievements of v0.6.0, an exhaustive audit reveals cl
 | **Document-Local LSP Rename** | The Language Server Protocol `rename` command operates strictly on non-exported symbols within the active document. Cross-module renames are refused. | `src/tooling/LanguageServer.py` | Refactoring a public symbol across multiple files requires manual search and replace. |
 | **No Semantic Tokens in LSP** | The LSP implementation does not emit semantic highlighting tokens (`textDocument/semanticTokens`). | `src/tooling/LanguageServer.py` | Syntax highlighting in editors depends entirely on TextMate grammars (`syntaxes/wysna.tmLanguage.json`). |
 | **Unsigned Binary Installers** | Distributed desktop packages (macOS PKG, Windows NSIS) are unsigned and unnotarized. | `packaging/` | macOS Gatekeeper and Windows Defender SmartScreen flag installers with security warnings upon manual installation. |
+
+---
+
+## PART III: Strategic Technical Debt Resolution & Implementation Roadmap (Wysna v0.7.0)
+
+Responding directly to the critical architectural feedback on the four core engineering dilemmas, this section formalizes the production-grade engineering blueprints and trade-off resolutions for the **Wysna v0.7.0** release line.
+
+```mermaid
+flowchart TD
+    subgraph PILLARS["The 3 Strategic Engineering Pillars (v0.7.0)"]
+        P1["Pillar 1: Structured Async I/O<br/>Event-multiplexed non-blocking engine"]
+        P2["Pillar 2: Native std/crypto<br/>[DELIVERED IN PR #146: SHA-256 + HMAC]"]
+        P3["Pillar 3: Native Tooling Migration<br/>wysna test & wysna fmt in Selfhost"]
+    end
+
+    subgraph DEBT_SOLUTIONS["Resolutions to Core Architectural Dilemmas"]
+        D1["Dilemma 1: Cycle Leaks<br/>→ Bacon-Rajan Deferred Trial Deletion"]
+        D2["Dilemma 2: Blocking I/O<br/>→ Cooperative Fiber Event Loop"]
+        D3["Dilemma 3: 32B WVal Footprint<br/>→ 64-bit NaN-Tagging 8B Representation"]
+        D4["Dilemma 4: Seed vs Selfhost Gap<br/>→ 3-Stage Native Independence Bootstrap"]
+    end
+
+    PILLARS --> DEBT_SOLUTIONS
+```
+
+---
+
+### 1. Dilemma 1: Class Cycle Leaks & The Bacon-Rajan Collector Architecture
+
+#### The Production Dilemma
+Relying exclusively on developer discipline and `Weak[C]` fails in AI agent workflows, where autonomous models frequently generate circular object graphs (`parent.child = child; child.parent = parent`). Under pure ARC, these structures leak silently until `--max-heap-mb` terminates the process with `W4004`.
+
+#### The Architectural Resolution: Deferred Bacon-Rajan Cycle Collection
+Wysna will implement a **deferred, thread-local Bacon-Rajan cycle collection algorithm** (the model proven in Swift and PHP) operating only over class instances:
+
+1. **Four-Color Node State:** Class object headers add 2 bits to encode node color:
+   - `BLACK`: Stable in-use node (not suspected of being in a dead cycle).
+   - `PURPLE`: Candidate root of a cycle (marked whenever a class reference count is decremented to a non-zero value: `refcount > 0`).
+   - `GRAY`: Node undergoing trial decrement.
+   - `WHITE`: Node confirmed unreachable (proven dead cycle member).
+2. **Deterministic Triggering Strategy:**
+   - Collection runs **only at cooperative epoch points** (e.g., lexical scope exits with high allocation pressure, or when heap usage reaches $80\%$ of `--max-heap-mb`).
+   - **Phase 1 (Mark Gray):** Starting from purple candidate roots, transitively traverse internal references and decrement temporary reference counts.
+   - **Phase 2 (Scan):** If an object's trial refcount is $> 0$, revert it to `BLACK` (it is reachable from outside the cycle). If trial refcount $== 0$, mark `WHITE`.
+   - **Phase 3 (Collect White):** Reclaim all `WHITE` subgraphs in a single sweep and return their slots to the pool.
+3. **Trade-offs:** Zero pause time during normal execution; zero overhead on value types (structs, lists, dicts continue with pure ARC/CoW). Class allocations incur a single word header overhead for candidate buffer tracking.
+
+---
+
+### 2. Dilemma 2: Structured Asynchronous I/O for Agent Workflows
+
+#### The Production Dilemma
+Agent workflows are $\ge 80\%$ I/O bound (vector database queries, LLM API calls, tool RPCs, web scraping). Synchronous blocking calls force agents to spawn heavy host processes or block event threads, bottlenecking multi-agent swarms.
+
+#### The Architectural Resolution: Cooperative Non-Blocking Event Multiplexing
+Wysna avoids preemptive OS threads and retains its single-threaded deterministic ARC invariant by implementing a **cooperative asynchronous I/O runtime**:
+
+```mermaid
+sequenceDiagram
+    participant Agent as Wysna Agent Code
+    participant Runtime as Async Task Queue
+    participant Host as Event Multiplexer (epoll/kqueue)
+
+    Agent->>Runtime: http.get_async("https://api...")
+    Runtime->>Host: register_socket_read(fd, task_id)
+    Runtime-->>Agent: yield to other ready tasks
+    Note over Host: OS kernel watches sockets in non-blocking mode
+    Host->>Runtime: socket_ready(task_id, data)
+    Runtime->>Agent: resume_task(task_id, response)
+```
+
+1. **Host Event Multiplexer:**
+   - Integrates OS-native multiplexers via ANSI C: `kqueue` (macOS/BSD), `epoll` (Linux), and `IOCP` (Windows), falling back to `poll()` on WASI.
+   - Sockets run strictly in non-blocking mode (`O_NONBLOCK`).
+2. **Structured Async Primitives:**
+   - Add `async fn` and `await` syntax to the grammar (`SPEC §9`).
+   - Async functions lower to state machine structs containing suspension points and local temporaries.
+   - Preserves ARC/CoW guarantees: because execution is cooperative and single-threaded within the worker engine, no race conditions or shared mutable locks are introduced.
+3. **Immediate v0.7.0 Delivery:**
+   - `std/http.batch_get` updated with bounded concurrent multi-dispatch.
+   - Introduction of `std/async` with `async.all(tasks)` and `async.race(tasks)`.
+
+---
+
+### 3. Dilemma 3: WVal Memory Footprint Reduction (32B → 8B NaN-Tagging)
+
+#### The Production Dilemma
+On 64-bit architectures, general `WVal` consumes 32 bytes (8-byte tag, 8-byte refcount/payload, 16-byte union data). This creates significant cache pressure: a standard 64-byte L1 cache line fits only **two** `WVal` instances, causing memory bandwidth bottlenecks on large JSON or graph traversals.
+
+#### The Architectural Resolution: 64-bit NaN-Tagging (8-Byte WVal)
+Wysna will adopt **64-bit NaN-Tagging**, utilizing the $51$ unused mantissa bits of IEEE-754 Quiet NaNs to represent all scalar primitives, pointers, and small values in a single 64-bit word ($4\times$ density increase):
+
+```text
+Double:       [0] [11-bit Exponent != 0x7FF] [52-bit Fraction]
+Quiet NaN:    [1] [11-bit Exponent == 0x7FF] [1] [50-bit Payload]
+
+Wysna NaN Tagging Bit Layout (64 bits):
+[ 1 ][ 11111111111 ][ 1 ][ 3-bit Tag ][ 48-bit Value / Pointer ]
+  Sign     Exponent   QNaN   Tag (0..7)          Payload
+```
+
+| Tag Bitfield | Type Represented | Payload Interpretation |
+| :---: | :--- | :--- |
+| `000` | **Raw IEEE-754 Double** | Stored directly when not matching Quiet NaN mask. |
+| `001` | **Signed Integer (`int`)** | 48-bit signed integer (immediate, zero allocation). |
+| `010` | **Boolean (`bool`)** | `0` = false, `1` = true. |
+| `011` | **Unit / None Sentinels** | `0` = unit, `1` = none. |
+| `100` | **Heap Object Pointer** | Canonical 48-bit virtual address pointing to ARC-managed header. |
+| `101` | **Small String (SSO)** | Inline string literal up to 6 ASCII bytes without heap allocation. |
+| `110` | **Small Symbol / Enum** | Interned enum variant identity (DefId: 24b, Variant: 24b). |
+| `111` | **Reserved Sentinel** | Poison/Error recovery handle. |
+
+**Performance Payoff:**
+- **L1 Cache Utilization:** 8 values per cache line instead of 2 ($400\%$ improvement).
+- **Zero Heap Allocation for Scalars:** Integers, booleans, unit, and small strings require zero dynamic heap allocations.
+
+---
+
+### 4. Dilemma 4: Bridging Seed (Python) and Selfhost (`native-core-v1`)
+
+#### The Production Dilemma
+Operating two compilers in parallel introduces permanent risk of **semantic drift**. The self-hosted compiler currently acts as an execution core, while developer tools (`wysna test`, `wysna fmt`, manifests, LSP) remain anchored to Python.
+
+#### The Architectural Resolution: 3-Stage Tooling Migration Plan
+
+```mermaid
+flowchart LR
+    STAGE1["Stage 1 (v0.6.1)<br/>Native std/crypto +<br/>NIST Validation<br/>(DELIVERED)"] --> STAGE2["Stage 2 (v0.7.0)<br/>Port 'wysna test' &<br/>'wysna fmt' to Selfhost"]
+    STAGE2 --> STAGE3["Stage 3 (v0.8.0)<br/>Full Selfhost LSP +<br/>Zero Python Dependency"]
+```
+
+1. **Stage 1 (v0.6.1 - Delivered in PR #146):**
+   - Implemented native `std/crypto` with zero-dependency C99 SHA-256 and HMAC-SHA256, verified across interpreter and native C99.
+2. **Stage 2 (Wysna v0.7.0 Target):**
+   - **Port `wysna test` to Native Binary:** Extract the test discovery, assertion runner, and TAP/JSON reporting into `selfhost/src/10_test_runner.wysna`. Compile and link directly into the standalone binary.
+   - **Port `wysna fmt` to Native Binary:** Re-implement AST trivia preservation and pretty-printing in Wysna source, enabling lightning-fast code formatting with zero Python overhead.
+3. **Stage 3 (Wysna v0.8.0 Target):**
+   - Port the JSON-RPC Language Server (`src/tooling/LanguageServer.py`) into native Wysna, completing Stage-3 self-hosting and decommissioning the Python Seed compiler for standard user workflows.
 
 ---
 
