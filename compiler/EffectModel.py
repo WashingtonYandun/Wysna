@@ -58,6 +58,7 @@ RUNTIME_EFFECTS.update({
     'wysna_builtin_exit': frozenset({'process.exit'}),
     'wysna_builtin_read_file': frozenset({'filesystem.read', 'memory.allocate', 'failure.raise'}),
     'wysna_builtin_write_file': frozenset({'filesystem.write', 'failure.raise'}),
+    'wysna_builtin_contract_assert_at': frozenset({'failure.raise'}),
 })
 
 HOST_EFFECTS = {

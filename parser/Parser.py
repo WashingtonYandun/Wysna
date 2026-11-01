@@ -555,6 +555,34 @@ class Parser:
             self.expect(TokenType.RBRACKET, code="W0006", msg="Expected ']' after type parameters")
         return type_params
 
+    def _parse_contracts(self, allow_ensures: bool = True) -> Tuple[List[Expr], List[Expr]]:
+        requires: List[Expr] = []
+        ensures: List[Expr] = []
+        while True:
+            saved = self.pos
+            while self.match(TokenType.NEWLINE):
+                pass
+            if (
+                self.check(TokenType.IDENTIFIER)
+                and self.at().value == "requires"
+                and self.peek(1).type != TokenType.COLON
+            ):
+                self.advance()
+                requires.append(self.parse_expr(allow_struct_init=False))
+                continue
+            if (
+                allow_ensures
+                and self.check(TokenType.IDENTIFIER)
+                and self.at().value == "ensures"
+                and self.peek(1).type != TokenType.COLON
+            ):
+                self.advance()
+                ensures.append(self.parse_expr(allow_struct_init=False))
+                continue
+            self.pos = saved
+            break
+        return requires, ensures
+
     def parse_fn_decl(self) -> FnDecl:
         start_tok = self.expect(TokenType.FN, code="W0006", msg="Expected 'fn'")
         name_tok = self.expect(TokenType.IDENTIFIER, code="W0006", msg="Expected function name after 'fn'")
@@ -568,8 +596,23 @@ class Parser:
         if self.match(TokenType.ARROW):
             return_type = self.parse_type()
 
+        requires, ensures = self._parse_contracts()
+        if requires or ensures:
+            while self.match(TokenType.NEWLINE):
+                pass
+
         body = self.parse_block()
-        return FnDecl(name=name_tok.value, params=params, return_type=return_type, body=body, type_params=type_params, line=start_tok.line, col=start_tok.col)
+        return FnDecl(
+            name=name_tok.value,
+            params=params,
+            return_type=return_type,
+            body=body,
+            type_params=type_params,
+            line=start_tok.line,
+            col=start_tok.col,
+            requires=requires,
+            ensures=ensures,
+        )
 
     def parse_interface_decl(self) -> InterfaceDecl:
         start_tok = self.expect(TokenType.INTERFACE, code="W0006", msg="Expected 'interface'")
@@ -591,7 +634,18 @@ class Parser:
             ret_type = NamedType("unit", line=m_name.line, col=m_name.col)
             if self.match(TokenType.ARROW):
                 ret_type = self.parse_type()
-            methods.append(InterfaceMethod(name=m_name.value, params=params, return_type=ret_type, line=fn_tok.line, col=fn_tok.col))
+            requires, ensures = self._parse_contracts()
+            methods.append(
+                InterfaceMethod(
+                    name=m_name.value,
+                    params=params,
+                    return_type=ret_type,
+                    line=fn_tok.line,
+                    col=fn_tok.col,
+                    requires=requires,
+                    ensures=ensures,
+                )
+            )
 
         self.expect(TokenType.RBRACE, code="W0006", msg="Unterminated interface body, expected '}'")
         return InterfaceDecl(name=name_tok.value, methods=methods, line=start_tok.line, col=start_tok.col, type_params=type_params)
@@ -647,6 +701,10 @@ class Parser:
                 ret_type = NamedType("unit", line=m_name.line, col=m_name.col)
                 if self.match(TokenType.ARROW):
                     ret_type = self.parse_type()
+                requires, ensures = self._parse_contracts()
+                if requires or ensures:
+                    while self.match(TokenType.NEWLINE):
+                        pass
                 body = self.parse_block()
                 methods.append(
                     MethodDecl(
@@ -657,6 +715,8 @@ class Parser:
                         is_public=is_public,
                         line=fn_tok.line,
                         col=fn_tok.col,
+                        requires=requires,
+                        ensures=ensures,
                     )
                 )
             else:
@@ -707,7 +767,15 @@ class Parser:
             f_name = self.expect(TokenType.IDENTIFIER, code="W0006", msg="Expected struct field name")
             self.expect(TokenType.COLON, code="W0006", msg="Expected ':' after struct field name")
             f_type = self.parse_type()
-            fields.append(StructField(f_name.value, f_type, line=f_name.line, col=f_name.col))
+            f_requires: List[Expr] = []
+            while (
+                self.check(TokenType.IDENTIFIER)
+                and self.at().value == "requires"
+                and self.peek(1).type != TokenType.COLON
+            ):
+                self.advance()
+                f_requires.append(self.parse_expr(allow_struct_init=False))
+            fields.append(StructField(f_name.value, f_type, line=f_name.line, col=f_name.col, requires=f_requires))
             self.match(TokenType.COMMA)
 
         self.expect(TokenType.RBRACE, code="W0006", msg="Unterminated struct body, expected '}'")

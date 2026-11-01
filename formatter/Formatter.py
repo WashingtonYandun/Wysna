@@ -176,7 +176,8 @@ class Formatter:
                 return f"{ind}struct {stmt.name}{tparams} {{}}"
             field_lines: List[str] = []
             for f in stmt.fields:
-                field_lines.append(f"{self._indent(level + 1)}{f.name}: {self.format_type(f.type_ann)},")
+                req_suffix = "".join(f" requires {self.format_expr(r, level + 1)}" for r in getattr(f, "requires", ()))
+                field_lines.append(f"{self._indent(level + 1)}{f.name}: {self.format_type(f.type_ann)}{req_suffix},")
             body = "\n".join(field_lines)
             return f"{ind}struct {stmt.name}{tparams} {{\n{body}\n{ind}}}"
 
@@ -188,7 +189,9 @@ class Formatter:
             for m in stmt.methods:
                 params_str = ", ".join([f"{p.name}: {self.format_type(p.type_ann)}" for p in m.params])
                 ret_str = self.format_type(m.return_type)
-                method_lines.append(f"{self._indent(level + 1)}fn {m.name}({params_str}) -> {ret_str}")
+                contracts_str = "".join(f" requires {self.format_expr(r, level + 1)}" for r in getattr(m, "requires", ()))
+                contracts_str += "".join(f" ensures {self.format_expr(e, level + 1)}" for e in getattr(m, "ensures", ()))
+                method_lines.append(f"{self._indent(level + 1)}fn {m.name}({params_str}) -> {ret_str}{contracts_str}")
             body = "\n".join(method_lines)
             return f"{ind}interface {stmt.name}{tparams} {{\n{body}\n{ind}}}"
 
@@ -209,8 +212,10 @@ class Formatter:
                 vis = "public " if m.is_public else "private "
                 params_str = ", ".join([f"{p.name}: {self.format_type(p.type_ann)}" for p in m.params])
                 ret_str = self.format_type(m.return_type)
+                contracts_str = "".join(f" requires {self.format_expr(r, level + 1)}" for r in getattr(m, "requires", ()))
+                contracts_str += "".join(f" ensures {self.format_expr(e, level + 1)}" for e in getattr(m, "ensures", ()))
                 blk_str = self.format_block(m.body, level + 1)
-                member_lines.append(f"{self._indent(level + 1)}{vis}fn {m.name}({params_str}) -> {ret_str} {blk_str}")
+                member_lines.append(f"{self._indent(level + 1)}{vis}fn {m.name}({params_str}) -> {ret_str}{contracts_str} {blk_str}")
             body = "\n".join(member_lines)
             return f"{header} {{\n{body}\n{ind}}}"
 
@@ -218,8 +223,10 @@ class Formatter:
             tparams = f"[{', '.join(str(p) for p in stmt.type_params)}]" if stmt.type_params else ""
             params_str = ", ".join([f"{p.name}: {self.format_type(p.type_ann)}" for p in stmt.params])
             ret_str = self.format_type(stmt.return_type)
+            contracts_str = "".join(f" requires {self.format_expr(r, level)}" for r in getattr(stmt, "requires", ()))
+            contracts_str += "".join(f" ensures {self.format_expr(e, level)}" for e in getattr(stmt, "ensures", ()))
             block_str = self.format_block(stmt.body, level)
-            return f"{ind}fn {stmt.name}{tparams}({params_str}) -> {ret_str} {block_str}"
+            return f"{ind}fn {stmt.name}{tparams}({params_str}) -> {ret_str}{contracts_str} {block_str}"
 
         if isinstance(stmt, LetDecl):
             mut_str = "mut " if stmt.is_mut else ""

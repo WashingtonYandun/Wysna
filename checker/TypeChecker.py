@@ -339,12 +339,135 @@ class TypeChecker:
                   line=parameter.line, col=parameter.col)
             for parameter in declaration.params
         ]
+        for req in getattr(declaration, "requires", []):
+            self._substitute_ast_types(req, substitutions)
+        for ens in getattr(declaration, "ensures", []):
+            self._substitute_ast_types(ens, substitutions)
         self._substitute_ast_types(declaration.body, substitutions)
         return declaration
 
+    def _check_contracts(
+        self,
+        owner_name: str,
+        requires_exprs: List[Expr],
+        ensures_exprs: List[Expr],
+        ret_type: WysnaType,
+    ) -> None:
+        for req in requires_exprs or ():
+            req_t = self._check_expr(req)
+            if not self._require_boolean(req_t, req, f"Precondition ('requires') on '{owner_name}'"):
+                raise TypeError(
+                    message=f"Contract 'requires' clause on '{owner_name}' must be bool, found '{req_t}'",
+                    line=req.line,
+                    col=req.col,
+                    file=self.file,
+                    code="W2001",
+                )
+        if ensures_exprs:
+            result_type = ret_type.ok if isinstance(ret_type, ResultType) else ret_type
+            ens_scope = Scope(parent=self.current_scope)
+            ens_scope.define_symbol(
+                Symbol("result", result_type, is_mut=False, kind="param", line=1, col=1),
+                file=self.file,
+            )
+            old_scope = self.current_scope
+            self.current_scope = ens_scope
+            try:
+                for ens in ensures_exprs:
+                    ens_t = self._check_expr(ens)
+                    if not self._require_boolean(ens_t, ens, f"Postcondition ('ensures') on '{owner_name}'"):
+                        raise TypeError(
+                            message=f"Contract 'ensures' clause on '{owner_name}' must be bool, found '{ens_t}'",
+                            line=ens.line,
+                            col=ens.col,
+                            file=self.file,
+                            code="W2001",
+                        )
+            finally:
+                self.current_scope = old_scope
+
+    def _check_struct_contracts(self, stmt: StructDecl) -> None:
+        if stmt.type_params:
+            return
+        if not any(getattr(f, "requires", None) for f in stmt.fields):
+            return
+        struct_type = self.global_scope.lookup_type(stmt.name)
+        if not isinstance(struct_type, StructType):
+            return
+        struct_scope = Scope(parent=self.current_scope)
+        struct_scope.define_symbol(
+            Symbol("self", struct_type, is_mut=False, kind="param", line=stmt.line, col=stmt.col),
+            file=self.file,
+        )
+        for f in stmt.fields:
+            f_type = struct_type.fields.get(f.name)
+            if f_type is not None:
+                struct_scope.define_symbol(
+                    Symbol(f.name, f_type, is_mut=False, kind="param", line=f.line, col=f.col),
+                    file=self.file,
+                )
+        old_scope = self.current_scope
+        self.current_scope = struct_scope
+        try:
+            for f in stmt.fields:
+                for req in getattr(f, "requires", None) or ():
+                    req_t = self._check_expr(req)
+                    if not self._require_boolean(req_t, req, f"Field invariant ('requires') on '{stmt.name}.{f.name}'"):
+                        raise TypeError(
+                            message=f"Contract 'requires' clause on '{stmt.name}.{f.name}' must be bool, found '{req_t}'",
+                            line=req.line,
+                            col=req.col,
+                            file=self.file,
+                            code="W2001",
+                        )
+        finally:
+            self.current_scope = old_scope
+
+    def _check_interface_contracts(self, stmt: InterfaceDecl) -> None:
+        if stmt.type_params:
+            return
+        intf_type = self.global_scope.lookup_type(stmt.name)
+        if not isinstance(intf_type, InterfaceType):
+            return
+        for m in stmt.methods:
+            if not getattr(m, "requires", None) and not getattr(m, "ensures", None):
+                continue
+            fn_type = intf_type.methods.get(m.name)
+            if fn_type is None:
+                continue
+            m_scope = Scope(parent=self.current_scope, is_function_scope=True)
+            m_scope.define_symbol(
+                Symbol("self", intf_type, is_mut=False, kind="param", line=m.line, col=m.col),
+                file=self.file,
+            )
+            for p, p_type in zip(m.params, fn_type.params):
+                m_scope.define_symbol(
+                    Symbol(p.name, p_type, is_mut=False, kind="param", line=p.line, col=p.col),
+                    file=self.file,
+                )
+            old_scope = self.current_scope
+            self.current_scope = m_scope
+            try:
+                self._check_contracts(
+                    f"{stmt.name}.{m.name}",
+                    getattr(m, "requires", []),
+                    getattr(m, "ensures", []),
+                    fn_type.ret,
+                )
+            finally:
+                self.current_scope = old_scope
+
     def _check_stmt(self, stmt: Stmt) -> None:
-        if isinstance(stmt, (EnumDecl, StructDecl, InterfaceDecl, ImportDecl)):
+        if isinstance(stmt, (EnumDecl, ImportDecl)):
             return  # Handled in Pass 1
+
+        elif isinstance(stmt, StructDecl):
+            self._check_struct_contracts(stmt)
+            return
+
+        elif isinstance(stmt, InterfaceDecl):
+            self._check_interface_contracts(stmt)
+            return
 
         elif isinstance(stmt, ClassDecl):
             if stmt.type_params:
@@ -483,6 +606,12 @@ class TypeChecker:
                             Symbol(p.name, p_type, is_mut=False, kind="param", line=p.line, col=p.col),
                             file=self.file
                         )
+                    self._check_contracts(
+                        f"{stmt.name}.{m.name}",
+                        getattr(m, "requires", []),
+                        getattr(m, "ensures", []),
+                        fn_type.ret,
+                    )
                     is_unit_ret = (fn_type.ret == UnitType) or (isinstance(fn_type.ret, ResultType) and fn_type.ret.ok == UnitType)
                     body_ret = self._check_block(m.body, is_statement_context=is_unit_ret)
                     if m.name == "init":
@@ -551,6 +680,13 @@ class TypeChecker:
                     Symbol(p.name, p_type, is_mut=False, kind="param", line=p.line, col=p.col),
                     file=self.file
                 )
+
+            self._check_contracts(
+                stmt.name,
+                getattr(stmt, "requires", []),
+                getattr(stmt, "ensures", []),
+                fn_type.ret,
+            )
 
             is_unit_ret = (fn_type.ret == UnitType) or (isinstance(fn_type.ret, ResultType) and fn_type.ret.ok == UnitType)
             body_ret = self._check_block(stmt.body, is_statement_context=is_unit_ret)

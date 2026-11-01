@@ -101,6 +101,95 @@ def _type_node_to_schema(node, known_defs):
     return {"x-wysna-type": raw_name}
 
 
+def _extract_numeric_literal(node):
+    kind = type(node).__name__
+    if kind in ("IntLiteral", "FloatLiteral"):
+        return node.value
+    if kind == "UnaryExpr" and getattr(node, "op", None) == "-":
+        inner = _extract_numeric_literal(node.operand)
+        if inner is not None:
+            return -inner
+    return None
+
+
+def _extract_target_and_kind(node):
+    """Return (target_name, 'value' | 'len') if node refers to an identifier or len(identifier)."""
+    kind = type(node).__name__
+    if kind == "IdentExpr":
+        return node.name, "value"
+    if kind == "MemberExpr":
+        obj_kind = type(node.object).__name__
+        if obj_kind == "ThisExpr" or (obj_kind == "IdentExpr" and node.object.name == "self"):
+            return node.property, "value"
+    if kind == "CallExpr":
+        callee = node.callee
+        args = getattr(node, "args", getattr(node, "arguments", ()))
+        if type(callee).__name__ == "IdentExpr" and callee.name == "len" and len(args) == 1:
+            inner_target, inner_kind = _extract_target_and_kind(args[0])
+            if inner_target is not None and inner_kind == "value":
+                return inner_target, "len"
+    return None, None
+
+
+_FLIP_OP = {">": "<", ">=": "<=", "<": ">", "<=": ">=", "==": "=="}
+
+
+def _apply_expr_to_schemas(expr, prop_schemas):
+    kind = type(expr).__name__
+    if kind == "BinaryExpr":
+        op = getattr(expr, "op", getattr(expr, "operator", None))
+        if op == "and":
+            _apply_expr_to_schemas(expr.left, prop_schemas)
+            _apply_expr_to_schemas(expr.right, prop_schemas)
+            return
+        if op in _FLIP_OP:
+            target, tkind = _extract_target_and_kind(expr.left)
+            bound = _extract_numeric_literal(expr.right)
+            if target is None or bound is None:
+                target, tkind = _extract_target_and_kind(expr.right)
+                bound = _extract_numeric_literal(expr.left)
+                op = _FLIP_OP[op]
+            if target is not None and bound is not None and target in prop_schemas:
+                schema = prop_schemas[target]
+                if not isinstance(schema, dict):
+                    return
+                if tkind == "value":
+                    if op == ">=":
+                        schema["minimum"] = bound
+                    elif op == ">":
+                        schema["exclusiveMinimum"] = bound
+                    elif op == "<=":
+                        schema["maximum"] = bound
+                    elif op == "<":
+                        schema["exclusiveMaximum"] = bound
+                elif tkind == "len" and isinstance(bound, int):
+                    stype = schema.get("type")
+                    min_key = "minLength" if stype == "string" else ("minItems" if stype == "array" else None)
+                    max_key = "maxLength" if stype == "string" else ("maxItems" if stype == "array" else None)
+                    if min_key and op == ">=":
+                        schema[min_key] = bound
+                    elif min_key and op == ">":
+                        schema[min_key] = bound + 1
+                    elif max_key and op == "<=":
+                        schema[max_key] = bound
+                    elif max_key and op == "<" and bound > 0:
+                        schema[max_key] = bound - 1
+
+
+def _format_contracts(exprs):
+    if not exprs:
+        return []
+    from formatter.Formatter import Formatter
+    fmt = Formatter()
+    return [fmt.format_expr(e, 0) for e in exprs]
+
+
+def _apply_expr_to_schemas_for_result(ensures_exprs, output_schema):
+    holder = {"result": output_schema}
+    for ens in ensures_exprs:
+        _apply_expr_to_schemas(ens, holder)
+
+
 def _struct_schema(decl, lines, known_defs):
     properties = {}
     required = []
@@ -108,6 +197,12 @@ def _struct_schema(decl, lines, known_defs):
         properties[field.name] = _type_node_to_schema(field.type_ann, known_defs)
         if type(field.type_ann).__name__ != "OptionalType":
             required.append(field.name)
+    for field in decl.fields:
+        reqs = getattr(field, "requires", None) or ()
+        if reqs:
+            for req in reqs:
+                _apply_expr_to_schemas(req, properties)
+            properties[field.name]["x-wysna-requires"] = _format_contracts(reqs)
     schema = {
         "type": "object",
         "properties": properties,
@@ -179,6 +274,9 @@ def _tool_definition(fn_decl, lines, known_defs, effect_row):
         properties[param.name] = _type_node_to_schema(param.type_ann, known_defs)
         if type(param.type_ann).__name__ != "OptionalType":
             required.append(param.name)
+    fn_reqs = getattr(fn_decl, "requires", None) or ()
+    for req in fn_reqs:
+        _apply_expr_to_schemas(req, properties)
     input_schema = {
         "type": "object",
         "properties": properties,
@@ -197,6 +295,10 @@ def _tool_definition(fn_decl, lines, known_defs, effect_row):
     else:
         output_schema = _type_node_to_schema(ret_node, known_defs)
         error_schema = None
+
+    fn_ens = getattr(fn_decl, "ensures", None) or ()
+    if fn_ens and isinstance(output_schema, dict):
+        _apply_expr_to_schemas_for_result(fn_ens, output_schema)
 
     params_sig = ", ".join(f"{p.name}: {_type_name(p.type_ann)}" for p in fn_decl.params)
     ret_sig = _type_name(ret_node) if ret_node is not None else "unit"
@@ -222,7 +324,7 @@ def _tool_definition(fn_decl, lines, known_defs, effect_row):
         and set(capabilities).issubset(_READ_ONLY_CAPABILITIES)
     )
 
-    return {
+    tool_def = {
         "name": fn_decl.name,
         "visibility": "public" if getattr(fn_decl, "is_exported", False) else "private",
         "signature": signature,
@@ -231,12 +333,15 @@ def _tool_definition(fn_decl, lines, known_defs, effect_row):
         "output_schema": output_schema,
         "error_schema": error_schema,
         "fallible": fallible,
+        "requires": _format_contracts(fn_reqs),
+        "ensures": _format_contracts(fn_ens),
         "effects": effects,
         "capabilities": capabilities,
         "complete_within_model": complete,
         "pure": pure,
         "idempotent": idempotent,
     }
+    return tool_def
 
 
 def _encode_scalar_expr(expr, type_node, known_defs):
@@ -568,8 +673,10 @@ def run_schema_command(argv):
                         help="Generate type-safe Wysna JSON codec functions for structs and enums")
     parser.add_argument("-o", "--output", dest="output_path",
                         help="Write generated output or codecs to a file")
+    parser.add_argument("--json", action="store_const", const="json-v1", dest="output_format",
+                        help="Emit canonical json-v1 tool result envelope")
     parser.add_argument("--output-format", choices=("json-v1",))
-    json_output = any(arg == "--output-format=json-v1" for arg in argv) or "--output-format" in argv
+    json_output = any(arg in ("--output-format=json-v1", "--json") for arg in argv) or "--output-format" in argv
     service = CompilerService()
     try:
         options = parser.parse_args(list(argv))

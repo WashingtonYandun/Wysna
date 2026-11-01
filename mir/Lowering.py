@@ -518,6 +518,8 @@ class Lowering:
             return self.call('wysna_fn_' + node.target.fn_name, [self.expr(arg) for arg in node.args], type_id, node)
         if isinstance(node, H.HirBuiltinCall):
             values = [self.expr(arg) for arg in node.args]
+            if node.builtin_name in ('contract_assert', '__wysna_contract_assert'):
+                return self.runtime('wysna_builtin_contract_assert_at', values, type_id, node, source=True)
             name = 'wysna_builtin_weak_owned' if node.builtin_name == 'weak' else 'wysna_builtin_' + node.builtin_name
             return self.runtime(name, values, type_id, node, moves=[0] if node.builtin_name == 'weak' else [])
         if isinstance(node, H.HirMethodCall):
