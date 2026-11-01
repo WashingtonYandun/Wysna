@@ -139,7 +139,9 @@ def _validate_wheel(packed, source_root, members):
                          + '; unexpected ' + repr(sorted(files - expected_files)))
     for name in source_names:
         disk_path = _resolve_source_path(source_root, name, configuration)
-        if disk_path.read_bytes() != packed.read(name):
+        disk_bytes = disk_path.read_bytes()
+        packed_bytes = packed.read(name)
+        if disk_bytes != packed_bytes and disk_bytes.replace(b'\r\n', b'\n') != packed_bytes.replace(b'\r\n', b'\n'):
             raise ValueError('Seed wheel does not match checkout: ' + name)
     metadata = Parser().parsestr(packed.read(metadata_root + '/METADATA').decode('utf-8'))
     if metadata.get_all('Name') != [project['name']] or metadata.get_all('Version') != [version]:
