@@ -25,9 +25,17 @@ dev = ["pytest==8.4.2", "aiohttp>=3.14.5,<4", "pycurl>=7.48,<8"]
 [project.scripts]
 wysna = "main:main"
 
+[tool.pytest.ini_options]
+pythonpath = ["src", "."]
+
 [tool.setuptools]
 py-modules = ["main", "run_conformance"]
 packages = ["lexer", "parser", "checker", "formatter", "runtime", "codegen", "common", "error", "node", "tokens", "hir", "mir", "compiler", "tooling", "common._vendor", "common._vendor.tomli", "stdlib", "project"]
+
+[tool.setuptools.package-dir]
+"" = "src"
+runtime = "runtime"
+stdlib = "stdlib"
 
 [tool.setuptools.package-data]
 runtime = ["*.h", "wysna_llvm_runtime.c", "wysna_llvm_operations.def"]

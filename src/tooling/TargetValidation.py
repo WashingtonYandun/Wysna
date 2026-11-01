@@ -1,6 +1,7 @@
 """Preflight checks for capabilities required by a selected project target."""
 from pathlib import Path
 
+from common.Paths import get_repo_root
 from error.Error import WysnaError
 from checker.TypeInterner import TYPE_BOOL, TYPE_FLOAT, TYPE_INT, TYPE_STR, TYPE_UNIT
 from node.NodeType import CallExpr, IdentExpr, Node
@@ -10,7 +11,7 @@ from project.Targets import target_spec
 def validate_checked_target(checked, target):
     """Reject source capabilities unavailable to a target before its toolchain runs."""
     spec = target_spec(target.profile)
-    repository_root = Path(__file__).resolve().parents[1]
+    repository_root = Path(get_repo_root())
     standard_library = (repository_root / "stdlib").resolve()
     module_paths = {Path(path).resolve() for path in checked.modules}
     http_module = (standard_library / "http.wysna").resolve()

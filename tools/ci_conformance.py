@@ -10,15 +10,18 @@ import sys
 import tempfile
 
 ROOT = Path(__file__).resolve().parents[1]
-sys.path.insert(0, str(ROOT))
+SRC = ROOT / 'src'
+if str(SRC) not in sys.path:
+    sys.path.insert(0, str(SRC))
+if str(ROOT) not in sys.path:
+    sys.path.insert(0, str(ROOT))
 from tests.engine_harness import ENGINES, PROFILES, corpus_paths, execute, verify_case
 
 
 def source_fingerprint(root=ROOT):
     """Bind evidence to the commit and exact source, fixture and harness bytes."""
-    roots = ('checker', 'codegen', 'common', 'compiler', 'error', 'formatter', 'hir',
-             'lexer', 'mir', 'node', 'parser', 'runtime', 'selfhost/src', 'stdlib',
-             'tooling', 'tools', 'tests', 'examples', 'tokens', 'bench', 'packaging', 'project')
+    roots = ('src', 'runtime', 'selfhost/src', 'stdlib',
+             'tools', 'tests', 'examples', 'bench', 'packaging')
     suffixes = {'.py', '.wysna', '.c', '.h', '.def', '.expected', '.json', '.txt'}
     paths = {path for name in roots for path in (root / name).rglob('*')
              if path.is_file() and path.suffix in suffixes

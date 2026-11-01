@@ -5,6 +5,12 @@ import os
 import subprocess
 import sys
 import tempfile
+from pathlib import Path
+
+_SRC = Path(__file__).resolve().parent / "src"
+if _SRC.is_dir() and str(_SRC) not in sys.path:
+    sys.path.insert(0, str(_SRC))
+
 from lexer.Lexer import Lexer
 from parser.Parser import Parser
 from checker.TypeChecker import TypeChecker
@@ -63,7 +69,11 @@ def sha256_file(path: str) -> str:
 
 
 def run_suite() -> None:
-    repo_root = os.path.dirname(os.path.realpath(__file__))
+    file_path = Path(__file__).resolve()
+    if file_path.parent.name == "src":
+        repo_root = str(file_path.parent.parent)
+    else:
+        repo_root = str(file_path.parent)
     prev_cwd = os.getcwd()
     os.chdir(repo_root)
     try:
@@ -358,7 +368,6 @@ def _run_suite_in_repo(repo_root: str) -> None:
     print(f"Runtime execution:   {runtime_passed}/{len(runtime_files)}")
 
     # 7. Native C99 Backend Tests (Wysna Seed) & 8. Self-Hosting Wysna Compiler Stage-2 Suite
-    repo_root = os.path.dirname(os.path.abspath(__file__))
     c99_targets = [f for f in runtime_files if os.path.exists(os.path.join(runtime_dir, f[:-6] + ".expected"))]
     c99_passed = 0
     bootstrap_ok = False

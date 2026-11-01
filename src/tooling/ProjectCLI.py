@@ -10,6 +10,7 @@ import tempfile
 import threading
 import time
 
+from common.Paths import get_repo_root
 from common.Version import WYSNA_VERSION
 from compiler.BrowserLibraryToolchain import (
     EMSCRIPTEN_VERSION,
@@ -171,14 +172,14 @@ def _run_build(resolver, target_name, output, json_mode):
         c_source = emission.source
         destination.parent.mkdir(parents=True, exist_ok=True)
         if target.profile == "wasi-command":
-            built = WasiToolchain(Path(__file__).resolve().parents[1]).build(c_source, destination)
+            built = WasiToolchain(Path(get_repo_root())).build(c_source, destination)
         elif target.profile == "browser-library":
-            built = BrowserLibraryToolchain(Path(__file__).resolve().parents[1]).build(
+            built = BrowserLibraryToolchain(Path(get_repo_root())).build(
                 c_source, destination, emission.abi_exports,
                 memory_limit_mb=target.memory_limit_mb,
             )
         else:
-            built = NativeToolchain(Path(__file__).resolve().parents[1]).build(c_source, destination)
+            built = NativeToolchain(Path(get_repo_root())).build(c_source, destination)
     except ToolchainError as error:
         diagnostic = diagnostic_from_error(error, service.source_texts())
         if json_mode:
@@ -385,7 +386,7 @@ def _run_wasi_program(resolver, target, entry, program_args, report_path=None):
         c_source = service.emit_c(checked).source
         with tempfile.TemporaryDirectory(prefix="wysna-wasi-run-") as temporary:
             wasm_path = Path(temporary) / "program.wasm"
-            WasiToolchain(Path(__file__).resolve().parents[1]).build(c_source, wasm_path)
+            WasiToolchain(Path(get_repo_root())).build(c_source, wasm_path)
             result = WasiRunner().run(
                 wasm_path, project_root=manifest.root, arguments=program_args,
                 preopens=target.preopens, fuel=target.fuel,
@@ -521,7 +522,7 @@ def _run_tests(resolver, filter_text, report_path, frozen=False):
             }, report_path)
         return 2
 
-    script = Path(__file__).resolve().parents[1] / "main.py"
+    script = Path(get_repo_root()) / "main.py"
     installed_entry = script.parent / "wysna_entry.py"
     if installed_entry.is_file() and (script.parent / "installation.json").is_file():
         runner = [sys.executable, "-I", "-B", "-X", "utf8", str(installed_entry)]

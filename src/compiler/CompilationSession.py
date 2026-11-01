@@ -4,6 +4,7 @@ import json
 import os
 from pathlib import Path
 from typing import Optional
+from common.Paths import get_repo_root
 from checker.TypeInterner import TypeInterner
 from checker.SymbolTable import Scope
 from checker.WysnaType import ModuleType
@@ -266,7 +267,7 @@ class CompilationSession:
         directory = os.path.dirname(importer) if not importer.startswith('<') else os.getcwd()
         if raw_path.startswith('std/') or raw_path.startswith('std.'):
             subpath = raw_path[4:].replace('.', '/')
-            base = Path(__file__).resolve().parent.parent / 'stdlib' / subpath
+            base = Path(get_repo_root()) / 'stdlib' / subpath
             cand = self.path(str(base.with_suffix('.wysna')))
             if os.path.isfile(cand) or cand in self.sources.overlays:
                 return cand

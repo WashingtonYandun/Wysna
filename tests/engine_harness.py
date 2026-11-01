@@ -8,10 +8,16 @@ import shlex
 import signal
 import subprocess
 import sys
-from common.Platform import compiler_command, executable_name
-from error.Error import DIAGNOSTIC_CODES
 
 ROOT = Path(__file__).resolve().parents[1]
+SRC = ROOT / 'src'
+if str(SRC) not in sys.path:
+    sys.path.insert(0, str(SRC))
+if str(ROOT) not in sys.path:
+    sys.path.insert(0, str(ROOT))
+
+from common.Platform import compiler_command, executable_name
+from error.Error import DIAGNOSTIC_CODES
 ENGINES = ('interpreter', 'ast', 'hir', 'selfhost')
 PROFILES = json.loads((ROOT / 'tests/engine_profiles.json').read_text())
 EXPANSION_DIRS = {'regressions', 'functions', 'ffi', 'stdlib', 'generic_oop'}
@@ -81,8 +87,18 @@ def diagnostic(stderr):
 def execute(command, directory, phase, timeout, env=None):
     """Persist commands and output, including timeout and signal failures."""
     try:
+        proc_env = dict(os.environ if env is None else env)
+        current_pp = proc_env.get('PYTHONPATH', '')
+        src_str = str(SRC)
+        root_str = str(ROOT)
+        pp_parts = [p for p in current_pp.split(os.pathsep) if p]
+        if src_str not in pp_parts:
+            pp_parts.insert(0, src_str)
+        if root_str not in pp_parts:
+            pp_parts.append(root_str)
+        proc_env['PYTHONPATH'] = os.pathsep.join(pp_parts)
         process = subprocess.Popen(command, cwd=ROOT, stdout=subprocess.PIPE,
-                                   stderr=subprocess.PIPE, text=True, env=env,
+                                   stderr=subprocess.PIPE, text=True, env=proc_env,
                                    start_new_session=(os.name == 'posix'))
         try:
             stdout, stderr = process.communicate(timeout=timeout)
