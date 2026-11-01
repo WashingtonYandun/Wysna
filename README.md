@@ -16,7 +16,7 @@
     <img src="https://img.shields.io/badge/version-0.6.0-blue?style=flat-square" alt="Version 0.6.0" />
   </a>
   <a href="LICENSE">
-    <img src="https://img.shields.io/badge/license-MIT-green?style=flat-square" alt="MIT license" />
+    <img src="https://img.shields.io/badge/license-Apache--2.0-blue?style=flat-square" alt="Apache 2.0 license" />
   </a>
   <img src="https://img.shields.io/badge/platforms-Windows%20x64%20%7C%20macOS%20arm64%20%7C%20Linux%20x64-lightgrey?style=flat-square" alt="Windows x64, macOS arm64 and Linux x64" />
 </p>
@@ -382,4 +382,4 @@ described in [SECURITY.md](SECURITY.md).
 
 ## License
 
-MIT © 2024–2026 Washington Yandún. See [LICENSE](LICENSE).
+Apache-2.0 © 2024–2026 Washington Yandún. See [LICENSE](LICENSE).
