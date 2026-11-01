@@ -10,6 +10,7 @@ from mir.LlvmProfile import (verify_profile, CONVERSIONS, ABI_VERSION, VALUE_BYT
 
 TYPES = {TYPE_INT: 'i64', TYPE_FLOAT: 'double', TYPE_BOOL: 'i1', TYPE_UNIT: 'void', TYPE_STR: 'ptr'}
 DECLARATIONS = '''declare void @llvm.dbg.declare(metadata, metadata, metadata)
+declare void @wysna_llvm_step_tick()
 declare void @wysna_llvm_init(i32, ptr)
 declare void @wysna_llvm_cleanup()
 declare void @wysna_llvm_box_int(ptr nocapture, i64)
@@ -211,8 +212,12 @@ class LlvmCodeGen:
         self.scratch = max([2] + [len(operation.args) + 1 for block in function.blocks for operation in block.operations])
         self.lines.append('  %scratch = alloca [' + str(self.scratch) + ' x %WysnaValue], align ' + str(ALIGNMENT))
         self.lines.append('  br label %bb0')
+        back_edge_targets = {target for block in function.blocks if block.terminator is not None
+                             for target in block.terminator.targets if target <= block.id}
         for block in function.blocks:
             self.lines.append('bb' + str(block.id) + ':')
+            if block.id == 0 or block.id in back_edge_targets:
+                self.emit('call void @wysna_llvm_step_tick()')
             for operation in block.operations:
                 self.location = self.debug.location(operation.source, scopes[function_debug.scope_for(operation)] if function_debug else self.scope, self.scope_file)
                 self.operation(operation)

@@ -341,3 +341,49 @@ fn main() {
     buf = io.StringIO()
     service.interpret(checked, stdout=buf)
     assert buf.getvalue().strip() == "25 2 55"
+
+
+# ============================================================================
+# Native backends: quotas and contracts must hold outside the interpreter
+# ============================================================================
+
+import subprocess
+import sys
+from pathlib import Path
+
+_REPO = Path(__file__).resolve().parents[2]
+
+
+def _wysna(*args):
+    return subprocess.run([sys.executable, str(_REPO / "main.py"), *args], cwd=_REPO,
+                          capture_output=True, text=True, stdin=subprocess.DEVNULL, timeout=300)
+
+
+def _native(tmp_path, source, backend, *flags):
+    """Run through the real native pipeline: LLVM via `run`, C99 via `build` + execute."""
+    prog = tmp_path / "program.wysna"
+    prog.write_text(source, encoding="utf-8")
+    if backend == "llvm":
+        return _wysna("run", "--backend=llvm", *flags, str(prog))
+    binary = tmp_path / "program.bin"
+    built = _wysna("build", "--backend=c99", *flags, str(prog), "-o", str(binary))
+    assert built.returncode == 0, built.stderr
+    return subprocess.run([str(binary)], capture_output=True, text=True,
+                          stdin=subprocess.DEVNULL, timeout=60)
+
+
+@pytest.mark.parametrize("backend", ["c99", "llvm"])
+def test_native_run_enforces_step_quota(tmp_path, backend):
+    source = "fn main() {\n    let mut i = 0\n    while true {\n        i = i + 1\n    }\n}\n"
+    result = _native(tmp_path, source, backend, "--max-steps", "300")
+    assert result.returncode != 0
+    assert "W4004" in result.stderr + result.stdout
+
+
+@pytest.mark.parametrize("backend", ["c99", "llvm"])
+def test_native_run_enforces_contracts(tmp_path, backend):
+    source = ("fn half(x: int) -> int\n    requires x > 0\n    ensures result < x\n{\n    return x\n}\n"
+              "fn main() {\n    print(half(4))\n}\n")
+    result = _native(tmp_path, source, backend)
+    assert result.returncode != 0
+    assert "W4005" in result.stderr + result.stdout
