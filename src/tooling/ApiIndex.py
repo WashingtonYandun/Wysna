@@ -5,6 +5,7 @@ from dataclasses import asdict
 from pathlib import Path
 import sys
 
+from common.Paths import get_repo_root
 from common.Version import WYSNA_VERSION
 from compiler.CompilerService import CompilerService
 from error.Error import WysnaError
@@ -23,7 +24,7 @@ from project.Targets import TARGET_SPECS
 from tooling.ToolResult import diagnostic_from_error, diagnostic_record, tool_result, write_tool_result
 
 
-_STDLIB_ROOT = Path(__file__).resolve().parents[1] / "stdlib"
+_STDLIB_ROOT = Path(get_repo_root()) / "stdlib"
 
 
 class _StrictArgumentParser(argparse.ArgumentParser):

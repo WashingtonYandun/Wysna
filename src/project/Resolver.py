@@ -7,6 +7,7 @@ from pathlib import Path
 import tempfile
 import unicodedata
 
+from common.Paths import get_repo_root
 from project.Manifest import ManifestError, ManifestIOError, ProjectManifest
 
 
@@ -154,7 +155,7 @@ class ProjectResolver:
             if (relative.startswith("/") or "\\" in relative or ":" in relative
                     or any(part in ("", ".", "..") for part in parts)):
                 return None
-            candidate = Path(__file__).resolve().parent.parent / "stdlib" / relative
+            candidate = Path(get_repo_root()) / "stdlib" / relative
             if not str(candidate).endswith(".wysna"):
                 candidate = Path(str(candidate) + ".wysna")
             return candidate.resolve() if candidate.is_file() else None

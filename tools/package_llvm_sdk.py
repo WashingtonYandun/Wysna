@@ -12,7 +12,11 @@ import tarfile
 import tempfile
 
 ROOT = Path(__file__).resolve().parents[1]
-sys.path.insert(0, str(ROOT))
+SRC = ROOT / 'src'
+if str(SRC) not in sys.path:
+    sys.path.insert(0, str(SRC))
+if str(ROOT) not in sys.path:
+    sys.path.insert(0, str(ROOT))
 from common.Version import WYSNA_VERSION
 from compiler.LlvmSdk import PLATFORMS, host_platform, query_layout, run_tool
 from tools.package_components import download, extract, sha256, unpack_seed

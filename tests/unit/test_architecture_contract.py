@@ -25,6 +25,11 @@ PRODUCTION_PACKAGES = ('checker', 'codegen', 'common', 'compiler', 'error',
                        'project', 'runtime', 'stdlib', 'tokens', 'tooling')
 
 
+def package_base(root: Path, package: str) -> Path:
+    src_base = root / 'src' / package
+    return src_base if src_base.exists() else root / package
+
+
 class ArchitectureContractTests(unittest.TestCase):
     def test_every_expression_has_an_explicit_engine_policy(self):
         expressions = {value for value in vars(N).values()
@@ -82,7 +87,7 @@ class ArchitectureContractTests(unittest.TestCase):
 
     def test_production_modules_do_not_import_the_entry_point(self):
         for package in PRODUCTION_PACKAGES:
-            for path in (ROOT / package).rglob('*.py'):
+            for path in package_base(ROOT, package).rglob('*.py'):
                 if '_vendor' in path.parts:
                     continue
                 for node in ast.walk(ast.parse(path.read_text(encoding='utf-8'))):
@@ -96,7 +101,7 @@ class ArchitectureContractTests(unittest.TestCase):
 
     def test_core_modules_do_not_depend_on_tool_presentations(self):
         for package in ('checker', 'codegen', 'common', 'compiler', 'hir', 'mir', 'runtime', 'project'):
-            for path in (ROOT / package).glob('*.py'):
+            for path in package_base(ROOT, package).glob('*.py'):
                 for node in ast.walk(ast.parse(path.read_text(encoding='utf-8'))):
                     modules = ([node.module or ''] if isinstance(node, ast.ImportFrom)
                                else [alias.name for alias in node.names]
@@ -112,7 +117,7 @@ class ArchitectureContractTests(unittest.TestCase):
 
     def test_bootstrap_tracks_all_runtime_headers_and_semantic_domains(self):
         expected = {str(path.relative_to(ROOT)) for path in (ROOT / 'runtime').glob('*.h')}
-        expected.update(str(path.relative_to(ROOT)) for path in (ROOT / 'checker').glob('*.py'))
+        expected.update(str(path.relative_to(ROOT)) for path in package_base(ROOT, 'checker').glob('*.py'))
         self.assertLessEqual(expected, set(SELFHOST_BOOTSTRAP_INPUTS))
         self.assertEqual(len(SELFHOST_BOOTSTRAP_INPUTS), len(set(SELFHOST_BOOTSTRAP_INPUTS)))
 

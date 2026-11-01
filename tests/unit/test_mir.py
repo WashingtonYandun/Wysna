@@ -169,6 +169,8 @@ def test_bootstrap_cache_serializes_processes():
         (Path(directory) / 'selfhost' / 'compiler.wysna').write_text('print(0)\n')
         script = """import hashlib, json, sys, time
 from pathlib import Path
+if 'src' not in sys.path:
+    sys.path.insert(0, 'src')
 import compiler.Bootstrap as bootstrap
 root = Path(sys.argv[1])
 fingerprint = 'a' * 64
