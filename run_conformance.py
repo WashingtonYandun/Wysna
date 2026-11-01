@@ -69,7 +69,11 @@ def sha256_file(path: str) -> str:
 
 
 def run_suite() -> None:
-    repo_root = os.path.dirname(os.path.realpath(__file__))
+    file_path = Path(__file__).resolve()
+    if file_path.parent.name == "src":
+        repo_root = str(file_path.parent.parent)
+    else:
+        repo_root = str(file_path.parent)
     prev_cwd = os.getcwd()
     os.chdir(repo_root)
     try:
