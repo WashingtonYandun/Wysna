@@ -170,6 +170,14 @@ error channels and pattern matching.
 | `wysna api` / `wysna capabilities` | Discover standard-library APIs and target availability. |
 | `wysna lsp` | Language server over stdio. |
 
+For native source compilation, `--engine=seed|compiler` selects the compiler
+implementation and `--backend=c99|llvm-experimental` selects the output target.
+Seed plus C99 is the supported default. The Compiler engine is limited to
+`native-core-v1`; in this CLI it supports file-based `emit-c` and `build`, while its
+standalone SDK provides its own commands. AST-to-C emission is only a differential
+test oracle. C99 is translated source: the selected C toolchain produces and links
+the machine-code executable. LLVM IR is available as an experimental Seed target.
+
 Structured commands accept `--output-format=json-v1`. `explain` reports transitive
 effects and marks unknown FFI or indirect calls. `wysna run --allow=...` or
 `--deny=...` applies that report as a static pre-execution gate and refuses

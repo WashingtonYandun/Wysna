@@ -214,7 +214,7 @@ static inline WVal wysna_list_clear(WVal* list_val) {
 
 static inline WVal wysna_dict_get(WVal dict_val, WVal key) {
     /* The optional lookup: unlike `d[k]`, an absent key is `none`, not W4002. */
-    if (dict_val.tag != W_DICT) return wysna_none();
+    if (dict_val.tag != W_DICT || !dict_val.as.dict || dict_val.as.dict->len == 0) return wysna_none();
     int32_t found = wysna_dict_find(dict_val.as.dict, key);
     if (found < 0) return wysna_none();
     return wysna_enum_payload("Option", "Some", wysna_clone(dict_val.as.dict->vals[found]));

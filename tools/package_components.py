@@ -4,14 +4,18 @@ import base64
 import configparser
 import csv
 from email.parser import Parser
+from email.utils import parsedate_to_datetime
 import hashlib
 import io
+import math
 from pathlib import Path, PurePosixPath, PureWindowsPath
 import shutil
 import ssl
 import stat
 import tarfile
 import tempfile
+import time
+import urllib.error
 import urllib.request
 import zipfile
 import re
@@ -223,6 +227,32 @@ def sha256(path):
     return digest.hexdigest()
 
 
+def _open_component(url, context):
+    """Retry transient HTTP responses without weakening checksum verification."""
+    retryable = {429, 500, 502, 503, 504}
+    for attempt in range(4):
+        try:
+            return urllib.request.urlopen(url, context=context, timeout=60)
+        except urllib.error.HTTPError as error:
+            if error.code not in retryable or attempt == 3:
+                raise
+            delay = 2 ** attempt
+            retry_after = error.headers.get('Retry-After') if error.headers else None
+            if retry_after:
+                try:
+                    if retry_after.isdecimal():
+                        requested = int(retry_after)
+                    else:
+                        requested = math.ceil(parsedate_to_datetime(retry_after).timestamp() - time.time())
+                    if requested > 60:
+                        raise
+                    delay = max(delay, requested)
+                except (TypeError, ValueError, OverflowError):
+                    pass
+            error.close()
+            time.sleep(delay)
+
+
 def download(component, cache):
     """Reject mismatched cached or downloaded bytes before unpacking anything."""
     target = cache / component['url'].rsplit('/', 1)[1]
@@ -230,7 +260,7 @@ def download(component, cache):
         context = ssl.create_default_context()
         if Path('/etc/ssl/cert.pem').exists():
             context.load_verify_locations('/etc/ssl/cert.pem')
-        with urllib.request.urlopen(component['url'], context=context, timeout=60) as response:
+        with _open_component(component['url'], context) as response:
             with tempfile.NamedTemporaryFile(dir=cache, delete=False) as stream:
                 temporary = Path(stream.name)
                 try:

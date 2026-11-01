@@ -9,6 +9,36 @@ SourceSnapshot -> AST -> CheckedProgram -> typed HIR -> verified MIR -> C99 | LL
                                                       \-> effect report (read-only)
 ```
 
+## Engine and backend model
+
+An **engine** owns parsing/checking semantics and lowers an explicitly supported
+source profile. A **backend** consumes verified intermediate representation and
+selects an output target. These are independent choices, exposed as
+`--engine=seed|compiler` and `--backend=c99|llvm-experimental`.
+
+- **Seed** is the default, full-language engine used by `check`, interpreted `run`,
+  projects, the language server, and normal C99 builds. Its installed distribution
+  bundles a private Python runtime; Seed still has a Python implementation dependency.
+- **Compiler** is a self-hosted native engine with the bounded `native-core-v1`
+  source profile. From the Seed CLI, `--engine=compiler` is supported for file-based
+  `emit-c` and `build`. The standalone Compiler SDK has its own commands and requires
+  no Python, but it does not implement the full Seed profile.
+- **C99** is the supported default output backend for both engines. Wysna emits C99;
+  GCC, Clang, Zig, or the bundled toolchain then produces machine code. C is an
+  intermediate representation here, not the runtime execution model.
+- **LLVM** is an opt-in Seed backend. It emits LLVM IR and uses LLVM tools to produce
+  a native executable. It remains experimental because measured N5 size, runtime,
+  and cold-compilation budgets are not all met.
+- **AST C99** is an independent differential oracle. It is reachable through the
+  internal test harness only and is not a user-selectable production route.
+
+Seed and Compiler currently have independent parsers and semantic implementations.
+Their shared verified MIR interchange contract and differential corpus constrain
+drift, but passing the current corpus does not establish universal parity. Do not
+remove Seed/Python or promote Compiler to the default until the Compiler profile,
+tooling, standard library, bootstrap, distribution, and installed-consumer gates
+cover the full declared language.
+
 `CompilationSession` owns source snapshots, dependency identity, declarations and
 the canonical type arena. `CompilerService` is the consumer-facing API for parsing,
 checking, interpretation, lowering, interchange, effect reporting and emission.
@@ -76,6 +106,9 @@ Python consumers. Productive modules must not import it.
 
 Compiler, codegen and runtime modules must not depend on tool presentation modules.
 The installed package root comes from `common.Paths`, independently of `main.py`.
+The native bootstrap cache defaults to `<checkout>/.wysna_cache/bootstrap`; setting
+`WYSNA_CACHE_HOME` relocates it to `<WYSNA_CACHE_HOME>/bootstrap`, so read-only source
+trees can use an explicit writable cache.
 
 ## Runtime implementation domains
 

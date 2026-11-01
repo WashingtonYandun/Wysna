@@ -141,7 +141,7 @@ def assemble(wheel, output, cache, *, source_commit=None):
                   'python': python, 'compiler': compiler, 'launcher': launcher, 'target': target,
                   'created_at': datetime.now(timezone.utc).isoformat(), 'components': components,
                   'wheel_sha256': sha256(wheel), 'files': files,
-                  'source_only_commands': ['test', 'bench', '--backend=selfhost'],
+                  'source_only_commands': ['test', 'bench', '--engine=compiler'],
                   'optional_external_dependencies': ['libcurl development files for native HTTP', 'declared C FFI libraries']}
         (stage / 'installation.json').write_text(json.dumps(record, indent=2) + '\n')
         stage.rename(output)

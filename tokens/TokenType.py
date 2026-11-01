@@ -10,6 +10,8 @@ class TokenType(Enum):
     STRUCT = auto()
     ENUM = auto()
     IMPORT = auto()
+    FROM = auto()
+    USE = auto()
 
     CLASS = auto()
     INTERFACE = auto()

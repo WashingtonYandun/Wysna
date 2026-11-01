@@ -88,7 +88,7 @@ the bundled toolchain.
 
 ## Scope and limits
 
-- `wysna test`, `wysna bench`, and `--backend=selfhost` require a source checkout and
+- `wysna test`, `wysna bench`, and `--engine=compiler` require a source checkout and
   are not part of this distribution.
 - For tests in an installed user project, use `wysna project test`; this is separate
   from the compiler's source-checkout maintenance suite.

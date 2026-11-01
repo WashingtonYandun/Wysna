@@ -185,7 +185,7 @@ def validate(wheel, forbidden, report):
             if command == 'test':
                 expected += "To run project tests, use 'wysna project test'.\n"
             assert unavailable.stderr == expected
-        selfhost = run('selfhost-source-only', ['emit-c', '--backend=selfhost', 'hello.wysna', '-o', 'selfhost.c'], code=1)
+        selfhost = run('selfhost-source-only', ['emit-c', '--engine=compiler', 'hello.wysna', '-o', 'selfhost.c'], code=1)
         assert '[W2013]' in selfhost.stderr
         assert not (site_packages / '.wysna_cache').exists()
         no_compiler = dict(environment, CC=str(directory / 'missing compiler'), PATH='')

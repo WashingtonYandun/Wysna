@@ -54,7 +54,8 @@ def emit_mir(path, implementation="seed"):
     from common.Paths import get_repo_root
     executable = ensure_selfhost_compiler_binary(get_repo_root())
     completed = subprocess.run(
-        [executable, "--emit-mir", str(source_path)],
+        [executable, "--stdlib-root", str(Path(get_repo_root()) / "stdlib"),
+         "--emit-mir", str(source_path)],
         capture_output=True, text=True, encoding="utf-8", timeout=120,
     )
     if completed.returncode:

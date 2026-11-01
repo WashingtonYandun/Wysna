@@ -453,8 +453,15 @@ def test_standard_file_cleanup_runs_on_runtime_panic():
                 command = [sys.executable, str(ROOT / 'main.py'), 'run', str(source)]
             else:
                 binary = directory / executable_name(backend)
-                built = subprocess.run([sys.executable, str(ROOT / 'main.py'), 'build', '--backend=' + backend,
-                                        str(source), '-o', str(binary)], capture_output=True, text=True, timeout=120)
+                if backend == 'ast':
+                    build_command = [sys.executable, str(ROOT / 'tests/emit_ast_oracle.py'),
+                                     str(source), str(directory / 'oracle.c'), '--build', str(binary)]
+                else:
+                    build_command = [sys.executable, str(ROOT / 'main.py'), 'build']
+                    if backend == 'selfhost':
+                        build_command.append('--engine=compiler')
+                    build_command += [str(source), '-o', str(binary)]
+                built = subprocess.run(build_command, capture_output=True, text=True, timeout=120)
                 assert built.returncode == 0, built.stderr
                 command = [str(binary)]
             result = subprocess.run(command, capture_output=True, text=True, timeout=30)
@@ -489,9 +496,16 @@ print(second.close(), audit_live(), first.close(), audit_live(), first.close())
                 command = [sys.executable, str(ROOT / 'main.py'), 'run', str(source), '--link-lib', str(shared)]
             else:
                 binary = directory / executable_name(backend)
-                built = subprocess.run([sys.executable, str(ROOT / 'main.py'), 'build', '--backend=' + backend,
-                                        str(source), '--link-lib', str(adapter), '-o', str(binary)],
-                                        capture_output=True, text=True, timeout=120)
+                if backend == 'ast':
+                    build_command = [sys.executable, str(ROOT / 'tests/emit_ast_oracle.py'),
+                                     str(source), str(directory / 'owners-oracle.c'), '--build', str(binary),
+                                     '--link-lib', str(adapter)]
+                else:
+                    build_command = [sys.executable, str(ROOT / 'main.py'), 'build']
+                    if backend == 'selfhost':
+                        build_command.append('--engine=compiler')
+                    build_command += [str(source), '--link-lib', str(adapter), '-o', str(binary)]
+                built = subprocess.run(build_command, capture_output=True, text=True, timeout=120)
                 assert built.returncode == 0, built.stderr
                 command = [str(binary)]
             result = subprocess.run(command, capture_output=True, text=True, timeout=30, env=dict(os.environ, WYSNA_MEM_CHECK='1'))

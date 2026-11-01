@@ -2,12 +2,34 @@
 
 ## Unreleased
 
+### Compiler architecture and migration
+
+- Separates `--engine=seed|compiler` from `--backend=c99|llvm-experimental`.
+  C99 remains the supported default; LLVM remains experimental. The Seed CLI's
+  Compiler engine supports file-based `emit-c` and `build` for `native-core-v1`.
+- Removes the public AST-to-C route and the mixed `--backend=hir|ast|selfhost`
+  selectors. Use `--engine=seed|compiler`; use `wysna ast <file>` only to inspect
+  syntax. AST-to-C emission is reserved for the differential test harness.
+- Allows `WYSNA_CACHE_HOME` to relocate the native bootstrap cache for read-only
+  source checkouts.
+
 ### Native Compiler
 
-- Supports parameterized classes whose declarations contain fields only, including
-  multiple concrete instantiations such as `Box[int]` and `Box[str]`. Methods,
-  inheritance, interfaces and parameterized interfaces remain explicit `W2013`
-  profile limits.
+- Allows native SDK builds and runs to search explicit library directories with
+  `--library-dir`, alongside `--library` and existing explicit link files.
+- Rejects standard-library imports that escape their configured root or fall back
+  to a project-controlled path; empty standard modules remain valid.
+
+- Supports concrete parameterized classes with fields and ordinary methods, including
+  multiple instantiations such as `Box[int]` and `Box[str]`. Constraints, inheritance,
+  interfaces and independently generic methods remain explicit `W2013` profile limits.
+- Supports environment arguments and variables and `std/time.unix_seconds()` in the
+  native profile. An automation consumer can invoke a child process and propagate
+  its exit status.
+- Resolves the bundled standard library explicitly when the compiler bootstrap cache
+  is relocated outside the source checkout.
+- Preserves explicit `exit(code)` status with memory checking enabled; immediate exit
+  does not unwind active frames or perform the normal zero-live-object check.
 
 ### Tooling and Interactive Use
 
@@ -43,6 +65,9 @@
   does not cover native builds, `project run`, or trusted runtime/FFI behavior.
 
 ### Distribution and Development
+
+- Retries bounded transient HTTP errors while downloading pinned components; every
+  downloaded or cached component still requires its pinned SHA-256 checksum.
 
 - Adds a `dev` extra installing pytest and the optional HTTP/service dependencies,
   and documents it in the README and contribution guide.

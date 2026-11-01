@@ -25,7 +25,7 @@ Verifies:
    - Struct Pair[T] { a: T, b: T } initialized with conflicting fields raises W2001.
 5. Generic enum argument preservation:
    - Multi-argument generic enum Either[L, R] retains all concrete type arguments in TypeInterner.
-6. Native C99 execution across AST and HIR backends with AddressSanitizer (0 leaks).
+6. Native C99 execution through the AST oracle and verified HIR/MIR production path with AddressSanitizer (0 leaks).
 """
 
 import os
@@ -365,7 +365,7 @@ def test_native_c99_execution_and_sanitizers():
         assert run_res.returncode == 0, f"AST C99 runtime failed:\n{run_res.stderr}"
         assert run_res.stdout.strip() == "30", f"AST C99 expected stdout '30', got '{run_res.stdout.strip()}'"
 
-        # 2. HIR C99 backend
+        # 2. Seed's verified HIR/MIR C99 production path
         ast_hir = Parser(file=wysna_file).parse(src)
         tc_hir = TypeChecker(file=wysna_file)
         tc_hir.check(ast_hir)
@@ -397,7 +397,7 @@ def test_native_c99_execution_and_sanitizers():
         assert run_res_hir.stdout.strip() == "30", f"HIR C99 expected stdout '30', got '{run_res_hir.stdout.strip()}'"
 
 
-    print("  [PASS] Native C99 execution across AST and HIR backends with AddressSanitizer")
+    print("  [PASS] Native C99 execution through AST oracle and verified HIR/MIR with AddressSanitizer")
 
 
 def run_all() -> bool:

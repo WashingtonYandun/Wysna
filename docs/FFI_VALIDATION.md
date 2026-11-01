@@ -62,7 +62,9 @@ python3 tools/measurement_ingest.py --database measurements.sqlite status
 neither rows nor journal entries; opening a new database can create its file and schema.
 `status` reports row count, sum and import count. Duplicate imports fail rather than
 silently deduplicating. `--json` returns structured command output, and
-`--backend=hir|ast|selfhost` selects the compiler path. Exported binaries have a build
+`--engine=seed|compiler` selects the compiler implementation; `--backend=c99` selects
+the default output target. AST emission is restricted to the differential test harness.
+Exported binaries have a build
 manifest; the build cache includes sources, backend and C toolchain identity.
 
 Native use: `WYSNA_SQLITE_DB=measurements.sqlite build/measurement-ingest [--check] file.csv`

@@ -51,8 +51,13 @@ def validate(rows=1000, samples=3, sanitize=False, llvm=False):
                 source = PILOT / 'reference.c'
             else:
                 source = directory / (backend + '.c')
-                execute([sys.executable, str(ROOT / 'main.py'), 'emit-c', '--backend=' + backend,
-                         str(PILOT / 'measurements.wysna'), '-o', str(source)])
+                if backend == 'ast':
+                    command = [sys.executable, str(ROOT / 'tests/emit_ast_oracle.py'),
+                               str(PILOT / 'measurements.wysna'), str(source)]
+                else:
+                    command = [sys.executable, str(ROOT / 'main.py'), 'emit-c',
+                               str(PILOT / 'measurements.wysna'), '-o', str(source)]
+                execute(command)
             if backend != 'llvm-experimental':
                 command = compiler + flags + [str(source), str(adapter), '-lsqlite3', '-o', str(binary)]
                 execute(command)

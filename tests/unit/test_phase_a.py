@@ -66,10 +66,14 @@ def run_phase_a_tests():
             assert interpreted.stdout == expected, (name, interpreted.stdout, expected)
             for hir in [False, True]:
                 binary = Path(directory) / ('program-hir' if hir else 'program-ast')
-                command = [sys.executable, str(root / 'main.py'), 'build', '--sanitize']
                 if hir:
-                    command.append('--hir')
-                compiled = subprocess.run(command + [str(source), '-o', str(binary)],
+                    command = [sys.executable, str(root / 'main.py'), 'build', '--sanitize',
+                               str(source), '-o', str(binary)]
+                else:
+                    command = [sys.executable, str(root / 'tests/emit_ast_oracle.py'),
+                               str(source), str(Path(directory) / (name + '-ast.c')),
+                               '--build', str(binary), '--sanitize']
+                compiled = subprocess.run(command,
                                           capture_output=True, text=True, timeout=60)
                 assert compiled.returncode == 0, compiled.stderr
                 env = dict(os.environ, WYSNA_MEM_CHECK='1')

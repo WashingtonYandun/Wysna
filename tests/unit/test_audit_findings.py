@@ -61,8 +61,11 @@ def test_literal_indexing_scales_linearly_by_work_not_wall_clock():
                 emitted = directory / (engine + '.c')
                 if engine == 'selfhost':
                     command = [selfhost_bin, str(source_path), str(emitted)]
+                elif engine == 'ast':
+                    command = [sys.executable, str(ROOT / 'tests/emit_ast_oracle.py'),
+                               str(source_path), str(emitted)]
                 else:
-                    command = [sys.executable, str(ROOT / 'main.py'), 'emit-c', '--backend=' + engine,
+                    command = [sys.executable, str(ROOT / 'main.py'), 'emit-c',
                                str(source_path), '-o', str(emitted)]
                 built = subprocess.run(command, capture_output=True, text=True, timeout=120)
                 assert built.returncode == 0, built.stderr

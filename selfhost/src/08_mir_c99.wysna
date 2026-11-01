@@ -89,11 +89,24 @@ fn mir_c_operation(module: MirModule, function: MirFunction, operation: MirOpera
     if kind == "const" or kind == "default" {
         let literal = operation.value
         let mut value = if literal.type_id == 6 { "wysna_none()" } else { "wysna_unit()" }
-        if literal.type_id == 2 { value = "wysna_bool(" + str(literal.boolean) + ")" }
+        if literal.type_id == 2 {
+            if not mir_value_storage(function.slots[result].type_id) {
+                return mir_c_write(function, result, str(literal.boolean), false)
+            }
+            value = "wysna_bool(" + str(literal.boolean) + ")"
+        }
         elif literal.type_id == 3 {
             let integer = if literal.integer == -9223372036854775808 { "(-9223372036854775807LL - 1LL)" } else { str(literal.integer) + "LL" }
+            if not mir_value_storage(function.slots[result].type_id) {
+                return mir_c_write(function, result, integer, false)
+            }
             value = "wysna_int(" + integer + ")"
-        } elif literal.type_id == 4 { value = "wysna_float(" + str(literal.floating) + ")" }
+        } elif literal.type_id == 4 {
+            if not mir_value_storage(function.slots[result].type_id) {
+                return mir_c_write(function, result, str(literal.floating), false)
+            }
+            value = "wysna_float(" + str(literal.floating) + ")"
+        }
         elif literal.type_id == 5 {
             value = "wysna_literal_str_n(&_literal, " + escape_c_str(literal.text) + ", " + str(len(bytes(literal.text))) + ")"
             return "{ static WStringLiteral _literal = {0}; " + mir_c_write(function, result, value, true) + " }"
@@ -101,10 +114,18 @@ fn mir_c_operation(module: MirModule, function: MirFunction, operation: MirOpera
         return mir_c_write(function, result, value, true)
     }
     if kind == "clone" or kind == "narrow" {
+        if not mir_value_storage(function.slots[result].type_id) and not mir_value_storage(function.slots[operation.args[0]].type_id) {
+            return mir_c_write(function, result, mir_c_name(operation.args[0]), false)
+        }
         let value = if mir_value_storage(function.slots[result].type_id) { "wysna_clone(" + arguments[0] + ")" } else { arguments[0] }
         return mir_c_write(function, result, value, true)
     }
-    if kind == "store" { return mir_c_write(function, result, arguments[0], true) }
+    if kind == "store" {
+        if not mir_value_storage(function.slots[result].type_id) and not mir_value_storage(function.slots[operation.args[0]].type_id) {
+            return mir_c_write(function, result, mir_c_name(operation.args[0]), false)
+        }
+        return mir_c_write(function, result, arguments[0], true)
+    }
     if kind == "release" {
         let name = mir_c_name(operation.args[0])
         return "wysna_release(" + name + "); " + name + " = wysna_unit();"
@@ -118,10 +139,16 @@ fn mir_c_operation(module: MirModule, function: MirFunction, operation: MirOpera
     }
     if kind == "iterate_value" {
         let counter = mir_c_name(operation.args[1])
-        let mut value = "wysna_int((" + arguments[0] + ").as.i + (int64_t)" + counter + ")"
-        if not operation.value.boolean {
-            value = "wysna_list_iteration_get_owned_at(" + arguments[0] + ", " + counter + ", " + escape_c_str(operation.source.file) + ", " + str(operation.source.line) + ", " + str(operation.source.col) + ")"
+        if operation.value.boolean {
+            let start_slot = function.slots[operation.args[0]]
+            let start_name = mir_c_name(operation.args[0])
+            let start_val = if not mir_value_storage(start_slot.type_id) { start_name } else { "(" + start_name + ").as.i" }
+            if not mir_value_storage(function.slots[result].type_id) {
+                return mir_c_write(function, result, start_val + " + (int64_t)" + counter, false)
+            }
+            return mir_c_write(function, result, "wysna_int(" + start_val + " + (int64_t)" + counter + ")", false)
         }
+        let value = "wysna_list_iteration_get_owned_at(" + arguments[0] + ", " + counter + ", " + escape_c_str(operation.source.file) + ", " + str(operation.source.line) + ", " + str(operation.source.col) + ")"
         return mir_c_write(function, result, value, true)
     }
     if kind == "construct" {
@@ -163,6 +190,52 @@ fn mir_c_operation(module: MirModule, function: MirFunction, operation: MirOpera
     }
     if kind == "runtime" or kind == "call" {
         let name = if operation.name == "wysna_make_range_inclusive" { "wysna_make_range" } else { operation.name }
+        if kind == "runtime" {
+            if (name == "wysna_add" or name == "wysna_sub" or name == "wysna_mul") and len(operation.args) == 2 {
+                let t0 = function.slots[operation.args[0]].type_id
+                let t1 = function.slots[operation.args[1]].type_id
+                let left = mir_c_name(operation.args[0])
+                let right = mir_c_name(operation.args[1])
+                let op = if name == "wysna_add" { " + " } elif name == "wysna_sub" { " - " } else { " * " }
+                if t0 == 3 and t1 == 3 {
+                    return mir_c_write(function, result, "(int64_t)((uint64_t)" + left + op + "(uint64_t)" + right + ")", false)
+                }
+                if t0 == 4 and t1 == 4 {
+                    return mir_c_write(function, result, left + op + right, false)
+                }
+            }
+            if name == "wysna_neg" and len(operation.args) == 1 {
+                let t0 = function.slots[operation.args[0]].type_id
+                let operand = mir_c_name(operation.args[0])
+                if t0 == 3 { return mir_c_write(function, result, "(int64_t)(0ULL - (uint64_t)" + operand + ")", false) }
+                if t0 == 4 { return mir_c_write(function, result, "-" + operand, false) }
+            }
+            if name == "wysna_not" and len(operation.args) == 1 {
+                let t0 = function.slots[operation.args[0]].type_id
+                let operand = mir_c_name(operation.args[0])
+                if t0 == 2 { return mir_c_write(function, result, "!" + operand, false) }
+            }
+            if (name == "wysna_lt" or name == "wysna_le" or name == "wysna_gt" or name == "wysna_ge") and len(operation.args) == 2 {
+                let t0 = function.slots[operation.args[0]].type_id
+                let t1 = function.slots[operation.args[1]].type_id
+                if (t0 == 3 and t1 == 3) or (t0 == 4 and t1 == 4) {
+                    let left = mir_c_name(operation.args[0])
+                    let right = mir_c_name(operation.args[1])
+                    let op = if name == "wysna_lt" { " < " } elif name == "wysna_le" { " <= " } elif name == "wysna_gt" { " > " } else { " >= " }
+                    return mir_c_write(function, result, left + op + right, false)
+                }
+            }
+            if (name == "wysna_equal" or name == "wysna_not_equal") and len(operation.args) == 2 {
+                let t0 = function.slots[operation.args[0]].type_id
+                let t1 = function.slots[operation.args[1]].type_id
+                if (t0 == 2 and t1 == 2) or (t0 == 3 and t1 == 3) or (t0 == 4 and t1 == 4) {
+                    let left = mir_c_name(operation.args[0])
+                    let right = mir_c_name(operation.args[1])
+                    let op = if name == "wysna_equal" { " == " } else { " != " }
+                    return mir_c_write(function, result, left + op + right, false)
+                }
+            }
+        }
         if name == "wysna_enum" or name == "wysna_enum_payload" {
             let labels = if len(operation.labels) == 2 { operation.labels } else { ["Option", "Some"] }
             let mut prefixed: list[str] = [escape_c_str(labels[0]), escape_c_str(labels[1])]
@@ -177,7 +250,16 @@ fn mir_c_operation(module: MirModule, function: MirFunction, operation: MirOpera
                 if callee.name == name {
                     found = true
                     boxed = mir_value_storage(callee.return_type)
-                    for i in 0..len(arguments) { arguments[i] = mir_c_unbox(arguments[i], callee.slots[callee.params[i]].type_id) }
+                    for i in 0..len(arguments) {
+                        let param_type = callee.slots[callee.params[i]].type_id
+                        let arg_id = operation.args[i]
+                        let arg_type = function.slots[arg_id].type_id
+                        if not mir_value_storage(param_type) and not mir_value_storage(arg_type) {
+                            arguments[i] = mir_c_name(arg_id)
+                        } else {
+                            arguments[i] = mir_c_unbox(arguments[i], param_type)
+                        }
+                    }
                 }
             }
             for external in module.externs { if external.name == name { found = true boxed = true } }
@@ -210,7 +292,11 @@ fn mir_c_function(module: MirModule, function: MirFunction) -> str {
         let term = block.terminator
         if term.kind == "goto" { parts.append("    goto bb" + str(term.targets[0]) + ";\n") }
         elif term.kind == "branch" { parts.append("    if (" + mir_c_name(term.value) + ") goto bb" + str(term.targets[0]) + "; else goto bb" + str(term.targets[1]) + ";\n") }
-        elif term.kind == "return" { parts.append("    return " + mir_c_unbox(mir_c_value(function, term.value, true), function.return_type) + ";\n") }
+        elif term.kind == "return" {
+            let name = mir_c_name(term.value)
+            let expression = if mir_value_storage(function.return_type) { "wysna_move(&" + name + ")" } else { name }
+            parts.append("    return " + expression + ";\n")
+        }
         else { parts.append("    wysna_runtime_fail(\"W9999\", \"Unreachable MIR block executed\");\n") }
     }
     parts.append("}\n")
@@ -236,3 +322,5 @@ fn mir_emit_c(module: MirModule) -> str {
     parts.append("    wysna_runtime_cleanup();\n    return status;\n}\n")
     return join_strings(parts, "")
 }
+
+fn compile_source(checked: CheckedProgram) -> str { return mir_emit_c(mir_build(checked)) }

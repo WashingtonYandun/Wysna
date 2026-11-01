@@ -91,7 +91,7 @@ Reassigning a mutable local variable (`x = rhs`) or container/struct slot (`a[i]
 
 ## 5. Runtime RC Instrumentation & Leak Verification (`WYSNA_MEM_CHECK=1`)
 
-In `runtime/wysna_runtime.h`, all heap-allocated runtime payloads (`WListBuf`, `WDictBuf`, `WTupleBuf`, `WStructBuf` for both `W_STRUCT` and `W_OBJECT`, and `WBoxBuf` for `W_OK`/`W_ERR`) carry an `int32_t refcount` header and participate in global telemetry counters:
+In `runtime/wysna_runtime.h`, reference-counted payloads (`WStringBuf`, `WListBuf`, `WDictBuf`, `WTupleBuf`, `WStructBuf`, `WBoxBuf`, `WFunctionBuf`, and `WPointerOwner`) use signed 32-bit strong-reference counts. `W_OBJECT` uses the separate strong count in `WWeakControl`; that control block also tracks weak references. Immortal string literals use a `-1` sentinel and bypass retain/release accounting. Heap allocations participate in global telemetry counters:
 - `wysna_g_alloc_count`: Total heap buffer allocations (`refcount = 1`).
 - `wysna_g_free_count`: Total heap buffer deallocations when `refcount` reaches `0`.
 - `wysna_g_retain_count`: Total `wysna_clone` increments on heap buffers.
@@ -100,10 +100,13 @@ In `runtime/wysna_runtime.h`, all heap-allocated runtime payloads (`WListBuf`, `
 
 ### Safety Invariants
 1. **Refcount Underflow / Double-Free Detection:** Both `wysna_clone` and `wysna_release` assert `refcount > 0`. Upon deallocation, `refcount` is poisoned to `-1` before `free()`. Any subsequent `wysna_clone` or `wysna_release` on a freed buffer immediately aborts with `[W4003] Runtime error: memory safety violation (refcount underflow / double free)`.
-2. **Zero-Leak Exit Verification (`WYSNA_MEM_CHECK=1`):** At the end of `main()`, after releasing top-level and global bindings, `wysna_runtime_cleanup()` checks `getenv("WYSNA_MEM_CHECK")`. When set to `"1"`, if `wysna_g_live_objects != 0` or `wysna_g_alloc_count != wysna_g_free_count`, the process aborts with `[W4003]` and prints exact allocation/free/live counters.
+2. **Retain Overflow Detection:** Retain operations reject a count of `INT32_MAX` before incrementing it, including the strong and weak fields in `WWeakControl`. The runtime exits with `[W4003]` instead of invoking signed-overflow undefined behavior. Releases do not use this guard because releasing a valid maximum count is safe.
+3. **Zero-Leak Exit Verification (`WYSNA_MEM_CHECK=1`):** At the end of `main()`, after releasing top-level and global bindings, `wysna_runtime_cleanup()` checks `getenv("WYSNA_MEM_CHECK")`. When set to `"1"`, if `wysna_g_live_objects != 0` or `wysna_g_alloc_count != wysna_g_free_count`, the process aborts with `[W4003]` and prints exact allocation/free/live counters.
 
 This check is intentionally opt-in. It reports logical Wysna runtime buffers only, runs during
-normal cleanup, and does not collect strong cycles. A runtime panic calls `exit()` and
+normal cleanup, and does not collect strong cycles. Explicit Wysna `exit(code)` stops
+the process with active frames, so it skips the zero-live-object check and preserves the
+requested status; it does not unwind those frames. A runtime panic calls `exit()` and
 does not reach this check. Development and CI use ASan/LSan separately for byte-level
 memory diagnostics; `WYSNA_MEM_CHECK` is not a substitute for those tools.
 

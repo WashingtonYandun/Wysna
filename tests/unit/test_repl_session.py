@@ -207,3 +207,19 @@ def test_cli_accepts_multiline_functions_and_recovers_from_invalid_input():
     assert '...> ' in result.stdout
     assert '[W000' in result.stdout
     assert 'Traceback' not in result.stdout + result.stderr
+
+
+def test_transactional_execute_and_explicit_snapshot_rollback():
+    output = StringIO()
+    session = ReplSession(stdout=output)
+    session.execute('let mut value = 10')
+    checkpoint = session.snapshot()
+    session.execute('value = 20')
+    assert session.interpreter.global_env.lookup('value').value == 20
+    session.rollback(checkpoint)
+    assert session.interpreter.global_env.lookup('value').value == 10
+
+    with pytest.raises(WysnaError):
+        session.execute('value = 99; print(1 / 0)', transactional=True)
+    assert session.interpreter.global_env.lookup('value').value == 10
+

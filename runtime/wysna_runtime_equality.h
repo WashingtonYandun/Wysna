@@ -46,6 +46,10 @@ static inline bool wysna_eq(WVal a, WVal b) {
             case W_POINTER: return a.as.pointer == b.as.pointer;
             case W_OBJECT: return a.as.st == b.as.st;
             case W_WEAK: return a.as.weak == b.as.weak;
+            case W_LIST: if (a.as.list == b.as.list) return true; break;
+            case W_TUPLE: if (a.as.tuple == b.as.tuple) return true; break;
+            case W_STRUCT: if (a.as.st == b.as.st) return true; break;
+            case W_DICT: if (a.as.dict == b.as.dict) return true; break;
             default: break;
         }
     }
@@ -151,6 +155,7 @@ static bool wysna_eq_graph(WVal a, WVal b) {
                 }
                 break;
             case W_LIST:
+                if (left.as.list == right.as.list) break;
                 if (left.as.list->len != right.as.list->len) {
                     equal = false;
                     break;
@@ -161,6 +166,7 @@ static bool wysna_eq_graph(WVal a, WVal b) {
                 }
                 break;
             case W_TUPLE:
+                if (left.as.tuple == right.as.tuple) break;
                 if (left.as.tuple->len != right.as.tuple->len) {
                     equal = false;
                     break;
@@ -171,6 +177,7 @@ static bool wysna_eq_graph(WVal a, WVal b) {
                 }
                 break;
             case W_DICT:
+                if (left.as.dict == right.as.dict) break;
                 if (left.as.dict->len != right.as.dict->len) {
                     equal = false;
                     break;
@@ -186,6 +193,7 @@ static bool wysna_eq_graph(WVal a, WVal b) {
                 }
                 break;
             case W_STRUCT:
+                if (left.as.st == right.as.st) break;
                 if ((left.as.st->name != right.as.st->name && strcmp(left.as.st->name, right.as.st->name) != 0) ||
                     left.as.st->len != right.as.st->len) {
                     equal = false;

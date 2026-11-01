@@ -53,8 +53,8 @@ are integrity/provenance records, not a cryptographic publisher signature.
 The installation may be read-only. Seed runs with isolated Python imports and
 bytecode writes disabled. LLVM temporary work goes into private build directories;
 Wysna object and Zig global caches go to user-writable cache locations. Set
-`WYSNA_COMPILER_CACHE_HOME` for objects and `WYSNA_CACHE_HOME` for the SDK's Zig global
-cache. SDK files never serve as build outputs. Paths with spaces/Unicode and a
+`WYSNA_COMPILER_CACHE_HOME` for C objects and `WYSNA_CACHE_HOME` for Zig global files
+and the native compiler bootstrap. SDK files never serve as build outputs. Paths with spaces/Unicode and a
 symlink to the command are supported.
 
 Install an update beside the previous version, verify it, then redirect your PATH

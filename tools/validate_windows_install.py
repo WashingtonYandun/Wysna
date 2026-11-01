@@ -62,7 +62,7 @@ def validate(installation, report):
         run('run-without-compiler', ['run', str(source)], 'hello Wysna\n', custom_environment=broken_environment)
         for command in ('test', 'bench'):
             run(command + '-source-only', [command], code=1)
-        run('selfhost-source-only', ['build', '--backend=selfhost', str(source), '-o', str(work / 'selfhost')], code=1)
+        run('selfhost-source-only', ['build', '--engine=compiler', str(source), '-o', str(work / 'selfhost')], code=1)
         formatted = run('format', ['fmt', str(source)])
         (work / 'formatted.wysna').write_text(formatted.stdout, encoding='utf-8')
         run('format-idempotence', ['fmt', str(work / 'formatted.wysna')], formatted.stdout)

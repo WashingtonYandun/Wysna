@@ -10,7 +10,7 @@ from node.NodeType import (
     IdentifierPattern, TuplePattern, EnumPattern, LiteralPattern, WildcardPattern,
     FnDecl, Param, StructDecl, StructField, EnumDecl, VariantDecl,
     InterfaceDecl, InterfaceMethod, ClassDecl, ClassField, MethodDecl,
-    ImportDecl, LetDecl,
+    ImportDecl, UseDecl, UseSymbol, LetDecl,
     WhileStmt, ForStmt, ReturnStmt, BreakStmt, ContinueStmt, ExprStmt,
     IntLiteral, FloatLiteral, StringLiteral, BoolLiteral, NoneLiteral,
     IdentExpr, ThisExpr, SuperExpr, NewExpr,
@@ -58,7 +58,7 @@ _STATEMENT_END_TOKENS = frozenset({TokenType.RBRACE, TokenType.EOF})
 
 class Parser:
     """
-    Recursive Descent + Pratt Parser for Wysna v0.1.
+    Recursive-descent and Pratt parser for Wysna source.
     Never calls exit(); raises ParserError with exact diagnostic codes and positions.
     """
     def __init__(self, file: str = "<stdin>") -> None:
@@ -67,8 +67,34 @@ class Parser:
         self.pos = 0
         self.recover = False
         self.diagnostics = []
+        self._source_text: Optional[str] = None
+
+    def _stamp_error(self, error: ParserError) -> ParserError:
+        """Attach direct UTF-8 byte spans and structured syntax kind to a ParserError."""
+        token = next((t for t in self.tokens if t.line == error.line and t.col == error.col), None)
+        if (token is not None and self._source_text is not None
+                and hasattr(token, "start_offset") and hasattr(token, "end_offset")):
+            try:
+                error.start_byte = len(self._source_text[:token.start_offset].encode("utf-8"))
+                error.end_byte = len(self._source_text[:token.end_offset].encode("utf-8"))
+            except UnicodeEncodeError:
+                pass
+        if not error.data.get("kind"):
+            msg = error.message
+            if msg.startswith("Unexpected token"):
+                error.with_data(kind="unexpected_token",
+                                found=token.type.name if token is not None else None)
+            elif "Unterminated" in msg:
+                error.with_data(kind="unterminated_construct")
+            elif msg.startswith("Expected"):
+                error.with_data(kind="expected_construct",
+                                found=token.type.name if token is not None else None)
+            else:
+                error.with_data(kind="syntax_error")
+        return error
 
     def parse(self, source: str, show_tokens: bool = False, *, tokens=None, recover=False) -> Program:
+        self._source_text = source
         self.tokens = tokens if tokens is not None else Lexer(source, file=self.file).tokenize()
         self.pos = 0
         self.recover = recover
@@ -81,14 +107,18 @@ class Parser:
                 raise ParserErrors(self.diagnostics)
             program.source_text = source
             return program
+        except ParserErrors:
+            raise
+        except ParserError as error:
+            raise self._stamp_error(error)
         except RecursionError:
-            raise ParserError(
+            raise self._stamp_error(ParserError(
                 message="Maximum syntax nesting depth exceeded",
                 line=self.at().line,
                 col=self.at().col,
                 file=self.file,
                 code="W0006",
-            )
+            ))
 
     def produce_ast(self) -> Program:
         start_line = self.at().line
@@ -112,6 +142,7 @@ class Parser:
         except ParserErrors:
             raise
         except ParserError as error:
+            self._stamp_error(error)
             if not self.recover:
                 raise
             self.diagnostics.append(error)
@@ -188,7 +219,9 @@ class Parser:
             return self.advance()
         token = self.at()
         err_msg = msg if msg else f"Expected token '{type_.name}', found '{token.type.name}'"
-        raise ParserError(message=err_msg, line=token.line, col=token.col, file=self.file, code=code)
+        raise ParserError(message=err_msg, line=token.line, col=token.col, file=self.file,
+                          code=code).with_data(kind="expected_token", expected=type_.name,
+                                               found=token.type.name)
 
     # ==========================================
     # Type Annotation Parsing
@@ -409,7 +442,9 @@ class Parser:
             self.expect(TokenType.ARROW)
             returned = self.parse_type()
             return ExternFnDecl(name.value, params, returned, token.line, token.col)
-        if self.check(TokenType.FN) or self.check(TokenType.STRUCT) or self.check(TokenType.ENUM) or self.check(TokenType.INTERFACE) or self.check(TokenType.CLASS) or self.check(TokenType.IMPORT):
+        if (self.check(TokenType.FN) or self.check(TokenType.STRUCT) or self.check(TokenType.ENUM)
+                or self.check(TokenType.INTERFACE) or self.check(TokenType.CLASS)
+                or self.check(TokenType.IMPORT) or self.check(TokenType.FROM)):
             if not allow_top_level:
                 tok = self.at()
                 raise ParserError(
@@ -433,6 +468,8 @@ class Parser:
             return self.parse_class_decl()
         if self.check(TokenType.IMPORT):
             return self.parse_import_decl()
+        if self.check(TokenType.FROM):
+            return self.parse_use_decl()
         if self.check(TokenType.WHILE):
             return self.parse_while_stmt()
         if self.check(TokenType.FOR):
@@ -717,6 +754,118 @@ class Parser:
             namespace = self.expect(TokenType.IDENTIFIER).value
         return ImportDecl(path=raw_path, namespace=namespace, line=start_tok.line, col=start_tok.col)
 
+    def parse_use_decl(self) -> UseDecl:
+        start_tok = self.expect(TokenType.FROM, code="W0006", msg="Expected 'from'")
+
+        # Module path parsing:
+        # Can be string literal: from "std/text" use ...
+        # OR dot-separated path: from app.domain.user use ...
+        # OR relative dot-path: from .user use ..., from ..domain.user use ...
+        if self.check(TokenType.STR):
+            path_tok = self.advance()
+            path = str(path_tok.value)
+        else:
+            leading_dots = ""
+            while self.check(TokenType.DOT) or self.check(TokenType.DOT_DOT):
+                if self.match(TokenType.DOT_DOT):
+                    leading_dots += ".."
+                else:
+                    self.advance()
+                    leading_dots += "."
+
+            if not self.check(TokenType.IDENTIFIER):
+                tok = self.at()
+                raise ParserError(
+                    message=f"Expected module path after 'from', found '{tok.type.name}'",
+                    line=tok.line,
+                    col=tok.col,
+                    file=self.file,
+                    code="W0006",
+                )
+
+            parts = [self.expect(TokenType.IDENTIFIER).value]
+            while self.match(TokenType.DOT):
+                parts.append(self.expect(TokenType.IDENTIFIER, code="W0006", msg="Expected identifier after '.' in module path").value)
+            path = leading_dots + ".".join(parts)
+
+        if self.check(TokenType.USE) or (self.check(TokenType.IDENTIFIER) and self.at().value == "use"):
+            self.advance()
+        else:
+            raise ParserError(
+                message="Expected 'use' after module path in 'from ... use' statement",
+                line=self.at().line,
+                col=self.at().col,
+                file=self.file,
+                code="W0006",
+            )
+
+        symbols: List[UseSymbol] = []
+        is_namespace = False
+        namespace_alias: Optional[str] = None
+        is_braced = False
+
+        if self.match(TokenType.LBRACE):
+            is_braced = True
+            while not self.check(TokenType.RBRACE) and not self.is_at_end():
+                self._skip_statement_separators()
+                if self.check(TokenType.RBRACE):
+                    break
+                sym_start = self.at()
+                parts = [self.expect(TokenType.IDENTIFIER, code="W0006", msg="Expected symbol name in 'use' block").value]
+                while self.match(TokenType.DOT):
+                    parts.append(self.expect(TokenType.IDENTIFIER, code="W0006", msg="Expected identifier after '.'").value)
+
+                if len(parts) > 1:
+                    subpath = ".".join(parts[:-1])
+                    sym_name = parts[-1]
+                else:
+                    subpath = None
+                    sym_name = parts[0]
+
+                alias = None
+                if self.check(TokenType.IDENTIFIER) and self.at().value == "as":
+                    self.advance()
+                    alias = self.expect(TokenType.IDENTIFIER, code="W0006", msg="Expected identifier after 'as'").value
+
+                symbols.append(UseSymbol(name=sym_name, alias=alias, subpath=subpath, line=sym_start.line, col=sym_start.col))
+
+                if not self.match(TokenType.COMMA):
+                    self._skip_statement_separators()
+                    if not self.check(TokenType.RBRACE):
+                        break
+
+            self._skip_statement_separators()
+            self.expect(TokenType.RBRACE, code="W0006", msg="Unterminated 'use' block, expected '}'")
+        else:
+            sym_start = self.at()
+            parts = [self.expect(TokenType.IDENTIFIER, code="W0006", msg="Expected symbol or module name after 'use'").value]
+            while self.match(TokenType.DOT):
+                parts.append(self.expect(TokenType.IDENTIFIER, code="W0006", msg="Expected identifier after '.'").value)
+
+            if len(parts) > 1:
+                subpath = ".".join(parts[:-1])
+                sym_name = parts[-1]
+            else:
+                subpath = None
+                sym_name = parts[0]
+
+            alias = None
+            if self.check(TokenType.IDENTIFIER) and self.at().value == "as":
+                self.advance()
+                alias = self.expect(TokenType.IDENTIFIER, code="W0006", msg="Expected identifier after 'as'").value
+
+            symbols.append(UseSymbol(name=sym_name, alias=alias, subpath=subpath, line=sym_start.line, col=sym_start.col))
+
+        return UseDecl(
+            path=path,
+            symbols=symbols,
+            is_namespace=is_namespace,
+            namespace_alias=namespace_alias,
+            is_braced=is_braced,
+            line=start_tok.line,
+            col=start_tok.col,
+        )
+
     def parse_while_stmt(self) -> WhileStmt:
         start_tok = self.expect(TokenType.WHILE, code="W0006", msg="Expected 'while'")
         condition = self.parse_expr(allow_struct_init=False)
@@ -807,6 +956,10 @@ class Parser:
                     if self.check(TokenType.ELSE) and not self._begins_match_arm():
                         continue
                     self.pos = saved
+
+                if self.check(TokenType.NEWLINE) and self.peek(1).type == TokenType.DOT:
+                    self.advance()
+                    continue
 
                 if self.check(TokenType.LPAREN):
                     # Call expression

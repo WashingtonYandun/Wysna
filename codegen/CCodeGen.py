@@ -887,11 +887,3 @@ class CCodeGen:
             for s in else_inner:
                 out.append(f"    {s}")
             out.append("}")
-
-
-def compile_to_c(source: str, file: str = "<stdin>") -> str:
-    """Compile source through the checked service boundary using the AST oracle."""
-    from compiler.CompilerService import CompilerService
-    service = CompilerService()
-    checked = service.check(source, file)
-    return service.emit_c(checked, backend="ast").source

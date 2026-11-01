@@ -58,7 +58,7 @@ def _leading_documentation(lines, line_number):
     index = line_number - 2
     comments = []
     while index >= 0 and lines[index].lstrip().startswith("#"):
-        comments.append(lines[index].lstrip()[1:].strip())
+        comments.append(lines[index].lstrip().lstrip("#").strip())
         index -= 1
     comments.reverse()
     return "\n".join(comments) if comments else None
@@ -334,10 +334,10 @@ def run_capabilities_command(argv):
             "compiler_version": WYSNA_VERSION,
             "commands": ["run", "check", "fmt", "ast", "mir", "tokens", "emit-c", "build",
                          "project.new", "project.lock", "project.check", "project.build", "project.run", "project.test",
-                         "api", "capabilities", "explain", "lsp", "repl"],
+                         "api", "capabilities", "explain", "fix", "schema", "mcp", "lsp", "repl"],
             "machine_output": {"format": "json-v1", "commands": ["check", "fmt", "emit-c", "build",
                                                                           "project.new", "project.check", "project.build",
-                                                                          "api", "capabilities", "explain"]},
+                                                                          "api", "capabilities", "explain", "fix", "schema"]},
             "profiles": ["native-cli", "wasi-command", "browser-library", "c99-source"],
             "targets": ["native", "wasm32-wasip1", "wasm32-unknown-emscripten"],
             "runtimes": {"wasi-command": "wasmtime-python==50.0.1",

@@ -186,10 +186,18 @@ def test_scoped_foreign_resources():
         for backend in ('ast', 'hir', 'selfhost'):
             binary = Path(directory) / executable_name(backend)
             flags = ['--sanitize'] if os.environ.get('WYSNA_SANITIZE') == '1' else []
-            built = subprocess.run([sys.executable, str(ROOT / 'main.py'), 'build',
-                str(ROOT / 'tests/ffi/resources.wysna'), '--backend=' + backend,
-                '--link-lib', str(ROOT / 'tests/ffi/resource_adapter.c'), '-o', str(binary)] + flags,
-                capture_output=True, text=True, timeout=120)
+            source = ROOT / 'tests/ffi/resources.wysna'
+            if backend == 'ast':
+                command = [sys.executable, str(ROOT / 'tests/emit_ast_oracle.py'), str(source),
+                           str(Path(directory) / 'resources-ast.c'), '--build', str(binary),
+                           '--link-lib', str(ROOT / 'tests/ffi/resource_adapter.c')]
+            else:
+                command = [sys.executable, str(ROOT / 'main.py'), 'build']
+                if backend == 'selfhost':
+                    command.append('--engine=compiler')
+                command += [str(source), '--link-lib', str(ROOT / 'tests/ffi/resource_adapter.c'),
+                            '-o', str(binary)]
+            built = subprocess.run(command + flags, capture_output=True, text=True, timeout=120)
             assert built.returncode == 0, built.stderr
             result = subprocess.run([str(binary)], capture_output=True, text=True, timeout=30,
                 env=dict(os.environ, WYSNA_MEM_CHECK='1', ASAN_OPTIONS='detect_leaks=' + ('1' if sys.platform.startswith('linux') else '0'), UBSAN_OPTIONS='halt_on_error=1'))

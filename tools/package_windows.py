@@ -65,7 +65,7 @@ def assemble(wheel, output, cache, launcher_compiler=None, source_commit=None, *
         manifest = {'version': version, 'profile': 'wysna', 'platform': 'windows-x64',
                     'source_commit': source_commit, 'components': COMPONENTS,
                     'wheel': {'name': wheel.name, 'sha256': sha256(wheel)},
-                    'source_only_commands': ['test', 'bench', '--backend=selfhost']}
+                    'source_only_commands': ['test', 'bench', '--engine=compiler']}
         (stage / 'windows-bundle.json').write_text(json.dumps(manifest, indent=2) + '\n', encoding='utf-8')
         stage.rename(output)
     print(json.dumps({'bundle': str(output), 'version': version, 'components': COMPONENTS}, indent=2))

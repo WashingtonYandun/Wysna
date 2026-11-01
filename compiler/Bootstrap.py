@@ -20,7 +20,7 @@ SELFHOST_BOOTSTRAP_INPUTS = ("selfhost/compiler.wysna", "tools/bundle_selfhost.p
     for package in ("lexer", "parser", "node", "checker", "compiler", "codegen", "common",
                     "error", "hir", "mir", "tokens", "runtime", "selfhost/src")
     for path in (ROOT / package).rglob("*")
-    if path.is_file() and (path.suffix == ".py" or package == "runtime" and path.suffix == ".h"
+    if path.is_file() and (path.suffix == ".py" or package == "runtime" and path.suffix in (".h", ".c")
                            or package == "selfhost/src" and path.suffix == ".wysna")
 ))
 
@@ -66,7 +66,7 @@ def bootstrap_compiler(repo_root, output_directory):
         raise RuntimeError("The compiler bundle is stale; run tools/bundle_selfhost.py")
     fingerprint, provenance = bootstrap_fingerprint(root)
     service = CompilerService()
-    seed_source = service.emit_c(service.check(source, source_path), backend="hir").source
+    seed_source = service.emit_c(service.check(source, source_path)).source
     bootstrap_c = directory / "bootstrap.c"
     bootstrap_c.write_text(seed_source, encoding="utf-8")
 
@@ -76,7 +76,7 @@ def bootstrap_compiler(repo_root, output_directory):
         command = compiler_command()
         built = subprocess.run(command + ["-std=c99", "-O1", "-I" + str(root),
                                str(path)] + math_flags + native_stack_link_args(command) + ["-o", str(binary)],
-                               capture_output=True, text=True, timeout=120, cwd=root)
+                               capture_output=True, text=True, timeout=240, cwd=root)
         if built.returncode:
             from error.Error import ToolchainError
             raise ToolchainError("Bootstrap C compilation failed: " + built.stdout + built.stderr)
@@ -86,7 +86,7 @@ def bootstrap_compiler(repo_root, output_directory):
     for stage in range(3):
         emitted = directory / ("compiler" + str(stage) + ".c")
         subprocess.run([str(binary), str(source_path), str(emitted)], check=True,
-                       capture_output=True, text=True, timeout=120, cwd=root)
+                       capture_output=True, text=True, timeout=240, cwd=root)
         if stage < 2:
             binary = compile_c(emitted, "stage" + str(stage + 1))
     hashes = tuple(_sha256(directory / ("compiler" + str(stage) + ".c")) for stage in range(3))
@@ -122,7 +122,9 @@ def ensure_selfhost_compiler_binary(repo_root: str) -> str:
     if not source.is_file():
         from error.Error import TypeError as WysnaTypeError
         raise WysnaTypeError("Wysna Compiler bootstrap requires a source checkout", file=str(source), code="W2013")
-    cache = root / ".wysna_cache/bootstrap"
+    configured_cache = os.environ.get("WYSNA_CACHE_HOME")
+    cache_root = Path(configured_cache).expanduser() if configured_cache else root / ".wysna_cache"
+    cache = cache_root / "bootstrap"
     cache.mkdir(parents=True, exist_ok=True)
     with cache_lock(str(cache / "bootstrap.lock")):
         fingerprint, _ = bootstrap_fingerprint(root)

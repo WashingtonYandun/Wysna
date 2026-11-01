@@ -16,12 +16,14 @@ from compiler.Bootstrap import SELFHOST_BOOTSTRAP_INPUTS
 PILOT = ROOT / 'examples/ffi/sqlite'
 
 
-def build(output=None, backend='hir'):
+def build(output=None, engine='seed'):
     compiler = subprocess.run(compiler_command() + ['--version'], capture_output=True,
                               text=True, check=True, timeout=30).stdout
     inputs = list(SELFHOST_BOOTSTRAP_INPUTS) + [str(path.relative_to(ROOT)) for path in
         (PILOT / 'import_csv.wysna', PILOT / 'adapter.c', PILOT / 'adapter.h')]
-    digest = hashlib.sha256(json.dumps([compiler, backend, compiler_command(), os.name]).encode())
+    if engine not in ('seed', 'compiler'):
+        raise ValueError('engine must be seed or compiler')
+    digest = hashlib.sha256(json.dumps([compiler, engine, compiler_command(), os.name]).encode())
     for relative in sorted(set(inputs)):
         digest.update(relative.encode())
         digest.update((ROOT / relative).read_bytes())
@@ -32,13 +34,13 @@ def build(output=None, backend='hir'):
     with cache_lock(binary.parent / 'build.lock'):
         if output or not binary.exists():
             command = [sys.executable, str(ROOT / 'main.py'), 'build', str(PILOT / 'import_csv.wysna'),
-                       '--backend=' + backend, '--link-lib', str(PILOT / 'adapter.c'),
+                       '--engine=' + engine, '--link-lib', str(PILOT / 'adapter.c'),
                        '--link-lib', 'sqlite3', '-o', str(binary)]
             result = subprocess.run(command, capture_output=True, text=True, timeout=180)
             if result.returncode:
                 raise RuntimeError(result.stderr)
             binary.with_suffix(binary.suffix + '.build.json').write_text(json.dumps({
-                'source_sha256': identity, 'backend': backend, 'compiler': compiler,
+                'source_sha256': identity, 'engine': engine, 'compiler': compiler,
                 'command': command, 'runtime_abi': 2}, indent=2))
     return binary
 
@@ -46,7 +48,7 @@ def build(output=None, backend='hir'):
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--database', type=Path, help='SQLite database path; required for data commands')
-    parser.add_argument('--backend', choices=('hir', 'ast', 'selfhost'), default='hir')
+    parser.add_argument('--engine', choices=('seed', 'compiler'), default='seed')
     parser.add_argument('--json', action='store_true')
     commands = parser.add_subparsers(dest='action', required=True)
     builder = commands.add_parser('build')
@@ -60,7 +62,7 @@ def main():
     if arguments.action in ('import', 'check'):
         if not arguments.csv.is_file() or arguments.csv.stat().st_size > 8388608:
             parser.error('CSV must be a regular file of at most 8 MiB')
-    binary = build(getattr(arguments, 'output', None), arguments.backend)
+    binary = build(getattr(arguments, 'output', None), arguments.engine)
     if arguments.action == 'build':
         print(binary)
         return 0

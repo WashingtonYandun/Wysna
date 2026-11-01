@@ -134,15 +134,23 @@ class ArchitectureContractTests(unittest.TestCase):
         parsed = tomli.loads('[package]\nname = "example"\n')
         self.assertEqual(parsed['package']['name'], 'example')
 
-    def test_public_convenience_apis_do_not_bypass_semantic_boundaries(self):
-        from codegen import compile_to_c
+    def test_ast_oracle_is_an_internal_consumer_of_checked_programs(self):
+        from compiler.CompilerService import CompilerService
         from runtime.Interpreter import evaluate
+        import codegen
+        import inspect
 
+        self.assertFalse(hasattr(codegen, 'compile_to_c'))
+        self.assertNotIn('backend', inspect.signature(CompilerService.emit_c).parameters)
+
+        service = CompilerService()
         with self.assertRaises(WysnaError) as caught:
-            compile_to_c('let value: int = "wrong"', 'convenience.wysna')
+            service.check('let value: int = "wrong"', 'oracle.wysna')
         self.assertEqual(caught.exception.code, 'W2001')
-        self.assertEqual(Path(caught.exception.file), (ROOT / 'convenience.wysna').resolve())
-        self.assertIn('#include "runtime/wysna_runtime.h"', compile_to_c('print(42)'))
+        self.assertEqual(Path(caught.exception.file), (ROOT / 'oracle.wysna').resolve())
+        checked = service.check('print(42)', 'oracle.wysna')
+        self.assertIn('#include "runtime/wysna_runtime.h"',
+                      service._emit_ast_oracle_for_testing(checked).source)
         with self.assertRaises(WysnaError) as caught:
             evaluate(object(), Interpreter().global_env)
         self.assertEqual(caught.exception.code, 'W9999')

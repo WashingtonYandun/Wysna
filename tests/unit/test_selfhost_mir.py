@@ -288,7 +288,7 @@ print("verified")
         modules = [(ROOT / "selfhost/src" / name).read_text() for name in MODULE_ORDER if name != "09_main.wysna"]
         service = CompilerService()
         checked = service.check("".join(modules) + driver, "mir-verifier-test.wysna")
-        generated = service.emit_c(checked, backend="ast").source
+        generated = service._emit_ast_oracle_for_testing(checked).source
         with tempfile.TemporaryDirectory(prefix="wysna-cfg-verifier-") as temporary:
             root = Path(temporary).resolve()
             c_path = root / "verifier.c"

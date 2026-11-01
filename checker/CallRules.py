@@ -26,6 +26,7 @@ from checker.WysnaType import (
     GenericFnTemplate,
 )
 from error.Error import TypeError
+from checker.Suggestions import suggest_mutable
 
 if TYPE_CHECKING:
     from checker.TypeChecker import TypeChecker
@@ -97,13 +98,13 @@ def check_call_expr(checker: "TypeChecker", expr: CallExpr, is_statement_context
             if isinstance(callee_t, FunctionType) and callee_t.is_mutating:
                 sym = checker._find_value_root_symbol(expr.callee.object)
                 if sym and not sym.is_mut:
-                    raise TypeError(
+                    raise suggest_mutable(TypeError(
                         message=checker._immutable_binding_message(sym, f"call mutating method '{expr.callee.property}'"),
                         line=expr.line,
                         col=expr.col,
                         file=checker.file,
                         code="W3001"
-                    )
+                    ), sym, checker.file)
         else:
             callee_t = checker._check_expr(expr.callee)
     if isinstance(callee_t, AnyType):

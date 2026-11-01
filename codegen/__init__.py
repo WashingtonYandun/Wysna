@@ -1,1 +1,1 @@
-from codegen.CCodeGen import CCodeGen, compile_to_c
+"""Internal AST C99 differential oracle; this package exposes no product API."""

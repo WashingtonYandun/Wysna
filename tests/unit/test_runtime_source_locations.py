@@ -65,13 +65,20 @@ def _emit_c(root: Path, source: Path, c_file: Path, backend: str, selfhost_compi
             text=True,
             timeout=120,
         )
+    elif backend == "ast":
+        result = subprocess.run(
+            [sys.executable, str(root / "tests/emit_ast_oracle.py"), str(source), str(c_file)],
+            cwd=root,
+            capture_output=True,
+            text=True,
+            timeout=120,
+        )
     else:
         result = subprocess.run(
             [
                 sys.executable,
                 "main.py",
                 "emit-c",
-                f"--backend={backend}",
                 str(source),
                 "-o",
                 str(c_file),

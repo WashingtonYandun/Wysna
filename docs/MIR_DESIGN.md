@@ -1,6 +1,6 @@
 # Wysna MIR: Verified Intermediate Representation
 
-Wysna Seed's default pipeline is checked AST → typed and verified HIR → verified MIR → C99 → C compiler. The public backend name remains `hir`; `--backend=ast` selects the independent AST oracle. Wysna Compiler uses its own frontend and a single productive pipeline: checked nodes → verified MIR → native C99 emitter. Its positional CLI and MIR commands use the same implementation.
+Wysna separates compiler **engines** from output **backends**. The default `seed` engine implements the full Seed language profile and lowers checked AST → typed and verified HIR → verified MIR → C99. The `compiler` engine is the standalone self-hosted `native-core-v1` profile and lowers its own checked representation → verified MIR → C99. Both produce C99 which a system or bundled C toolchain turns into a native executable. `--engine=seed|compiler` selects the compiler implementation; `--backend=c99|llvm-experimental` selects the output target. C99 is the supported default. LLVM is opt-in and remains experimental. The independent AST C emitter is a test oracle and has no production CLI selection.
 
 ## Interchange and native-core-v1
 
@@ -20,11 +20,12 @@ The `native-core-v1` source profile contains:
 - Scalars, UTF-8 strings including embedded NUL, globals, typed functions, explicit and inferred lambda returns, conditionals, loops, early returns and short-circuit operators.
 - Lists, dictionaries and tuples, collection operations, copy-on-write mutation, direct ranges, nested irrefutable tuple loop bindings and preserved left-to-right evaluation.
 - Optional and Result channels, nested/context-free builtin channel constructors, success lifting, propagation, handlers and closed error unions.
+- `std/environment.arguments()` and `std/environment.get(name)`, including the distinction between an absent and empty environment value.
 - Structs, enums, classes, inheritance, interfaces and virtual/super calls; pattern matching with guards and explicit payload witnesses.
 - Function values, snapshot closures, indirect calls, concrete generic functions and concrete generic structs/enums/classes. Generic class methods substitute the concrete class arguments into their signatures and bodies. Generic definitions retain symbolic obligations and bounded specialization.
 - Relative/standard-library imports through one module loader, physical module identity, and the declared scalar/opaque C ABI.
 
-Parameterized classes with concrete type arguments, fields and non-generic methods are supported in this native profile and included in the four-engine measured corpus. Constrained parameterized classes, methods that introduce their own type parameters inside a parameterized class, inheritance or interfaces on parameterized classes, parameterized interfaces, generic nominal values with unresolved type arguments, library-mode exports and WebAssembly targets remain outside it. An unresolved nominal value requires an explicit concrete type context. Seed's formatter, package/project and LSP commands remain outside the SDK. Unsupported source features report `W2013`; there is no Python fallback. This is a declared, tested profile, not universal Seed parity.
+Parameterized classes with concrete type arguments, fields and non-generic methods are supported in this native profile and included in the four-engine measured corpus. `std/environment.get` reads the process environment inherited by the program; this API does not filter or sandbox environment access. Constrained parameterized classes, methods that introduce their own type parameters inside a parameterized class, inheritance or interfaces on parameterized classes, parameterized interfaces, generic nominal values with unresolved type arguments, library-mode exports and WebAssembly targets remain outside it. An unresolved nominal value requires an explicit concrete type context. Seed's formatter, package/project and LSP commands remain outside the SDK. Unsupported source features report `W2013`; there is no Python fallback. This is a declared, tested profile, not universal Seed parity.
 
 Value equality rejects function payloads in structs, enums and collections during checking (`W2001`); classes retain identity equality. Generic function arguments and materialized nominal types share a structural complexity limit of 256, with expanding nominal recursion rejected as `W2011`. Ordinary recursive enums remain supported.
 
@@ -46,7 +47,7 @@ Snapshots use copy-on-write lists: consumers cannot mutate one another's checked
 
 ## Bootstrap provenance
 
-`compiler/Bootstrap.py` is the authoritative bootstrap builder. Seed lowers the compiler source through verified HIR/MIR and emits `bootstrap.c`, which builds the initial native engine. That engine emits native C0; C0 builds Stage 1, which emits C1; C1 builds Stage 2, which emits C2. Acceptance requires **C0 = C1 = C2** and unchanged source/runtime/build inputs. The Seed emission hash is recorded separately. The AST C99 backend remains an independent conformance oracle; it is not the bootstrap path.
+`compiler/Bootstrap.py` is the authoritative bootstrap builder. Seed lowers the compiler source through verified HIR/MIR and emits `bootstrap.c`, which builds the initial native engine. That engine emits native C0; C0 builds Stage 1, which emits C1; C1 builds Stage 2, which emits C2. Acceptance requires **C0 = C1 = C2** and unchanged source/runtime/build inputs. The Seed emission hash is recorded separately. The independent AST C99 emitter remains a conformance oracle; it is not the bootstrap path.
 
 Caches are versioned by implementation fingerprint, locked while constructing, and validate the Seed/native C emission hashes and both stage binaries before reuse. `bootstrap.json` records provenance. A fixed point demonstrates deterministic self-hosting; independent behavior and rejection tests establish the measured semantic evidence.
 

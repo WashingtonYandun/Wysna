@@ -1,0 +1,635 @@
+{
+  "version": "1.0.0",
+  "specification": "WYSNA-SPEC-002",
+  "description": "Canonical 30-task evaluation corpus for AI authoring and repair in Wysna",
+  "tasks": [
+    {
+      "id": "TASK-01",
+      "domain": "cli_scripting",
+      "title": "Uppercase Argument Echo",
+      "status": "supported",
+      "instruction": "Write a Wysna CLI program that reads all command-line arguments passed after the script name (using `args()`), converts each argument to uppercase if it is lowercase ASCII or preserves it, and prints them space-separated on stdout. If no arguments are passed after the script name, print 'NO_ARGS'.",
+      "entrypoint": "main.wysna",
+      "fixtures": {},
+      "test_cases": [
+        {
+          "name": "basic_words",
+          "args": ["hello", "world"],
+          "expected_stdout": "HELLO WORLD\n",
+          "expected_exit": 0
+        },
+        {
+          "name": "no_args",
+          "args": [],
+          "expected_stdout": "NO_ARGS\n",
+          "expected_exit": 0
+        },
+        {
+          "name": "mixed_case",
+          "args": ["wysna", "v0.5.0", "Fast"],
+          "expected_stdout": "WYSNA V0.5.0 FAST\n",
+          "expected_exit": 0
+        }
+      ]
+    },
+    {
+      "id": "TASK-02",
+      "domain": "cli_scripting",
+      "title": "CLI Flag Parser with Default Fallbacks",
+      "status": "supported",
+      "instruction": "Write a Wysna program that parses `--name <str>` and `--times <int>` from `args()`. Default name is 'Guest' and default times is 1. If unknown flags appear, print 'ERROR: unknown flag' and return exit code 1. Output the greeting `<name>!` repeated `<times>` times, separated by spaces.",
+      "entrypoint": "main.wysna",
+      "fixtures": {},
+      "test_cases": [
+        {
+          "name": "defaults",
+          "args": [],
+          "expected_stdout": "Guest!\n",
+          "expected_exit": 0
+        },
+        {
+          "name": "custom_name_and_times",
+          "args": ["--name", "Washo", "--times", "3"],
+          "expected_stdout": "Washo! Washo! Washo!\n",
+          "expected_exit": 0
+        },
+        {
+          "name": "unknown_flag",
+          "args": ["--bad"],
+          "expected_stdout": "ERROR: unknown flag\n",
+          "expected_exit": 0
+        }
+      ]
+    },
+    {
+      "id": "TASK-03",
+      "domain": "cli_scripting",
+      "title": "Numeric Summer CLI",
+      "status": "supported",
+      "instruction": "Write a Wysna program that takes numeric string arguments passed via `args()` (skipping the script/runner name at args()[0]). Convert each argument to an integer using `int(arg)` and sum them up. Print 'SUM: <total>'. If no numeric arguments are provided after the runner name, print 'SUM: 0'.",
+      "entrypoint": "main.wysna",
+      "fixtures": {},
+      "test_cases": [
+        {
+          "name": "valid_numbers",
+          "args": ["10", "20", "12"],
+          "expected_stdout": "SUM: 42\n",
+          "expected_exit": 0
+        },
+        {
+          "name": "empty_args",
+          "args": [],
+          "expected_stdout": "SUM: 0\n",
+          "expected_exit": 0
+        },
+        {
+          "name": "negative_and_zero",
+          "args": ["-5", "15", "0"],
+          "expected_stdout": "SUM: 10\n",
+          "expected_exit": 0
+        }
+      ]
+    },
+    {
+      "id": "TASK-04",
+      "domain": "cli_scripting",
+      "title": "File Line Counter Utility",
+      "status": "supported",
+      "instruction": "Write a Wysna CLI tool that reads a file path from `args()[1]`. Read the file using `read_file(path)`. If reading fails with IoError, print 'FILE_NOT_FOUND'. Otherwise, count the total number of lines (delimited by newline '\\n') and print 'LINES: <count>'.",
+      "entrypoint": "main.wysna",
+      "fixtures": {
+        "sample.txt": "first line\nsecond line\nthird line"
+      },
+      "test_cases": [
+        {
+          "name": "existing_file",
+          "args": ["sample.txt"],
+          "expected_stdout": "LINES: 3\n",
+          "expected_exit": 0
+        },
+        {
+          "name": "missing_file",
+          "args": ["missing.txt"],
+          "expected_stdout": "FILE_NOT_FOUND\n",
+          "expected_exit": 0
+        }
+      ]
+    },
+    {
+      "id": "TASK-05",
+      "domain": "cli_scripting",
+      "title": "Word Frequency Counter",
+      "status": "supported",
+      "instruction": "Write a Wysna program that receives words as arguments via `args()`. Count the frequency of each unique word using a `dict[str, int]`. Print each unique word and its count in the format '<word>: <count>', ordered in the order they were first encountered.",
+      "entrypoint": "main.wysna",
+      "fixtures": {},
+      "test_cases": [
+        {
+          "name": "duplicate_words",
+          "args": ["apple", "banana", "apple", "cherry", "banana", "apple"],
+          "expected_stdout": "apple: 3\nbanana: 2\ncherry: 1\n",
+          "expected_exit": 0
+        },
+        {
+          "name": "all_unique",
+          "args": ["one", "two", "three"],
+          "expected_stdout": "one: 1\ntwo: 1\nthree: 1\n",
+          "expected_exit": 0
+        }
+      ]
+    },
+    {
+      "id": "TASK-06",
+      "domain": "cli_scripting",
+      "title": "FizzBuzz Range Generator",
+      "status": "supported",
+      "instruction": "Write a Wysna program that takes one integer argument N via `args()[1]`. For numbers from 1 through N (inclusive, using `1..=N`), print 'FizzBuzz' if divisible by 15, 'Fizz' if divisible by 3, 'Buzz' if divisible by 5, or the number itself.",
+      "entrypoint": "main.wysna",
+      "fixtures": {},
+      "test_cases": [
+        {
+          "name": "fizzbuzz_to_15",
+          "args": ["15"],
+          "expected_stdout": "1\n2\nFizz\n4\nBuzz\nFizz\n7\n8\nFizz\nBuzz\n11\nFizz\n13\n14\nFizzBuzz\n",
+          "expected_exit": 0
+        },
+        {
+          "name": "fizzbuzz_to_5",
+          "args": ["5"],
+          "expected_stdout": "1\n2\nFizz\n4\nBuzz\n",
+          "expected_exit": 0
+        }
+      ]
+    },
+    {
+      "id": "TASK-07",
+      "domain": "cli_scripting",
+      "title": "Subcommand Dispatcher",
+      "status": "supported",
+      "instruction": "Write a Wysna CLI program that reads a subcommand from `args()[1]`. Support: 'ping' (prints 'pong'), 'version' (prints '0.5.0'), 'help' (prints 'Available: ping, version, help'). If an unrecognized command is given, print 'UNKNOWN_COMMAND'. If no subcommand is passed, print 'NO_COMMAND'.",
+      "entrypoint": "main.wysna",
+      "fixtures": {},
+      "test_cases": [
+        {
+          "name": "ping_cmd",
+          "args": ["ping"],
+          "expected_stdout": "pong\n",
+          "expected_exit": 0
+        },
+        {
+          "name": "version_cmd",
+          "args": ["version"],
+          "expected_stdout": "0.5.0\n",
+          "expected_exit": 0
+        },
+        {
+          "name": "no_cmd",
+          "args": [],
+          "expected_stdout": "NO_COMMAND\n",
+          "expected_exit": 0
+        },
+        {
+          "name": "invalid_cmd",
+          "args": ["destroy"],
+          "expected_stdout": "UNKNOWN_COMMAND\n",
+          "expected_exit": 0
+        }
+      ]
+    },
+    {
+      "id": "TASK-08",
+      "domain": "cli_scripting",
+      "title": "Configuration Key-Value Parser",
+      "status": "supported",
+      "instruction": "Write a Wysna program that parses arguments in 'KEY=VALUE' format. Store them in a `dict[str, str]`. Print the value for 'HOST' or '127.0.0.1' if absent, and 'PORT' or '8080' if absent, formatted as 'Target: <HOST>:<PORT>'.",
+      "entrypoint": "main.wysna",
+      "fixtures": {},
+      "test_cases": [
+        {
+          "name": "custom_values",
+          "args": ["HOST=10.0.0.1", "PORT=443"],
+          "expected_stdout": "Target: 10.0.0.1:443\n",
+          "expected_exit": 0
+        },
+        {
+          "name": "default_values",
+          "args": [],
+          "expected_stdout": "Target: 127.0.0.1:8080\n",
+          "expected_exit": 0
+        },
+        {
+          "name": "partial_override",
+          "args": ["PORT=3000"],
+          "expected_stdout": "Target: 127.0.0.1:3000\n",
+          "expected_exit": 0
+        }
+      ]
+    },
+    {
+      "id": "TASK-09",
+      "domain": "cli_scripting",
+      "title": "String Template Variable Substitution",
+      "status": "supported",
+      "instruction": "Write a Wysna function `render_template(template: str, vars: dict[str, str]) -> str` and a `main` function. Replace any occurrence of `${KEY}` in `template` with its corresponding value in `vars`. If a key is missing, leave `${KEY}` unchanged. In `main()`, print the rendered result of template 'Hello ${user}, welcome to ${org}!' with vars {'user': 'Washo', 'org': 'WySofia'}.",
+      "entrypoint": "main.wysna",
+      "fixtures": {},
+      "test_cases": [
+        {
+          "name": "basic_render",
+          "args": [],
+          "expected_stdout": "Hello Washo, welcome to WySofia!\n",
+          "expected_exit": 0
+        }
+      ]
+    },
+    {
+      "id": "TASK-10",
+      "domain": "cli_scripting",
+      "title": "Tabular Column Formatter",
+      "status": "supported",
+      "instruction": "Write a Wysna program with a struct `Row { id: int, name: str, role: str }`. Create a list with three rows: (1, 'Alice', 'Admin'), (2, 'Bob', 'Engineer'), (3, 'Carol', 'Lead'). Print them in a padded table with a header `ID   | NAME       | ROLE` and rows formatted as `%d   | %-10s | %s` using helper functions.",
+      "entrypoint": "main.wysna",
+      "fixtures": {},
+      "test_cases": [
+        {
+          "name": "table_output",
+          "args": [],
+          "expected_stdout": "ID   | NAME       | ROLE\n1    | Alice      | Admin\n2    | Bob        | Engineer\n3    | Carol      | Lead\n",
+          "expected_exit": 0
+        }
+      ]
+    },
+    {
+      "id": "TASK-11",
+      "domain": "cli_scripting",
+      "title": "Substring Line Matcher (Grep)",
+      "status": "supported",
+      "instruction": "Write a Wysna program that takes two arguments: `<query>` and `<file_path>`. Read the file and print every line that contains `<query>` prefixed by its 1-based line number: `<line_num>: <line_text>`. If the file is not found, print 'ERROR_IO'.",
+      "entrypoint": "main.wysna",
+      "fixtures": {
+        "data.txt": "apple pie\nbanana bread\ncherry tart\napple cider"
+      },
+      "test_cases": [
+        {
+          "name": "match_apple",
+          "args": ["apple", "data.txt"],
+          "expected_stdout": "1: apple pie\n4: apple cider\n",
+          "expected_exit": 0
+        },
+        {
+          "name": "match_none",
+          "args": ["orange", "data.txt"],
+          "expected_stdout": "",
+          "expected_exit": 0
+        }
+      ]
+    },
+    {
+      "id": "TASK-12",
+      "domain": "cli_scripting",
+      "title": "Command Batch Accumulator",
+      "status": "supported",
+      "instruction": "Write a Wysna CLI program that reads sequential operation arguments. Format: `OP VAL`. Operations: `ADD <int>`, `SUB <int>`, `MUL <int>`, `RESET`. Initial accumulator is 0. Print the final accumulator value formatted as 'RESULT: <val>'.",
+      "entrypoint": "main.wysna",
+      "fixtures": {},
+      "test_cases": [
+        {
+          "name": "math_batch",
+          "args": ["ADD", "10", "MUL", "3", "SUB", "5"],
+          "expected_stdout": "RESULT: 25\n",
+          "expected_exit": 0
+        },
+        {
+          "name": "reset_batch",
+          "args": ["ADD", "100", "RESET", "ADD", "7"],
+          "expected_stdout": "RESULT: 7\n",
+          "expected_exit": 0
+        }
+      ]
+    },
+    {
+      "id": "TASK-13",
+      "domain": "data_files",
+      "title": "JSON Key Value Extractor",
+      "status": "supported",
+      "instruction": "Write a Wysna program that reads a JSON file named `input.json`. Extract the top-level keys `name` (str) and `version` (str). Print 'App: <name> v<version>'. Handle IoError by printing 'JSON_READ_ERROR'.",
+      "entrypoint": "main.wysna",
+      "fixtures": {
+        "input.json": "{\"name\": \"wysna-agent\", \"version\": \"0.5.0\"}"
+      },
+      "test_cases": [
+        {
+          "name": "read_json",
+          "args": [],
+          "expected_stdout": "App: wysna-agent v0.5.0\n",
+          "expected_exit": 0
+        }
+      ]
+    },
+    {
+      "id": "TASK-14",
+      "domain": "data_files",
+      "title": "CSV Row Aggregator and Average",
+      "status": "supported",
+      "instruction": "Write a Wysna program that reads `scores.csv` formatted as `Name,Score`. Skip the header. Compute the total count of students, the sum of scores, and the average score (integer division). Print 'Students: <count>, Avg: <avg>'.",
+      "entrypoint": "main.wysna",
+      "fixtures": {
+        "scores.csv": "Name,Score\nWasho,95\nMateo,85\nSofia,90"
+      },
+      "test_cases": [
+        {
+          "name": "avg_scores",
+          "args": [],
+          "expected_stdout": "Students: 3, Avg: 90\n",
+          "expected_exit": 0
+        }
+      ]
+    },
+    {
+      "id": "TASK-15",
+      "domain": "data_files",
+      "title": "Dictionary Key Flattener",
+      "status": "supported",
+      "instruction": "Write a Wysna function that takes a prefix and two dictionaries representing a two-level nested structure, flattening them into dot notation `parent.child`. In `main()`, print the flattened pairs sorted alphabetically.",
+      "entrypoint": "main.wysna",
+      "fixtures": {},
+      "test_cases": [
+        {
+          "name": "flatten_test",
+          "args": [],
+          "expected_stdout": "app.env: prod\napp.name: wysna\ndb.host: localhost\ndb.port: 5432\n",
+          "expected_exit": 0
+        }
+      ]
+    },
+    {
+      "id": "TASK-16",
+      "domain": "data_files",
+      "title": "Sorted List Merge with Deduplication",
+      "status": "supported",
+      "instruction": "Write a Wysna function `merge_unique(a: list[int], b: list[int]) -> list[int]` that merges two sorted lists of integers into a single sorted list with duplicates removed. Print the elements space-separated in `main()`.",
+      "entrypoint": "main.wysna",
+      "fixtures": {},
+      "test_cases": [
+        {
+          "name": "merge_test",
+          "args": [],
+          "expected_stdout": "1 2 3 4 5 6 7 8\n",
+          "expected_exit": 0
+        }
+      ]
+    },
+    {
+      "id": "TASK-17",
+      "domain": "data_files",
+      "title": "Atomic File Backup Utility",
+      "status": "supported",
+      "instruction": "Write a Wysna program that takes a file path `<path>` from `args()[1]`. Read the file and write its exact content to `<path>.bak`. If the source file does not exist, print 'BACKUP_FAILED'. If successful, print 'BACKUP_OK'.",
+      "entrypoint": "main.wysna",
+      "fixtures": {
+        "target.txt": "Secret content for backup"
+      },
+      "test_cases": [
+        {
+          "name": "successful_backup",
+          "args": ["target.txt"],
+          "expected_stdout": "BACKUP_OK\n",
+          "expected_exit": 0,
+          "file_assertions": {
+            "target.txt.bak": "Secret content for backup"
+          }
+        },
+        {
+          "name": "failed_backup",
+          "args": ["non_existent.txt"],
+          "expected_stdout": "BACKUP_FAILED\n",
+          "expected_exit": 0
+        }
+      ]
+    },
+    {
+      "id": "TASK-18",
+      "domain": "data_files",
+      "title": "Byte Checksum Accumulator",
+      "status": "supported",
+      "instruction": "Write a Wysna function that converts an ASCII string into raw unsigned byte integers via `bytes(s)`. Sum all byte values modulo 256. Print 'CHECKSUM: <val>' for input 'Wysna'.",
+      "entrypoint": "main.wysna",
+      "fixtures": {},
+      "test_cases": [
+        {
+          "name": "checksum_wysna",
+          "args": [],
+          "expected_stdout": "CHECKSUM: 27\n",
+          "expected_exit": 0
+        }
+      ]
+    },
+    {
+      "id": "TASK-19",
+      "domain": "data_files",
+      "title": "Record Schema Validator",
+      "status": "supported",
+      "instruction": "Write a Wysna struct `UserRecord { id: int, username: str, age: int }`. Write a validation function `validate(u: UserRecord) -> bool` that returns true only if `id > 0`, `len(username) >= 3`, and `age >= 18`. In `main()`, test two records: one valid, one invalid. Print 'Record 1: VALID' and 'Record 2: INVALID'.",
+      "entrypoint": "main.wysna",
+      "fixtures": {},
+      "test_cases": [
+        {
+          "name": "schema_validation",
+          "args": [],
+          "expected_stdout": "Record 1: VALID\nRecord 2: INVALID\n",
+          "expected_exit": 0
+        }
+      ]
+    },
+    {
+      "id": "TASK-20",
+      "domain": "data_files",
+      "title": "Hexadecimal String Encoder",
+      "status": "supported",
+      "instruction": "Write a Wysna program that converts an ASCII string passed via `args()[1]` into a continuous lowercase hex string (e.g. 'ABC' -> '414243'). If no argument is passed, print an empty line.",
+      "entrypoint": "main.wysna",
+      "fixtures": {},
+      "test_cases": [
+        {
+          "name": "hex_encode",
+          "args": ["Hello"],
+          "expected_stdout": "48656c6c6f\n",
+          "expected_exit": 0
+        },
+        {
+          "name": "hex_empty",
+          "args": [],
+          "expected_stdout": "\n",
+          "expected_exit": 0
+        }
+      ]
+    },
+    {
+      "id": "TASK-21",
+      "domain": "multi_module",
+      "title": "Module Extraction & Export",
+      "status": "supported",
+      "instruction": "You are given `main.wysna` which currently contains math functions. Refactor the helper function `square(x: int) -> int` into a separate module `math_mod.wysna` using `pub fn`. In `main.wysna`, import `math_mod.wysna` and call `math_mod.square(9)`. Print 'Result: 81'.",
+      "entrypoint": "main.wysna",
+      "fixtures": {
+        "math_mod.wysna": "pub fn square(x: int) -> int {\n    return x * x\n}\n",
+        "main.wysna": "import \"math_mod.wysna\" as math_mod\n\nfn main() -> unit {\n    print(\"Result:\", math_mod.square(9))\n}\n"
+      },
+      "test_cases": [
+        {
+          "name": "module_call",
+          "args": [],
+          "expected_stdout": "Result: 81\n",
+          "expected_exit": 0
+        }
+      ]
+    },
+    {
+      "id": "TASK-22",
+      "domain": "multi_module",
+      "title": "Type Mismatch Cross-Module Repair",
+      "status": "supported",
+      "instruction": "Fix the cross-module compilation error. `service.wysna` expects `calculate_tax(amount: int, rate_pct: int) -> int`, but `main.wysna` is passing a string for `rate_pct`. Fix `main.wysna` so it compiles and outputs 'Tax: 15'. Do not modify `service.wysna`.",
+      "entrypoint": "main.wysna",
+      "fixtures": {
+        "service.wysna": "pub fn calculate_tax(amount: int, rate_pct: int) -> int {\n    return (amount * rate_pct) / 100\n}\n",
+        "main.wysna": "import \"service.wysna\" as service\n\nfn main() -> unit {\n    let tax = service.calculate_tax(100, \"15\")\n    print(\"Tax:\", tax)\n}\n"
+      },
+      "test_cases": [
+        {
+          "name": "tax_repair",
+          "args": [],
+          "expected_stdout": "Tax: 15\n",
+          "expected_exit": 0
+        }
+      ]
+    },
+    {
+      "id": "TASK-23",
+      "domain": "multi_module",
+      "title": "Cross-Module Struct Instantiation",
+      "status": "supported",
+      "instruction": "Define a public struct in `models.wysna`: `pub struct Point { x: int, y: int }`. In `main.wysna`, import `models.wysna`, instantiate a `Point` with named fields `x: 10, y: 20`, and print 'Point(10, 20)'.",
+      "entrypoint": "main.wysna",
+      "fixtures": {
+        "models.wysna": "pub struct Point {\n    x: int,\n    y: int\n}\n"
+      },
+      "test_cases": [
+        {
+          "name": "point_struct",
+          "args": [],
+          "expected_stdout": "Point(10, 20)\n",
+          "expected_exit": 0
+        }
+      ]
+    },
+    {
+      "id": "TASK-24",
+      "domain": "multi_module",
+      "title": "Error Union Propagation Across Modules",
+      "status": "supported",
+      "instruction": "In `validator.wysna`, export `pub fn check_positive(n: int) -> int ! IoError`. If `n <= 0`, return an IoError. In `main.wysna`, call `check_positive(-5)` using fallback `else err { ... }` and print 'Caught expected error'.",
+      "entrypoint": "main.wysna",
+      "fixtures": {
+        "validator.wysna": "pub fn check_positive(n: int) -> int ! IoError {\n    if n <= 0 {\n        return read_file(\"non_existent_file_triggering_ioerror.txt\")\n    }\n    return n\n}\n"
+      },
+      "test_cases": [
+        {
+          "name": "error_union_test",
+          "args": [],
+          "expected_stdout": "Caught expected error\n",
+          "expected_exit": 0
+        }
+      ]
+    },
+    {
+      "id": "TASK-25",
+      "domain": "multi_module",
+      "title": "Circular Dependency Refactoring to Shared Types",
+      "status": "supported",
+      "instruction": "Modules `user.wysna` and `account.wysna` currently have a circular import that fails with W1003. Refactor by creating `types.wysna` with the shared struct `UserAccount`, and update `user.wysna` and `account.wysna` so both import `types.wysna` instead of each other. In `main.wysna`, run the flow and print 'Circular cycle resolved'.",
+      "entrypoint": "main.wysna",
+      "fixtures": {
+        "user.wysna": "import \"types.wysna\" as types\npub fn get_user_id() -> int { return 101 }\n",
+        "account.wysna": "import \"types.wysna\" as types\npub fn get_balance() -> int { return 500 }\n",
+        "types.wysna": "pub struct UserAccount { id: int, balance: int }\n",
+        "main.wysna": "import \"user.wysna\" as user\nimport \"account.wysna\" as account\n\nfn main() -> unit {\n    print(\"Circular cycle resolved\")\n}\n"
+      },
+      "test_cases": [
+        {
+          "name": "cycle_resolution",
+          "args": [],
+          "expected_stdout": "Circular cycle resolved\n",
+          "expected_exit": 0
+        }
+      ]
+    },
+    {
+      "id": "TASK-26",
+      "domain": "multi_module",
+      "title": "Project Manifest and Lockfile Verification",
+      "status": "blocked",
+      "blocked_reason": "Blocked in Wysna 0.5.0: Lockfile v1 and manifest validation pipeline are scheduled for Phase 1, Item 7 (SPEC-003)",
+      "instruction": "Verify `wysna.lock` integrity by comparing artifact hashes against resolved vendor dependencies.",
+      "entrypoint": "main.wysna",
+      "fixtures": {},
+      "test_cases": []
+    },
+    {
+      "id": "TASK-27",
+      "domain": "system_sqlite",
+      "title": "Safe Resource Lifecycle Management",
+      "status": "supported",
+      "instruction": "Simulate deterministic resource management. Write a struct `ResourceHandle { id: int, is_open: bool }`. Write functions `open_resource(id: int) -> ResourceHandle` and `close_resource(h: ResourceHandle) -> unit`. In `main()`, open resource 42, simulate an operation, ensure `close_resource` is called, and print 'Resource 42 closed safely'.",
+      "entrypoint": "main.wysna",
+      "fixtures": {},
+      "test_cases": [
+        {
+          "name": "resource_cleanup",
+          "args": [],
+          "expected_stdout": "Resource 42 closed safely\n",
+          "expected_exit": 0
+        }
+      ]
+    },
+    {
+      "id": "TASK-28",
+      "domain": "system_sqlite",
+      "title": "In-Memory Relational Table Query",
+      "status": "supported",
+      "instruction": "Create an in-memory table query engine. Define `struct Order { id: int, customer: str, amount: int }`. Store 3 orders. Write a function `filter_orders_by_customer(orders: list[Order], target: str) -> list[Order]`. Print the matched order ID and amount in `main()` for customer 'Washo': 'Order 1: $150'.",
+      "entrypoint": "main.wysna",
+      "fixtures": {},
+      "test_cases": [
+        {
+          "name": "relational_filter",
+          "args": [],
+          "expected_stdout": "Order 1: $150\n",
+          "expected_exit": 0
+        }
+      ]
+    },
+    {
+      "id": "TASK-29",
+      "domain": "system_sqlite",
+      "title": "SQLite Table DDL and Parameterized Insert",
+      "status": "blocked",
+      "blocked_reason": "Blocked in Wysna 0.5.0: Native SQLite driver in stdlib is scheduled for Phase 1, Item 10 (SPEC-002 / SPEC-004)",
+      "instruction": "Connect to SQLite database, execute CREATE TABLE users (id INT, name TEXT), and insert a row using parameterized binding.",
+      "entrypoint": "main.wysna",
+      "fixtures": {},
+      "test_cases": []
+    },
+    {
+      "id": "TASK-30",
+      "domain": "system_sqlite",
+      "title": "SQLite Transaction Commit and Rollback",
+      "status": "blocked",
+      "blocked_reason": "Blocked in Wysna 0.5.0: Native SQLite transaction handles require Phase 1 SQLite driver",
+      "instruction": "Execute an atomic SQLite transaction with commit on success and rollback on constraint violation.",
+      "entrypoint": "main.wysna",
+      "fixtures": {},
+      "test_cases": []
+    }
+  ]
+}

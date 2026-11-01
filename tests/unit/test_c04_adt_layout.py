@@ -18,7 +18,7 @@ Verifies:
 4. Pattern matching with guards:
    - Guards do NOT contribute unconditional exhaustiveness (raises W2003 if unconditional arm is missing).
    - Guards evaluate and fall through cleanly at runtime.
-5. Native C99 execution across AST and HIR backends with AddressSanitizer (0 leaks).
+5. Native C99 execution through the AST oracle and verified HIR/MIR production path with AddressSanitizer (0 leaks).
 """
 
 import os
@@ -210,7 +210,7 @@ def test_match_guards_and_exhaustiveness():
 
 
 def test_native_c99_recursive_adts():
-    """Verify end-to-end execution of recursive ADTs across AST and HIR backends under ASan."""
+    """Verify recursive ADTs through the AST oracle and verified HIR/MIR path under ASan."""
     code = """
     enum Tree[T] {
         Leaf(T),
@@ -309,7 +309,7 @@ def test_native_c99_recursive_adts():
         assert run_hir.returncode == 0, f"HIR run failed:\n{run_hir.stderr}"
         assert run_hir.stdout == expected_output, f"HIR output mismatch: {run_hir.stdout!r} vs {expected_output!r}"
 
-    print("  [PASS] Native C99 execution across AST and HIR backends with AddressSanitizer")
+    print("  [PASS] Native C99 execution through AST oracle and verified HIR/MIR with AddressSanitizer")
 
 
 def run_all() -> bool:

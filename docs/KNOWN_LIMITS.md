@@ -156,7 +156,9 @@ pause behaviour and complexity that the "deterministic refcounting" promise in S
 rules out.
 
 **Policy.** `WYSNA_MEM_CHECK` is opt-in and checks logical runtime allocation counters during
-normal cleanup. It does not collect cycles, run on panic-driven `exit()`, or replace
+normal cleanup. An explicit Wysna `exit(code)` terminates with active frames and skips
+the zero-live-object check; it preserves the requested exit status. It does not unwind
+those frames. The check does not collect cycles, run on panic-driven `exit()`, or replace
 ASan/LSan byte-level checks in development and CI. Keeping it opt-in avoids changing
 stderr or exit status for production programs that intentionally retain process-lifetime
 objects.
@@ -190,7 +192,7 @@ a proposed memory model; do not treat this as an implicit promise that ARC is th
 | Chained assignment | HIR uses `HirAssignment`; the value is preserved and each index is evaluated once. The artificial depth limit was removed. |
 | Parser error recovery | Check and LSP recover up to 100 syntax diagnostics. JSON preserves the first error and adds `diagnostics`; recovered programs never execute. |
 | `wysna fmt` coverage | The gate checks idempotence and AST preservation across fixtures, runtime programs, recursive examples, the standard library, and self-hosted sources. It also runs generated trees before and after formatting. |
-| LSP | `initialize`, `didOpen/didChange/didClose` with ordered ranged edits, `definition`, `hover`, `completion`, `references`, `rename`, document formatting and `publishDiagnostics`. No signature help or semantic tokens. |
+| LSP | `initialize`, `didOpen/didChange/didClose` with ordered ranged edits, `definition`, `hover`, `completion`, `references`, `rename`, `codeAction` (quickfixes), `signatureHelp`, document formatting and `publishDiagnostics` (errors and `W6001`/`W6002` warnings). No semantic tokens. |
 
 | Capability policy | `wysna run --allow` and `--deny` reject modeled capability violations and incomplete effect analyses before interpretation (`W5006`). This is a static gate, not an OS sandbox; native builds, `project run` and trusted runtime/FFI behavior are outside it. |
 | Dictionary keys | `int`, `str`, `bool`, `enum` only; `float` and composites containing it are rejected with `W2010`. |
