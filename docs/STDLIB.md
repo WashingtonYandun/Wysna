@@ -67,6 +67,10 @@ Wysna distributes modules under `std/` imported via canonical paths such as `imp
   - `algorithms.all[T]` `(values, fn(T) -> bool) -> bool`: check if all elements satisfy predicate.
   - `algorithms.find_first[T]` `(values, fn(T) -> bool) -> T?`: find first element satisfying predicate, returning none if absent.
   - `algorithms.contains[T]` `(values, target: T) -> bool`: check if list contains target element.
+  - `algorithms.parallel_map[T, R]` `(values: list[T], transform: fn(T) -> R) -> list[R]`: multi-core index-ordered parallel mapping over worker threads.
+  - `algorithms.parallel_filter[T]` `(values: list[T], predicate: fn(T) -> bool) -> list[T]`: multi-core index-ordered parallel filter.
+  - `algorithms.parallel_reduce[T]` `(values: list[T], initial: T, reducer: fn(T, T) -> T) -> T`: multi-core tree reduction.
+  - `algorithms.parallel_batch[T]` `(values: list[T], batch_size: int) -> list[list[T]]`: split list into chunks for parallel batch processing.
 - `std/bytes`: UTF-8 codec operations.
   - `bytes.encode(text) -> list[int]`: encode UTF-8 string into byte values (0–255).
   - `bytes.decode(bytes) -> str ! Utf8Error`: decode byte values into validated UTF-8 string.
@@ -81,6 +85,7 @@ Wysna distributes modules under `std/` imported via canonical paths such as `imp
   - `http.make_header(name, value) -> Header` constructs a request header.
   - `http.request(url, method, headers, body, timeout_ms, max_response_bytes) -> Response ! HttpError`: issue one request using `GET`, `POST`, `PUT`, `PATCH`, `DELETE`, or `HEAD`. `GET` and `HEAD` reject request bodies.
   - `http.get(url) -> Response ! HttpError`: issue a GET with a 30-second total timeout and 1 MiB response limit.
+  - `http.batch_get(urls: list[str], max_concurrency: int = 8) -> list[Response ! HttpError]`: dispatch parallel HTTP GET requests across a bounded worker pool while preserving input URL ordering.
   - `http.post_json(url, headers, payload) -> Response ! HttpError | JsonError`: serialize one JSON value and send it as `application/json`.
   - `http.header(response, name) -> str?`, `http.response_text(response) -> str ! HttpError`, and `http.response_json(response) -> json.Value ! HttpError | JsonError` inspect a response.
   - `Response` preserves the HTTP status, response headers and owned `buffer.Bytes` body. Close `response.body` when it is no longer needed. Statuses such as 401, 429, 302 and 503 are responses, not transport errors.

@@ -82,6 +82,14 @@ wysna mcp --root .
 The MCP server exposes `wysna_check`, `wysna_fix`, `wysna_fmt`, `wysna_explain`,
 `wysna_schema`, `wysna_api`, and `wysna_capabilities` confined to `--root`.
 
+## Execution Quotas, Effect Cassettes, and First-Class Contracts
+
+To safeguard agent loops against runaway execution and unrepeatable I/O side-effects:
+
+- **Enforce quotas:** Pass `--max-steps=<N>` (instruction budget) and `--max-heap-mb=<N>` (memory budget). Exceeding limits halts execution deterministically with error code `[W4004]`. In native binaries, set `WYSNA_MAX_STEPS` and `WYSNA_MAX_HEAP_BYTES`.
+- **Capture and replay effects:** Use `wysna run --record-trace=trace.json <file.wysna>` to capture all external operations (HTTP, clock, filesystem) into a versioned `wysna.effect.trace/1` cassette. Use `--replay-trace=trace.json` to rerun offline with bit-identical deterministic results.
+- **Write declarative contracts:** Add `requires` preconditions and `ensures` postconditions (referencing `result`) to function declarations. `wysna schema` automatically reflects them as JSON Schema bounds for LLM tool calling.
+
 ## Respect declared limits
 
 - Use `native-cli` for host executables, `wasi-command` for constrained WASI

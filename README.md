@@ -91,7 +91,7 @@ sets up a terminal-local `PATH`; build outputs use `.exe`.
 Save this as `hello.wysna`:
 
 ```wysna
-import "std/json" as json
+import "std/json"
 
 let value = json.number("42") else error { json.null() }
 let output = json.stringify(json.object({"answer": value})) else error { "{}" }
@@ -189,7 +189,7 @@ for agent tool calling.
 import "std/algorithms" as alg
 
 let numbers = [1, 2, 3, 4, 5]
-let squares = alg.parallel_map[int, int](numbers, |n: int| => n * n)
+let squares = alg.parallel_map[int, int] (numbers, |n: int| => n * n)
 print(squares)  # [1, 4, 9, 16, 25]
 ```
 
@@ -205,15 +205,17 @@ error channels, contracts and pattern matching.
 
 | Command | Purpose |
 | :--- | :--- |
-| `wysna check` | Typecheck without executing. |
-| `wysna run` | Execute source through the reference runtime. |
+| `wysna check` | Typecheck without executing; emits multi-error facts in `--output-format=json-v1`. |
+| `wysna fix` | Apply deterministic compiler self-healing repairs with verified SHA-256 edits. |
+| `wysna run` | Execute source through the reference runtime (with `--max-steps` / `--max-heap-mb`). |
 | `wysna build` | Compile a native executable through verified MIR → C99. |
 | `wysna fmt` | Canonical, deterministic formatting. |
 | `wysna explain` | Conservative effect and capability report over verified MIR. |
 | `wysna schema` | Export function contracts and struct shapes to JSON Schema (Draft 2020-12). |
+| `wysna mcp` | In-memory Model Context Protocol daemon for AI agents and IDE integrations. |
 | `wysna project` | Create, lock, check, build, run and test local projects. |
 | `wysna api` / `wysna capabilities` | Discover standard-library APIs and target availability. |
-| `wysna lsp` | Language server over stdio. |
+| `wysna lsp` | Language server over stdio with code action quickfixes. |
 
 For native source compilation, `--engine=seed|compiler` selects the compiler
 implementation and `--backend=c99|llvm-experimental` selects the output target.

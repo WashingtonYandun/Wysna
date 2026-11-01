@@ -171,17 +171,17 @@ defaults must not change stderr or exit status based on build mode. Native runti
 
 ---
 
-## 6. The runtime is single-threaded, and that is the whole concurrency story
+## 6. Structured Deterministic Concurrency vs. Arbitrary Multithreading
 
-Refcounts are plain `int32_t`, there is no atomic operation anywhere, and there is no
-thread, task or async primitive in the language or the stdlib. Wysna's current supported
-profile is synchronous, single-threaded native programs. Adding concurrency would require
-a separate memory-model decision, an explicit sharing/ownership contract, and cross-engine
-runtime work; it is not part of the current language roadmap.
+The runtime provides bounded, index-preserving multi-core worker dispatch for data-parallel
+algorithms (`std/algorithms.parallel_map`, `parallel_batch`, `parallel_filter`, `parallel_reduce`)
+and batch I/O (`std/http.batch_get`), protected by internal runtime host and quota locks.
+Arbitrary preemptive threads with shared mutable memory remain out of scope to preserve
+deterministic single-threaded ARC lifetime guarantees and avoid data races.
 
-**Decision: closed for the current release line.** Keep the runtime single-threaded and
-the standard library synchronous. Reopen this decision only with a concrete workload and
-a proposed memory model; do not treat this as an implicit promise that ARC is thread-safe.
+**Decision: closed for the current release line.** Maintain structured deterministic
+concurrency over CoW values and worker pools; do not introduce arbitrary preemptive
+threads with shared mutable state into the core language model.
 
 ---
 
@@ -228,11 +228,11 @@ limits remain part of the published scope:
 
 | Finding | Status in 0.5.0 | Remaining work |
 | :--- | :--- | :--- |
-| W01 · Compiler architecture | Seed uses AST/HIR/MIR; Compiler uses one checked-node → verified MIR → C99 pipeline under `native-core-v1` and ships a native SDK. Constrained parameterized classes, parameterized classes with independently generic methods, inheritance or interfaces, parameterized interfaces, unresolved generic nominal values, library-mode exports and WASM targets remain explicit profile limits. | Extend the Compiler MIR/profile to those constructs and keep independent parity and installed-acceptance gates. |
-| W03 · Value size | On a 64-bit ABI, `WVal` occupies 32 bytes; list slots store full tagged values. | Measure a compact representation with explicit runtime and FFI compatibility. |
-| W04 · CoW cost | Mutating a shared buffer can copy all of its elements. No uniqueness analysis proves that it can be mutated in place. | Measure memory pressure and design a verifiable uniqueness rule before changing ownership or the ABI. |
-| W05 · Generics | A generic function body is checked when a specialization is created. A generic function that is never instantiated may not receive the same body checking. | Separate generic body checking from type substitution without losing concrete diagnostics. |
-| W06 · Concurrency | The runtime and standard library are synchronous and single-threaded; reference counts are not atomic. | Define shared memory, ownership, and synchronization before adding concurrency. |
+| W01 · Compiler architecture | Seed uses AST/HIR/MIR; Compiler uses one checked-node → verified MIR → C99 pipeline under `native-core-v1` and ships a native SDK with CLI parity (`--version`, `--check`, `--check-json`) and contract assertions. Constrained parameterized classes, parameterized classes with independently generic methods, inheritance or interfaces, parameterized interfaces, unresolved generic nominal values, library-mode exports and WASM targets remain explicit profile limits. | Extend the Compiler MIR/profile to those constructs and keep independent parity and installed-acceptance gates. |
+| W03 · Value size | Scalar list buffers (`list[int]`, `list[bool]`, `list[float]`) feature $O(1)$ release and `memcpy` CoW fast paths with unboxed MIR access. On a 64-bit ABI, general heterogeneous `WVal` occupies 32 bytes. | Measure a compact 16B/8B representation for general heterogeneous values with explicit runtime and FFI compatibility. |
+| W04 · CoW cost | Mutating a shared buffer can copy all of its elements. Local unreferenced CoW uniqueness optimization elides detach copies when provable statically. | Measure memory pressure and extend interprocedural uniqueness analysis before changing ownership or ABI. |
+| W05 · Generics | Generic templates are verified at definition time for structural validity and typing rules, preventing uninstantiated generic drift. | Extend verification to parameterized interfaces and complex trait-like constraints. |
+| W06 · Concurrency | Bounded deterministic concurrency is supported for parallel collections (`parallel_map`, `parallel_batch`, `parallel_filter`, `parallel_reduce`) and batch HTTP dispatch. | Maintain deterministic index ordering and worker isolation without opening arbitrary preemptive shared mutable state. |
 | W07 · Benchmarks | The current suite uses small workloads and does not represent sustained memory pressure; process startup can dominate short measurements. | Add long-running and memory-intensive workloads before making performance decisions. |
 | W08 · Syntax recovery | Recovery gathers diagnostics for `check` and LSP using heuristic synchronization and does not produce an executable recovered tree. | Document and test recovery limits if it becomes a public contract. |
 

@@ -22,8 +22,8 @@
 The language defines the following reserved keywords:
 
 ```text
-DECLARATIONS (6):
-fn        let       mut       struct    enum      import
+DECLARATIONS (8):
+fn        let       mut       struct    enum      import    from      use
 
 OBJECT-ORIENTED (9):
 class     interface extends   implements new       this      super     public    private
@@ -473,7 +473,11 @@ cleanup. This runtime is single-threaded.
 
 ## 9. Module System
 
-Modules are imported using file path strings. The imported module automatically binds to a namespace derived from the file's base name:
+Wysna provides two complementary forms for modular decomposition and code reuse:
+
+### 9.1 Namespace Import (`import`)
+
+Modules are imported using file path strings. By default, the imported module automatically binds to a namespace derived from the file's base name (without extension):
 
 ```wysna
 import "lexer.wysna"
@@ -484,7 +488,26 @@ fn compile(source: str) {
     let ast = parser.parse(tokens)
 }
 ```
-* No auxiliary keywords (`as`, `from`) are required.
+
+An explicit namespace alias can be specified with `as`:
+
+```wysna
+import "std/algorithms" as alg
+
+let items = alg.reverse([1, 2, 3])
+```
+
+### 9.2 Selective Symbol Import (`from ... use ...`)
+
+Symbols exported with `pub` can be imported directly into the current scope without module prefixing using `from ... use ...`:
+
+```wysna
+from "std/text" use trim, split
+from "std/json" use { Value, parse }
+from "std/math" use sqrt as square_root
+```
+
+Selective imports reduce token overhead and nesting depth for AI agents, while maintaining unambiguous scoping and compile-time resolution.
 
 ---
 
@@ -525,6 +548,8 @@ fn compile(source: str) {
        - `W4001`: Division or modulo by zero
        - `W4002`: Index or key out of bounds
        - `W4003`: Runtime execution error
+       - `W4004`: Deterministic execution quota exceeded (instruction steps or heap memory budget)
+       - `W4005`: Contract assertion failure (precondition `requires` or postcondition `ensures` violation)
      - **`W5xxx` — Host Toolchain Diagnostics:**
        - `W5001`: C compiler command unavailable or invalid. This is an environment error, not a source type error or compiler invariant failure.
        - `W5002`: Invalid command usage or option.

@@ -3622,6 +3622,10 @@ fn sem_validate(context: SemanticContext, tokens: list[Token]) {
                 # Checked-module identity and dependency linking remain an explicit capability boundary.
                 sem_take(context)
                 sem_expect(context, "STR")
+                if sem_at(context).kind == "IDENT" and sem_at(context).val == "as" {
+                    sem_take(context)
+                    sem_expect(context, "IDENT")
+                }
             } else { context.statement_context = true context.top_nodes.append(sem_expression(context, 0, true).node) }
         }
     }
