@@ -282,8 +282,16 @@ class CCodeGen:
             initial = 'wysna_unit()' if slot.storage == 'value' else '0'
             lines.append(f'    {type_} {self.name(slot.id)} = {initial};')
         lines.append('    goto bb0;')
+        back_edge_targets = {
+            target
+            for b in function.blocks
+            for target in b.terminator.targets
+            if target <= b.id
+        }
         for block in function.blocks:
             lines.append(f'bb{block.id}:;')
+            if block.id == 0 or block.id in back_edge_targets:
+                lines.append('    wysna_step_tick();')
             for operation in block.operations:
                 lines.extend('    ' + line for line in self.operation(operation))
             term = block.terminator
@@ -417,6 +425,18 @@ class CCodeGen:
                         right = self.scalar(operation.args[1])
                         op = ' == ' if name == 'wysna_equal' else ' != '
                         return [self.write(result, f'{left}{op}{right}', boxed=False)]
+                elif (name in ('wysna_index_get_at', 'wysna_index_get_owned_at', 'wysna_index_get', 'wysna_index_get_owned')
+                      and data.get('source')
+                      and len(operation.args) == 2
+                      and self.slots[result].storage in ('integer', 'float', 'boolean')
+                      and self.interner.get_entry(self.slots[operation.args[0]].type_id).tag == 'list'):
+                    idx_expr = self.scalar(operation.args[1])
+                    helper = {
+                        'integer': 'wysna_list_get_int_at',
+                        'float': 'wysna_list_get_float_at',
+                        'boolean': 'wysna_list_get_bool_at',
+                    }[self.slots[result].storage]
+                    return [self.write(result, f'{helper}({args[0]}, {idx_expr}, {quote(source.file)}, {source.line}, {source.col})', boxed=False)]
             if name in ('wysna_builtin_print', 'wysna_builtin_eprint'):
                 args = [str(len(args)), self.array(args)]
             elif name in ('wysna_enum', 'wysna_enum_payload'):
@@ -490,6 +510,14 @@ class CCodeGen:
                 if self.slots[result].storage != 'value':
                     return [self.write(result, f'{start_val} + (int64_t){index}', boxed=False)]
                 return [self.write(result, f'wysna_int({start_val} + (int64_t){index})', boxed=False)]
+            res_storage = self.slots[result].storage
+            if res_storage in ('integer', 'float', 'boolean'):
+                iter_helper = {
+                    'integer': 'wysna_list_iteration_get_int_at',
+                    'float': 'wysna_list_iteration_get_float_at',
+                    'boolean': 'wysna_list_iteration_get_bool_at',
+                }[res_storage]
+                return [self.write(result, f'{iter_helper}({args[0]}, {index}, {quote(source.file)}, {source.line}, {source.col})', boxed=False)]
             value = f'wysna_list_iteration_get_owned_at({args[0]}, {index}, {quote(source.file)}, {source.line}, {source.col})'
             return [self.write(result, value)]
         if kind == 'test':

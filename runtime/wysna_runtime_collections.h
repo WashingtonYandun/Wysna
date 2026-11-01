@@ -11,9 +11,14 @@ static inline WVal wysna_make_list(int32_t count, const WVal* elems) {
     b->refcount = 1;
     b->len = count;
     b->cap = count > 4 ? count : 4;
+    b->scalar_only = true;
     b->data = (WVal*)wysna_alloc_safe(sizeof(WVal) * b->cap);
     wysna_mem_on_alloc();
     for (int32_t i = 0; i < count; i++) {
+        WTag t = elems[i].tag;
+        if (t != W_INT && t != W_FLOAT && t != W_BOOL) {
+            b->scalar_only = false;
+        }
         b->data[i] = wysna_clone(elems[i]);
     }
     WVal v; v.tag = W_LIST; v.as.list = b; return v;
@@ -44,6 +49,7 @@ static inline WVal wysna_make_range(WVal start, WVal end, bool inclusive) {
     b->refcount = 1;
     b->len = count;
     b->cap = count > 4 ? count : 4;
+    b->scalar_only = true;
     b->data = (WVal*)wysna_alloc_safe(sizeof(WVal) * b->cap);
     wysna_mem_on_alloc();
     for (int32_t i = 0; i < count; i++) {

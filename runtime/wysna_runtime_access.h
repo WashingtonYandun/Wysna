@@ -60,6 +60,10 @@ static inline WVal* wysna_index_ref(WVal* obj, WVal idx) {
         if (i < 0 || i >= obj->as.list->len) {
             wysna_runtime_fail("W4002", "List index out of bounds");
         }
+        WTag existing_tag = obj->as.list->data[i].tag;
+        if (existing_tag != W_INT && existing_tag != W_FLOAT && existing_tag != W_BOOL) {
+            obj->as.list->scalar_only = false;
+        }
         return &obj->as.list->data[i];
     }
     if (obj->tag == W_DICT) {
@@ -154,6 +158,49 @@ static inline WVal wysna_list_iteration_get_owned_at(WVal value, int32_t index,
     return wysna_clone(wysna_list_iteration_get_at(value, index, file, line, col));
 }
 
+/* W03: Unboxed scalar list accessors (zero retain/release, zero boxing) */
+static inline int64_t wysna_list_get_int_at(WVal obj, int64_t idx,
+                                            const char* file, int32_t line, int32_t col) {
+    wysna_runtime_set_position(file, line, col);
+    if (obj.tag != W_LIST || !obj.as.list || idx < 0 || idx >= obj.as.list->len) {
+        wysna_runtime_fail("W4002", "List index out of bounds");
+    }
+    return obj.as.list->data[idx].as.i;
+}
+
+static inline double wysna_list_get_float_at(WVal obj, int64_t idx,
+                                             const char* file, int32_t line, int32_t col) {
+    wysna_runtime_set_position(file, line, col);
+    if (obj.tag != W_LIST || !obj.as.list || idx < 0 || idx >= obj.as.list->len) {
+        wysna_runtime_fail("W4002", "List index out of bounds");
+    }
+    return obj.as.list->data[idx].as.f;
+}
+
+static inline bool wysna_list_get_bool_at(WVal obj, int64_t idx,
+                                          const char* file, int32_t line, int32_t col) {
+    wysna_runtime_set_position(file, line, col);
+    if (obj.tag != W_LIST || !obj.as.list || idx < 0 || idx >= obj.as.list->len) {
+        wysna_runtime_fail("W4002", "List index out of bounds");
+    }
+    return obj.as.list->data[idx].as.b;
+}
+
+static inline int64_t wysna_list_iteration_get_int_at(WVal value, int32_t index,
+                                                      const char* file, int32_t line, int32_t col) {
+    return wysna_list_iteration_get_at(value, index, file, line, col).as.i;
+}
+
+static inline double wysna_list_iteration_get_float_at(WVal value, int32_t index,
+                                                       const char* file, int32_t line, int32_t col) {
+    return wysna_list_iteration_get_at(value, index, file, line, col).as.f;
+}
+
+static inline bool wysna_list_iteration_get_bool_at(WVal value, int32_t index,
+                                                    const char* file, int32_t line, int32_t col) {
+    return wysna_list_iteration_get_at(value, index, file, line, col).as.b;
+}
+
 /* Physical field offsets resolved and checked before MIR reaches the backend. */
 static inline WVal wysna_field_get_at(WVal object, int32_t index) {
     if ((object.tag != W_STRUCT && object.tag != W_OBJECT) || index < 0 || index >= object.as.st->len)
@@ -182,7 +229,10 @@ static inline WVal wysna_list_append(WVal* list_val, WVal item) {
         b->cap = b->cap > 0 ? b->cap * 2 : 4;
         b->data = (WVal*)wysna_realloc_safe(b->data, sizeof(WVal) * b->cap);
     }
-    b->data[b->len++] = wysna_clone(item);
+    if (item.tag != W_INT && item.tag != W_FLOAT && item.tag != W_BOOL) {
+        b->scalar_only = false;
+    }
+    b->data[b->len++] = item.tag <= W_BOOL ? item : wysna_clone(item);
     return wysna_unit();
 }
 
@@ -205,10 +255,13 @@ static inline WVal wysna_list_clear(WVal* list_val) {
     if (list_val->tag != W_LIST) wysna_runtime_fail("W4003", "List intrinsic requires list receiver");
     wysna_list_detach(list_val);
     WListBuf* b = list_val->as.list;
-    for (int32_t i = 0; i < b->len; i++) {
-        wysna_release(b->data[i]);
+    if (!b->scalar_only) {
+        for (int32_t i = 0; i < b->len; i++) {
+            wysna_release(b->data[i]);
+        }
     }
     b->len = 0;
+    b->scalar_only = true;
     return wysna_unit();
 }
 
