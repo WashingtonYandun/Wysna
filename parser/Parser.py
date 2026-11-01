@@ -569,6 +569,10 @@ class Parser:
             ):
                 self.advance()
                 requires.append(self.parse_expr(allow_struct_init=False))
+                while self.match(TokenType.COMMA):
+                    while self.match(TokenType.NEWLINE):
+                        pass
+                    requires.append(self.parse_expr(allow_struct_init=False))
                 continue
             if (
                 allow_ensures
@@ -578,6 +582,10 @@ class Parser:
             ):
                 self.advance()
                 ensures.append(self.parse_expr(allow_struct_init=False))
+                while self.match(TokenType.COMMA):
+                    while self.match(TokenType.NEWLINE):
+                        pass
+                    ensures.append(self.parse_expr(allow_struct_init=False))
                 continue
             self.pos = saved
             break

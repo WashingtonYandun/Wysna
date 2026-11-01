@@ -189,7 +189,7 @@ for agent tool calling.
 import "std/algorithms" as alg
 
 let numbers = [1, 2, 3, 4, 5]
-let squares = alg.parallel_map(numbers, fn(n: int) -> int { n * n })
+let squares = alg.parallel_map[int, int](numbers, |n: int| => n * n)
 print(squares)  # [1, 4, 9, 16, 25]
 ```
 
