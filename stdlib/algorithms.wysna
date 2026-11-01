@@ -154,3 +154,39 @@ pub fn flat_map[T, R](values: list[T], transform: fn(T) -> list[R]) -> list[R] {
     }
     return result
 }
+
+pub fn parallel_batch[T, R](values: list[T], batch_size: int, transform: fn(T) -> R) -> list[R] {
+    let step = if batch_size > 0 { batch_size } else { 1 }
+    let total = len(values)
+    let mut result: list[R] = []
+    let mut offset = 0
+    while offset < total {
+        let limit = if offset + step < total { offset + step } else { total }
+        for index in offset..limit {
+            let item_snapshot = values[index]
+            result.append(transform(item_snapshot))
+        }
+        offset = limit
+    }
+    return result
+}
+
+pub fn parallel_filter[T](values: list[T], predicate: fn(T) -> bool) -> list[T] {
+    let mut result: list[T] = []
+    for index in 0..len(values) {
+        let item_snapshot = values[index]
+        if predicate(item_snapshot) {
+            result.append(item_snapshot)
+        }
+    }
+    return result
+}
+
+pub fn parallel_reduce[T, R](values: list[T], initial: R, mapper: fn(T) -> R, combiner: fn(R, R) -> R) -> R {
+    let mapped = parallel_map[T, R](values, mapper)
+    let mut acc = initial
+    for item in mapped {
+        acc = combiner(acc, item)
+    }
+    return acc
+}

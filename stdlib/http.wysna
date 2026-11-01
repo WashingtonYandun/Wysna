@@ -243,3 +243,56 @@ pub fn response_json(response: Response) -> json.Value ! HttpError | json.JsonEr
     let source = response_text(response)?
     return json.parse(source)?
 }
+
+pub struct BatchItemResult {
+    url: str,
+    ok: bool,
+    response: Response?,
+    error: HttpError?,
+}
+
+pub fn batch_get(urls: list[str]) -> list[BatchItemResult] {
+    let mut results: list[BatchItemResult] = []
+    for index in 0..len(urls) {
+        let target_url = urls[index]
+        let mut item_err: HttpError? = none
+        let mut item_ok = true
+        let empty_headers: list[Header] = []
+        let resp = get(target_url) else err {
+            item_ok = false
+            item_err = Some(err)
+            Response { status: 0, headers: empty_headers, body: new buffer.Bytes() }
+        }
+        if item_ok {
+            results.append(BatchItemResult {
+                url: target_url,
+                ok: true,
+                response: Some(resp),
+                error: none,
+            })
+        } else {
+            resp.body.close()
+            results.append(BatchItemResult {
+                url: target_url,
+                ok: false,
+                response: none,
+                error: item_err,
+            })
+        }
+    }
+    return results
+}
+
+pub fn batch_get_all(urls: list[str]) -> list[Response] ! HttpError {
+    let mut responses: list[Response] = []
+    for index in 0..len(urls) {
+        let resp = get(urls[index]) else err {
+            for prior in responses {
+                prior.body.close()
+            }
+            return Err(err)
+        }
+        responses.append(resp)
+    }
+    return responses
+}
