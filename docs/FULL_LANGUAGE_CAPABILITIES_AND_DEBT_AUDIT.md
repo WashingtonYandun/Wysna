@@ -132,7 +132,7 @@ classDiagram
    - `else err` unwrap clause with lexical error binding: `let val = fallible() else err { return default }`.
    - **Error Unions:** `T ! E1 | E2` with subset propagation and exhaustive handling.
 7. **Optionals & Coalescing:** `T?` syntax, unwrapping via `?` operator (propagating `none`), and null coalescing via `??` (`let x = opt ?? fallback`).
-8. **Parametric Generics:** Definition-time type checking for generic functions, structs, and enums (`fn map[T, R](...)`). Verified monomorphization with complexity budgeting (`MAX_SPECIALIZATION_COMPLEXITY`).
+8. **Parametric Generics:** Definition-time type checking for generic functions, structs, and enums (`fn map[T, R] (items: list[T]) -> list[R]`). Verified monomorphization with complexity budgeting (`MAX_SPECIALIZATION_COMPLEXITY`).
 9. **Cycle & Infinite Layout Detection:** Tarjan's strongly connected components algorithm (`LayoutGraph.py`) detects and rejects infinite inline layouts (`W2011`) while permitting indirect recursive ADTs.
 
 ---
@@ -291,7 +291,7 @@ Despite the architectural achievements of v0.6.0, an exhaustive audit reveals cl
 | **Immutable Snapshot Closures** | Lambdas capture outer variables by **immutable snapshot only**. Captured mutable variables cannot be modified inside a closure, and mutations outside after capture are not observed. | `src/checker/ClosureConversion.py`<br>`docs/KNOWN_LIMITS.md §1` | Stateful closures (e.g. `make_counter()`) are impossible. Workaround: Use a `class` with private fields. |
 | **Restricted Error Unions** | Error unions (`T ! E1 \| E2`) only accept primitive scalars, non-generic `struct`, and non-generic `enum`. Classes, generic types, collections, and functions are rejected. | `src/checker/ResultRules.py`<br>`docs/KNOWN_LIMITS.md §2` | Rich error hierarchies with inherited classes or generic payloads cannot be used in error unions without manual boxing. |
 | **Dictionary Key Restrictions** | Only `int`, `str`, `bool`, and `enum` can be dictionary keys. Floating-point numbers (`float`), structs, and collections are rejected (`W2010`). | `src/checker/CollectionRules.py`<br>`W2010` | Prevents NaN comparison anomalies and float hashing instability. Float keys require string formatting before insertion. |
-| **No Independent Generic Methods in Classes** | Parameterized classes can use class-level type arguments in methods, but individual methods cannot introduce independent type parameters: `class Box[T] { fn transform[R](...) }` is unsupported. | `src/checker/OopGenerics.py` | Generic mapping patterns must be written as standalone functions (`fn transform[T, R](...)`) instead of class methods. |
+| **No Independent Generic Methods in Classes** | Parameterized classes can use class-level type arguments in methods, but individual methods cannot introduce independent type parameters: `class Box[T] { fn transform[R] (...) }` is unsupported. | `src/checker/OopGenerics.py` | Generic mapping patterns must be written as standalone functions (`fn transform[T, R] (...)`) instead of class methods. |
 | **No Complex Trait / Typeclass System** | Interfaces are strictly nominal and apply only to classes (`class A implements Interface`). Structural typing, duck typing, and retroactive trait implementations for primitives/structs do not exist. | `src/checker/TypeRelations.py` | Code cannot define interfaces that apply retroactively to built-in types like `int` or `str`. |
 
 ---
