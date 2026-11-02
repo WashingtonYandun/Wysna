@@ -219,3 +219,22 @@ class NativeToolchain:
                 else:
                     source = '#define WYSNA_HAS_HTTP 1\n' + source
         return CompilerEmissionResult(source, codegen_ms)
+
+    def check_compiler(self, compiler_path, file, json_output=False):
+        """Use the independent selfhost compiler binary to check a source file without emitting code."""
+        input_path = os.path.abspath(os.fspath(file))
+        input_directory = os.path.dirname(input_path) or os.getcwd()
+        check_flag = "--check-json" if json_output else "--check"
+        started = time.perf_counter()
+        result = subprocess.run(
+            [os.fspath(compiler_path), "--stdlib-root", str(Path(self.repo_root) / "stdlib"),
+             check_flag, input_path],
+            capture_output=True, text=True, cwd=input_directory, timeout=120,
+        )
+        check_ms = (time.perf_counter() - started) * 1000.0
+        if result.returncode != 0:
+            raise NativeCompilationError(
+                'selfhost', 'Wysna Compiler Check Error', result.stderr, result.returncode,
+            )
+        return result.stdout, check_ms
+
