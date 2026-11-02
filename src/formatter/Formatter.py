@@ -9,7 +9,7 @@ from node.NodeType import (
     ImportDecl, UseDecl, UseSymbol, LetDecl, WhileStmt, ForStmt, ReturnStmt, BreakStmt, ContinueStmt,
     IntLiteral, FloatLiteral, StringLiteral, BoolLiteral, NoneLiteral,
     IdentExpr, ThisExpr, SuperExpr, NewExpr,
-    UnaryExpr, BinaryExpr, CoalesceExpr, RangeExpr, PostfixTryExpr, ElseErrExpr,
+    UnaryExpr, AwaitExpr, BinaryExpr, CoalesceExpr, RangeExpr, PostfixTryExpr, ElseErrExpr,
     CallExpr, MemberExpr, IndexExpr, AssignmentExpr, FieldInit, StructInitExpr,
     ListExpr, DictEntry, DictExpr, TupleExpr, ElifBranch, IfExpr, MatchArm, MatchExpr
 )
@@ -226,7 +226,8 @@ class Formatter:
             contracts_str = "".join(f" requires {self.format_expr(r, level)}" for r in getattr(stmt, "requires", ()))
             contracts_str += "".join(f" ensures {self.format_expr(e, level)}" for e in getattr(stmt, "ensures", ()))
             block_str = self.format_block(stmt.body, level)
-            return f"{ind}fn {stmt.name}{tparams}({params_str}) -> {ret_str}{contracts_str} {block_str}"
+            async_prefix = "async " if getattr(stmt, "is_async", False) else ""
+            return f"{ind}{async_prefix}fn {stmt.name}{tparams}({params_str}) -> {ret_str}{contracts_str} {block_str}"
 
         if isinstance(stmt, LetDecl):
             mut_str = "mut " if stmt.is_mut else ""
@@ -353,6 +354,11 @@ class Formatter:
                 res = f"not {inner}"
             else:
                 res = f"-{inner}"
+            return f"({res})" if parent_prec > 10 else res
+
+        if isinstance(expr, AwaitExpr):
+            inner = self.format_expr(expr.operand, level, parent_prec=10)
+            res = f"await {inner}"
             return f"({res})" if parent_prec > 10 else res
 
         if isinstance(expr, BinaryExpr):

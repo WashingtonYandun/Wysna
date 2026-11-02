@@ -620,6 +620,481 @@ wysna_http_done:
         return wysna_host_http_fail(WYSNA_HTTP_INVALID_RESPONSE, EIO);
     return (int64_t)status;
 }
+
+typedef struct WysnaAsyncHttpTransfer {
+    int64_t id;
+    CURL* curl;
+    struct curl_slist* headers;
+    char* url_copy;
+    char* method_copy;
+    unsigned char* header_buf;
+    size_t header_len;
+    size_t header_cap;
+    unsigned char* body_buf;
+    size_t body_len;
+    size_t body_cap;
+    size_t header_fields;
+    size_t max_response_bytes;
+    long status;
+    int error_kind;
+    int error_code;
+    int done; /* 0: pending, 1: completed, -1: error */
+    struct WysnaAsyncHttpTransfer* next;
+} WysnaAsyncHttpTransfer;
+
+static CURLM* wysna_http_multi = NULL;
+static WysnaAsyncHttpTransfer* wysna_async_http_transfers = NULL;
+static int64_t wysna_async_http_next_id = 1;
+
+static size_t wysna_http_async_write_headers(char* buffer, size_t size, size_t nitems, void* userdata) {
+    WysnaAsyncHttpTransfer* t = (WysnaAsyncHttpTransfer*)userdata;
+    size_t length = size * nitems;
+    if (t->error_kind != 0) return 0;
+    if (t->header_len + length > WYSNA_HTTP_MAX_HEADERS) {
+        t->error_kind = WYSNA_HTTP_LIMIT;
+        return 0;
+    }
+    if (length >= 5 && memcmp(buffer, "HTTP/", 5) == 0) {
+        t->header_len = 0;
+        t->header_fields = 0;
+        return length;
+    }
+    if (length == 0 || (length == 2 && buffer[0] == '\r' && buffer[1] == '\n') || (length == 1 && buffer[0] == '\n')) {
+        return length;
+    }
+    if (t->header_fields >= WYSNA_HTTP_MAX_HEADER_FIELDS) {
+        t->error_kind = WYSNA_HTTP_LIMIT;
+        return 0;
+    }
+    size_t content_length = length;
+    if (content_length && buffer[content_length - 1] == '\n') content_length--;
+    if (content_length && buffer[content_length - 1] == '\r') content_length--;
+    char* colon = (char*)memchr(buffer, ':', content_length);
+    if (!colon || colon == buffer || !wysna_http_ascii_header((const unsigned char*)buffer, content_length)) {
+        t->error_kind = WYSNA_HTTP_INVALID_RESPONSE;
+        return 0;
+    }
+    for (char* cursor = buffer; cursor < colon; cursor++) {
+        if (!wysna_http_token_byte((unsigned char)*cursor)) {
+            t->error_kind = WYSNA_HTTP_INVALID_RESPONSE;
+            return 0;
+        }
+    }
+    if (t->header_len + content_length + 2 > t->header_cap) {
+        size_t next_cap = t->header_cap ? t->header_cap * 2 : 1024;
+        while (next_cap < t->header_len + content_length + 2) next_cap *= 2;
+        unsigned char* grown = (unsigned char*)realloc(t->header_buf, next_cap);
+        if (!grown) { t->error_kind = WYSNA_HTTP_LIMIT; return 0; }
+        t->header_buf = grown;
+        t->header_cap = next_cap;
+    }
+    memcpy(t->header_buf + t->header_len, buffer, content_length);
+    t->header_len += content_length;
+    t->header_buf[t->header_len++] = '\n';
+    t->header_fields++;
+    return length;
+}
+
+static size_t wysna_http_async_write_body(char* ptr, size_t size, size_t nmemb, void* userdata) {
+    WysnaAsyncHttpTransfer* t = (WysnaAsyncHttpTransfer*)userdata;
+    size_t length = size * nmemb;
+    if (t->error_kind != 0) return 0;
+    if (t->body_len + length > t->max_response_bytes) {
+        t->error_kind = WYSNA_HTTP_LIMIT;
+        return 0;
+    }
+    if (t->body_len + length > t->body_cap) {
+        size_t next_cap = t->body_cap ? t->body_cap * 2 : 4096;
+        while (next_cap < t->body_len + length) next_cap *= 2;
+        unsigned char* grown = (unsigned char*)realloc(t->body_buf, next_cap);
+        if (!grown) { t->error_kind = WYSNA_HTTP_LIMIT; return 0; }
+        t->body_buf = grown;
+        t->body_cap = next_cap;
+    }
+    memcpy(t->body_buf + t->body_len, ptr, length);
+    t->body_len += length;
+    return length;
+}
+
+static WysnaAsyncHttpTransfer* wysna_async_http_find(int64_t id) {
+    WysnaAsyncHttpTransfer* curr = wysna_async_http_transfers;
+    while (curr) {
+        if (curr->id == id) return curr;
+        curr = curr->next;
+    }
+    return NULL;
+}
+
+static WysnaAsyncHttpTransfer* wysna_async_http_find_by_curl(CURL* curl) {
+    WysnaAsyncHttpTransfer* curr = wysna_async_http_transfers;
+    while (curr) {
+        if (curr->curl == curl) return curr;
+        curr = curr->next;
+    }
+    return NULL;
+}
+
+static void wysna_async_http_process_messages(void) {
+    if (!wysna_http_multi) return;
+    CURLMsg* msg = NULL;
+    int msgs_left = 0;
+    while ((msg = curl_multi_info_read(wysna_http_multi, &msgs_left))) {
+        if (msg->msg == CURLMSG_DONE) {
+            CURL* easy = msg->easy_handle;
+            WysnaAsyncHttpTransfer* t = wysna_async_http_find_by_curl(easy);
+            if (t && t->done == 0) {
+                CURLcode res = msg->data.result;
+                if (res == CURLE_OK && t->error_kind == 0) {
+                    curl_easy_getinfo(easy, CURLINFO_RESPONSE_CODE, &t->status);
+                    if (t->status < 100 || t->status > 599) {
+                        t->error_kind = WYSNA_HTTP_INVALID_RESPONSE;
+                        t->error_code = EIO;
+                        t->done = -1;
+                    } else {
+                        t->done = 1;
+                    }
+                } else {
+                    t->done = -1;
+                    if (t->error_kind == 0) {
+                        if (res == CURLE_OPERATION_TIMEDOUT) t->error_kind = WYSNA_HTTP_TIMEOUT;
+                        else if (res == CURLE_PEER_FAILED_VERIFICATION || res == CURLE_SSL_CONNECT_ERROR || res == CURLE_SSL_CERTPROBLEM) t->error_kind = WYSNA_HTTP_TLS;
+                        else if (res == CURLE_URL_MALFORMAT || res == CURLE_UNSUPPORTED_PROTOCOL || res == CURLE_BAD_FUNCTION_ARGUMENT) t->error_kind = WYSNA_HTTP_INVALID_REQUEST;
+                        else t->error_kind = WYSNA_HTTP_TRANSPORT;
+                    }
+                    t->error_code = res;
+                }
+            }
+        }
+    }
+}
+
+static void wysna_async_http_free(WysnaAsyncHttpTransfer* t) {
+    if (!t) return;
+    if (wysna_http_multi && t->curl) {
+        curl_multi_remove_handle(wysna_http_multi, t->curl);
+    }
+    if (t->curl) curl_easy_cleanup(t->curl);
+    if (t->headers) curl_slist_free_all(t->headers);
+    if (t->url_copy) free(t->url_copy);
+    if (t->method_copy) free(t->method_copy);
+    if (t->header_buf) free(t->header_buf);
+    if (t->body_buf) free(t->body_buf);
+    free(t);
+}
+
+static int64_t wysna_host_http_async_start(void* url_handle, void* method_handle,
+        void* request_headers_handle, void* request_body_handle,
+        int64_t timeout_ms, int64_t max_response_bytes) {
+    wysna_host_error_code = 0;
+    wysna_host_error_domain = 0;
+    WysnaHostEntry* url = wysna_host_find(url_handle, 1);
+    WysnaHostEntry* method = wysna_host_find(method_handle, 1);
+    WysnaHostEntry* request_headers = wysna_host_find(request_headers_handle, 1);
+    WysnaHostEntry* request_body = wysna_host_find(request_body_handle, 1);
+    WysnaHostEntry* all[] = {url, method, request_headers, request_body};
+    for (size_t left = 0; left < sizeof(all) / sizeof(all[0]); left++) {
+        if (!all[left]) return wysna_host_http_fail(WYSNA_HTTP_INVALID_REQUEST, EBADF);
+        for (size_t right = left + 1; right < sizeof(all) / sizeof(all[0]); right++)
+            if (all[left] == all[right]) return wysna_host_http_fail(WYSNA_HTTP_INVALID_REQUEST, EINVAL);
+    }
+    if (timeout_ms < 1 || timeout_ms > 30000 || max_response_bytes < 1
+            || max_response_bytes > WYSNA_HTTP_MAX_BODY || url->length > WYSNA_HTTP_MAX_URL
+            || request_body->length > WYSNA_HTTP_MAX_BODY
+            || request_headers->length > WYSNA_HTTP_MAX_HEADERS || method->length == 0
+            || method->length > 16)
+        return wysna_host_http_fail(WYSNA_HTTP_INVALID_REQUEST, EINVAL);
+    if (!url->length || !method->length || memchr(url->data, 0, url->length)
+            || memchr(method->data, 0, method->length)
+            || memchr(request_headers->data, 0, request_headers->length))
+        return wysna_host_http_fail(WYSNA_HTTP_INVALID_REQUEST, EINVAL);
+    const unsigned char* url_text = (const unsigned char*)url->data;
+    for (size_t index = 0; index < url->length; index++)
+        if (url_text[index] <= 32 || url_text[index] > 126)
+            return wysna_host_http_fail(WYSNA_HTTP_INVALID_REQUEST, EINVAL);
+    char* url_copy = (char*)wysna_alloc_safe(url->length + 1);
+    char* method_copy = (char*)wysna_alloc_safe(method->length + 1);
+    memcpy(url_copy, url->data, url->length); url_copy[url->length] = 0;
+    memcpy(method_copy, method->data, method->length); method_copy[method->length] = 0;
+    if ((!wysna_http_prefix_case(url_copy, "http://") && !wysna_http_prefix_case(url_copy, "https://"))
+            || strchr(url_copy, '#') != NULL) {
+        free(url_copy); free(method_copy);
+        return wysna_host_http_fail(WYSNA_HTTP_INVALID_REQUEST, EINVAL);
+    }
+    size_t authority_start = wysna_http_prefix_case(url_copy, "http://") ? 7 : 8;
+    char* authority_end = strpbrk(url_copy + authority_start, "/?");
+    if (!authority_end) authority_end = url_copy + strlen(url_copy);
+    if (memchr(url_copy + authority_start, '@', (size_t)(authority_end - (url_copy + authority_start)))) {
+        free(url_copy); free(method_copy);
+        return wysna_host_http_fail(WYSNA_HTTP_INVALID_REQUEST, EINVAL);
+    }
+    if (strcmp(method_copy, "GET") && strcmp(method_copy, "POST") && strcmp(method_copy, "PUT")
+            && strcmp(method_copy, "PATCH") && strcmp(method_copy, "DELETE") && strcmp(method_copy, "HEAD")) {
+        free(url_copy); free(method_copy);
+        return wysna_host_http_fail(WYSNA_HTTP_INVALID_REQUEST, EINVAL);
+    }
+    if ((strcmp(method_copy, "GET") == 0 || strcmp(method_copy, "HEAD") == 0) && request_body->length) {
+        free(url_copy); free(method_copy);
+        return wysna_host_http_fail(WYSNA_HTTP_INVALID_REQUEST, EINVAL);
+    }
+
+    struct curl_slist* headers = NULL;
+    size_t offset = 0;
+    while (offset < request_headers->length) {
+        size_t end = offset;
+        while (end < request_headers->length && ((char*)request_headers->data)[end] != '\n') end++;
+        if (end == request_headers->length || end == offset
+                || memchr((char*)request_headers->data + offset, '\r', end - offset)) {
+            curl_slist_free_all(headers); free(url_copy); free(method_copy);
+            return wysna_host_http_fail(WYSNA_HTTP_INVALID_REQUEST, EINVAL);
+        }
+        unsigned char* line = (unsigned char*)request_headers->data + offset;
+        size_t length = end - offset;
+        unsigned char* colon = (unsigned char*)memchr(line, ':', length);
+        if (!colon || colon == line || wysna_http_forbidden_header(line, (size_t)(colon - line))
+                || !wysna_http_ascii_header(line, length)) {
+            curl_slist_free_all(headers); free(url_copy); free(method_copy);
+            return wysna_host_http_fail(WYSNA_HTTP_INVALID_REQUEST, EINVAL);
+        }
+        for (unsigned char* cursor = line; cursor < colon; cursor++) {
+            if (!wysna_http_token_byte(*cursor)) {
+                curl_slist_free_all(headers); free(url_copy); free(method_copy);
+                return wysna_host_http_fail(WYSNA_HTTP_INVALID_REQUEST, EINVAL);
+            }
+        }
+        char* header = (char*)wysna_alloc_safe(length + 1);
+        memcpy(header, line, length); header[length] = 0;
+        struct curl_slist* appended = curl_slist_append(headers, header);
+        free(header);
+        if (!appended) {
+            curl_slist_free_all(headers); free(url_copy); free(method_copy);
+            return wysna_host_http_fail(WYSNA_HTTP_TRANSPORT, CURLE_OUT_OF_MEMORY);
+        }
+        headers = appended;
+        offset = end + 1;
+    }
+
+    if (!wysna_http_curl_initialized) {
+        CURLcode initialized = curl_global_init(CURL_GLOBAL_DEFAULT);
+        if (initialized != CURLE_OK) {
+            curl_slist_free_all(headers); free(url_copy); free(method_copy);
+            return wysna_host_http_fail(WYSNA_HTTP_UNAVAILABLE, initialized);
+        }
+        wysna_http_curl_initialized = true;
+    }
+    if (!wysna_http_multi) {
+        wysna_http_multi = curl_multi_init();
+        if (!wysna_http_multi) {
+            curl_slist_free_all(headers); free(url_copy); free(method_copy);
+            return wysna_host_http_fail(WYSNA_HTTP_UNAVAILABLE, CURLE_OUT_OF_MEMORY);
+        }
+    }
+    CURL* curl = curl_easy_init();
+    if (!curl) {
+        curl_slist_free_all(headers); free(url_copy); free(method_copy);
+        return wysna_host_http_fail(WYSNA_HTTP_UNAVAILABLE, CURLE_OUT_OF_MEMORY);
+    }
+
+    WysnaAsyncHttpTransfer* transfer = (WysnaAsyncHttpTransfer*)wysna_alloc_safe(sizeof(WysnaAsyncHttpTransfer));
+    memset(transfer, 0, sizeof(*transfer));
+    transfer->id = wysna_async_http_next_id++;
+    transfer->curl = curl;
+    transfer->headers = headers;
+    transfer->url_copy = url_copy;
+    transfer->method_copy = method_copy;
+    transfer->max_response_bytes = (size_t)max_response_bytes;
+    transfer->done = 0;
+
+    curl_easy_setopt(curl, CURLOPT_URL, url_copy);
+    curl_easy_setopt(curl, CURLOPT_CUSTOMREQUEST, method_copy);
+    curl_easy_setopt(curl, CURLOPT_HTTPHEADER, headers);
+    curl_easy_setopt(curl, CURLOPT_WRITEFUNCTION, wysna_http_async_write_body);
+    curl_easy_setopt(curl, CURLOPT_WRITEDATA, transfer);
+    curl_easy_setopt(curl, CURLOPT_HEADERFUNCTION, wysna_http_async_write_headers);
+    curl_easy_setopt(curl, CURLOPT_HEADERDATA, transfer);
+    curl_easy_setopt(curl, CURLOPT_FOLLOWLOCATION, 0L);
+    curl_easy_setopt(curl, CURLOPT_MAXREDIRS, 0L);
+    curl_easy_setopt(curl, CURLOPT_SSL_VERIFYPEER, 1L);
+    curl_easy_setopt(curl, CURLOPT_SSL_VERIFYHOST, 2L);
+    curl_easy_setopt(curl, CURLOPT_TIMEOUT_MS, (long)timeout_ms);
+    curl_easy_setopt(curl, CURLOPT_CONNECTTIMEOUT_MS, (long)(timeout_ms < 5000 ? timeout_ms : 5000));
+    curl_easy_setopt(curl, CURLOPT_NOSIGNAL, 1L);
+    curl_easy_setopt(curl, CURLOPT_NETRC, (long)CURL_NETRC_IGNORED);
+    curl_easy_setopt(curl, CURLOPT_HTTP_VERSION, (long)CURL_HTTP_VERSION_1_1);
+#if LIBCURL_VERSION_NUM >= 0x075500
+    curl_easy_setopt(curl, CURLOPT_PROTOCOLS_STR, "http,https");
+#else
+    curl_easy_setopt(curl, CURLOPT_PROTOCOLS, (long)(CURLPROTO_HTTP | CURLPROTO_HTTPS));
+#endif
+    if (strcmp(method_copy, "HEAD") == 0) curl_easy_setopt(curl, CURLOPT_NOBODY, 1L);
+    if (request_body->length || strcmp(method_copy, "POST") == 0
+            || strcmp(method_copy, "PUT") == 0 || strcmp(method_copy, "PATCH") == 0) {
+        curl_easy_setopt(curl, CURLOPT_POSTFIELDS, request_body->length ? request_body->data : "");
+        curl_easy_setopt(curl, CURLOPT_POSTFIELDSIZE_LARGE, (curl_off_t)request_body->length);
+    }
+
+    curl_multi_add_handle(wysna_http_multi, curl);
+
+    transfer->next = wysna_async_http_transfers;
+    wysna_async_http_transfers = transfer;
+
+    int still_running = 0;
+    curl_multi_perform(wysna_http_multi, &still_running);
+    wysna_async_http_process_messages();
+
+    return transfer->id;
+}
+
+static int64_t wysna_host_http_async_poll(int64_t transfer_id) {
+    WysnaAsyncHttpTransfer* t = wysna_async_http_find(transfer_id);
+    if (!t) return -1;
+    if (t->done == 0 && wysna_http_multi) {
+        int still_running = 0;
+        curl_multi_perform(wysna_http_multi, &still_running);
+        wysna_async_http_process_messages();
+    }
+    return (int64_t)t->done;
+}
+
+static int64_t wysna_host_http_multi_poll(int64_t timeout_ms) {
+    if (!wysna_http_multi) return 0;
+    int still_running = 0;
+    curl_multi_perform(wysna_http_multi, &still_running);
+    wysna_async_http_process_messages();
+    if (still_running > 0) {
+        int numfds = 0;
+        curl_multi_poll(wysna_http_multi, NULL, 0, (int)timeout_ms, &numfds);
+        curl_multi_perform(wysna_http_multi, &still_running);
+        wysna_async_http_process_messages();
+    }
+    return (int64_t)still_running;
+}
+
+static int64_t wysna_host_http_async_finish(int64_t transfer_id, void* response_headers_handle, void* response_body_handle) {
+    WysnaAsyncHttpTransfer** prev = &wysna_async_http_transfers;
+    WysnaAsyncHttpTransfer* t = *prev;
+    while (t && t->id != transfer_id) {
+        prev = &t->next;
+        t = t->next;
+    }
+    if (!t) return wysna_host_http_fail(WYSNA_HTTP_INVALID_REQUEST, EINVAL);
+    *prev = t->next;
+
+    if (t->done == 0 && wysna_http_multi) {
+        int still_running = 0;
+        curl_multi_perform(wysna_http_multi, &still_running);
+        wysna_async_http_process_messages();
+    }
+
+    WysnaHostEntry* resp_headers = wysna_host_find(response_headers_handle, 1);
+    WysnaHostEntry* resp_body = wysna_host_find(response_body_handle, 1);
+    if (!resp_headers || !resp_body) {
+        wysna_async_http_free(t);
+        return wysna_host_http_fail(WYSNA_HTTP_INVALID_REQUEST, EBADF);
+    }
+
+    resp_headers->length = 0;
+    resp_body->length = 0;
+
+    if (t->done != 1 || t->error_kind != 0) {
+        int kind = t->error_kind ? t->error_kind : WYSNA_HTTP_TRANSPORT;
+        int code = t->error_code;
+        wysna_async_http_free(t);
+        return wysna_host_http_fail(kind, code);
+    }
+
+    if (t->header_len > 0) {
+        wysna_host_buffer_append_bytes(resp_headers, t->header_buf, t->header_len);
+    }
+    if (t->body_len > 0) {
+        wysna_host_buffer_append_bytes(resp_body, t->body_buf, t->body_len);
+    }
+    long status = t->status;
+    wysna_async_http_free(t);
+    return (int64_t)status;
+}
+
+static int64_t wysna_host_http_async_cancel(int64_t transfer_id) {
+    WysnaAsyncHttpTransfer** prev = &wysna_async_http_transfers;
+    WysnaAsyncHttpTransfer* t = *prev;
+    while (t && t->id != transfer_id) {
+        prev = &t->next;
+        t = t->next;
+    }
+    if (!t) return 0;
+    *prev = t->next;
+    wysna_async_http_free(t);
+    return 1;
+}
+#else
+static int64_t wysna_host_http_async_start(void* u, void* m, void* h, void* b, int64_t t, int64_t max) {
+    (void)u; (void)m; (void)h; (void)b; (void)t; (void)max;
+    wysna_host_error_code = ENOSYS; wysna_host_error_domain = 1;
+    return -2;
+}
+static int64_t wysna_host_http_async_poll(int64_t id) { (void)id; return -1; }
+static int64_t wysna_host_http_multi_poll(int64_t t) { (void)t; return 0; }
+static int64_t wysna_host_http_async_finish(int64_t id, void* h, void* b) {
+    (void)id; (void)h; (void)b;
+    wysna_host_error_code = ENOSYS; wysna_host_error_domain = 1;
+    return -2;
+}
+static int64_t wysna_host_http_async_cancel(int64_t id) { (void)id; return 0; }
 #endif /* WYSNA_HAS_HTTP && !__wasi__ */
+
+static inline WVal wysna_await(WVal val) {
+    if (val.tag == W_STRUCT || val.tag == W_OBJECT) {
+        bool is_task = false;
+        for (int32_t i = 0; i < val.as.st->len; i++) {
+            if (val.as.st->keys[i] && strcmp(val.as.st->keys[i], "is_ready") == 0) {
+                is_task = true;
+                break;
+            }
+        }
+        if (is_task) {
+            while (true) {
+                WVal r = wysna_member_get(val, "is_ready");
+                WVal f = wysna_member_get(val, "is_failed");
+                bool ready = (r.tag == W_BOOL && r.as.b);
+                bool failed = (f.tag == W_BOOL && f.as.b);
+                wysna_release(r);
+                wysna_release(f);
+                if (ready) break;
+                if (failed) {
+                    WVal err = wysna_member_get(val, "error");
+                    if (err.tag == W_ENUM && strcmp(err.as.en.variant, "Some") == 0 && err.as.en.box) {
+                        WVal inner_err = err.as.en.box->val;
+                        if (inner_err.tag == W_STR) {
+                            wysna_runtime_fail("W4003", inner_err.as.string.data);
+                        }
+                    }
+                    wysna_release(err);
+                    wysna_release(val);
+                    wysna_runtime_fail("W4003", "Async task failed");
+                    return wysna_unit();
+                }
+                WVal h = wysna_member_get(val, "handle");
+                int64_t handle_val = (h.tag == W_INT) ? h.as.i : 0;
+                wysna_release(h);
+                if (handle_val > 0) {
+                    wysna_host_http_multi_poll(10);
+                    wysna_host_http_async_poll(handle_val);
+                } else {
+                    wysna_host_http_multi_poll(10);
+                }
+            }
+            WVal v = wysna_member_get(val, "value");
+            WVal res;
+            if (v.tag == W_ENUM && strcmp(v.as.en.variant, "Some") == 0 && v.as.en.box) {
+                res = wysna_clone(v.as.en.box->val);
+            } else {
+                res = wysna_clone(v);
+            }
+            wysna_release(v);
+            wysna_release(val);
+            return res;
+        }
+    }
+    return val;
+}
 
 #endif

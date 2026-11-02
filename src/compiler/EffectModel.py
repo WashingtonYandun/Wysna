@@ -42,6 +42,7 @@ RUNTIME_EFFECTS = {name: frozenset({
     'wysna_not',
     'wysna_not_equal',
     'wysna_ok',
+    'wysna_await',
     'wysna_sub',
     'wysna_unwrap_err',
     'wysna_unwrap_ok',

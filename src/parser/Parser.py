@@ -15,7 +15,7 @@ from node.NodeType import (
     IntLiteral, FloatLiteral, StringLiteral, BoolLiteral, NoneLiteral,
     IdentExpr, ThisExpr, SuperExpr, NewExpr,
     UnaryExpr, BinaryExpr, CoalesceExpr, RangeExpr, PostfixTryExpr, ElseErrExpr,
-    CallExpr, MemberExpr, IndexExpr, AssignmentExpr,
+    CallExpr, MemberExpr, IndexExpr, AssignmentExpr, AwaitExpr,
     StructInitExpr, FieldInit, ListExpr, DictExpr, DictEntry, TupleExpr,
     IfExpr, ElifBranch, MatchExpr, MatchArm
 )
@@ -46,8 +46,8 @@ PRECEDENCE = {
 # value and to detect missing statement separators.
 _EXPRESSION_STARTERS = frozenset({
     TokenType.INT, TokenType.FLOAT, TokenType.STR, TokenType.TRUE, TokenType.FALSE,
-    TokenType.NONE, TokenType.IDENTIFIER, TokenType.THIS, TokenType.SUPER, TokenType.NEW,
-    TokenType.MINUS, TokenType.NOT, TokenType.LPAREN, TokenType.LBRACKET, TokenType.LBRACE,
+    TokenType.NONE, TokenType.IDENTIFIER, TokenType.ASYNC, TokenType.THIS, TokenType.SUPER, TokenType.NEW,
+    TokenType.MINUS, TokenType.NOT, TokenType.AWAIT, TokenType.LPAREN, TokenType.LBRACKET, TokenType.LBRACE,
     TokenType.PIPE, TokenType.IF, TokenType.MATCH,
 })
 
@@ -152,7 +152,7 @@ class Parser:
             return None
 
     def _synchronize(self, start, top_level):
-        starters = {TokenType.LET, TokenType.FN, TokenType.STRUCT, TokenType.ENUM,
+        starters = {TokenType.LET, TokenType.FN, TokenType.ASYNC, TokenType.STRUCT, TokenType.ENUM,
                     TokenType.CLASS, TokenType.INTERFACE, TokenType.IMPORT,
                     TokenType.WHILE, TokenType.FOR, TokenType.RETURN,
                     TokenType.BREAK, TokenType.CONTINUE}
@@ -217,6 +217,8 @@ class Parser:
     def expect(self, type_: TokenType, code: str = "W0001", msg: str = None) -> Token:
         if self.check(type_):
             return self.advance()
+        if type_ == TokenType.IDENTIFIER and self.check(TokenType.ASYNC) and self.peek(1).type != TokenType.FN:
+            return self.advance()
         token = self.at()
         err_msg = msg if msg else f"Expected token '{type_.name}', found '{token.type.name}'"
         raise ParserError(message=err_msg, line=token.line, col=token.col, file=self.file,
@@ -243,7 +245,7 @@ class Parser:
             inner_type = self.parse_type()
             self.expect(TokenType.RPAREN, code="W0006", msg="Expected ')' after grouped type")
             return self._parse_type_suffix(inner_type, token.line, token.col)
-        if not self.check(TokenType.IDENTIFIER):
+        if not (self.check(TokenType.IDENTIFIER) or (self.check(TokenType.ASYNC) and self.peek(1).type != TokenType.FN)):
             raise ParserError(
                 message=f"Expected type name, found '{token.type.name}'",
                 line=token.line,
@@ -442,7 +444,7 @@ class Parser:
             self.expect(TokenType.ARROW)
             returned = self.parse_type()
             return ExternFnDecl(name.value, params, returned, token.line, token.col)
-        if (self.check(TokenType.FN) or self.check(TokenType.STRUCT) or self.check(TokenType.ENUM)
+        if (self.check(TokenType.FN) or (self.check(TokenType.ASYNC) and self.peek(1).type == TokenType.FN) or self.check(TokenType.STRUCT) or self.check(TokenType.ENUM)
                 or self.check(TokenType.INTERFACE) or self.check(TokenType.CLASS)
                 or self.check(TokenType.IMPORT) or self.check(TokenType.FROM)):
             if not allow_top_level:
@@ -454,6 +456,9 @@ class Parser:
                     file=self.file,
                     code="W0006",
                 )
+        if self.check(TokenType.ASYNC) and self.peek(1).type == TokenType.FN:
+            self.advance()
+            return self.parse_fn_decl(is_async=True)
         if self.check(TokenType.FN):
             return self.parse_fn_decl()
         if self.check(TokenType.LET):
@@ -591,7 +596,9 @@ class Parser:
             break
         return requires, ensures
 
-    def parse_fn_decl(self) -> FnDecl:
+    def parse_fn_decl(self, is_async: bool = False) -> FnDecl:
+        if not is_async and self.match(TokenType.ASYNC):
+            is_async = True
         start_tok = self.expect(TokenType.FN, code="W0006", msg="Expected 'fn'")
         name_tok = self.expect(TokenType.IDENTIFIER, code="W0006", msg="Expected function name after 'fn'")
         type_params = self._parse_type_params()
@@ -620,6 +627,7 @@ class Parser:
             col=start_tok.col,
             requires=requires,
             ensures=ensures,
+            is_async=is_async,
         )
 
     def parse_interface_decl(self) -> InterfaceDecl:
@@ -849,7 +857,7 @@ class Parser:
                     self.advance()
                     leading_dots += "."
 
-            if not self.check(TokenType.IDENTIFIER):
+            if not (self.check(TokenType.IDENTIFIER) or (self.check(TokenType.ASYNC) and self.peek(1).type != TokenType.FN)):
                 tok = self.at()
                 raise ParserError(
                     message=f"Expected module path after 'from', found '{tok.type.name}'",
@@ -1260,7 +1268,7 @@ class Parser:
             return expression
 
         # Identifiers & Named Struct Initializations
-        if self.match(TokenType.IDENTIFIER):
+        if self.match(TokenType.IDENTIFIER) or (self.check(TokenType.ASYNC) and self.peek(1).type != TokenType.FN and self.advance()):
             ident_name = token.value
 
             type_args: Optional[List[TypeNode]] = None
@@ -1307,6 +1315,10 @@ class Parser:
                     return StructInitExpr(struct_name=ident_name, fields=fields, type_args=type_args, line=token.line, col=token.col)
 
             return IdentExpr(name=ident_name, line=token.line, col=token.col)
+
+        if self.match(TokenType.AWAIT):
+            operand = self.parse_expr(min_prec=9, allow_struct_init=allow_struct_init)
+            return AwaitExpr(operand=operand, line=token.line, col=token.col)
 
         # Unary operations: '-' and 'not'.
         # SPEC §5 puts unary at Level 3, tighter than multiplicative (Level 4, prec=9).

@@ -284,7 +284,7 @@ class CompilerService:
 
     @staticmethod
     def _enable_http_runtime(source):
-        if 'wysna_host_http_request' not in source or 'WYSNA_HAS_HTTP' in source:
+        if 'wysna_host_http_' not in source or 'WYSNA_HAS_HTTP' in source:
             return source
         include = '#include "runtime/wysna_runtime.h"'
         if include in source:

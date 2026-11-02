@@ -9,6 +9,7 @@ from node.NodeType import (
     NoneLiteral,
     IdentExpr,
     UnaryExpr,
+    AwaitExpr,
     BinaryExpr,
     RangeExpr,
     CoalesceExpr,
@@ -37,6 +38,7 @@ from checker.ScalarRules import (
     check_none_literal,
     check_ident_expr,
     check_unary_expr,
+    check_await_expr,
     check_binary_expr,
     check_range_expr,
 )
@@ -77,6 +79,7 @@ EXPRESSION_RULES = ExpressionDispatch("type", {
     NoneLiteral: check_none_literal,
     IdentExpr: check_ident_expr,
     UnaryExpr: check_unary_expr,
+    AwaitExpr: check_await_expr,
     BinaryExpr: check_binary_expr,
     RangeExpr: check_range_expr,
     CoalesceExpr: check_coalesce_expr,

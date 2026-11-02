@@ -14,6 +14,7 @@ from node.NodeType import (
     SuperExpr,
     NewExpr,
     UnaryExpr,
+    AwaitExpr,
     BinaryExpr,
     CoalesceExpr,
     RangeExpr,
@@ -109,6 +110,41 @@ def evaluate_unary_expr(interpreter: "Interpreter", expr: UnaryExpr, env: Enviro
         col=expr.col,
         file=interpreter.file
     )
+
+
+def evaluate_await_expr(interpreter: "Interpreter", expr: AwaitExpr, env: Environment) -> WysnaValue:
+    val = interpreter.eval_expr(expr.operand, env)
+    fields = None
+    if hasattr(val, "storage") and hasattr(val.storage, "data"):
+        fields = val.storage.data
+    elif hasattr(val, "fields"):
+        fields = val.fields
+    if fields is not None:
+        if "is_ready" in fields:
+            while True:
+                is_ready = getattr(fields.get("is_ready"), "value", False)
+                is_failed = getattr(fields.get("is_failed"), "value", False)
+                if is_ready or is_failed:
+                    break
+                from runtime.HostAbi import http_multi_poll, http_async_poll
+                http_multi_poll(10)
+                handle_val = getattr(fields.get("handle"), "value", 0)
+                if handle_val > 0:
+                    http_async_poll(handle_val)
+            if getattr(fields.get("is_failed"), "value", False):
+                err_val = fields.get("error")
+                err_msg = "Async task failed"
+                if hasattr(err_val, "variant") and err_val.variant == "Some" and getattr(err_val, "payload", None):
+                    err_msg = getattr(err_val.payload[0], "value", "Async task failed")
+                elif hasattr(err_val, "value"):
+                    err_msg = err_val.value
+                raise WysnaRuntimeError(message=str(err_msg), line=expr.line, col=expr.col, file=interpreter.file)
+            val_item = fields.get("value")
+            if hasattr(val_item, "variant") and val_item.variant == "Some" and getattr(val_item, "payload", None):
+                return val_item.payload[0]
+            if val_item is not None:
+                return val_item
+    return val
 
 
 def evaluate_binary_expr(interpreter: "Interpreter", expr: BinaryExpr, env: Environment) -> WysnaValue:
@@ -527,6 +563,7 @@ EXPRESSION_RULES = ExpressionDispatch('runtime', {
     NoneLiteral: evaluate_none_literal,
     IdentExpr: evaluate_ident_expr,
     UnaryExpr: evaluate_unary_expr,
+    AwaitExpr: evaluate_await_expr,
     BinaryExpr: evaluate_binary_expr,
     CoalesceExpr: evaluate_coalesce_expr,
     RangeExpr: evaluate_range_expr,

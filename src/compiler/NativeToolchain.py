@@ -45,7 +45,7 @@ class NativeToolchain:
 
     def build(self, c_source, output, sanitize=False, link_libraries=(), *, profile=None):
         """Compile C and explicit adapters, then link without owning caller inputs."""
-        uses_http = 'wysna_host_http_request' in c_source
+        uses_http = 'wysna_host_http_' in c_source
         if uses_http and 'WYSNA_HAS_HTTP' not in c_source:
             include = '#include "runtime/wysna_runtime.h"'
             if include in c_source:
@@ -212,7 +212,7 @@ class NativeToolchain:
                     'selfhost', 'Wysna Compiler Error', result.stderr, result.returncode,
                 )
             source = Path(output_path).read_text(encoding='utf-8')
-            if 'wysna_host_http_request' in source and 'WYSNA_HAS_HTTP' not in source:
+            if 'wysna_host_http_' in source and 'WYSNA_HAS_HTTP' not in source:
                 include = '#include "runtime/wysna_runtime.h"'
                 if include in source:
                     source = source.replace(include, '#define WYSNA_HAS_HTTP 1\n' + include, 1)

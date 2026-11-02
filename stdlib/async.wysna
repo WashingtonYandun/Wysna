@@ -1,0 +1,155 @@
+# std/async: Structured Cooperative Asynchronous Runtime for Wysna
+
+extern "C" fn wysna_host_http_multi_poll(timeout_ms: int) -> int
+extern "C" fn wysna_host_http_async_poll(transfer_id: int) -> int
+extern "C" fn wysna_host_last_error() -> int
+
+pub enum FutureState[T] {
+    Pending,
+    Ready(T),
+    Failed(str),
+}
+
+pub struct Task[T] {
+    id: int,
+    handle: int,
+    is_ready: bool,
+    is_failed: bool,
+    value: T?,
+    error: str?,
+}
+
+pub fn ready[T](val: T) -> Task[T] {
+    return Task[T] {
+        id: 0,
+        handle: 0,
+        is_ready: true,
+        is_failed: false,
+        value: Some(val),
+        error: none,
+    }
+}
+
+pub fn failed[T](err_msg: str) -> Task[T] {
+    let empty_val: T? = none
+    return Task[T] {
+        id: 0,
+        handle: 0,
+        is_ready: false,
+        is_failed: true,
+        value: empty_val,
+        error: Some(err_msg),
+    }
+}
+
+pub fn poll_events(timeout_ms: int) -> int {
+    if timeout_ms < 0 {
+        return 0
+    }
+    return wysna_host_http_multi_poll(timeout_ms)
+}
+
+pub fn is_ready[T](task: Task[T]) -> bool {
+    if task.is_ready or task.is_failed {
+        return true
+    }
+    if task.handle > 0 {
+        let st = wysna_host_http_async_poll(task.handle)
+        return st != 0
+    }
+    return false
+}
+
+pub fn wait[T](task: Task[T]) -> T ! str {
+    if task.is_ready {
+        match task.value {
+            Some(v) => { return v },
+            None => { return Err("Task marked ready without value") },
+        }
+    }
+    if task.is_failed {
+        match task.error {
+            Some(e) => { return Err(e) },
+            None => { return Err("Task failed with unspecified error") },
+        }
+    }
+
+    while not is_ready(task) {
+        let _ = poll_events(10)
+    }
+
+    if task.is_failed {
+        match task.error {
+            Some(e) => { return Err(e) },
+            None => { return Err("Task failed") },
+        }
+    }
+
+    match task.value {
+        Some(v) => { return v },
+        None => { return Err("Task completed without value") },
+    }
+}
+
+pub fn all[T](tasks: list[Task[T]]) -> list[T] ! str {
+    let mut done = false
+    while not done {
+        done = true
+        for index in 0..len(tasks) {
+            let t = tasks[index]
+            if not is_ready(t) {
+                done = false
+            } elif t.is_failed {
+                match t.error {
+                    Some(err) => { return Err(err) },
+                    None => { return Err("Task failed in async.all") },
+                }
+            }
+        }
+        if not done {
+            let _ = poll_events(10)
+        }
+    }
+
+    let mut results: list[T] = []
+    for index in 0..len(tasks) {
+        let t = tasks[index]
+        if t.is_failed {
+            match t.error {
+                Some(err) => { return Err(err) },
+                None => { return Err("Task failed in async.all") },
+            }
+        }
+        match t.value {
+            Some(val) => results.append(val),
+            None => { return Err("Task in async.all had no value") },
+        }
+    }
+    return results
+}
+
+pub fn race[T](tasks: list[Task[T]]) -> T ! str {
+    if len(tasks) == 0 {
+        return Err("Cannot race empty task list")
+    }
+
+    while true {
+        for index in 0..len(tasks) {
+            let t = tasks[index]
+            if is_ready(t) {
+                if t.is_failed {
+                    match t.error {
+                        Some(err) => { return Err(err) },
+                        None => { return Err("Task failed in async.race") },
+                    }
+                }
+                match t.value {
+                    Some(val) => { return val },
+                    None => { return Err("Raced task had no value") },
+                }
+            }
+        }
+        let _ = poll_events(10)
+    }
+    return Err("Unreachable race state")
+}
