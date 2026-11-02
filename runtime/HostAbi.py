@@ -826,6 +826,65 @@ def crypto_hmac_sha256(key_handle, message_handle, output_handle):
     return 0
 
 
+def crypto_sha512(input_handle, output_handle):
+    import hashlib
+    inp = find(input_handle, 'buffer')
+    out = find(output_handle, 'buffer')
+    if inp is None or out is None:
+        return failure(ValueError("Invalid buffer handle"))
+    digest = hashlib.sha512(bytes(inp)).digest()
+    out.clear()
+    out.extend(digest)
+    return 0
+
+
+def crypto_hmac_sha512(key_handle, message_handle, output_handle):
+    import hmac, hashlib
+    k = find(key_handle, 'buffer')
+    m = find(message_handle, 'buffer')
+    out = find(output_handle, 'buffer')
+    if k is None or m is None or out is None:
+        return failure(ValueError("Invalid buffer handle"))
+    digest = hmac.new(bytes(k), bytes(m), hashlib.sha512).digest()
+    out.clear()
+    out.extend(digest)
+    return 0
+
+
+def crypto_md5(input_handle, output_handle):
+    import hashlib
+    inp = find(input_handle, 'buffer')
+    out = find(output_handle, 'buffer')
+    if inp is None or out is None:
+        return failure(ValueError("Invalid buffer handle"))
+    digest = hashlib.md5(bytes(inp)).digest()
+    out.clear()
+    out.extend(digest)
+    return 0
+
+
+def crypto_random_bytes(output_handle, count):
+    import os
+    if count <= 0 or count > (1024 * 1024 * 64):
+        return failure(ValueError("Invalid count"))
+    out = find(output_handle, 'buffer')
+    if out is None:
+        return failure(ValueError("Invalid buffer handle"))
+    rnd = os.urandom(int(count))
+    out.clear()
+    out.extend(rnd)
+    return 0
+
+
+def crypto_constant_time_compare(a_handle, b_handle):
+    import hmac
+    a = find(a_handle, 'buffer')
+    b = find(b_handle, 'buffer')
+    if a is None or b is None:
+        return failure(ValueError("Invalid buffer handle"))
+    return 1 if hmac.compare_digest(bytes(a), bytes(b)) else 0
+
+
 FUNCTIONS = {
     'wysna_host_last_error': lambda: _error_code,
     'wysna_host_last_error_domain': lambda: _error_domain,
@@ -854,4 +913,9 @@ FUNCTIONS = {
     'wysna_host_http_async_cancel': http_async_cancel,
     'wysna_host_crypto_sha256': crypto_sha256,
     'wysna_host_crypto_hmac_sha256': crypto_hmac_sha256,
+    'wysna_host_crypto_sha512': crypto_sha512,
+    'wysna_host_crypto_hmac_sha512': crypto_hmac_sha512,
+    'wysna_host_crypto_md5': crypto_md5,
+    'wysna_host_crypto_random_bytes': crypto_random_bytes,
+    'wysna_host_crypto_constant_time_compare': crypto_constant_time_compare,
 }
