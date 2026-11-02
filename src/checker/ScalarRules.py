@@ -10,6 +10,7 @@ from node.NodeType import (
     NoneLiteral,
     IdentExpr,
     UnaryExpr,
+    AwaitExpr,
     BinaryExpr,
     RangeExpr,
 )
@@ -137,6 +138,18 @@ def check_unary_expr(checker: "TypeChecker", expr: UnaryExpr, is_statement_conte
             file=checker.file,
             code="W2001"
         )
+
+
+def check_await_expr(checker: "TypeChecker", expr: AwaitExpr, is_statement_context: bool = False) -> WysnaType:
+    operand_t = checker._check_expr(expr.operand)
+    if hasattr(operand_t, "type_args") and operand_t.type_args:
+        return operand_t.type_args[0]
+    if hasattr(operand_t, "fields") and "value" in operand_t.fields:
+        val_t = operand_t.fields["value"]
+        if hasattr(val_t, "inner"):
+            return val_t.inner
+        return val_t
+    return operand_t
 
 
 def check_binary_expr(checker: "TypeChecker", expr: BinaryExpr, is_statement_context: bool = False) -> WysnaType:

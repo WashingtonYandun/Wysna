@@ -11,7 +11,7 @@ from node.NodeType import (
     LetDecl, WhileStmt, ForStmt, ReturnStmt, BreakStmt, ContinueStmt,
     IntLiteral, FloatLiteral, StringLiteral, BoolLiteral, NoneLiteral, IdentExpr,
     ThisExpr, SuperExpr, NewExpr,
-    UnaryExpr, BinaryExpr, CoalesceExpr, RangeExpr, PostfixTryExpr, ElseErrExpr,
+    UnaryExpr, AwaitExpr, BinaryExpr, CoalesceExpr, RangeExpr, PostfixTryExpr, ElseErrExpr,
     CallExpr, MemberExpr, IndexExpr, AssignmentExpr, StructInitExpr,
     ListExpr, DictExpr, TupleExpr, IfExpr, MatchExpr
 )
@@ -796,6 +796,11 @@ class HirBuilder:
         elif isinstance(expr, UnaryExpr):
             operand_hir = self._lower_expr(expr.operand)
             return HirUnaryOp(getattr(expr, "op", getattr(expr, "operator", "-")), operand_hir, tid, span)
+        elif isinstance(expr, AwaitExpr):
+            operand_hir = self._lower_expr(expr.operand)
+            if operand_hir.type_id == tid:
+                return operand_hir
+            return HirCoerce(operand_hir, tid, kind="await", span=span)
         elif isinstance(expr, BinaryExpr):
             left_hir = self._lower_expr(expr.left)
             right_hir = self._lower_expr(expr.right)

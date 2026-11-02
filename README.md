@@ -59,9 +59,12 @@ agents need to write, verify, and run production software reliably.
 | **Errors are values** | `T ! E` puts declared errors in the signature. `else error`, `?` and exhaustive `match` make those errors explicit; runtime failures remain possible. |
 | **Memory you can reason about** | Single-threaded ARC and copy-on-write provide predictable lifetime management and cheap snapshots, with $O(1)$ fast paths for unboxed scalar lists. Strong cycles are not collected automatically, and abnormal termination can bypass cleanup; `Weak` helps break cycles. |
 | **First-class contracts** | Native `requires` and `ensures` enforce preconditions and postconditions statically and dynamically (`W4005`), exportable as JSON Schema (Draft 2020-12) via `wysna schema`. |
+| **Structured cooperative async** | Native `async fn` and `await` with zero-allocation scalar futures, combinators (`std/async`), and non-blocking multiplexed HTTP dispatch without heavy thread overhead. |
+| **Zero-dependency cryptography** | Clean, self-contained header-only C99 primitives (SHA-256, SHA-512, MD5, HMAC), timing-safe comparisons, and native CSPRNG (`/dev/urandom`) without external `-lcrypto` dependencies. |
 | **Deterministic quotas** | `--max-steps` and `--max-heap-mb` bound execution budgets with deterministic fail-stop `W4004` across interpreter, LLVM, and native binaries. |
 | **Effect cassette replay** | `--record-trace` and `--replay-trace` capture and replay external I/O interactions (`wysna.effect.trace/1`) for reproducible testing and agent sandboxing. |
 | **Deterministic concurrency** | Index-ordered parallel batching, mapping, and HTTP dispatch over thread-safe multi-core worker runtimes. |
+| **Progressive native tooling** | `wysna check`, `fmt`, `run`, and `test` with `--engine=compiler` / `--native` for sub-millisecond static verification and test execution on the self-hosted binary. |
 | **A verified pipeline** | Source → typed HIR or checked nodes → verified MIR → C99. Independent oracles, a self-hosted compiler and conformance tests check the same language from different angles. |
 | **One install for the core** | The Seed distribution carries private CPython and Zig, so core CLI, projects, formatter and LSP work without host Python, a virtual environment or a C SDK. |
 | **Tools for humans and agents** | Scriptable commands, JSON Schema export, and versioned `json-v1` envelopes let editors, scripts and AI agents inspect and bound programs before execution. |
@@ -254,8 +257,50 @@ print(squares)  # [1, 4, 9, 16, 25]
 
 `std/algorithms` provides `parallel_batch`, `parallel_filter`, `parallel_reduce`, and
 `parallel_map`. Worker tasks execute across available CPU cores with thread-safe runtime
-locks, guaranteeing strict deterministic index-ordered output. `std/http` provides `batch_get`
-for parallel HTTP requests.
+locks, guaranteeing strict deterministic index-ordered output.
+
+### Structured cooperative async (async/await & std/async)
+
+```wysna
+import "std/async"
+
+async fn compute_job(id: int) -> int {
+    return id * 10
+}
+
+let task_a = async.ready(42)
+let task_b = async.ready(100)
+
+# Combinators: wait for all or race the first resolved task
+let both = async.all([task_a, task_b])
+let values = await both
+print(values)  # [42, 100]
+```
+
+Wysna provides structured, cooperative asynchronous I/O via `async fn` and `await`. Asynchronous functions evaluate tasks without blocking the main OS thread. Combined with `std/http`'s non-blocking multiplexed dispatcher (`curl_multi_*`), agents can concurrently orchestrate multiple LLM calls, vector database queries, and external APIs with zero memory leaks and single-threaded ARC safety.
+
+### Cryptographic security and CSPRNG (std/crypto)
+
+```wysna
+import "std/crypto"
+
+let digest = crypto.sha512("wysna-agent-security")
+let session_id = crypto.random_hex(16)
+let token = "expected-bearer-secret"
+
+# Timing-attack resistant verification
+let is_valid = crypto.constant_time_eq(token, token)
+
+print("Hash prefix: " + digest[0..16])
+print("Session: " + session_id)
+print("Constant-time valid: " + str(is_valid))
+```
+
+`std/crypto` provides header-only, self-contained C99 cryptographic primitives without external dynamic dependencies (`-lcrypto` is not required):
+- **Hashing:** NIST FIPS 180-4 SHA-256 and SHA-512, RFC 1321 MD5.
+- **Message Authentication:** RFC 2104 HMAC-SHA256 and HMAC-SHA512.
+- **Operating System CSPRNG:** `random_bytes(count)` and `random_hex(count)` backed by `/dev/urandom` on POSIX and `CryptGenRandom` on Windows.
+- **Side-Channel Protection:** `constant_time_eq` and `constant_time_eq_bytes` to protect against timing attacks.
 
 See [more executable examples](examples/language), including bounded resources,
 error channels, contracts and pattern matching.
@@ -264,11 +309,12 @@ error channels, contracts and pattern matching.
 
 | Command | Purpose |
 | :--- | :--- |
-| `wysna check` | Typecheck without executing; emits multi-error facts in `--output-format=json-v1`. |
+| `wysna check` | Typecheck without executing; supports `--engine=compiler` (native MIR) and `--output-format=json-v1`. |
 | `wysna fix` | Apply deterministic compiler self-healing repairs with verified SHA-256 edits. |
-| `wysna run` | Execute source through the reference runtime (with `--max-steps` / `--max-heap-mb`). |
+| `wysna run` | Execute source through the reference runtime or native binary (`--engine=compiler`), with `--max-steps` / `--max-heap-mb`. |
 | `wysna build` | Compile a native executable through verified MIR → C99. |
-| `wysna fmt` | Canonical, deterministic formatting. |
+| `wysna fmt` | Canonical, deterministic formatting; supports `--engine=compiler` verification. |
+| `wysna test` | Run conformance, differential, fuzz, or native test runner (`--engine=compiler` / `--native`). |
 | `wysna explain` | Conservative effect and capability report over verified MIR. |
 | `wysna schema` | Export function contracts and struct shapes to JSON Schema (Draft 2020-12). |
 | `wysna mcp` | In-memory Model Context Protocol daemon for AI agents and IDE integrations. |
@@ -278,11 +324,12 @@ error channels, contracts and pattern matching.
 
 For native source compilation, `--engine=seed|compiler` selects the compiler
 implementation and `--backend=c99|llvm-experimental` selects the output target.
-Seed plus C99 is the supported default. The Compiler engine is limited to
-`native-core-v1`; in this CLI it supports file-based `emit-c` and `build`, while its
-standalone SDK provides its own commands. AST-to-C emission is only a differential
-test oracle. C99 is translated source: the selected C toolchain produces and links
-the machine-code executable. LLVM IR is available as an experimental Seed target.
+Seed plus C99 is the supported default. The Compiler engine is based on
+`native-core-v1`; in this CLI it supports `check`, `fmt`, `run`, `emit-c`, `build`,
+and native testing (`wysna test --native`), while its standalone SDK provides its own
+embedded driver. AST-to-C emission is only a differential test oracle. C99 is translated
+source: the selected C toolchain produces and links the machine-code executable. LLVM IR
+is available as an experimental Seed target.
 
 ### Deterministic Execution & Effect Cassettes
 
@@ -311,17 +358,20 @@ source-hash-checked diagnostics.
 
 | Area | Modules |
 | :--- | :--- |
-| Data | `std/json`, `std/text`, `std/parse`, `std/algorithms`, `std/bytes` |
+| Data & Algorithms | `std/json`, `std/text`, `std/parse`, `std/algorithms`, `std/bytes`, `std/crypto` |
+| Concurrency & Async | `std/async` (`Task[T]`, `all`, `race`, `wait`) |
 | I/O and files | `std/files`, `std/buffer`, `std/fs`, `std/path`, `std/io`, `std/resources` |
-| Host | `std/environment`, `std/process`, `std/time`, `std/http` |
+| Host & Network | `std/environment`, `std/process`, `std/time`, `std/http` |
 | Testing | `std/test` |
 
 `std/algorithms` includes scalar list specializations along with deterministic multi-core
 operations (`parallel_batch`, `parallel_filter`, `parallel_reduce`, `parallel_map`).
-Native HTTP uses libcurl with TLS verification, deadlines, response limits, and parallel
-`batch_get`. HTTP remains an explicit dependency, as do C FFI libraries and their headers.
-Projects use `wysna.toml`, contained local dependencies and hash-checked lockfiles; there is
-no public package registry.
+Native HTTP uses libcurl with TLS verification, deadlines, response limits, parallel
+`batch_get`, and non-blocking event loop dispatch (`curl_multi_*`). `std/crypto` delivers
+self-contained, header-only C99 implementations of SHA-256/512, MD5, HMAC, timing-safe
+equality, and OS-level CSPRNG. HTTP remains an explicit dependency, as do C FFI libraries
+and their headers. Projects use `wysna.toml`, contained local dependencies and hash-checked
+lockfiles; there is no public package registry.
 
 ## Status and scope
 
@@ -369,11 +419,12 @@ and [scope](docs/SCOPE.md) for the full boundary.
 | :--- | :--- |
 | [Syntax manual](WYSNA_SINTAXIS.md) | [Compiler architecture](docs/COMPILER_ARCHITECTURE.md) |
 | [AI agent guide](docs/AI_AGENT_GUIDE.md) | [MIR design](docs/MIR_DESIGN.md) |
-| [Scope and status](docs/SCOPE.md) | [Effect reports](docs/EFFECTS.md) |
-| [Seed distribution](docs/SEED_DISTRIBUTION.md) | [Known limits](docs/KNOWN_LIMITS.md) |
-| [Projects and tests](docs/PROJECTS.md) | [Engine parity](docs/ENGINE_PARITY_MATRIX.md) |
-| [Standard library](docs/STDLIB.md) | [Language specification](SPEC.md) |
-| [Examples](examples/language) | [Changelog](CHANGELOG.md) |
+| [Scope and status](docs/SCOPE.md) | [Full architecture audit](docs/FULL_LANGUAGE_CAPABILITIES_AND_DEBT_AUDIT.md) |
+| [Seed distribution](docs/SEED_DISTRIBUTION.md) | [Effect reports](docs/EFFECTS.md) |
+| [Projects and tests](docs/PROJECTS.md) | [Known limits](docs/KNOWN_LIMITS.md) |
+| [Standard library](docs/STDLIB.md) | [Engine parity](docs/ENGINE_PARITY_MATRIX.md) |
+| [Examples](examples/language) | [Language specification](SPEC.md) |
+| [Changelog](CHANGELOG.md) | [Security policy](SECURITY.md) |
 
 The full [documentation index](docs/README.md) covers ownership, FFI, the native SDK,
 LLVM, the service pilot and distribution details.

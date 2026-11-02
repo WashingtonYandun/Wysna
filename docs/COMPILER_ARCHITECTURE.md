@@ -97,6 +97,7 @@ Python consumers. Productive modules must not import it.
 
 - `tooling/CLI.py`: command parsing, command selection and terminal presentation.
 - `tooling/SourceCommand.py`: source command orchestration and diagnostics.
+- `tooling/TestRunner.py`: targeted and native test runner supporting Seed interpretation and native Compiler execution.
 - `tooling/ExplainCLI.py`: read-only effect/capability report presentation.
 - `tooling/RunReport.py`: application exit and JSON run-report protocol.
 - `compiler/Bootstrap.py`: locked bootstrap cache and compiler construction.

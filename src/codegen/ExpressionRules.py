@@ -15,6 +15,7 @@ from node.NodeType import (
     SuperExpr,
     NewExpr,
     UnaryExpr,
+    AwaitExpr,
     BinaryExpr,
     CoalesceExpr,
     RangeExpr,
@@ -94,6 +95,11 @@ def emit_unary_expr(emitter: "CCodeGen", expr: UnaryExpr, out: List[str]) -> str
         return f"wysna_neg({op_val})"
     if expr.op == "not":
         return f"wysna_bool(!({op_val}).as.b)"
+
+
+def emit_await_expr(emitter: "CCodeGen", expr: AwaitExpr, out: List[str]) -> str:
+    operand = emitter.emit_expr(expr.operand, out)
+    return emitter._bind_call(f"wysna_await({emitter._own_expr(operand)})", out)
 
 
 def emit_binary_expr(emitter: "CCodeGen", expr: BinaryExpr, out: List[str]) -> str:
@@ -516,6 +522,7 @@ EXPRESSION_RULES = ExpressionDispatch('codegen', {
     NewExpr: emit_new_expr,
     IdentExpr: emit_ident_expr,
     UnaryExpr: emit_unary_expr,
+    AwaitExpr: emit_await_expr,
     BinaryExpr: emit_binary_expr,
     CoalesceExpr: emit_coalesce_expr,
     RangeExpr: emit_range_expr,

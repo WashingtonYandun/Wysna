@@ -108,8 +108,8 @@ def print_help(prog: Optional[str] = None) -> None:
     print(f"  {prog} repl                                    # Start interactive REPL")
     print(f"  {prog} [run] [--stats] [--report-json <path>] [--invocation-id <id>] <file.wysna> [-- args...] # Execute Wysna source file")
     print(f"  {prog} run --deny=<cap,...>|--allow=<cap,...> <file.wysna> # Static capability gate before interpretation")
-    print(f"  {prog} check [--json|--output-format=json-v1] [--warn-cycles] [--stats] <file.wysna>   # Static typecheck without execution")
-    print(f"  {prog} fmt [--write] [--output-format=json-v1] <file.wysna> # Canonical deterministic formatter")
+    print(f"  {prog} check [--engine=seed|compiler] [--json|--output-format=json-v1] [--warn-cycles] [--stats] <file.wysna>   # Static typecheck without execution")
+    print(f"  {prog} fmt [--engine=seed|compiler] [--write] [--output-format=json-v1] <file.wysna> # Canonical deterministic formatter")
     print(f"  {prog} build [--engine=seed|compiler] [--backend=llvm-experimental] [--profile=dev|release|size] [--output-format=json-v1] <file.wysna> [-o <bin>] # Compile a native binary")
     print(f"  {prog} version                                   # Show compiler version")
     print("Compiler inspection and verification:")
@@ -121,12 +121,12 @@ def print_help(prog: Optional[str] = None) -> None:
     print("Experimental tools (see docs/SCOPE.md for their contracts):")
     print(f"  {prog} service serve --worker <bin> --database <db> # Local bounded HTTP/JSON pilot")
     print(f"  {prog} emit-llvm <file.wysna> [-o <out.ll>] # Native-command LLVM IR (Seed)")
-    print(f"  {prog} run [--backend=c99|llvm] [--sanitize] [--timeout-ms <N>] <file.wysna> [-- args...]")
+    print(f"  {prog} run [--engine=seed|compiler] [--backend=c99|llvm] [--sanitize] [--timeout-ms <N>] <file.wysna> [-- args...]")
     print(f"  {prog} build [--backend=c99|llvm] [--profile=dev|release|size] <file.wysna> [-o <bin>]")
-    print("  Engines: seed (full Seed profile, default) or compiler (native-core-v1; emit-c/build only here).")
+    print("  Engines: seed (full Seed profile, default) or compiler (native-core-v1).")
     print("  Backends: c99 (default) or llvm (alias: llvm-experimental). The AST emitter is a test oracle, not a CLI backend.")
     print("Source-checkout maintenance:")
-    print(f"  {prog} test [--differential [N]] [--fuzz [N]]            # Run conformance, differential, or fuzz suite")
+    print(f"  {prog} test [--engine=seed|compiler] [--native] [--differential [N]] [--fuzz [N]] [files...] # Run conformance, differential, fuzz, or native test suite")
     print(f"  {prog} bench [--update-baseline]                         # Run Seed/Compiler performance benchmark harness")
 
 
@@ -287,13 +287,58 @@ def main(argv=None) -> None:
                 ok = run_fuzz_suite(fuzz_count=fuzz_count, base_seed=base_seed, repo_root=repo_root)
                 sys.exit(0 if ok else 1)
             else:
-                if any(arg not in ("--sanitize", "-s") for arg in args):
-                    usage_error(f"invalid test option '{next(arg for arg in args if arg not in ('--sanitize', '-s'))}'")
-                if args and ("--sanitize" in args or "-s" in args):
-                    os.environ["WYSNA_SANITIZE"] = "1"
-                from run_conformance import run_suite
-                run_suite()
-                return
+                test_engine = "seed"
+                test_sanitize = False
+                test_timeout_ms = 30000
+                test_targets = []
+                idx = 0
+                while idx < len(args):
+                    arg = args[idx]
+                    if arg in ("--sanitize", "-s"):
+                        test_sanitize = True
+                        os.environ["WYSNA_SANITIZE"] = "1"
+                        idx += 1
+                    elif arg == "--native":
+                        test_engine = "compiler"
+                        idx += 1
+                    elif arg.startswith("--engine="):
+                        val = arg.split("=", 1)[1]
+                        if val not in ("seed", "compiler"):
+                            usage_error(f"invalid test engine '{val}'")
+                        test_engine = val
+                        idx += 1
+                    elif arg == "--engine":
+                        idx += 1
+                        if idx >= len(args) or args[idx] not in ("seed", "compiler"):
+                            usage_error("--engine requires 'seed' or 'compiler'")
+                        test_engine = args[idx]
+                        idx += 1
+                    elif arg.startswith("--timeout-ms="):
+                        val = arg.split("=", 1)[1]
+                        if not val.isdigit():
+                            usage_error("--timeout-ms requires an integer")
+                        test_timeout_ms = int(val)
+                        idx += 1
+                    elif arg == "--timeout-ms":
+                        idx += 1
+                        if idx >= len(args) or not args[idx].isdigit():
+                            usage_error("--timeout-ms requires an integer")
+                        test_timeout_ms = int(args[idx])
+                        idx += 1
+                    elif not arg.startswith("-"):
+                        test_targets.append(arg)
+                        idx += 1
+                    else:
+                        usage_error(f"invalid test option '{arg}'")
+
+                if test_targets or test_engine == "compiler":
+                    from tooling.TestRunner import run_tests
+                    repo_root = get_repo_root()
+                    sys.exit(run_tests(test_targets, engine=test_engine, sanitize=test_sanitize, timeout_ms=test_timeout_ms))
+                else:
+                    from run_conformance import run_suite
+                    run_suite()
+                    return
         elif subcmd == "version":
             print(f"Wysna Language Compiler v{WYSNA_VERSION} (Wysna Seed + Wysna Compiler Self-Hosted C99)")
             return
@@ -542,12 +587,12 @@ def main(argv=None) -> None:
     if backend_explicit and backend == "c99" and subcmd not in ("emit-c", "build"):
         usage_error("--backend=c99 applies only to emit-c and build; check, fmt, and run use Seed directly")
     if engine == "compiler":
-        if subcmd not in ("emit-c", "build"):
-            usage_error("--engine=compiler in the Seed CLI supports emit-c and build only; use the standalone Compiler SDK for native check/run commands")
+        if subcmd not in ("emit-c", "build", "check", "fmt", "run", None):
+            usage_error("--engine=compiler supports emit-c, build, check, fmt, and run")
         if backend != "c99":
             usage_error("--engine=compiler currently supports only the C99 output backend")
-        if (show_tokens or show_ast or show_mir or fmt_only or fmt_write or check_only):
-            usage_error("--engine=compiler does not support Seed inspection or formatting options")
+        if (show_tokens or show_ast or show_mir):
+            usage_error("--engine=compiler does not support Seed AST, token, or MIR inspection")
     if optimization_profile is not None and backend != "llvm-experimental" and subcmd != "build":
         usage_error("--profile is supported by native builds and LLVM source commands")
     if run_timeout_ms is not None and (subcmd not in (None, "run") or backend != "llvm-experimental"):
@@ -590,8 +635,8 @@ def main(argv=None) -> None:
         elif subcmd == "fmt":
             if not fmt_only or check_only or emit_c_path is not None or build_bin_path is not None:
                 usage_error("fmt --output-format=json-v1 supports formatting only")
-            if sanitize or link_libraries or backend != "c99" or engine != "seed":
-                usage_error("fmt --output-format=json-v1 does not accept backend or build options")
+            if sanitize or link_libraries or backend != "c99" or engine not in ("seed", "compiler"):
+                usage_error("fmt --output-format=json-v1 does not accept backend or link options")
         elif subcmd == "emit-c":
             if check_only or fmt_only or fmt_write or build_bin_path is not None:
                 usage_error("emit-c --output-format=json-v1 supports C generation only")

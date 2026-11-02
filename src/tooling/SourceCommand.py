@@ -1,7 +1,10 @@
 """Source-command orchestration over CompilerService and NativeToolchain."""
 import json
 import os
+from pathlib import Path
+import subprocess
 import sys
+import tempfile
 from typing import Optional
 from lexer.Lexer import Lexer
 from runtime.ExecutionContext import ExecutionContext
@@ -168,14 +171,14 @@ def run_pipeline(
             raise WysnaError("Capability policy applies only to interpreted run",
                              code="W5002", stage="options")
 
-        compiler_direct = engine == "compiler" and (emit_c_path is not None or build_bin_path is not None)
+        compiler_direct = engine == "compiler"
         if engine == "compiler" and (
-                not compiler_direct or file_name == "<stdin>" or check_only or show_tokens
-                or show_ast or show_mir or fmt_only or fmt_write or emit_llvm_path is not None
+                file_name == "<stdin>" or show_tokens
+                or show_ast or show_mir or emit_llvm_path is not None
                 or capability_policy is not None):
             raise WysnaError(
-                "The compiler engine currently supports file-based emit-c and build only; "
-                "use the standalone Compiler SDK for its native commands",
+                "The compiler engine supports check, fmt, run, emit-c, and build; "
+                "AST and token inspection require the Seed engine",
                 code="W5002", stage="options")
 
         import time
@@ -184,7 +187,95 @@ def run_pipeline(
         lex_ms = parse_ms = check_ms = 0.0
         ast = None
         checked = None
-        compiler_direct = compiler_direct and not show_tokens and not show_ast and not fmt_only and not check_only
+
+        if engine == "compiler" and check_only:
+            repo_root = get_repo_root()
+            selfhost_bin = ensure_selfhost_compiler_binary(repo_root)
+            toolchain = NativeToolchain(repo_root)
+            try:
+                out, check_ms = toolchain.check_compiler(selfhost_bin, file_name, json_output=json_v1 or json_diagnostics)
+            except NativeCompilationError as exc:
+                if json_v1:
+                    diagnostic = diagnostic_record("W2001", "typecheck", exc.stderr.strip() or str(exc))
+                    _write_json_v1(tool_command, "type_error", 1, diagnostics=[diagnostic])
+                    return 1
+                print(exc.stderr.strip() or str(exc), file=sys.stderr)
+                return 1
+            if json_v1:
+                try:
+                    payload = json.loads(out)
+                    _write_json_v1(tool_command, "ok", 0, data=payload.get("data", {}))
+                except Exception:
+                    _write_json_v1(tool_command, "ok", 0)
+                return 0
+            if json_diagnostics:
+                print(out.strip())
+                return 0
+            if show_stats:
+                stat_obj = {
+                    "status": "ok",
+                    "file": file_name,
+                    "engine": "compiler",
+                    "timing_ms": {
+                        "check": round(check_ms, 2),
+                        "total": round((time.perf_counter() - t_start) * 1000.0, 2),
+                    },
+                }
+                print(json.dumps(stat_obj, indent=2))
+                return 0
+            print(out.strip() if out.strip() else f"[Wysna Compiler] Checked {file_name}")
+            return 0
+
+        if engine == "compiler" and fmt_only:
+            repo_root = get_repo_root()
+            selfhost_bin = ensure_selfhost_compiler_binary(repo_root)
+            toolchain = NativeToolchain(repo_root)
+            try:
+                toolchain.check_compiler(selfhost_bin, file_name)
+            except NativeCompilationError as exc:
+                if json_v1:
+                    diagnostic = diagnostic_record("W1001", "syntax", exc.stderr.strip() or str(exc))
+                    _write_json_v1(tool_command, "type_error", 1, diagnostics=[diagnostic])
+                    return 1
+                print(exc.stderr.strip() or str(exc), file=sys.stderr)
+                return 1
+            service = CompilerService(project_root=project_root, project_resolver=project_resolver)
+            parsed = service.parse(source_code, file_name, recover=False)
+            formatted = Formatter().format(parsed.program)
+            if fmt_write and file_name != "<stdin>":
+                with open(file_name, "w", encoding="utf-8") as f:
+                    f.write(formatted)
+                if json_v1:
+                    artifact = artifact_file("formatted_source", "text/x-wysna", file_name)
+                else:
+                    print(f"Formatted {file_name}")
+            else:
+                if json_v1:
+                    artifact = artifact_inline("formatted_source", "text/x-wysna", formatted)
+                else:
+                    print(formatted, end="")
+            if json_v1:
+                _write_json_v1(
+                    tool_command,
+                    "ok",
+                    0,
+                    artifacts=[artifact],
+                    target={"profile": "wysna-source", "triple": None},
+                )
+            return 0
+
+        if engine == "compiler" and emit_c_path is None and build_bin_path is None:
+            repo_root = get_repo_root()
+            toolchain = NativeToolchain(repo_root)
+            selfhost_bin = ensure_selfhost_compiler_binary(repo_root)
+            with tempfile.TemporaryDirectory(prefix="wysna-native-run-") as tmpdir:
+                tmp_bin = str(Path(tmpdir) / "program_bin")
+                emission = toolchain.emit_compiler(selfhost_bin, file_name)
+                built = toolchain.build(emission.source, tmp_bin, sanitize=sanitize, link_libraries=link_libraries, profile=optimization_profile)
+                prog_args = list(execution_context.argv[1:]) if execution_context and execution_context.argv else []
+                run_res = subprocess.run([built.output_path] + prog_args, cwd=os.getcwd())
+                return run_res.returncode
+
 
         if show_tokens:
             tokens = Lexer(source_code, file=file_name).tokenize()

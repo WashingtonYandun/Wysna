@@ -432,76 +432,16 @@ def _http_request_headers(data):
     return headers
 
 
-def http_request(url_handle, method_handle, request_headers_handle, request_body_handle,
-                 response_headers_handle, response_body_handle, timeout_ms, max_response_bytes):
-    """Perform one synchronous HTTP(S) request with bounded input and output."""
-    global _error_code, _error_domain
-    _error_code = 0
-    _error_domain = 0
-    url_bytes = find(url_handle, 'buffer')
-    method_bytes = find(method_handle, 'buffer')
-    request_headers = find(request_headers_handle, 'buffer')
-    request_body = find(request_body_handle, 'buffer')
-    response_headers = find(response_headers_handle, 'buffer')
-    response_body = find(response_body_handle, 'buffer')
-    handles = (url_handle, method_handle, request_headers_handle, request_body_handle,
-               response_headers_handle, response_body_handle)
-    if (any(value is None for value in (url_bytes, method_bytes, request_headers, request_body,
-                                        response_headers, response_body))
-            or len(set(handles)) != len(handles)):
-        return _http_failure(_HTTP_INVALID_REQUEST, errno.EBADF)
-    if (not 1 <= timeout_ms <= _HTTP_MAX_TIMEOUT_MS
-            or not 1 <= max_response_bytes <= _HTTP_MAX_BODY
-            or len(url_bytes) > _HTTP_MAX_URL or len(request_body) > _HTTP_MAX_BODY):
-        return _http_failure(_HTTP_INVALID_REQUEST, errno.EINVAL)
-
-    try:
-        url = bytes(url_bytes).decode('ascii')
-        method = bytes(method_bytes).decode('ascii')
-        parsed = urlsplit(url)
-        _ = parsed.port
-        if (parsed.scheme.lower() not in ('http', 'https') or not parsed.hostname
-                or parsed.username is not None or parsed.password is not None or parsed.fragment
-                or any(ord(character) <= 32 or ord(character) > 126 for character in url)):
-            raise ValueError('URL must be an ASCII HTTP or HTTPS URL without user info or fragment')
-        if method not in ('GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'HEAD'):
-            raise ValueError('unsupported HTTP method')
-        if method in ('GET', 'HEAD') and request_body:
-            raise ValueError('GET and HEAD requests cannot include a body')
-        headers = _http_request_headers(bytes(request_headers))
-    except (UnicodeError, ValueError, OverflowError):
-        return _http_failure(_HTTP_INVALID_REQUEST, errno.EINVAL)
-
-    trace_args = [
-        method,
-        url,
-        bytes(request_headers).hex(),
-        bytes(request_body).hex(),
-        timeout_ms,
-        max_response_bytes,
-    ]
-    if _active_trace is not None and _active_trace.is_replaying:
-        ok, payload = _active_trace.replay('host.http_request', trace_args)
-        if not ok:
-            if isinstance(payload, dict):
-                return _http_failure(
-                    int(payload.get('kind', _HTTP_TRANSPORT)),
-                    int(payload.get('error_code', errno.EIO)),
-                )
-            return _http_failure(_HTTP_TRANSPORT, errno.EIO)
-        response_headers[:] = bytes.fromhex(payload.get('headers_hex', ''))
-        response_body[:] = bytes.fromhex(payload.get('body_hex', ''))
-        return int(payload['status'])
-
+def _execute_http_transfer(url, method, headers, request_body, timeout_ms, max_response_bytes):
     try:
         import pycurl
     except ImportError:
-        return _http_failure(_HTTP_UNAVAILABLE, getattr(errno, 'ENOSYS', errno.EIO))
+        return (0, b'', b'', _HTTP_UNAVAILABLE, getattr(errno, 'ENOSYS', errno.EIO))
     try:
         if int(pycurl.version_info()[2]) < 0x080300:
-            return _http_failure(_HTTP_UNAVAILABLE, getattr(errno, 'EPROTONOSUPPORT', errno.EIO))
+            return (0, b'', b'', _HTTP_UNAVAILABLE, getattr(errno, 'EPROTONOSUPPORT', errno.EIO))
     except (AttributeError, IndexError, TypeError, ValueError):
-        return _http_failure(_HTTP_UNAVAILABLE, getattr(errno, 'EPROTONOSUPPORT', errno.EIO))
+        return (0, b'', b'', _HTTP_UNAVAILABLE, getattr(errno, 'EPROTONOSUPPORT', errno.EIO))
 
     response_headers_output = bytearray()
     response_body_output = bytearray()
@@ -578,23 +518,10 @@ def http_request(url_handle, method_handle, request_headers_handle, request_body
         status = int(curl.getinfo(pycurl.RESPONSE_CODE))
         if callback_error:
             code = getattr(errno, 'EOVERFLOW', errno.EINVAL) if callback_error == _HTTP_LIMIT else errno.EPROTO
-            return _http_failure(callback_error, code)
+            return (0, b'', b'', callback_error, code)
         if not 100 <= status <= 599:
-            return _http_failure(_HTTP_INVALID_RESPONSE, errno.EPROTO)
-        response_headers[:] = response_headers_output
-        response_body[:] = response_body_output
-        if _active_trace is not None and _active_trace.is_recording:
-            _active_trace.record(
-                'host.http_request',
-                trace_args,
-                ok=True,
-                result={
-                    'status': status,
-                    'headers_hex': bytes(response_headers_output).hex(),
-                    'body_hex': bytes(response_body_output).hex(),
-                },
-            )
-        return status
+            return (0, b'', b'', _HTTP_INVALID_RESPONSE, errno.EPROTO)
+        return (status, bytes(response_headers_output), bytes(response_body_output), 0, 0)
     except pycurl.error as error:
         curl_code = error.args[0] if error.args and isinstance(error.args[0], int) else errno.EIO
         if curl is None:
@@ -613,18 +540,202 @@ def http_request(url_handle, method_handle, request_headers_handle, request_body
             kind = _HTTP_INVALID_REQUEST
         else:
             kind = _HTTP_TRANSPORT
-        return _http_failure(kind, curl_code)
+        return (0, b'', b'', kind, curl_code)
     except (TypeError, ValueError, UnicodeError):
-        return _http_failure(_HTTP_INVALID_REQUEST, errno.EINVAL)
+        return (0, b'', b'', _HTTP_INVALID_REQUEST, errno.EINVAL)
     except OSError as error:
-        return _http_failure(_HTTP_TRANSPORT, getattr(error, 'errno', None) or errno.EIO)
+        return (0, b'', b'', _HTTP_TRANSPORT, getattr(error, 'errno', None) or errno.EIO)
     finally:
         if curl is not None:
-            curl.close()
+            try:
+                curl.close()
+            except Exception:
+                pass
+
+
+_async_http_transfers = {}
+_async_http_next_id = 1
+_async_http_executor = concurrent.futures.ThreadPoolExecutor(max_workers=16)
+
+
+def http_async_start(url_handle, method_handle, request_headers_handle, request_body_handle,
+                     timeout_ms, max_response_bytes):
+    global _error_code, _error_domain, _async_http_next_id
+    _error_code = 0
+    _error_domain = 0
+    url_bytes = find(url_handle, 'buffer')
+    method_bytes = find(method_handle, 'buffer')
+    request_headers = find(request_headers_handle, 'buffer')
+    request_body = find(request_body_handle, 'buffer')
+    handles = (url_handle, method_handle, request_headers_handle, request_body_handle)
+    if any(value is None for value in (url_bytes, method_bytes, request_headers, request_body)) or len(set(handles)) != len(handles):
+        return _http_failure(_HTTP_INVALID_REQUEST, errno.EBADF)
+    if (not 1 <= timeout_ms <= _HTTP_MAX_TIMEOUT_MS
+            or not 1 <= max_response_bytes <= _HTTP_MAX_BODY
+            or len(url_bytes) > _HTTP_MAX_URL or len(request_body) > _HTTP_MAX_BODY):
+        return _http_failure(_HTTP_INVALID_REQUEST, errno.EINVAL)
+
     try:
-        process.kill()
-    except OSError:
-        pass
+        url = bytes(url_bytes).decode('ascii')
+        method = bytes(method_bytes).decode('ascii')
+        parsed = urlsplit(url)
+        _ = parsed.port
+        if (parsed.scheme.lower() not in ('http', 'https') or not parsed.hostname
+                or parsed.username is not None or parsed.password is not None or parsed.fragment
+                or any(ord(character) <= 32 or ord(character) > 126 for character in url)):
+            raise ValueError('URL must be an ASCII HTTP or HTTPS URL without user info or fragment')
+        if method not in ('GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'HEAD'):
+            raise ValueError('unsupported HTTP method')
+        if method in ('GET', 'HEAD') and request_body:
+            raise ValueError('GET and HEAD requests cannot include a body')
+        headers = _http_request_headers(bytes(request_headers))
+    except (UnicodeError, ValueError, OverflowError):
+        return _http_failure(_HTTP_INVALID_REQUEST, errno.EINVAL)
+
+    with _host_lock:
+        transfer_id = _async_http_next_id
+        _async_http_next_id += 1
+        future = _async_http_executor.submit(
+            _execute_http_transfer,
+            url, method, headers, bytes(request_body), timeout_ms, max_response_bytes
+        )
+        _async_http_transfers[transfer_id] = future
+    return transfer_id
+
+
+def http_async_poll(transfer_id):
+    with _host_lock:
+        future = _async_http_transfers.get(transfer_id)
+    if future is None:
+        return -1
+    if not future.done():
+        return 0
+    try:
+        status, _, _, err_kind, _ = future.result()
+        return -1 if err_kind != 0 else 1
+    except Exception:
+        return -1
+
+
+def http_multi_poll(timeout_ms):
+    with _host_lock:
+        pending = [f for f in _async_http_transfers.values() if not f.done()]
+    if not pending:
+        return 0
+    timeout_sec = max(0.001, timeout_ms / 1000.0)
+    done, not_done = concurrent.futures.wait(pending, timeout=timeout_sec, return_when=concurrent.futures.FIRST_COMPLETED)
+    return len(not_done)
+
+
+def http_async_finish(transfer_id, response_headers_handle, response_body_handle):
+    with _host_lock:
+        future = _async_http_transfers.pop(transfer_id, None)
+    if future is None:
+        return _http_failure(_HTTP_INVALID_REQUEST, errno.EINVAL)
+    response_headers = find(response_headers_handle, 'buffer')
+    response_body = find(response_body_handle, 'buffer')
+    if response_headers is None or response_body is None:
+        return _http_failure(_HTTP_INVALID_REQUEST, errno.EBADF)
+    try:
+        status, h_out, b_out, err_kind, err_code = future.result()
+    except Exception:
+        return _http_failure(_HTTP_TRANSPORT, errno.EIO)
+    if err_kind != 0:
+        return _http_failure(err_kind, err_code)
+    response_headers[:] = h_out
+    response_body[:] = b_out
+    return status
+
+
+def http_async_cancel(transfer_id):
+    with _host_lock:
+        future = _async_http_transfers.pop(transfer_id, None)
+    if future is None:
+        return 0
+    future.cancel()
+    return 1
+
+
+def http_request(url_handle, method_handle, request_headers_handle, request_body_handle,
+                 response_headers_handle, response_body_handle, timeout_ms, max_response_bytes):
+    """Perform one synchronous HTTP(S) request with bounded input and output."""
+    global _error_code, _error_domain
+    _error_code = 0
+    _error_domain = 0
+    url_bytes = find(url_handle, 'buffer')
+    method_bytes = find(method_handle, 'buffer')
+    request_headers = find(request_headers_handle, 'buffer')
+    request_body = find(request_body_handle, 'buffer')
+    response_headers = find(response_headers_handle, 'buffer')
+    response_body = find(response_body_handle, 'buffer')
+    handles = (url_handle, method_handle, request_headers_handle, request_body_handle,
+               response_headers_handle, response_body_handle)
+    if (any(value is None for value in (url_bytes, method_bytes, request_headers, request_body,
+                                        response_headers, response_body))
+            or len(set(handles)) != len(handles)):
+        return _http_failure(_HTTP_INVALID_REQUEST, errno.EBADF)
+    if (not 1 <= timeout_ms <= _HTTP_MAX_TIMEOUT_MS
+            or not 1 <= max_response_bytes <= _HTTP_MAX_BODY
+            or len(url_bytes) > _HTTP_MAX_URL or len(request_body) > _HTTP_MAX_BODY):
+        return _http_failure(_HTTP_INVALID_REQUEST, errno.EINVAL)
+
+    try:
+        url = bytes(url_bytes).decode('ascii')
+        method = bytes(method_bytes).decode('ascii')
+        parsed = urlsplit(url)
+        _ = parsed.port
+        if (parsed.scheme.lower() not in ('http', 'https') or not parsed.hostname
+                or parsed.username is not None or parsed.password is not None or parsed.fragment
+                or any(ord(character) <= 32 or ord(character) > 126 for character in url)):
+            raise ValueError('URL must be an ASCII HTTP or HTTPS URL without user info or fragment')
+        if method not in ('GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'HEAD'):
+            raise ValueError('unsupported HTTP method')
+        if method in ('GET', 'HEAD') and request_body:
+            raise ValueError('GET and HEAD requests cannot include a body')
+        headers = _http_request_headers(bytes(request_headers))
+    except (UnicodeError, ValueError, OverflowError):
+        return _http_failure(_HTTP_INVALID_REQUEST, errno.EINVAL)
+
+    trace_args = [
+        method,
+        url,
+        bytes(request_headers).hex(),
+        bytes(request_body).hex(),
+        timeout_ms,
+        max_response_bytes,
+    ]
+    if _active_trace is not None and _active_trace.is_replaying:
+        ok, payload = _active_trace.replay('host.http_request', trace_args)
+        if not ok:
+            if isinstance(payload, dict):
+                return _http_failure(
+                    int(payload.get('kind', _HTTP_TRANSPORT)),
+                    int(payload.get('error_code', errno.EIO)),
+                )
+            return _http_failure(_HTTP_TRANSPORT, errno.EIO)
+        response_headers[:] = bytes.fromhex(payload.get('headers_hex', ''))
+        response_body[:] = bytes.fromhex(payload.get('body_hex', ''))
+        return int(payload['status'])
+
+    status, h_out, b_out, err_kind, err_code = _execute_http_transfer(
+        url, method, headers, request_body, timeout_ms, max_response_bytes
+    )
+    if err_kind != 0:
+        return _http_failure(err_kind, err_code)
+    response_headers[:] = h_out
+    response_body[:] = b_out
+    if _active_trace is not None and _active_trace.is_recording:
+        _active_trace.record(
+            'host.http_request',
+            trace_args,
+            ok=True,
+            result={
+                'status': status,
+                'headers_hex': bytes(h_out).hex(),
+                'body_hex': bytes(b_out).hex(),
+            },
+        )
+    return status
 
 
 def process_run(executable_handle, arguments_handle, timeout_ms, *, cwd=None, env=None):
@@ -690,6 +801,90 @@ def process_run(executable_handle, arguments_handle, timeout_ms, *, cwd=None, en
         return res
 
 
+def crypto_sha256(input_handle, output_handle):
+    import hashlib
+    inp = find(input_handle, 'buffer')
+    out = find(output_handle, 'buffer')
+    if inp is None or out is None:
+        return failure(ValueError("Invalid buffer handle"))
+    digest = hashlib.sha256(bytes(inp)).digest()
+    out.clear()
+    out.extend(digest)
+    return 0
+
+
+def crypto_hmac_sha256(key_handle, message_handle, output_handle):
+    import hmac, hashlib
+    k = find(key_handle, 'buffer')
+    m = find(message_handle, 'buffer')
+    out = find(output_handle, 'buffer')
+    if k is None or m is None or out is None:
+        return failure(ValueError("Invalid buffer handle"))
+    digest = hmac.new(bytes(k), bytes(m), hashlib.sha256).digest()
+    out.clear()
+    out.extend(digest)
+    return 0
+
+
+def crypto_sha512(input_handle, output_handle):
+    import hashlib
+    inp = find(input_handle, 'buffer')
+    out = find(output_handle, 'buffer')
+    if inp is None or out is None:
+        return failure(ValueError("Invalid buffer handle"))
+    digest = hashlib.sha512(bytes(inp)).digest()
+    out.clear()
+    out.extend(digest)
+    return 0
+
+
+def crypto_hmac_sha512(key_handle, message_handle, output_handle):
+    import hmac, hashlib
+    k = find(key_handle, 'buffer')
+    m = find(message_handle, 'buffer')
+    out = find(output_handle, 'buffer')
+    if k is None or m is None or out is None:
+        return failure(ValueError("Invalid buffer handle"))
+    digest = hmac.new(bytes(k), bytes(m), hashlib.sha512).digest()
+    out.clear()
+    out.extend(digest)
+    return 0
+
+
+def crypto_md5(input_handle, output_handle):
+    import hashlib
+    inp = find(input_handle, 'buffer')
+    out = find(output_handle, 'buffer')
+    if inp is None or out is None:
+        return failure(ValueError("Invalid buffer handle"))
+    digest = hashlib.md5(bytes(inp)).digest()
+    out.clear()
+    out.extend(digest)
+    return 0
+
+
+def crypto_random_bytes(output_handle, count):
+    import os
+    if count <= 0 or count > (1024 * 1024 * 64):
+        return failure(ValueError("Invalid count"))
+    out = find(output_handle, 'buffer')
+    if out is None:
+        return failure(ValueError("Invalid buffer handle"))
+    rnd = os.urandom(int(count))
+    out.clear()
+    out.extend(rnd)
+    return 0
+
+
+def crypto_constant_time_compare(a_handle, b_handle):
+    import hmac
+    a = find(a_handle, 'buffer')
+    b = find(b_handle, 'buffer')
+    if a is None or b is None:
+        return failure(ValueError("Invalid buffer handle"))
+    return 1 if hmac.compare_digest(bytes(a), bytes(b)) else 0
+
+
 FUNCTIONS = {
     'wysna_host_last_error': lambda: _error_code,
     'wysna_host_last_error_domain': lambda: _error_domain,
@@ -711,4 +906,16 @@ FUNCTIONS = {
     'wysna_host_fs_canonical': canonical_path,
     'wysna_host_process_run': process_run,
     'wysna_host_http_request': http_request,
+    'wysna_host_http_async_start': http_async_start,
+    'wysna_host_http_async_poll': http_async_poll,
+    'wysna_host_http_async_finish': http_async_finish,
+    'wysna_host_http_multi_poll': http_multi_poll,
+    'wysna_host_http_async_cancel': http_async_cancel,
+    'wysna_host_crypto_sha256': crypto_sha256,
+    'wysna_host_crypto_hmac_sha256': crypto_hmac_sha256,
+    'wysna_host_crypto_sha512': crypto_sha512,
+    'wysna_host_crypto_hmac_sha512': crypto_hmac_sha512,
+    'wysna_host_crypto_md5': crypto_md5,
+    'wysna_host_crypto_random_bytes': crypto_random_bytes,
+    'wysna_host_crypto_constant_time_compare': crypto_constant_time_compare,
 }

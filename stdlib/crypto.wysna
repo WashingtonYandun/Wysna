@@ -1,0 +1,176 @@
+import "std/buffer"
+
+extern "C" fn wysna_host_crypto_sha256(input_handle: opaque, output_handle: opaque) -> int
+extern "C" fn wysna_host_crypto_hmac_sha256(key_handle: opaque, msg_handle: opaque, output_handle: opaque) -> int
+extern "C" fn wysna_host_crypto_sha512(input_handle: opaque, output_handle: opaque) -> int
+extern "C" fn wysna_host_crypto_hmac_sha512(key_handle: opaque, msg_handle: opaque, output_handle: opaque) -> int
+extern "C" fn wysna_host_crypto_md5(input_handle: opaque, output_handle: opaque) -> int
+extern "C" fn wysna_host_crypto_random_bytes(output_handle: opaque, count: int) -> int
+extern "C" fn wysna_host_crypto_constant_time_compare(a_handle: opaque, b_handle: opaque) -> int
+
+pub struct CryptoError {
+    message: str,
+}
+
+fn hex_char(val: int) -> str {
+    if val == 0 { return "0" }
+    if val == 1 { return "1" }
+    if val == 2 { return "2" }
+    if val == 3 { return "3" }
+    if val == 4 { return "4" }
+    if val == 5 { return "5" }
+    if val == 6 { return "6" }
+    if val == 7 { return "7" }
+    if val == 8 { return "8" }
+    if val == 9 { return "9" }
+    if val == 10 { return "a" }
+    if val == 11 { return "b" }
+    if val == 12 { return "c" }
+    if val == 13 { return "d" }
+    if val == 14 { return "e" }
+    return "f"
+}
+
+pub fn bytes_to_hex(data: buffer.Bytes) -> str {
+    let mut out = ""
+    for i in 0..data.size() {
+        let b = data.get(i) else err { 0 }
+        let high = (b / 16) % 16
+        let low = b % 16
+        out = out + hex_char(high) + hex_char(low)
+    }
+    return out
+}
+
+pub fn sha256_bytes(data: buffer.Bytes) -> buffer.Bytes ! CryptoError {
+    let out = new buffer.Bytes()
+    let status = wysna_host_crypto_sha256(data.borrow(), out.borrow())
+    if status != 0 {
+        out.close()
+        return Err(CryptoError { message: "SHA-256 calculation failed" })
+    }
+    return out
+}
+
+pub fn sha256(text: str) -> str ! CryptoError {
+    let buf = buffer.from_text(text)
+    let digest_bytes = sha256_bytes(buf)?
+    buf.close()
+    let hex = bytes_to_hex(digest_bytes)
+    digest_bytes.close()
+    return hex
+}
+
+pub fn hmac_sha256_bytes(key: buffer.Bytes, message: buffer.Bytes) -> buffer.Bytes ! CryptoError {
+    let out = new buffer.Bytes()
+    let status = wysna_host_crypto_hmac_sha256(key.borrow(), message.borrow(), out.borrow())
+    if status != 0 {
+        out.close()
+        return Err(CryptoError { message: "HMAC-SHA256 calculation failed" })
+    }
+    return out
+}
+
+pub fn hmac_sha256(key: str, message: str) -> str ! CryptoError {
+    let key_buf = buffer.from_text(key)
+    let msg_buf = buffer.from_text(message)
+    let digest_bytes = hmac_sha256_bytes(key_buf, msg_buf)?
+    key_buf.close()
+    msg_buf.close()
+    let hex = bytes_to_hex(digest_bytes)
+    digest_bytes.close()
+    return hex
+}
+
+pub fn sha512_bytes(data: buffer.Bytes) -> buffer.Bytes ! CryptoError {
+    let out = new buffer.Bytes()
+    let status = wysna_host_crypto_sha512(data.borrow(), out.borrow())
+    if status != 0 {
+        out.close()
+        return Err(CryptoError { message: "SHA-512 calculation failed" })
+    }
+    return out
+}
+
+pub fn sha512(text: str) -> str ! CryptoError {
+    let buf = buffer.from_text(text)
+    let digest_bytes = sha512_bytes(buf)?
+    buf.close()
+    let hex = bytes_to_hex(digest_bytes)
+    digest_bytes.close()
+    return hex
+}
+
+pub fn hmac_sha512_bytes(key: buffer.Bytes, message: buffer.Bytes) -> buffer.Bytes ! CryptoError {
+    let out = new buffer.Bytes()
+    let status = wysna_host_crypto_hmac_sha512(key.borrow(), message.borrow(), out.borrow())
+    if status != 0 {
+        out.close()
+        return Err(CryptoError { message: "HMAC-SHA512 calculation failed" })
+    }
+    return out
+}
+
+pub fn hmac_sha512(key: str, message: str) -> str ! CryptoError {
+    let key_buf = buffer.from_text(key)
+    let msg_buf = buffer.from_text(message)
+    let digest_bytes = hmac_sha512_bytes(key_buf, msg_buf)?
+    key_buf.close()
+    msg_buf.close()
+    let hex = bytes_to_hex(digest_bytes)
+    digest_bytes.close()
+    return hex
+}
+
+pub fn md5_bytes(data: buffer.Bytes) -> buffer.Bytes ! CryptoError {
+    let out = new buffer.Bytes()
+    let status = wysna_host_crypto_md5(data.borrow(), out.borrow())
+    if status != 0 {
+        out.close()
+        return Err(CryptoError { message: "MD5 calculation failed" })
+    }
+    return out
+}
+
+pub fn md5(text: str) -> str ! CryptoError {
+    let buf = buffer.from_text(text)
+    let digest_bytes = md5_bytes(buf)?
+    buf.close()
+    let hex = bytes_to_hex(digest_bytes)
+    digest_bytes.close()
+    return hex
+}
+
+pub fn random_bytes(count: int) -> buffer.Bytes ! CryptoError {
+    if count <= 0 {
+        return Err(CryptoError { message: "Count must be greater than zero" })
+    }
+    let out = new buffer.Bytes()
+    let status = wysna_host_crypto_random_bytes(out.borrow(), count)
+    if status != 0 {
+        out.close()
+        return Err(CryptoError { message: "Failed to generate random bytes" })
+    }
+    return out
+}
+
+pub fn random_hex(byte_count: int) -> str ! CryptoError {
+    let rnd = random_bytes(byte_count)?
+    let hex = bytes_to_hex(rnd)
+    rnd.close()
+    return hex
+}
+
+pub fn constant_time_eq_bytes(a: buffer.Bytes, b: buffer.Bytes) -> bool {
+    let res = wysna_host_crypto_constant_time_compare(a.borrow(), b.borrow())
+    return res == 1
+}
+
+pub fn constant_time_eq(a: str, b: str) -> bool {
+    let a_buf = buffer.from_text(a)
+    let b_buf = buffer.from_text(b)
+    let ok = constant_time_eq_bytes(a_buf, b_buf)
+    a_buf.close()
+    b_buf.close()
+    return ok
+}

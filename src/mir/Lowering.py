@@ -470,6 +470,8 @@ class Lowering:
                 return self.runtime('wysna_ok', [value], type_id, node, moves=[0])
             if node.kind == 'int_to_float':
                 return self.runtime('wysna_builtin_float', [value], type_id, node)
+            if node.kind == 'await':
+                return self.runtime('wysna_await', [value], type_id, node, moves=[0])
             # Identity/upcast retain physical representation while changing static type.
             result = self.slot(type_id)
             self.store(result, value, node)

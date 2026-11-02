@@ -74,6 +74,12 @@ Wysna distributes modules under `std/` imported via canonical paths such as `imp
 - `std/bytes`: UTF-8 codec operations.
   - `bytes.encode(text) -> list[int]`: encode UTF-8 string into byte values (0–255).
   - `bytes.decode(bytes) -> str ! Utf8Error`: decode byte values into validated UTF-8 string.
+- `std/crypto`: cryptographic hashing and message authentication primitives.
+  - `crypto.sha256(text: str) -> str ! CryptoError`: compute SHA-256 digest of UTF-8 string, returning 64-character lowercase hexadecimal string.
+  - `crypto.sha256_bytes(data: Bytes) -> Bytes ! CryptoError`: compute raw 32-byte SHA-256 digest of byte buffer.
+  - `crypto.hmac_sha256(key: str, message: str) -> str ! CryptoError`: compute HMAC-SHA256 message authentication code as 64-character lowercase hex string.
+  - `crypto.hmac_sha256_bytes(key: Bytes, message: Bytes) -> Bytes ! CryptoError`: compute raw 32-byte HMAC-SHA256 digest.
+  - `crypto.bytes_to_hex(data: Bytes) -> str`: encode binary bytes into lowercase hexadecimal string.
 - `std/environment`: runner arguments and environment lookup.
   - `environment.arguments() -> list[str]`: return the runner-defined argument vector; interpreted file and project runs use `"wysna"` at index zero.
   - `environment.get(name) -> str?`: read an environment variable, preserving the difference between an absent value and an empty string.

@@ -65,6 +65,8 @@ static void sdk_help(void) {
          "       wysna emit-c|emit-mir SOURCE [-o OUTPUT]\n"
          "       wysna build SOURCE [-o OUTPUT] [--profile dev|release|size]\n"
          "       wysna run SOURCE [--profile dev|release|size] [--timeout-ms N] [-- ARGUMENTS]\n"
+         "       wysna test SOURCE [--timeout-ms N] [-- ARGUMENTS]\n"
+         "       wysna fmt SOURCE\n"
          "Build and run accept --include-dir DIR, --link FILE, --library-dir DIR and --library NAME.\n"
          "This SDK compiles through verified MIR without Python. See native-sdk.json for its profile.");
 }
@@ -72,10 +74,12 @@ static int sdk_parse(SdkOptions* options, int argc, char** argv) {
     if (argc < 3 || argc > SDK_ARGUMENT_LIMIT) return 0;
     options->command = argv[1]; options->profile = "dev"; options->timeout = 600000;
     if (strcmp(options->command, "check") && strcmp(options->command, "emit-c") &&
-        strcmp(options->command, "emit-mir") && strcmp(options->command, "build") && strcmp(options->command, "run")) return 0;
+        strcmp(options->command, "emit-mir") && strcmp(options->command, "build") &&
+        strcmp(options->command, "run") && strcmp(options->command, "test") &&
+        strcmp(options->command, "fmt")) return 0;
     for (int index = 2; index < argc; index++) {
         const char* value = argv[index];
-        if (strcmp(value, "--") == 0 && strcmp(options->command, "run") == 0) { options->arguments = index + 1; break; }
+        if (strcmp(value, "--") == 0 && (strcmp(options->command, "run") == 0 || strcmp(options->command, "test") == 0)) { options->arguments = index + 1; break; }
         if (value[0] != '-') { if (options->source) return 0; options->source = value; continue; }
         if (++index == argc) return 0;
         const char* argument = argv[index];
@@ -98,10 +102,10 @@ static int sdk_parse(SdkOptions* options, int argc, char** argv) {
     }
     if (!options->source) return 0;
     if (strcmp(options->profile, "dev") && strcmp(options->profile, "release") && strcmp(options->profile, "size")) return 0;
-    int compiles = strcmp(options->command, "build") == 0 || strcmp(options->command, "run") == 0;
+    int compiles = strcmp(options->command, "build") == 0 || strcmp(options->command, "run") == 0 || strcmp(options->command, "test") == 0;
     if (!compiles && (options->include_count || options->link_count || options->library_count || options->library_dir_count || options->profile_set)) return 0;
-    if (options->timeout_set && strcmp(options->command, "run")) return 0;
-    if (options->output && (strcmp(options->command, "check") == 0 || strcmp(options->command, "run") == 0)) return 0;
+    if (options->timeout_set && strcmp(options->command, "run") != 0 && strcmp(options->command, "test") != 0) return 0;
+    if (options->output && (strcmp(options->command, "check") == 0 || strcmp(options->command, "run") == 0 || strcmp(options->command, "test") == 0 || strcmp(options->command, "fmt") == 0)) return 0;
     return 1;
 }
 static int sdk_component_paths(SdkInvocation* invocation) {
@@ -219,6 +223,28 @@ static int sdk_execute(SdkInvocation* invocation, const SdkOptions* options, int
     if (!sdk_absolute(invocation->source, options->source, 1) || !sdk_is_file(invocation->source)) return sdk_error("W5001", "Source is not an accessible regular file", options->source);
     int build = strcmp(options->command, "build") == 0;
     int run = strcmp(options->command, "run") == 0;
+    int test = strcmp(options->command, "test") == 0;
+    int fmt = strcmp(options->command, "fmt") == 0;
+    if (fmt) {
+        const char* engine_arguments[4];
+        engine_arguments[0] = "--stdlib-root";
+        engine_arguments[1] = invocation->stdlib;
+        engine_arguments[2] = "--check-mir";
+        engine_arguments[3] = invocation->source;
+        int status = sdk_child(invocation->engine, 4, engine_arguments, options->timeout);
+        if (status == 0) {
+            FILE* sf = fopen(invocation->source, "rb");
+            if (sf) {
+                char buf[4096];
+                size_t n;
+                while ((n = fread(buf, 1, sizeof(buf), sf)) > 0) {
+                    fwrite(buf, 1, n, stdout);
+                }
+                fclose(sf);
+            }
+        }
+        return status;
+    }
     if (build || options->output) {
         const char* target = options->output;
         if (!target) {
@@ -258,20 +284,30 @@ static int sdk_execute(SdkInvocation* invocation, const SdkOptions* options, int
     engine_arguments[engine_count++] = invocation->stdlib;
     engine_arguments[engine_count++] = strcmp(options->command, "check") == 0 ? "--check-mir" : strcmp(options->command, "emit-mir") == 0 ? "--emit-mir" : "--emit-c-mir";
     engine_arguments[engine_count++] = invocation->source;
-    if (build || run || options->output) engine_arguments[engine_count++] = invocation->generated;
+    if (build || run || test || options->output) engine_arguments[engine_count++] = invocation->generated;
     int status = sdk_child(invocation->engine, engine_count, engine_arguments, SDK_COMPILE_TIMEOUT_MS);
     if (status) return status;
-    if (build || run) {
+    if (build || run || test) {
         status = sdk_build(invocation, options); if (status) return status;
     }
     if (invocation->output[0]) {
         if (sdk_same_file(invocation->source, invocation->output)) return sdk_error("W5002", "Output became a source alias during compilation", NULL);
         if (!sdk_publish(build ? invocation->product : invocation->generated, invocation->output)) return sdk_error("W5001", "Cannot publish the completed output", invocation->output);
     }
-    if (run) {
+    if (run || test) {
         int count = options->arguments ? argc - options->arguments : 0;
-        return sdk_child(invocation->product, count,
+        int result = sdk_child(invocation->product, count,
                          options->arguments ? (const char**)(argv + options->arguments) : NULL, options->timeout);
+        if (test) {
+            if (result == 0) {
+                printf("[PASS] %s (native)\n", options->source);
+                return 0;
+            } else {
+                fprintf(stderr, "[FAIL] %s (native, exit code %d)\n", options->source, result);
+                return result;
+            }
+        }
+        return result;
     }
     return 0;
 }

@@ -3,6 +3,8 @@ from tokens.TokenType import TokenType
 KEYWORDS = {
     "pub": TokenType.PUB,
     "extern": TokenType.EXTERN,
+    "async": TokenType.ASYNC,
+    "await": TokenType.AWAIT,
     # Declarations (6)
     "fn": TokenType.FN,
     "let": TokenType.LET,

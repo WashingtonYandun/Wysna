@@ -4,6 +4,8 @@ class TokenType(Enum):
     # Reserved Keywords
     PUB = auto()
     EXTERN = auto()
+    ASYNC = auto()
+    AWAIT = auto()
     FN = auto()
     LET = auto()
     MUT = auto()

@@ -296,6 +296,7 @@ class FnDecl(Stmt):
         col: int = 1,
         requires: Optional[List['Expr']] = None,
         ensures: Optional[List['Expr']] = None,
+        is_async: bool = False,
     ):
         super().__init__(line, col)
         self.name = name
@@ -305,6 +306,7 @@ class FnDecl(Stmt):
         self.type_params = type_params or []
         self.requires = list(requires) if requires else []
         self.ensures = list(ensures) if ensures else []
+        self.is_async = is_async
 
     def to_dict(self) -> dict:
         d = {
@@ -313,6 +315,7 @@ class FnDecl(Stmt):
             "params": [p.to_dict() for p in self.params],
             "return_type": self.return_type.to_dict(),
             "body": self.body.to_dict(),
+            "is_async": self.is_async,
             "line": self.line,
             "col": self.col
         }
@@ -766,6 +769,19 @@ class UnaryExpr(Expr):
         return {
             "kind": "UnaryExpr",
             "op": self.op,
+            "operand": self.operand.to_dict(),
+            "line": self.line,
+            "col": self.col
+        }
+
+class AwaitExpr(Expr):
+    def __init__(self, operand: Expr, line: int = 1, col: int = 1):
+        super().__init__(line, col)
+        self.operand = operand
+
+    def to_dict(self) -> dict:
+        return {
+            "kind": "AwaitExpr",
             "operand": self.operand.to_dict(),
             "line": self.line,
             "col": self.col

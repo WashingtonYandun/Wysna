@@ -15,7 +15,7 @@ RUNTIME = {
     'wysna_builtin_float', 'wysna_builtin_ord', 'wysna_builtin_chr', 'wysna_builtin_slice', 'wysna_builtin_bytes',
     'wysna_builtin_args', 'wysna_builtin_env', 'wysna_builtin_unix_time', 'wysna_builtin_exit', 'wysna_builtin_enumerate', 'wysna_builtin_dict_items',
     'wysna_builtin_read_file', 'wysna_builtin_write_file', 'wysna_builtin_join_strings', 'wysna_builtin_weak_owned',
-    'wysna_builtin_upgrade', 'wysna_builtin_contract_assert_at',
+    'wysna_builtin_upgrade', 'wysna_builtin_contract_assert_at', 'wysna_await',
 }
 RUNTIME_ARITIES = {
     **dict.fromkeys(('wysna_neg', 'wysna_not', 'wysna_ok', 'wysna_err', 'wysna_enum_payload', 'wysna_wrap_result',
@@ -24,7 +24,7 @@ RUNTIME_ARITIES = {
                      'wysna_builtin_str', 'wysna_builtin_int', 'wysna_builtin_float', 'wysna_builtin_ord',
                      'wysna_builtin_chr', 'wysna_builtin_bytes', 'wysna_builtin_exit', 'wysna_builtin_enumerate',
                      'wysna_builtin_dict_items', 'wysna_builtin_read_file', 'wysna_builtin_weak_owned',
-                     'wysna_builtin_upgrade', 'wysna_builtin_env'), 1),
+                     'wysna_builtin_upgrade', 'wysna_builtin_env', 'wysna_await'), 1),
     **dict.fromkeys(('wysna_add', 'wysna_sub', 'wysna_mul', 'wysna_div_at', 'wysna_mod_at', 'wysna_lt', 'wysna_le',
                      'wysna_gt', 'wysna_ge', 'wysna_equal', 'wysna_not_equal', 'wysna_make_range',
                      'wysna_index_get_owned_at', 'wysna_dict_get', 'wysna_builtin_write_file',
@@ -35,7 +35,7 @@ RUNTIME_ARITIES = {
 assert set(RUNTIME_ARITIES) == RUNTIME, 'Every MIR runtime helper requires a signature'
 
 CONSUMING = {'wysna_ok': (0,), 'wysna_err': (0,), 'wysna_enum_payload': (0,),
-             'wysna_wrap_result': (0,), 'wysna_builtin_weak_owned': (0,)}
+             'wysna_wrap_result': (0,), 'wysna_builtin_weak_owned': (0,), 'wysna_await': (0,)}
 
 
 class Verifier:
@@ -207,6 +207,8 @@ class Verifier:
             require(returned.tag == 'weak' and self.interner.get_entry(returned.data).tag == 'class')
         elif name == 'wysna_builtin_upgrade':
             require(entry(0).tag == 'weak' and returned.tag == 'optional' and returned.data == entry(0).data)
+        elif name == 'wysna_await':
+            pass
         elif name in ('wysna_ok', 'wysna_err'):
             require(returned.tag == 'result' and self.compatible(types[0], returned.data[0 if name == 'wysna_ok' else 1]))
         elif name == 'wysna_wrap_result':
