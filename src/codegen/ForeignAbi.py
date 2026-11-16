@@ -22,4 +22,6 @@ def foreign_wrapper(c_name, native_name, signature):
         if native_name in ('wysna_host_buffer_new', 'wysna_host_file_open'):
             constructor = 'wysna_host_owned_pointer'
         body = 'return ' + constructor + '(' + call + ');'
-    return prototype, 'static WVal ' + c_name + '(' + wrapped_params + ') { ' + body + ' }'
+    if not native_name.startswith('wysna_'):
+        body = '#ifdef WYSNA_DENY_CAP_NATIVE_FFI\n    ' + ''.join('(void)v_' + str(i) + '; ' for i in range(len(params))) + 'wysna_sandbox_deny("native-ffi");\n#endif\n    ' + body
+    return prototype, 'static WVal ' + c_name + '(' + wrapped_params + ') {\n    ' + body + '\n}'

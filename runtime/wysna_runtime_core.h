@@ -302,6 +302,10 @@ static inline void wysna_runtime_fail(const char* code, const char* format, ...)
     exit(1);
 }
 
+static inline void wysna_sandbox_deny(const char* capability) {
+    wysna_runtime_fail("W5006", "Sandbox capability '%s' is denied", capability ? capability : "unknown");
+}
+
 struct WClassVTable {
     int32_t count;
     const WInvoke* methods;

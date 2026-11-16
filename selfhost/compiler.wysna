@@ -5387,6 +5387,11 @@ fn mir_c_externs(module: MirModule) -> str {
             let constructor = if returned == "int" { "wysna_int" } elif returned == "float" { "wysna_float" } else { "wysna_bool" }
             body = "return " + constructor + "(" + call + ");"
         }
+        if len(external.native) < 6 or slice(external.native, 0, 6) != "wysna_" {
+            let mut voids = ""
+            for i in 0..len(external.params) { voids = voids + "(void)v_" + str(i) + "; " }
+            body = "\n#ifdef WYSNA_DENY_CAP_NATIVE_FFI\n    " + voids + "wysna_sandbox_deny(\"native-ffi\");\n#endif\n    " + body
+        }
         out = out + prototype + ");\n" + wrapper + ") { " + body + " }\n"
     }
     return out

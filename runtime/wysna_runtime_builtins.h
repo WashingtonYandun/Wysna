@@ -7,6 +7,11 @@
 
 /* Standard Built-ins */
 static inline WVal wysna_builtin_print(int32_t argc, const WVal* argv) {
+#ifdef WYSNA_DENY_CAP_STDIO
+    (void)argc; (void)argv;
+    wysna_sandbox_deny("stdio");
+    return wysna_unit();
+#endif
     for (int32_t i = 0; i < argc; i++) {
         if (i > 0) fputc(' ', stdout);
         WVal value = argv[i];
@@ -34,6 +39,11 @@ static inline WVal wysna_builtin_print(int32_t argc, const WVal* argv) {
 }
 
 static inline WVal wysna_builtin_eprint(int32_t argc, const WVal* argv) {
+#ifdef WYSNA_DENY_CAP_STDIO
+    (void)argc; (void)argv;
+    wysna_sandbox_deny("stdio");
+    return wysna_unit();
+#endif
     for (int32_t i = 0; i < argc; i++) {
         if (i > 0) fputc(' ', stderr);
         WVal value = argv[i];
@@ -74,6 +84,11 @@ static inline WVal wysna_builtin_eprint(int32_t argc, const WVal* argv) {
 }
 
 static inline WVal wysna_builtin_exit(WVal code) {
+#ifdef WYSNA_DENY_CAP_PROCESS_CONTROL
+    (void)code;
+    wysna_sandbox_deny("process-control");
+    return wysna_unit();
+#endif
     int c = (wysna_tag(code) == W_INT) ? (int)wysna_as_int(code) : 0;
     wysna_runtime_cleanup_for_exit();
     exit(c);
@@ -431,6 +446,11 @@ static inline FILE* wysna_builtin_fopen(const char* path, const char* mode) {
 }
 
 static inline WVal wysna_builtin_read_file(WVal path) {
+#ifdef WYSNA_DENY_CAP_FILESYSTEM_READ
+    (void)path;
+    wysna_sandbox_deny("filesystem.read");
+    return wysna_io_error("Permission denied");
+#endif
     if (wysna_tag(path) != W_STR) return wysna_io_error("Invalid path");
     char path_buf[7];
     size_t path_len = 0;
@@ -472,6 +492,11 @@ static inline WVal wysna_builtin_read_file(WVal path) {
 }
 
 static inline WVal wysna_builtin_write_file(WVal path, WVal content) {
+#ifdef WYSNA_DENY_CAP_FILESYSTEM_WRITE
+    (void)path; (void)content;
+    wysna_sandbox_deny("filesystem.write");
+    return wysna_io_error("Permission denied");
+#endif
     if (wysna_tag(path) != W_STR || wysna_tag(content) != W_STR)
         return wysna_io_error("Invalid arguments");
     char path_buf[7], content_buf[7];
@@ -580,6 +605,10 @@ static inline void wysna_init_args(int argc, char** argv) {
 #endif
 
 static inline WVal wysna_builtin_args(void) {
+#ifdef WYSNA_DENY_CAP_ARGUMENTS
+    wysna_sandbox_deny("arguments");
+    return wysna_unit();
+#endif
     WListBuf* b = (WListBuf*)wysna_alloc_safe(sizeof(WListBuf));
     b->refcount = 1;
     b->len = (int32_t)wysna_g_argc;
@@ -594,6 +623,11 @@ static inline WVal wysna_builtin_args(void) {
 }
 
 static inline WVal wysna_builtin_env(WVal name) {
+#ifdef WYSNA_DENY_CAP_ENVIRONMENT
+    (void)name;
+    wysna_sandbox_deny("environment");
+    return wysna_none();
+#endif
     if (wysna_tag(name) != W_STR)
         wysna_runtime_fail("W4003", "env() expects a valid environment variable name");
     char name_buf[7];
@@ -657,6 +691,10 @@ static inline WVal wysna_builtin_env(WVal name) {
 }
 
 static inline WVal wysna_builtin_unix_time(void) {
+#ifdef WYSNA_DENY_CAP_CLOCK
+    wysna_sandbox_deny("clock");
+    return wysna_int(0);
+#endif
     time_t current = time(NULL);
     if (current == (time_t)-1) wysna_runtime_fail("W4003", "unable to read the system clock");
     return wysna_int((int64_t)current);

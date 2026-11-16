@@ -193,6 +193,20 @@ static wchar_t* wysna_host_wide(const char* text) {
 }
 #endif
 static void* wysna_host_file_open(void* path_handle, int64_t mode) {
+#ifdef WYSNA_DENY_CAP_FILESYSTEM_READ
+    if (mode == 0) {
+        (void)path_handle;
+        wysna_sandbox_deny("filesystem.read");
+        return NULL;
+    }
+#endif
+#ifdef WYSNA_DENY_CAP_FILESYSTEM_WRITE
+    if (mode != 0) {
+        (void)path_handle;
+        wysna_sandbox_deny("filesystem.write");
+        return NULL;
+    }
+#endif
     char* path = wysna_host_path(path_handle);
     if (!path || mode < 0 || mode > 2) { free(path); wysna_host_errno(EINVAL); return NULL; }
     const char* modes[] = { "rb", "wb", "ab" };
@@ -209,6 +223,11 @@ static void* wysna_host_file_open(void* path_handle, int64_t mode) {
     return file ? wysna_host_new(2, file) : NULL;
 }
 static int64_t wysna_host_file_read(void* file_handle, void* buffer_handle, int64_t count) {
+#ifdef WYSNA_DENY_CAP_FILESYSTEM_READ
+    (void)file_handle; (void)buffer_handle; (void)count;
+    wysna_sandbox_deny("filesystem.read");
+    return -1;
+#endif
     WysnaHostEntry* file = wysna_host_find(file_handle, 2);
     WysnaHostEntry* buffer = wysna_host_find(buffer_handle, 1);
     /* An explicit bound prevents an untrusted request from allocating a whole file. */
@@ -223,6 +242,11 @@ static int64_t wysna_host_file_read(void* file_handle, void* buffer_handle, int6
     return ferror((FILE*)file->data) ? wysna_host_errno(errno) : (int64_t)buffer->length;
 }
 static int64_t wysna_host_file_write(void* file_handle, void* buffer_handle) {
+#ifdef WYSNA_DENY_CAP_FILESYSTEM_WRITE
+    (void)file_handle; (void)buffer_handle;
+    wysna_sandbox_deny("filesystem.write");
+    return -1;
+#endif
     WysnaHostEntry* file = wysna_host_find(file_handle, 2);
     WysnaHostEntry* buffer = wysna_host_find(buffer_handle, 1);
     if (!file || !buffer) return wysna_host_errno(EBADF);
@@ -235,6 +259,20 @@ static int64_t wysna_host_file_write(void* file_handle, void* buffer_handle) {
 static int64_t wysna_host_is_open(void* handle) { return wysna_host_find(handle, 2) != NULL; }
 /* Operations: exists, size, mkdir, remove, rename. Failures return -1. */
 static int64_t wysna_host_fs(void* first, void* second, int64_t operation) {
+#ifdef WYSNA_DENY_CAP_FILESYSTEM_READ
+    if (operation == 0 || operation == 1) {
+        (void)first; (void)second;
+        wysna_sandbox_deny("filesystem.read");
+        return -1;
+    }
+#endif
+#ifdef WYSNA_DENY_CAP_FILESYSTEM_WRITE
+    if (operation >= 2 && operation <= 4) {
+        (void)first; (void)second;
+        wysna_sandbox_deny("filesystem.write");
+        return -1;
+    }
+#endif
     char* path = wysna_host_path(first);
     char* other = operation == 4 ? wysna_host_path(second) : NULL;
     if (!path || (operation == 4 && !other)) { free(path); free(other); return wysna_host_errno(EINVAL); }
@@ -317,7 +355,7 @@ static WysnaSpawnTask* wysna_spawn_tasks = NULL;
 static int64_t wysna_spawn_next_id = WYSNA_SPAWN_HANDLE_BASE;
 static volatile int wysna_spawn_lock = 0;
 
-static inline int64_t wysna_host_monotonic_ms(void) {
+static inline int64_t wysna_host_monotonic_ms_internal(void) {
 #ifdef _WIN32
     LARGE_INTEGER freq, counter;
     if (!QueryPerformanceFrequency(&freq) || freq.QuadPart == 0) return 0;
@@ -339,7 +377,15 @@ static inline int64_t wysna_host_monotonic_ms(void) {
 #endif
 }
 
-static inline void wysna_host_sleep_ms(int64_t ms) {
+static inline int64_t wysna_host_monotonic_ms(void) {
+#ifdef WYSNA_DENY_CAP_CLOCK
+    wysna_sandbox_deny("clock");
+    return 0;
+#endif
+    return wysna_host_monotonic_ms_internal();
+}
+
+static inline void wysna_host_sleep_ms_internal(int64_t ms) {
     if (ms <= 0) return;
 #ifdef _WIN32
     Sleep((DWORD)ms);
@@ -351,6 +397,15 @@ static inline void wysna_host_sleep_ms(int64_t ms) {
     tv.tv_usec = (int)((ms % 1000LL) * 1000LL);
     select(0, NULL, NULL, NULL, &tv);
 #endif
+}
+
+static inline void wysna_host_sleep_ms(int64_t ms) {
+#ifdef WYSNA_DENY_CAP_CLOCK
+    (void)ms;
+    wysna_sandbox_deny("clock");
+    return;
+#endif
+    wysna_host_sleep_ms_internal(ms);
 }
 
 #include "wysna_host_system.h"
@@ -541,13 +596,18 @@ static inline WVal wysna_spawn_take_option(WVal handle_val, WVal fallback) {
 }
 
 static inline int64_t wysna_timer_poll_or_create(int64_t transfer_id) {
+#ifdef WYSNA_DENY_CAP_CLOCK
+    (void)transfer_id;
+    wysna_sandbox_deny("clock");
+    return -1;
+#endif
     if (transfer_id <= -1000) {
         int64_t duration_ms = -(transfer_id + 1000);
         if (duration_ms < 0) duration_ms = 0;
         WysnaAsyncTimer* t = (WysnaAsyncTimer*)calloc(1, sizeof(WysnaAsyncTimer));
         if (!t) return -1;
         wysna_runtime_context.host_async_cleanup = wysna_async_shutdown;
-        int64_t now = wysna_host_monotonic_ms();
+        int64_t now = wysna_host_monotonic_ms_internal();
         wysna_spinlock_acquire(&wysna_async_timer_lock);
         t->id = wysna_async_timer_next_id++;
         t->deadline_ms = now + duration_ms;
@@ -558,7 +618,7 @@ static inline int64_t wysna_timer_poll_or_create(int64_t transfer_id) {
         wysna_spinlock_release(&wysna_async_timer_lock);
         return id;
     }
-    int64_t now = wysna_host_monotonic_ms();
+    int64_t now = wysna_host_monotonic_ms_internal();
     int64_t result = -1;
     wysna_spinlock_acquire(&wysna_async_timer_lock);
     WysnaAsyncTimer* cur = wysna_async_timers;
@@ -577,7 +637,7 @@ static inline int64_t wysna_timer_poll_or_create(int64_t transfer_id) {
 }
 
 static inline int64_t wysna_timer_next_wait_ms(int64_t* out_pending) {
-    int64_t now = wysna_host_monotonic_ms();
+    int64_t now = wysna_host_monotonic_ms_internal();
     int64_t pending = 0;
     int64_t min_rem = INT64_MAX;
     wysna_spinlock_acquire(&wysna_async_timer_lock);
@@ -604,19 +664,19 @@ static inline int64_t wysna_timer_multi_poll(int64_t timeout_ms, bool allow_slee
     int64_t min_rem = wysna_timer_next_wait_ms(&timer_pending);
     int64_t spawn_pending = wysna_spawn_pending_count();
     if (allow_sleep && (timer_pending > 0 || spawn_pending > 0) && timeout_ms > 0) {
-        int64_t deadline = wysna_host_monotonic_ms() + timeout_ms;
+        int64_t deadline = wysna_host_monotonic_ms_internal() + timeout_ms;
         if (timer_pending > 0 && min_rem < timeout_ms) {
-            deadline = wysna_host_monotonic_ms() + (min_rem > 0 ? min_rem : 1);
+            deadline = wysna_host_monotonic_ms_internal() + (min_rem > 0 ? min_rem : 1);
         }
         int64_t initial_spawns = spawn_pending;
         for (;;) {
-            int64_t now = wysna_host_monotonic_ms();
+            int64_t now = wysna_host_monotonic_ms_internal();
             spawn_pending = wysna_spawn_pending_count();
             wysna_timer_next_wait_ms(&timer_pending);
             if (spawn_pending < initial_spawns || (timer_pending == 0 && spawn_pending == 0) || now >= deadline) {
                 break;
             }
-            wysna_host_sleep_ms(1);
+            wysna_host_sleep_ms_internal(1);
         }
     }
     return timer_pending + spawn_pending;
@@ -797,6 +857,12 @@ static int64_t wysna_host_http_request(void* url_handle, void* method_handle,
         void* request_headers_handle, void* request_body_handle,
         void* response_headers_handle, void* response_body_handle,
         int64_t timeout_ms, int64_t max_response_bytes) {
+#ifdef WYSNA_DENY_CAP_NETWORK
+    (void)url_handle; (void)method_handle; (void)request_headers_handle; (void)request_body_handle;
+    (void)response_headers_handle; (void)response_body_handle; (void)timeout_ms; (void)max_response_bytes;
+    wysna_sandbox_deny("network");
+    return -1;
+#endif
     wysna_host_error_code = 0;
     wysna_host_error_domain = 0;
     WysnaHostEntry* url = wysna_host_find(url_handle, 1);
@@ -1128,6 +1194,12 @@ static void wysna_async_http_free(WysnaAsyncHttpTransfer* t) {
 static int64_t wysna_host_http_async_start(void* url_handle, void* method_handle,
         void* request_headers_handle, void* request_body_handle,
         int64_t timeout_ms, int64_t max_response_bytes) {
+#ifdef WYSNA_DENY_CAP_NETWORK
+    (void)url_handle; (void)method_handle; (void)request_headers_handle;
+    (void)request_body_handle; (void)timeout_ms; (void)max_response_bytes;
+    wysna_sandbox_deny("network");
+    return -1;
+#endif
     wysna_host_error_code = 0;
     wysna_host_error_domain = 0;
     WysnaHostEntry* url = wysna_host_find(url_handle, 1);
@@ -1294,6 +1366,10 @@ static int64_t wysna_host_http_async_poll(int64_t transfer_id) {
     if (transfer_id <= -1000 || transfer_id >= WYSNA_TIMER_HANDLE_BASE) {
         return wysna_timer_poll_or_create(transfer_id);
     }
+#ifdef WYSNA_DENY_CAP_NETWORK
+    wysna_sandbox_deny("network");
+    return -1;
+#endif
     WysnaAsyncHttpTransfer* t = wysna_async_http_find(transfer_id);
     if (!t) return -1;
     if (t->done == 0 && wysna_http_multi) {
@@ -1334,6 +1410,11 @@ static int64_t wysna_host_http_multi_poll(int64_t timeout_ms) {
 }
 
 static int64_t wysna_host_http_async_finish(int64_t transfer_id, void* response_headers_handle, void* response_body_handle) {
+#ifdef WYSNA_DENY_CAP_NETWORK
+    (void)transfer_id; (void)response_headers_handle; (void)response_body_handle;
+    wysna_sandbox_deny("network");
+    return -1;
+#endif
     WysnaAsyncHttpTransfer** prev = &wysna_async_http_transfers;
     WysnaAsyncHttpTransfer* t = *prev;
     while (t && t->id != transfer_id) {
@@ -1391,6 +1472,11 @@ static int64_t wysna_host_http_async_cancel(int64_t transfer_id) {
 }
 #else
 static int64_t wysna_host_http_async_start(void* u, void* m, void* h, void* b, int64_t t, int64_t max) {
+#ifdef WYSNA_DENY_CAP_NETWORK
+    (void)u; (void)m; (void)h; (void)b; (void)t; (void)max;
+    wysna_sandbox_deny("network");
+    return -1;
+#endif
     (void)u; (void)m; (void)h; (void)b; (void)t; (void)max;
     wysna_host_error_code = ENOSYS; wysna_host_error_domain = 1;
     return -2;
@@ -1402,12 +1488,21 @@ static int64_t wysna_host_http_async_poll(int64_t id) {
     if (id <= -1000 || id >= WYSNA_TIMER_HANDLE_BASE) {
         return wysna_timer_poll_or_create(id);
     }
+#ifdef WYSNA_DENY_CAP_NETWORK
+    wysna_sandbox_deny("network");
+    return -1;
+#endif
     return -1;
 }
 static int64_t wysna_host_http_multi_poll(int64_t t) {
     return wysna_timer_multi_poll(t, true);
 }
 static int64_t wysna_host_http_async_finish(int64_t id, void* h, void* b) {
+#ifdef WYSNA_DENY_CAP_NETWORK
+    (void)id; (void)h; (void)b;
+    wysna_sandbox_deny("network");
+    return -1;
+#endif
     (void)id; (void)h; (void)b;
     wysna_host_error_code = ENOSYS; wysna_host_error_domain = 1;
     return -2;

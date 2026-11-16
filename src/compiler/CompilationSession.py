@@ -40,7 +40,7 @@ class SourceManager:
 
 
 class CheckedModule:
-    def __init__(self, module_id, path, program, checker, exports, generation, dependencies, is_entry=False):
+    def __init__(self, module_id, path, program, checker, exports, generation, dependencies, is_entry=False, *, interface_digest=None, nominal_signature=None):
         self.module_id = module_id
         self.path = path
         self.program = program
@@ -50,7 +50,78 @@ class CheckedModule:
         self.is_entry = is_entry
         self.dependencies = dependencies
         self.source_hash = hashlib.sha256(program.source_text.encode('utf-8')).hexdigest()
+        self.interface_digest = interface_digest
+        self.nominal_signature = nominal_signature if nominal_signature is not None else {}
         self.cache_key = (self.source_hash, checker.session.options_key(), is_entry, tuple(dependency.cache_key for dependency in dependencies))
+
+
+def _syntax_digest_payload(node):
+    if isinstance(node, A.Node):
+        payload = {'$node': type(node).__name__}
+        for key, value in sorted(vars(node).items()):
+            if key in ('line', 'col', 'end_line', 'end_col', 'source_text', 'session',
+                       'checked_module', 'linked_program', 'decl_id', 'source_file', 'module_id'):
+                continue
+            payload[key] = _syntax_digest_payload(value)
+        return payload
+    if isinstance(node, list):
+        return [_syntax_digest_payload(item) for item in node]
+    if isinstance(node, dict):
+        return {str(k): _syntax_digest_payload(v) for k, v in sorted(node.items())}
+    if isinstance(node, tuple):
+        return [_syntax_digest_payload(item) for item in node]
+    return node
+
+
+def _compute_interface_and_nominals(program, is_entry=False):
+    """Compute a deterministic digest of exported API signatures and nominal layout map."""
+    exported_items = []
+    nominals = {}
+    for stmt in getattr(program, 'body', ()):
+        if isinstance(stmt, (A.ImportDecl, A.UseDecl)):
+            if is_entry or getattr(stmt, 'is_exported', False) or isinstance(stmt, A.UseDecl):
+                exported_items.append(_syntax_digest_payload(stmt))
+            continue
+        if isinstance(stmt, (A.StructDecl, A.EnumDecl, A.ClassDecl, A.InterfaceDecl)):
+            nominals[stmt.name] = hashlib.sha256(
+                json.dumps(_syntax_digest_payload(stmt), sort_keys=True, separators=(',', ':')).encode('utf-8')
+            ).hexdigest()
+            if getattr(stmt, 'is_exported', False):
+                exported_items.append(_syntax_digest_payload(stmt))
+            continue
+        if isinstance(stmt, A.FnDecl) and getattr(stmt, 'is_exported', False):
+            # Include body when generic (monomorphized in importers); otherwise keep signature + contracts only.
+            if getattr(stmt, 'type_params', None):
+                exported_items.append(_syntax_digest_payload(stmt))
+            else:
+                exported_items.append({
+                    '$node': 'FnSig',
+                    'name': stmt.name,
+                    'is_async': bool(getattr(stmt, 'is_async', False)),
+                    'params': _syntax_digest_payload(stmt.params),
+                    'return_type': _syntax_digest_payload(stmt.return_type),
+                    'error_type': _syntax_digest_payload(getattr(stmt, 'error_type', None)),
+                    'requires': _syntax_digest_payload(getattr(stmt, 'requires', [])),
+                    'ensures': _syntax_digest_payload(getattr(stmt, 'ensures', [])),
+                })
+            continue
+        if isinstance(stmt, A.ExternFnDecl) and getattr(stmt, 'is_exported', False):
+            exported_items.append(_syntax_digest_payload(stmt))
+            continue
+        if isinstance(stmt, A.LetDecl) and getattr(stmt, 'is_exported', False):
+            item = {
+                '$node': 'LetSig',
+                'name': stmt.name,
+                'is_mut': bool(getattr(stmt, 'is_mut', False)),
+                'type_ann': _syntax_digest_payload(getattr(stmt, 'type_ann', None)),
+            }
+            if getattr(stmt, 'type_ann', None) is None:
+                item['initializer'] = _syntax_digest_payload(getattr(stmt, 'initializer', None))
+            exported_items.append(item)
+    digest = hashlib.sha256(
+        json.dumps(exported_items, sort_keys=True, separators=(',', ':')).encode('utf-8')
+    ).hexdigest()
+    return digest, nominals
 
 
 class CompilationSession:
@@ -67,6 +138,8 @@ class CompilationSession:
         self.generation = 0
         self.parse_counts = {}
         self.check_counts = {}
+        self.reused_module_counts = {}
+        self.interface_cutoff_hits = 0
         self._ast_cache = {}
         # One closure-name counter per compilation: a per-module counter restarts at 1
         # in every module, so two modules each holding a lambda produced the same
@@ -91,28 +164,216 @@ class CompilationSession:
             identity = Path(path).as_uri()
         return ModuleId(identity)
 
+    def _parse_cached(self, path, source):
+        from compiler.CheckedProgram import clone_syntax
+        from parser.Parser import Parser
+        source_hash = hashlib.sha256(source.encode('utf-8')).hexdigest()
+        cache_key = (path, source_hash)
+        cached_ast = self._ast_cache.get(cache_key)
+        if cached_ast is not None:
+            program = clone_syntax(cached_ast)
+            program.source_text = source
+            return program
+        program = Parser(file=path).parse(source, recover=True)
+        self.parse_counts[path] = self.parse_counts.get(path, 0) + 1
+        self._ast_cache[cache_key] = clone_syntax(program)
+        return program
+
+    def _evict_module(self, mod_path):
+        unit = self.modules.pop(mod_path, None)
+        self.sources.snapshots.pop(mod_path, None)
+        if unit is not None:
+            dead_keys = [decl_id for decl_id in self.declarations if decl_id[0] == unit.module_id]
+            for decl_id in dead_keys:
+                self.declarations.pop(decl_id, None)
+        return unit
+
+    def _refresh_unchanged_unit(self, old_unit):
+        from compiler.CheckedProgram import clone_syntax
+        new_deps = [self.modules.get(dep.path, dep) for dep in old_unit.dependencies]
+        cloned_program = clone_syntax(old_unit.program)
+        cloned_program.source_text = old_unit.program.source_text
+        for stmt in getattr(cloned_program, 'body', ()):
+            if isinstance(stmt, A.ImportDecl):
+                dep_unit = getattr(stmt, 'checked_module', None)
+                if dep_unit is not None and dep_unit.path in self.modules:
+                    stmt.checked_module = self.modules[dep_unit.path]
+                if hasattr(stmt, 'checked_modules') and stmt.checked_modules:
+                    stmt.checked_modules = [self.modules.get(d.path, d) for d in stmt.checked_modules]
+        fresh = CheckedModule(
+            old_unit.module_id,
+            old_unit.path,
+            cloned_program,
+            old_unit.checker,
+            old_unit.exports,
+            self.generation,
+            new_deps,
+            is_entry=old_unit.is_entry,
+            interface_digest=old_unit.interface_digest,
+            nominal_signature=old_unit.nominal_signature,
+        )
+        fresh.names = old_unit.names
+        fresh.imported_symbol_names = getattr(old_unit, 'imported_symbol_names', {})
+        cloned_program.session = self
+        cloned_program.checked_module = fresh
+        self.modules[old_unit.path] = fresh
+        self.reused_module_counts[old_unit.path] = self.reused_module_counts.get(old_unit.path, 0) + 1
+        self.interface_cutoff_hits += 1
+        for node in getattr(cloned_program, 'body', ()):
+            if isinstance(node, DECLARATIONS) and hasattr(node, 'decl_id'):
+                self.declarations[node.decl_id] = node
+            self.decorate(node, old_unit.path, old_unit.module_id)
+        return fresh
+
     def prepare(self, path, source):
         self.sources.batch = {path: source}
-        changed = self.options_key() != self._options_key or (self.root_path is not None and self.root_path != path)
-        self.root_path = path
-        for previous, content in list(self.sources.snapshots.items()):
-            try:
-                current = source if previous == path else self.sources.read(previous)
-            except OSError:
-                current = None
-            changed = changed or current != content
-        if path in self.modules:
-            old_source = getattr(self.modules[path].program, 'source_text', None)
-            changed = changed or old_source != source
-        if changed:
-            if self.options_key() != self._options_key:
-                self._ast_cache.clear()
+        options_changed = self.options_key() != self._options_key
+        if options_changed:
+            self._ast_cache.clear()
             self.modules.clear()
             self._linked_programs.clear()
             self.declarations.clear()
             self.interner = TypeInterner()
             self.generation += 1
             self.sources.snapshots.clear()
+            self.root_path = path
+            self._options_key = self.options_key()
+            self.sources.snapshots[path] = source
+            return
+
+        current_texts = {path: source}
+        changed_paths = set()
+        for previous, content in list(self.sources.snapshots.items()):
+            try:
+                current = source if previous == path else self.sources.read(previous)
+            except OSError:
+                current = None
+            if current is not None:
+                current_texts[previous] = current
+            if current != content:
+                changed_paths.add(previous)
+        if path in self.modules:
+            old_unit = self.modules[path]
+            old_source = getattr(old_unit.program, 'source_text', None)
+            if old_source != source or not old_unit.is_entry:
+                changed_paths.add(path)
+
+        # Switching entry module invalidates old is_entry wrapper(s), leaving shared libs cached.
+        switched_entries = {m_path for m_path, m_unit in self.modules.items() if m_unit.is_entry and m_path != path}
+        if not changed_paths and not switched_entries and path in self.modules:
+            self.root_path = path
+            self._options_key = self.options_key()
+            self.sources.snapshots[path] = source
+            return
+
+        self.root_path = path
+        self._linked_programs.clear()
+        self.generation += 1
+
+        # Build reverse dependency graph over cached modules.
+        reverse_deps = {}
+        for mod_path, mod_unit in self.modules.items():
+            for dep in mod_unit.dependencies:
+                reverse_deps.setdefault(dep.path, set()).add(mod_path)
+
+        dirty_paths = set(changed_paths) | switched_entries
+        interface_broken = set(switched_entries)
+        nominal_collision = False
+        recheck_with_cutoff = []
+
+        # Determine whether changed modules altered public interfaces or mutated existing nominals.
+        for mod_path in sorted(changed_paths):
+            old_unit = self.modules.get(mod_path)
+            cur_text = current_texts.get(mod_path)
+            if old_unit is None or cur_text is None:
+                interface_broken.add(mod_path)
+                continue
+            try:
+                parsed = self._parse_cached(mod_path, cur_text)
+                if getattr(parsed, 'diagnostics', None):
+                    interface_broken.add(mod_path)
+                    continue
+                new_iface, new_nominals = _compute_interface_and_nominals(parsed, is_entry=old_unit.is_entry)
+            except WysnaError:
+                interface_broken.add(mod_path)
+                continue
+            # Check if any previously declared nominal changed or was removed.
+            for nom_name, nom_hash in (old_unit.nominal_signature or {}).items():
+                if new_nominals.get(nom_name) != nom_hash:
+                    nominal_collision = True
+                    break
+            if old_unit.interface_digest != new_iface:
+                interface_broken.add(mod_path)
+            else:
+                recheck_with_cutoff.append((mod_path, cur_text))
+
+        if nominal_collision:
+            self.modules.clear()
+            self.declarations.clear()
+            self.interner = TypeInterner()
+            self.sources.snapshots.clear()
+            self._options_key = self.options_key()
+            self.sources.snapshots[path] = source
+            return
+
+        # Expand dirty set ONLY across dependents whose upstream interface actually changed.
+        pending = list(interface_broken)
+        while pending:
+            curr = pending.pop()
+            for importer in reverse_deps.get(curr, ()):
+                if importer not in dirty_paths:
+                    dirty_paths.add(importer)
+                    pending.append(importer)
+
+        # Also collect unaffected importers of interface-preserving changed modules for shallow relinking.
+        cutoff_dependents = set()
+        if recheck_with_cutoff:
+            cutoff_queue = [p for p, _ in recheck_with_cutoff]
+            while cutoff_queue:
+                curr = cutoff_queue.pop()
+                for importer in reverse_deps.get(curr, ()):
+                    if importer not in dirty_paths and importer not in cutoff_dependents:
+                        cutoff_dependents.add(importer)
+                        cutoff_queue.append(importer)
+
+        # Check if any newly deleted file wasn't in self.modules (just snapshots): purge snapshot.
+        for mod_path in list(dirty_paths):
+            self._evict_module(mod_path)
+
+        # If a module edited only non-interface implementation details, re-check it first so
+        # clean downstream dependents can safely cut off without re-parsing/re-typechecking.
+        cutoff_rechecked = False
+        try:
+            for mod_path, cur_text in recheck_with_cutoff:
+                if mod_path in self.modules or cur_text is None:
+                    continue
+                if mod_path != path:
+                    self._check_unit(mod_path, cur_text, imported=True)
+                    self.sources.snapshots[mod_path] = cur_text
+                    cutoff_rechecked = True
+        except Exception:
+            for dep_path in cutoff_dependents:
+                self._evict_module(dep_path)
+            raise
+
+        if cutoff_rechecked and cutoff_dependents:
+            # Refresh clean importers in topological order (dependencies before importers).
+            ordered_refresh = []
+            visited_refresh = set()
+            def visit_dep(m_path):
+                if m_path in visited_refresh or m_path not in cutoff_dependents or m_path not in self.modules:
+                    return
+                visited_refresh.add(m_path)
+                for d in self.modules[m_path].dependencies:
+                    visit_dep(d.path)
+                ordered_refresh.append(m_path)
+            for dep_path in list(cutoff_dependents):
+                visit_dep(dep_path)
+            for dep_path in ordered_refresh:
+                old_dep_unit = self.modules.get(dep_path)
+                if old_dep_unit is not None:
+                    self._refresh_unchanged_unit(old_dep_unit)
+
         self._options_key = self.options_key()
         self.sources.snapshots[path] = source
 
@@ -161,18 +422,9 @@ class CompilationSession:
         from checker.TypeChecker import TypeChecker
         module_id = self.module_id(path)
         if program is None:
-            from compiler.CheckedProgram import clone_syntax
-            source_hash = hashlib.sha256(source.encode('utf-8')).hexdigest()
-            cache_key = (path, source_hash)
-            cached_ast = self._ast_cache.get(cache_key)
-            if cached_ast is not None:
-                program = clone_syntax(cached_ast)
-                program.source_text = source
-            else:
-                program = Parser(file=path).parse(source, recover=True)
-                self.parse_counts[path] = self.parse_counts.get(path, 0) + 1
-                self._ast_cache[cache_key] = clone_syntax(program)
+            program = self._parse_cached(path, source)
         self.validate_names(program, path)
+        interface_digest, nominal_signature = _compute_interface_and_nominals(program, is_entry=not imported)
         for node in program.body:
             if isinstance(node, (A.StructDecl, A.EnumDecl, A.ClassDecl, A.InterfaceDecl)) and (
                     node.name in ('Option', 'Result', 'Weak') or node.name.startswith(('Option__', 'Result__'))):
@@ -244,7 +496,12 @@ class CompilationSession:
                     dependencies.extend(node.checked_modules)
                 elif getattr(node, 'checked_module', None):
                     dependencies.append(node.checked_module)
-        unit = CheckedModule(module_id, path, program, checker, exports, self.generation, dependencies, is_entry=not imported)
+        unit = CheckedModule(
+            module_id, path, program, checker, exports, self.generation, dependencies,
+            is_entry=not imported,
+            interface_digest=interface_digest,
+            nominal_signature=nominal_signature,
+        )
         unit.names = names
         unit.imported_symbol_names = getattr(checker, 'imported_symbol_names', {})
         program.session = self

@@ -4,6 +4,10 @@
 #define WYSNA_HOST_SYSTEM_H
 
 static inline int64_t wysna_host_wall_ms(void) {
+#ifdef WYSNA_DENY_CAP_CLOCK
+    wysna_sandbox_deny("clock");
+    return -1;
+#endif
 #ifdef _WIN32
     FILETIME ft;
     ULARGE_INTEGER value;
@@ -29,18 +33,32 @@ static inline int64_t wysna_host_wall_ms(void) {
 
 /* Blocking sleep. Returns 0 on success, -1 for a negative duration. */
 static inline int64_t wysna_host_sleep(int64_t ms) {
+#ifdef WYSNA_DENY_CAP_CLOCK
+    (void)ms;
+    wysna_sandbox_deny("clock");
+    return -1;
+#endif
     if (ms < 0) return -1;
     wysna_host_sleep_ms(ms);
     return 0;
 }
 
 static inline int64_t wysna_host_stdout_flush(void) {
+#ifdef WYSNA_DENY_CAP_STDIO
+    wysna_sandbox_deny("stdio");
+    return -1;
+#endif
     return fflush(stdout) == 0 ? 0 : -1;
 }
 
 /* Reads one line from stdin into the buffer (without the line terminator).
  * Returns 1 when a line was produced, 0 on end of input with no data, -1 on failure. */
 static inline int64_t wysna_host_stdin_read_line(void* output_handle) {
+#ifdef WYSNA_DENY_CAP_STDIO
+    (void)output_handle;
+    wysna_sandbox_deny("stdio");
+    return -1;
+#endif
     WysnaHostEntry* output = wysna_host_find(output_handle, 1);
     if (!output) return -1;
     output->length = 0;
@@ -61,6 +79,11 @@ static inline int64_t wysna_host_stdin_read_line(void* output_handle) {
 
 /* Reads the remainder of stdin into the buffer. Returns the byte count or -1. */
 static inline int64_t wysna_host_stdin_read_all(void* output_handle) {
+#ifdef WYSNA_DENY_CAP_STDIO
+    (void)output_handle;
+    wysna_sandbox_deny("stdio");
+    return -1;
+#endif
     WysnaHostEntry* output = wysna_host_find(output_handle, 1);
     if (!output) return -1;
     output->length = 0;
@@ -75,6 +98,11 @@ static inline int64_t wysna_host_stdin_read_all(void* output_handle) {
 
 /* Writes the working directory into the buffer. Returns the byte count or -1. */
 static inline int64_t wysna_host_getcwd(void* output_handle) {
+#ifdef WYSNA_DENY_CAP_ENVIRONMENT
+    (void)output_handle;
+    wysna_sandbox_deny("environment");
+    return -1;
+#endif
     WysnaHostEntry* output = wysna_host_find(output_handle, 1);
     if (!output) return -1;
     char path[4096];
