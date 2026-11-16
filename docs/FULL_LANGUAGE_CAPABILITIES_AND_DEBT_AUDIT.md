@@ -300,7 +300,7 @@ Despite the architectural achievements of v0.6.0, an exhaustive audit reveals cl
 
 | Limitation | Technical Description | Root Cause / File | Impact / Workaround |
 | :--- | :--- | :--- | :--- |
-| **Cyclic Class References Leak** | Strong reference cycles between classes (`a.b = b; b.a = a`) are not reclaimed by ARC upon scope exit. | `runtime/wysna_runtime_memory.h`<br>`docs/KNOWN_LIMITS.md §5` | Programs with cyclic data structures leak memory unless cycles are broken with `Weak[C]` or manual teardown. |
+| **Cyclic Class References Leak (Mitigated via Opt-In / Quota Bacon-Rajan)** | Strong reference cycles between classes (`a.b = b; b.a = a`) leak under pure ARC alone; deferred Bacon-Rajan cycle collection (`wysna_collect_cycles()`) reclaims dead `W_OBJECT` subgraphs when `WYSNA_COLLECT_CYCLES=1` or under `--max-heap-mb` pressure. | `runtime/wysna_runtime_memory.h`<br>`docs/KNOWN_LIMITS.md §5` | Default builds without `WYSNA_COLLECT_CYCLES=1` preserve strict deterministic ARC timing unless heap budget triggers collection or `Weak[C]` is used. |
 | **Opt-In Memory Leak Verification** | Runtime leak detection (`WYSNA_MEM_CHECK=1`) is strictly opt-in and does not run by default in production. | `runtime/wysna_runtime_core.h` | Production builds exit silently on cyclic leaks to avoid altering stdout/stderr for programs retaining process-lifetime objects. |
 | **No Stack Unwinding on `exit(code)`** | Calling `exit(code)` terminates the host process immediately without executing LIFO `CleanupScope` destructors for active stack frames. | `src/codegen/CCodeGen.py` | Resources (files, network connections) rely on the OS kernel for cleanup on immediate exit. |
 | **32-Byte General `WVal` Footprint** | On 64-bit architectures, general heterogeneous `WVal` instances consume 32 bytes (`type: 8B`, `rc: 8B`, `payload: 16B`). | `runtime/wysna_runtime.h` | While unboxed scalar lists mitigate this, general collections consume higher memory bandwidth compared to 16-byte or 8-byte NaN-boxed representations. |
@@ -311,8 +311,7 @@ Despite the architectural achievements of v0.6.0, an exhaustive audit reveals cl
 
 | Limitation | Technical Description | Root Cause / File | Impact / Workaround |
 | :--- | :--- | :--- | :--- |
-| **No Preemptive Threads or Shared Mutable Memory** | Wysna does not support arbitrary preemptive multithreading (`std::thread`, raw mutexes, shared mutable heaps). | `docs/KNOWN_LIMITS.md §6` | Concurrency is restricted to structured data-parallel collections (`parallel_map`, `parallel_reduce`). Thread races are prevented, but arbitrary actor models are impossible. |
-| **No Built-in Native `async` / `await`** | Wysna lacks an asynchronous event loop and `async`/`await` keywords in its core grammar. | `src/tokens/TokenType.py` | All network (`std/http`) and file I/O operations are synchronous and blocking. High-concurrency servers must rely on multi-process scaling or C FFI adapters. |
+| **Cooperative HTTP Multiplexing & Eager `async fn`** | `async fn` and `await` parse, typecheck, and execute identically across Seed, LLVM, and Selfhost; `std/http` provides genuine non-blocking `curl_multi_*` dispatch (`batch_get`, `get_async`). However, general user `async fn` executes eagerly (no CPS coroutine state machine suspension), and `std/algorithms.parallel_*` uses `ThreadPoolExecutor` in the interpreter while running sequentially in native C99. | `src/hir/HirBuilder.py`<br>`runtime/wysna_host.h`<br>`stdlib/algorithms.wysna` | Safe HTTP fan-out works concurrently via `curl_multi`; arbitrary CPU-bound parallel lambdas and general suspendable coroutines remain future v0.7.0 work. |
 
 ---
 
@@ -484,9 +483,10 @@ flowchart LR
 ```
 
 1. **Stage 1 (v0.6.1 - Delivered in PR #146):**
-   - Implemented native `std/crypto` (SHA-256, SHA-512, MD5, HMAC, CSPRNG, constant-time compare) hardened under ASan/UBSan.
-   - Implemented cooperative async I/O (`async fn`, `await`, `std/async`, `curl_multi`) across Seed, LLVM, and Selfhost (`native-core-v1`), decoupled from mandatory libcurl headers when `std/http` transport is unused.
-   - Implemented compile-time Semantic Relationship Graph (`wysna graph`), surgical slicing (`wysna inspect`), hash-guarded checked patching (`wysna patch`), versioned skills (`wysna skills`), diagnostic code guides (`wysna explain --code`), and LSP `textDocument/implementation` + hover relationships (`wysna.graph/1`).
+   - Implemented native `std/crypto` (SHA-256, SHA-512, MD5, HMAC, CSPRNG, constant-time compare) hardened under ASan/UBSan (`runtime/wysna_host_crypto.h`).
+   - Implemented `async fn` / `await`, `std/async`, and non-blocking `curl_multi` HTTP dispatch across Seed, LLVM, and Selfhost (`native-core-v1`), hardened against format-string bugs and `handle == 0` pending deadlocks, with explicit MIR verification rules (`Verifier.py`).
+   - Implemented compile-time Semantic Relationship Graph (`wysna graph`), surgical slicing (`wysna inspect`), hash-guarded checked patching (`wysna patch` with `W5005`), versioned skills (`wysna skills`), diagnostic code guides (`wysna explain --code`), and LSP `textDocument/implementation` + hover relationships (`wysna.graph/1`).
+   - Delivered Principal Audit Hardenings (`AUD-01..AUD-10`): deferred Bacon-Rajan cycle collector (`wysna_collect_cycles`, `WYSNA_COLLECT_CYCLES=1`, quota reclamation), atomic runtime refcount/alloc primitives + string-literal spinlock, incremental per-module AST caching (`CompilationSession._ast_cache`), module-qualified `extends`/`implements` resolution, eliminated redundant primitive `[T]` parser backtracking, and Selfhost CLI `0.6.0` version parity.
 2. **Stage 2 (Wysna v0.7.0 Target):**
    - **Port `wysna test` to Native Binary:** Extract the test discovery, assertion runner, and TAP/JSON reporting into `selfhost/src/10_test_runner.wysna`. Compile and link directly into the standalone binary.
    - **Port `wysna fmt` to Native Binary:** Re-implement AST trivia preservation and pretty-printing in Wysna source, enabling lightning-fast code formatting with zero Python overhead.

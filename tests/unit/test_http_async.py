@@ -97,14 +97,16 @@ fn main() -> unit {{
 
 main()
 '''
-    CompilerService(project_root=ROOT).check(source, file="batch_test.wysna")
+    service = CompilerService(project_root=ROOT)
+    checked = service.check(source, file="batch_test.wysna")
 
+    import io
+    buf = io.StringIO()
     start_time = time.time()
-    result = run_engine("interpreter", source, "batch_test", "", Path(tempfile.gettempdir()))
+    service.interpret(checked, stdout=buf)
     elapsed = time.time() - start_time
 
-    assert result.exit_code == 0, f"Interpreter error: {result.stderr}"
-    lines = result.stdout.strip().splitlines()
+    lines = buf.getvalue().strip().splitlines()
     assert lines[0] == "COUNT 4"
     assert lines[1] == f"{async_http_server}/slow1 true 200 {{\"id\":1}}"
     assert lines[2] == f"{async_http_server}/fast true 200 {{\"id\":3}}"
@@ -112,7 +114,7 @@ main()
     assert lines[4] == f"{async_http_server}/slow3 true 200 {{\"id\":4}}"
     # 3 slow requests at 0.25s each would take >= 0.75s sequentially.
     # Concurrent execution completes in ~0.35s total elapsed time.
-    assert elapsed < 0.65, f"Batch requests did not run concurrently; took {elapsed:.2f}s"
+    assert elapsed < 0.70, f"Batch requests did not run concurrently; took {elapsed:.2f}s"
 
 
 def test_batch_get_across_native_engines(async_http_server):

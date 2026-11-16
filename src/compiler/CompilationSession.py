@@ -67,6 +67,7 @@ class CompilationSession:
         self.generation = 0
         self.parse_counts = {}
         self.check_counts = {}
+        self._ast_cache = {}
         # One closure-name counter per compilation: a per-module counter restarts at 1
         # in every module, so two modules each holding a lambda produced the same
         # `_WYSNA_Closure_N_Env` and `_WYSNA_Closure_N`, and the linked program broke.
@@ -104,6 +105,8 @@ class CompilationSession:
             old_source = getattr(self.modules[path].program, 'source_text', None)
             changed = changed or old_source != source
         if changed:
+            if self.options_key() != self._options_key:
+                self._ast_cache.clear()
             self.modules.clear()
             self._linked_programs.clear()
             self.declarations.clear()
@@ -158,8 +161,17 @@ class CompilationSession:
         from checker.TypeChecker import TypeChecker
         module_id = self.module_id(path)
         if program is None:
-            program = Parser(file=path).parse(source, recover=True)
-            self.parse_counts[path] = self.parse_counts.get(path, 0) + 1
+            from compiler.CheckedProgram import clone_syntax
+            source_hash = hashlib.sha256(source.encode('utf-8')).hexdigest()
+            cache_key = (path, source_hash)
+            cached_ast = self._ast_cache.get(cache_key)
+            if cached_ast is not None:
+                program = clone_syntax(cached_ast)
+                program.source_text = source
+            else:
+                program = Parser(file=path).parse(source, recover=True)
+                self.parse_counts[path] = self.parse_counts.get(path, 0) + 1
+                self._ast_cache[cache_key] = clone_syntax(program)
         self.validate_names(program, path)
         for node in program.body:
             if isinstance(node, (A.StructDecl, A.EnumDecl, A.ClassDecl, A.InterfaceDecl)) and (

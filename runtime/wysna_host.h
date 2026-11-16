@@ -1061,15 +1061,25 @@ static inline WVal wysna_await(WVal val) {
                 if (ready) break;
                 if (failed) {
                     WVal err = wysna_member_get(val, "error");
+                    char* msg_copy = NULL;
                     if (err.tag == W_ENUM && strcmp(err.as.en.variant, "Some") == 0 && err.as.en.box) {
                         WVal inner_err = err.as.en.box->val;
-                        if (inner_err.tag == W_STR) {
-                            wysna_runtime_fail("W4003", inner_err.as.string.data);
+                        if (inner_err.tag == W_STR && inner_err.as.string.data) {
+                            size_t len = inner_err.as.string.length;
+                            msg_copy = (char*)malloc(len + 1);
+                            if (msg_copy) {
+                                if (len) memcpy(msg_copy, inner_err.as.string.data, len);
+                                msg_copy[len] = '\0';
+                            }
                         }
                     }
                     wysna_release(err);
                     wysna_release(val);
-                    wysna_runtime_fail("W4003", "Async task failed");
+                    if (msg_copy) {
+                        wysna_runtime_fail("W4003", "%s", msg_copy);
+                    } else {
+                        wysna_runtime_fail("W4003", "%s", "Async task failed");
+                    }
                     return wysna_unit();
                 }
                 WVal h = wysna_member_get(val, "handle");
@@ -1077,9 +1087,24 @@ static inline WVal wysna_await(WVal val) {
                 wysna_release(h);
                 if (handle_val > 0) {
                     wysna_host_http_multi_poll(10);
-                    wysna_host_http_async_poll(handle_val);
+                    int64_t poll_st = wysna_host_http_async_poll(handle_val);
+                    if (poll_st == 1) {
+                        break;
+                    }
+                    if (poll_st == 2) {
+                        wysna_release(val);
+                        wysna_runtime_fail("W4003", "%s", "Async HTTP transfer failed");
+                        return wysna_unit();
+                    }
+                    if (poll_st < 0) {
+                        wysna_release(val);
+                        wysna_runtime_fail("W4003", "%s", "Invalid async transfer handle");
+                        return wysna_unit();
+                    }
                 } else {
-                    wysna_host_http_multi_poll(10);
+                    wysna_release(val);
+                    wysna_runtime_fail("W4003", "%s", "Deadlock: awaiting pending Task with no active handle");
+                    return wysna_unit();
                 }
             }
             WVal v = wysna_member_get(val, "value");

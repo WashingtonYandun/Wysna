@@ -65,11 +65,51 @@ typedef struct {
     WVal* vals;
 } WStructBuf;
 
+typedef enum {
+    W_COLOR_BLACK = 0,
+    W_COLOR_PURPLE = 1,
+    W_COLOR_GRAY = 2,
+    W_COLOR_WHITE = 3
+} WCycleColor;
+
 struct WWeakControl {
     int32_t strong;
     int32_t weak; /* Includes one implicit reference while the object is alive. */
+    int32_t trial_rc;
+    uint8_t color;
+    bool buffered;
     WStructBuf* object;
+    WWeakControl* cycle_next;
+    WWeakControl* cycle_prev;
 };
+
+#if defined(__GNUC__) || defined(__clang__)
+static inline int32_t wysna_atomic_inc_i32(int32_t* ptr) {
+    return __atomic_add_fetch(ptr, 1, __ATOMIC_RELAXED);
+}
+static inline int32_t wysna_atomic_dec_i32(int32_t* ptr) {
+    return __atomic_sub_fetch(ptr, 1, __ATOMIC_ACQ_REL);
+}
+static inline int64_t wysna_atomic_add_i64(int64_t* ptr, int64_t delta) {
+    return __atomic_add_fetch(ptr, delta, __ATOMIC_RELAXED);
+}
+static inline int64_t wysna_atomic_sub_i64(int64_t* ptr, int64_t delta) {
+    return __atomic_sub_fetch(ptr, delta, __ATOMIC_RELAXED);
+}
+static inline void wysna_spinlock_acquire(volatile int* lock) {
+    while (__atomic_test_and_set(lock, __ATOMIC_ACQUIRE)) {}
+}
+static inline void wysna_spinlock_release(volatile int* lock) {
+    __atomic_clear(lock, __ATOMIC_RELEASE);
+}
+#else
+static inline int32_t wysna_atomic_inc_i32(int32_t* ptr) { return ++(*ptr); }
+static inline int32_t wysna_atomic_dec_i32(int32_t* ptr) { return --(*ptr); }
+static inline int64_t wysna_atomic_add_i64(int64_t* ptr, int64_t delta) { return (*ptr += delta); }
+static inline int64_t wysna_atomic_sub_i64(int64_t* ptr, int64_t delta) { return (*ptr -= delta); }
+static inline void wysna_spinlock_acquire(volatile int* lock) { (void)lock; }
+static inline void wysna_spinlock_release(volatile int* lock) { (void)lock; }
+#endif
 
 typedef struct WPointerOwner {
     int32_t refcount;
@@ -131,12 +171,18 @@ typedef struct WysnaRuntimeContext {
     int64_t heap_bytes_allocated;
     int64_t max_heap_bytes;
     bool quotas_initialized;
+    WWeakControl* purple_head;
+    int64_t collected_cycles;
+    bool collecting_cycles;
+    volatile int runtime_lock;
     int argc;
     char** argv;
 #ifdef _WIN32
     bool argv_allocated;
 #endif
 } WysnaRuntimeContext;
+
+static inline int64_t wysna_collect_cycles(void);
 
 #ifdef WYSNA_SHARED_RUNTIME
 extern WysnaRuntimeContext wysna_runtime_context;
@@ -277,15 +323,15 @@ static inline void wysna_cow_reset_stats(void) {
  * Clang/GCC AddressSanitizer and LeakSanitizer (ASan/LSan) in CI and test suites.
  */
 static inline void wysna_mem_on_alloc(void) {
-    wysna_g_alloc_count++;
-    wysna_g_live_objects++;
+    wysna_atomic_add_i64(&wysna_g_alloc_count, 1);
+    wysna_atomic_add_i64(&wysna_g_live_objects, 1);
 }
 
 static inline void wysna_mem_on_free(void) {
-    wysna_g_free_count++;
-    wysna_g_live_objects--;
-    if (wysna_g_live_objects < 0) {
-        fprintf(stderr, "[W4003] RuntimeError: Memory safety violation (live_object_count underflow: %" PRId64 ")\n", wysna_g_live_objects);
+    wysna_atomic_add_i64(&wysna_g_free_count, 1);
+    int64_t live = wysna_atomic_sub_i64(&wysna_g_live_objects, 1);
+    if (live < 0) {
+        fprintf(stderr, "[W4003] RuntimeError: Memory safety violation (live_object_count underflow: %" PRId64 ")\n", live);
         exit(1);
     }
 }
@@ -346,7 +392,10 @@ static inline void wysna_step_tick(void) {
 static inline void wysna_charge_heap_bytes(size_t size) {
     if (!wysna_runtime_context.quotas_initialized) wysna_init_quotas();
     if (wysna_runtime_context.max_heap_bytes > 0 && size > 0) {
-        wysna_runtime_context.heap_bytes_allocated += (int64_t)size;
+        int64_t allocated = wysna_atomic_add_i64(&wysna_runtime_context.heap_bytes_allocated, (int64_t)size);
+        if (allocated > wysna_runtime_context.max_heap_bytes && !wysna_runtime_context.collecting_cycles) {
+            wysna_collect_cycles();
+        }
         if (wysna_runtime_context.heap_bytes_allocated > wysna_runtime_context.max_heap_bytes) {
             wysna_runtime_fail("W4004", "Execution heap memory quota exceeded (limit: %" PRId64 " bytes)",
                                wysna_runtime_context.max_heap_bytes);
@@ -402,6 +451,10 @@ static inline void wysna_runtime_cleanup_impl(bool verify_live_objects) {
         free(literal->buffer.codepoint_offsets);
         memset(&literal->buffer, 0, sizeof(literal->buffer));
         literal->next = NULL;
+    }
+    const char* collect_env = getenv("WYSNA_COLLECT_CYCLES");
+    if (verify_live_objects && collect_env && strcmp(collect_env, "1") == 0) {
+        wysna_collect_cycles();
     }
     const char* stats_env = getenv("WYSNA_MEM_STATS");
     if (stats_env && strcmp(stats_env, "1") == 0) {

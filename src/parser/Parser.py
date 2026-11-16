@@ -673,24 +673,35 @@ class Parser:
 
         superclass: Optional[str] = None
         if self.match(TokenType.EXTENDS):
+            saved_sup = self.pos
             sup_tok = self.expect(TokenType.IDENTIFIER, code="W0006", msg="Expected superclass name after 'extends'")
             superclass = sup_tok.value
+            while self.match(TokenType.DOT):
+                superclass += "." + self.expect(TokenType.IDENTIFIER, code="W0006", msg="Expected superclass name after '.'").value
             if self.check(TokenType.LBRACKET):
-                self.pos -= 1
+                self.pos = saved_sup
                 superclass = self.parse_type()
 
         interfaces: List[str] = []
         if self.match(TokenType.IMPLEMENTS):
+            saved_intf = self.pos
             first_intf = self.expect(TokenType.IDENTIFIER, code="W0006", msg="Expected interface name after 'implements'")
-            interfaces.append(first_intf.value)
+            intf_name = first_intf.value
+            while self.match(TokenType.DOT):
+                intf_name += "." + self.expect(TokenType.IDENTIFIER, code="W0006", msg="Expected interface name after '.'").value
+            interfaces.append(intf_name)
             if self.check(TokenType.LBRACKET):
-                self.pos -= 1
+                self.pos = saved_intf
                 interfaces[-1] = self.parse_type()
             while self.match(TokenType.COMMA):
+                saved_next = self.pos
                 next_intf = self.expect(TokenType.IDENTIFIER, code="W0006", msg="Expected interface name after ','")
-                interfaces.append(next_intf.value)
+                next_name = next_intf.value
+                while self.match(TokenType.DOT):
+                    next_name += "." + self.expect(TokenType.IDENTIFIER, code="W0006", msg="Expected interface name after '.'").value
+                interfaces.append(next_name)
                 if self.check(TokenType.LBRACKET):
-                    self.pos -= 1
+                    self.pos = saved_next
                     interfaces[-1] = self.parse_type()
 
         self.expect(TokenType.LBRACE, code="W0006", msg="Expected '{' to start class body")
@@ -1078,7 +1089,7 @@ class Parser:
                                     args.append(self.parse_expr())
                             self.expect(TokenType.RPAREN, code="W0006", msg="Expected ')' after generic module call")
                             left = CallExpr(left, args, type_args, line=left.line, col=left.col)
-                            left.index_alternative = self._parse_index_alternative(saved)
+                            left.index_alternative = self._parse_index_alternative(saved, type_args)
                             continue
                         self.pos = saved
                     # Indexing
@@ -1143,7 +1154,12 @@ class Parser:
 
         return left
 
-    def _parse_index_alternative(self, start):
+    def _parse_index_alternative(self, start, type_args=None):
+        if type_args is not None:
+            if len(type_args) != 1 or not isinstance(type_args[0], NamedType):
+                return None
+            if type_args[0].name in ("int", "float", "bool", "str", "unit", "none"):
+                return None
         previous = self.pos
         self.pos = start + 1
         try:
@@ -1293,7 +1309,7 @@ class Parser:
                     line=token.line,
                     col=token.col
                 )
-                call.index_alternative = self._parse_index_alternative(bracket_start)
+                call.index_alternative = self._parse_index_alternative(bracket_start, type_args)
                 return call
 
             # Check if this is a Struct Initialization: Identifier { field: val, ... } or Identifier[T] { field: val, ... }

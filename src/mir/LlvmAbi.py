@@ -11,7 +11,12 @@ def operation_codes():
     rows = re.findall(r'^WYSNA_LLVM_OPERATION\((\w+), (\d+),', source, re.MULTILINE)
     codes = {name: int(code) for name, code in rows}
     if set(codes) != RUNTIME or len(set(codes.values())) != len(codes):
-        raise RuntimeError('LLVM runtime operation table does not match the verified MIR contract')
+        missing = sorted(RUNTIME - set(codes))
+        extra = sorted(set(codes) - RUNTIME)
+        raise RuntimeError(
+            f'LLVM runtime operation table does not match the verified MIR contract '
+            f'(missing={missing}, extra={extra}, unique_codes={len(set(codes.values()))}/{len(codes)})'
+        )
     return codes
 
 

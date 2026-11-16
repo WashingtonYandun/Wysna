@@ -293,7 +293,7 @@ def resolve_declaration_signatures(checker: "TypeChecker", program: Program) -> 
             assert isinstance(cls_type, ClassType)
 
             if stmt.superclass is not None:
-                sup_t = checker.global_scope.lookup_type(stmt.superclass)
+                sup_t = checker._lookup_type_name(stmt.superclass) if isinstance(stmt.superclass, str) else None
                 if sup_t is None or not isinstance(sup_t, ClassType):
                     raise TypeError(
                         message=f"Unknown superclass '{stmt.superclass}' for class '{stmt.name}'",
@@ -302,6 +302,7 @@ def resolve_declaration_signatures(checker: "TypeChecker", program: Program) -> 
                         file=checker.file,
                         code="W1001"
                     )
+                stmt.superclass = sup_t.name
                 if sup_t.name == stmt.name or sup_t.is_subclass_of(stmt.name):
                     raise TypeError(
                         message=f"Cyclic class inheritance detected involving '{stmt.name}'",
@@ -312,8 +313,9 @@ def resolve_declaration_signatures(checker: "TypeChecker", program: Program) -> 
                     )
                 cls_type.superclass = sup_t
 
+            resolved_interfaces = []
             for intf_name in stmt.interfaces:
-                intf_t = checker.global_scope.lookup_type(intf_name)
+                intf_t = checker._lookup_type_name(intf_name) if isinstance(intf_name, str) else None
                 if intf_t is None or not isinstance(intf_t, InterfaceType):
                     raise TypeError(
                         message=f"Unknown interface '{intf_name}' implemented by class '{stmt.name}'",
@@ -322,7 +324,9 @@ def resolve_declaration_signatures(checker: "TypeChecker", program: Program) -> 
                         file=checker.file,
                         code="W1001"
                     )
+                resolved_interfaces.append(intf_t.name)
                 cls_type.interfaces.append(intf_t)
+            stmt.interfaces = resolved_interfaces
 
             # Own fields & methods
             seen_own_fields: Set[str] = set()

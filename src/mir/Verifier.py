@@ -208,7 +208,10 @@ class Verifier:
         elif name == 'wysna_builtin_upgrade':
             require(entry(0).tag == 'weak' and returned.tag == 'optional' and returned.data == entry(0).data)
         elif name == 'wysna_await':
-            pass
+            require(len(types) == 1 and (
+                self.compatible(types[0], result.type_id)
+                or entry(0).tag in ('struct', 'class', 'enum')
+            ))
         elif name in ('wysna_ok', 'wysna_err'):
             require(returned.tag == 'result' and self.compatible(types[0], returned.data[0 if name == 'wysna_ok' else 1]))
         elif name == 'wysna_wrap_result':

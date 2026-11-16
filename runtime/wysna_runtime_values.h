@@ -45,12 +45,16 @@ static inline WVal wysna_str_n(const char* s, size_t length) {
 
 static inline WVal wysna_literal_str_n(WStringLiteral* literal, const char* data, size_t length) {
     if (literal->buffer.refcount == 0) {
-        literal->buffer.refcount = -1; /* Immortal data and descriptor. */
-        literal->buffer.byte_length = length;
-        literal->buffer.codepoint_count = SIZE_MAX;
-        literal->buffer.data = (char*)data;
-        literal->next = wysna_g_string_literals;
-        wysna_g_string_literals = literal;
+        wysna_spinlock_acquire(&wysna_runtime_context.runtime_lock);
+        if (literal->buffer.refcount == 0) {
+            literal->buffer.refcount = -1; /* Immortal data and descriptor. */
+            literal->buffer.byte_length = length;
+            literal->buffer.codepoint_count = SIZE_MAX;
+            literal->buffer.data = (char*)data;
+            literal->next = wysna_g_string_literals;
+            wysna_g_string_literals = literal;
+        }
+        wysna_spinlock_release(&wysna_runtime_context.runtime_lock);
     }
     WVal value = wysna_str_n(data, length);
     value.as.string.owner = &literal->buffer;

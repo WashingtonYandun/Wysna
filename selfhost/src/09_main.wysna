@@ -23,7 +23,7 @@ fn run_compiler() -> unit ! IoError {
         for index in 3..len(raw_cli) { cli.append(raw_cli[index]) }
     }
     if len(cli) == 2 and (cli[1] == "--version" or cli[1] == "-v") {
-        print("wysna 0.1.3-alpha")
+        print("wysna 0.6.0")
         return
     }
     if len(cli) > 1 and (cli[1] == "--check" or cli[1] == "--check-json") {
@@ -37,7 +37,7 @@ fn run_compiler() -> unit ! IoError {
         mir_verify(module)
         if cli[1] == "--check-json" {
             let fn_count = str(len(module.functions))
-            let payload = "{\"schema_version\":\"wysna.cli.result/1\",\"compiler_version\":\"0.1.3-alpha\",\"command\":\"check\",\"ok\":true,\"exit_code\":0,\"diagnostics\":[],\"data\":{\"file\":" + selfhost_json_quote(in_path) + ",\"functions\":" + fn_count + "}}"
+            let payload = "{\"schema_version\":\"wysna.cli.result/1\",\"compiler_version\":\"0.6.0\",\"command\":\"check\",\"ok\":true,\"exit_code\":0,\"diagnostics\":[],\"data\":{\"file\":" + selfhost_json_quote(in_path) + ",\"functions\":" + fn_count + "}}"
             print(payload)
         } else {
             print("[Wysna Compiler] Checked", in_path)

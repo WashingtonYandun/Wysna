@@ -134,8 +134,10 @@ static inline WVal wysna_make_object(const char* name, int32_t count, const char
     WStructBuf* st = (WStructBuf*)wysna_alloc_safe(total);
     st->refcount = 1;
     st->control = (WWeakControl*)wysna_alloc_safe(sizeof(WWeakControl));
+    memset(st->control, 0, sizeof(WWeakControl));
     st->control->strong = 1;
     st->control->weak = 1;
+    st->control->color = W_COLOR_BLACK;
     st->control->object = st;
     wysna_mem_on_alloc();
     st->vtable = NULL;
@@ -154,8 +156,10 @@ static inline WVal wysna_make_object(const char* name, int32_t count, const char
 /* Default non-optional weak fields are independent expired handles. */
 static inline WVal wysna_empty_weak(void) {
     WWeakControl* control = (WWeakControl*)wysna_alloc_safe(sizeof(WWeakControl));
+    memset(control, 0, sizeof(WWeakControl));
     control->strong = 0;
     control->weak = 1;
+    control->color = W_COLOR_BLACK;
     control->object = NULL;
     wysna_mem_on_alloc();
     WVal value = wysna_unit();
