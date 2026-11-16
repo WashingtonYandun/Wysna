@@ -73,6 +73,7 @@ typedef enum {
 } WCycleColor;
 
 struct WWeakControl {
+    uint32_t kind;
     int32_t strong;
     int32_t weak; /* Includes one implicit reference while the object is alive. */
     int32_t trial_rc;
@@ -141,6 +142,7 @@ static inline void wysna_spinlock_release(volatile int* lock) { (void)lock; }
 #endif
 
 typedef struct WPointerOwner {
+    uint32_t kind;
     int32_t refcount;
     int64_t (*close)(void*);
     void* address;
@@ -148,12 +150,8 @@ typedef struct WPointerOwner {
 
 typedef struct WBoxBuf WBoxBuf;
 typedef struct WFunctionBuf WFunctionBuf;
-
-typedef struct {
-    const char* enum_name;
-    const char* variant;
-    WBoxBuf* box;
-} WEnumVal;
+typedef struct WIntBox WIntBox;
+typedef struct WEnumBuf WEnumBuf;
 
 typedef struct {
     int32_t refcount;
@@ -228,72 +226,53 @@ static WysnaRuntimeContext wysna_runtime_context = {0};
 #define W_STRING_SCAN_STEP() ((void)0)
 #endif
 
-/* ABI v2 keeps string metadata in its variant rather than in every value. */
-#define W_RUNTIME_ABI_VERSION 2
-struct WVal {
-    WTag tag;
-    uint32_t aux;
-    union {
-        int64_t i;
-        double f;
-        bool b;
-        struct {
-            const char* data;
-            WStringBuf* owner;
-            size_t length;
-        } string;
-        WListBuf* list;
-        WDictBuf* dict;
-        WTupleBuf* tuple;
-        WStructBuf* st;
-        WEnumVal en;
-        WBoxBuf* box;
-        WWeakControl* weak;
-        WFunctionBuf* function;
-        void* pointer;
-        struct { void* address; WPointerOwner* owner; } handle;
-    } as;
-};
-
 /*
- * Compact 64-bit NaN-Boxed value representation (WVal64):
- * Fits 8 values per 64-byte L1 cache line vs 2 values for 32-byte WVal.
- * Bit layout (negative Quiet NaN prefix in top 13 bits: 0xFFF8_0000_0000_0000):
- *   bits 50..48 = 3-bit type tag (1..7); all floats avoid this bit space.
- *   bits 47..0  = 48-bit immediate payload / pointer / inline 0..6-byte string (SSO).
+ * ABI v3 unifies every runtime value into an 8-byte NaN-boxed word (WVal == WVal64):
+ * - 0x0000_0000_0000_0000: W_UNIT (zero-initialized globals/locals equal unit)
+ * - 0x0000_0000_0000_0001..3: W_NONE, false, true
+ * - 0x0000_8000_xxxx_xxxx_xxxx: raw 47-bit opaque W_POINTER (address with bit 47 set)
+ * - 0x0001_0000_0000_0000..0xFFF1_0000_0000_0000: IEEE-754 double + WVAL_DOUBLE_OFFSET
+ * - 0xFFF2..0xFFFF: 14 distinct 48-bit tag bands (inline int48, SSO 0..6B, strings, heap containers, boxes, ext)
  */
-typedef uint64_t WVal64;
-#define WVAL64_QNAN_PREFIX   UINT64_C(0xFFF8000000000000)
-#define WVAL64_TAG_MASK      UINT64_C(0x0007000000000000)
-#define WVAL64_PAYLOAD_MASK  UINT64_C(0x0000FFFFFFFFFFFF)
-#define WVAL64_TAG_SHIFT     48
-#define WVAL64_TAG_INT       UINT64_C(1)
-#define WVAL64_TAG_BOOL      UINT64_C(2)
-#define WVAL64_TAG_SENTINEL  UINT64_C(3)
-#define WVAL64_TAG_PTR       UINT64_C(4)
-#define WVAL64_TAG_SSO_SHORT UINT64_C(5)
-#define WVAL64_TAG_SSO_6     UINT64_C(6)
-#define WVAL64_TAG_RESERVED  UINT64_C(7)
-#define WVAL64_UNIT_VAL      (WVAL64_QNAN_PREFIX | (WVAL64_TAG_SENTINEL << WVAL64_TAG_SHIFT) | UINT64_C(0))
-#define WVAL64_NONE_VAL      (WVAL64_QNAN_PREFIX | (WVAL64_TAG_SENTINEL << WVAL64_TAG_SHIFT) | UINT64_C(1))
-#define WVAL64_CANON_NAN     UINT64_C(0x7FF8000000000000)
+#define W_RUNTIME_ABI_VERSION 3
+struct WVal {
+    uint64_t bits;
+};
+typedef WVal WVal64;
 
-static inline bool wysna_value_is_error_type(WVal value, const char* kind, const char* name) {
-    if (strcmp(kind, "int") == 0) return value.tag == W_INT;
-    if (strcmp(kind, "float") == 0) return value.tag == W_FLOAT;
-    if (strcmp(kind, "bool") == 0) return value.tag == W_BOOL;
-    if (strcmp(kind, "str") == 0) return value.tag == W_STR;
-    if (strcmp(kind, "struct") == 0) {
-        return value.tag == W_STRUCT && value.as.st && (value.as.st->name == name || strcmp(value.as.st->name, name) == 0);
-    }
-    if (strcmp(kind, "class") == 0) {
-        return value.tag == W_OBJECT && value.as.st && (value.as.st->name == name || strcmp(value.as.st->name, name) == 0);
-    }
-    if (strcmp(kind, "enum") == 0) {
-        return value.tag == W_ENUM && value.as.en.enum_name && (value.as.en.enum_name == name || strcmp(value.as.en.enum_name, name) == 0);
-    }
-    return false;
-}
+#define WVAL_DOUBLE_OFFSET    UINT64_C(0x0001000000000000)
+#define WVAL_DOUBLE_MAX_ENC   UINT64_C(0xFFF0000000000000)
+#define WVAL_HI_SHIFT         48
+#define WVAL_PAYLOAD_MASK     UINT64_C(0x0000FFFFFFFFFFFF)
+#define WVAL_RAW_PTR_FLAG     UINT64_C(0x0000800000000000)
+#define WVAL_RAW_PTR_MASK     UINT64_C(0x00007FFFFFFFFFFF)
+
+#define WVAL_UNIT_BITS        UINT64_C(0x0000000000000000)
+#define WVAL_NONE_BITS        UINT64_C(0x0000000000000001)
+#define WVAL_FALSE_BITS       UINT64_C(0x0000000000000002)
+#define WVAL_TRUE_BITS        UINT64_C(0x0000000000000003)
+#define WVAL_NULL_PTR_BITS    WVAL_RAW_PTR_FLAG
+#define WVAL_CANON_NAN_ENC    (UINT64_C(0x7FF8000000000000) + WVAL_DOUBLE_OFFSET)
+
+#define WVAL_HI_INT           UINT64_C(0xFFF2)
+#define WVAL_HI_SSO_SHORT     UINT64_C(0xFFF3)
+#define WVAL_HI_SSO_6         UINT64_C(0xFFF4)
+#define WVAL_HI_CSTR          UINT64_C(0xFFF5)
+#define WVAL_HI_STR_PTR       UINT64_C(0xFFF6)
+#define WVAL_HI_LIST          UINT64_C(0xFFF7)
+#define WVAL_HI_DICT          UINT64_C(0xFFF8)
+#define WVAL_HI_TUPLE         UINT64_C(0xFFF9)
+#define WVAL_HI_STRUCT        UINT64_C(0xFFFA)
+#define WVAL_HI_OBJECT        UINT64_C(0xFFFB)
+#define WVAL_HI_ENUM          UINT64_C(0xFFFC)
+#define WVAL_HI_OK            UINT64_C(0xFFFD)
+#define WVAL_HI_ERR           UINT64_C(0xFFFE)
+#define WVAL_HI_EXT           UINT64_C(0xFFFF)
+
+/* Backward-compatible constants for callers referencing WVal64 masks directly. */
+#define WVAL64_UNIT_VAL       ((WVal){WVAL_UNIT_BITS})
+#define WVAL64_NONE_VAL       ((WVal){WVAL_NONE_BITS})
+#define WVAL64_CANON_NAN      ((WVal){WVAL_CANON_NAN_ENC})
 
 typedef WVal (*WInvoke)(WVal environment, int32_t argc, const WVal* argv);
 
@@ -327,15 +306,23 @@ struct WClassVTable {
     int32_t count;
     const WInvoke* methods;
 };
-static inline WVal wysna_virtual_call(WVal receiver, int32_t slot, int32_t argc, const WVal* argv) {
-    const WClassVTable* table = receiver.tag == W_OBJECT ? receiver.as.st->vtable : NULL;
-    if (!table || slot < 0 || slot >= table->count || !table->methods[slot]) {
-        fprintf(stderr, "[W4003] RuntimeError: Invalid virtual method dispatch\n"); exit(1);
-    }
-    return table->methods[slot](receiver, argc, argv);
-}
+
+struct WIntBox {
+    uint32_t kind;
+    int32_t refcount; /* -1 = immortal literal, -2 = stack-scoped borrow, >=1 = heap ARC */
+    int64_t value;
+};
+
+struct WEnumBuf {
+    int32_t refcount; /* -1 = immortal unit literal, >=1 = heap ARC */
+    bool has_payload;
+    const char* enum_name;
+    const char* variant;
+    WVal payload;
+};
 
 struct WFunctionBuf {
+    uint32_t kind;
     int32_t refcount;
     WInvoke invoke;
     WVal environment;

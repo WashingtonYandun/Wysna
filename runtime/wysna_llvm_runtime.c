@@ -9,7 +9,7 @@ typedef char WysnaLlvmAbiVersion[(WYSNA_LLVM_RUNTIME_ABI == WYSNA_LLVM_EXPECTED_
 typedef char WysnaLlvmValueSize[(sizeof(WVal) == WYSNA_LLVM_VALUE_BYTES) ? 1 : -1];
 typedef char WysnaLlvmLiteralSize[(sizeof(WStringLiteral) == WYSNA_LLVM_LITERAL_BYTES) ? 1 : -1];
 typedef char WysnaLlvmValueAlignment[(offsetof(struct { char prefix; WVal value; }, value) == WYSNA_LLVM_ALIGNMENT) ? 1 : -1];
-typedef char WysnaLlvmPayloadOffset[(offsetof(WVal, as) == 8) ? 1 : -1];
+typedef char WysnaLlvmBitsOffset[(offsetof(WVal, bits) == 0) ? 1 : -1];
 typedef char WysnaLlvmVTableSize[(sizeof(WClassVTable) == 16) ? 1 : -1];
 typedef char WysnaLlvmVTableMethods[(offsetof(WClassVTable, methods) == 8) ? 1 : -1];
 typedef char WysnaLlvmInvokeSize[(sizeof(WInvoke) == sizeof(void*)) ? 1 : -1];
@@ -21,9 +21,9 @@ void wysna_llvm_cleanup(void) { wysna_runtime_cleanup(); }
 void wysna_llvm_box_int(void* out, int64_t value) { wysna_assign(out, wysna_int(value)); }
 void wysna_llvm_box_float(void* out, double value) { wysna_assign(out, wysna_float(value)); }
 void wysna_llvm_box_bool(void* out, int32_t value) { wysna_assign(out, wysna_bool(value != 0)); }
-int64_t wysna_llvm_int(const void* value) { return ((const WVal*)value)->as.i; }
-double wysna_llvm_float(const void* value) { return ((const WVal*)value)->as.f; }
-int32_t wysna_llvm_bool(const void* value) { return ((const WVal*)value)->as.b ? 1 : 0; }
+int64_t wysna_llvm_int(const void* value) { return wysna_as_int(*(const WVal*)value); }
+double wysna_llvm_float(const void* value) { return wysna_as_float(*(const WVal*)value); }
+int32_t wysna_llvm_bool(const void* value) { return wysna_as_bool(*(const WVal*)value) ? 1 : 0; }
 void wysna_llvm_clone(void* out, const void* value) { wysna_assign(out, wysna_clone(*(const WVal*)value)); }
 void wysna_llvm_move(void* out, void* value) {
     if (out != value) wysna_assign(out, wysna_move(value));
@@ -58,21 +58,21 @@ int32_t wysna_llvm_compare(const void* left, const void* right, int32_t kind) {
     switch (kind) {
     case 0: return wysna_eq(a, b);
     case 1: return !wysna_eq(a, b);
-    case 2: return wysna_lt(a, b).as.b;
-    case 3: return wysna_le(a, b).as.b;
-    case 4: return wysna_gt(a, b).as.b;
-    case 5: return wysna_ge(a, b).as.b;
+    case 2: return wysna_as_bool(wysna_lt(a, b));
+    case 3: return wysna_as_bool(wysna_le(a, b));
+    case 4: return wysna_as_bool(wysna_gt(a, b));
+    case 5: return wysna_as_bool(wysna_ge(a, b));
     default: wysna_runtime_fail("W9999", "Invalid LLVM comparison ABI"); return 0;
     }
 }
 int32_t wysna_llvm_range_count(int64_t start, int64_t end, int32_t inclusive) {
-    return wysna_range_count(wysna_int(start), wysna_int(end), inclusive != 0);
+    return wysna_range_count(wysna_borrow_int(start), wysna_borrow_int(end), inclusive != 0);
 }
 void wysna_llvm_position(const char* file, int32_t line, int32_t col) { wysna_runtime_set_position(file, line, col); }
 void wysna_llvm_fail(const char* code, const char* message, const char* file, int32_t line, int32_t col) {
     wysna_runtime_set_position(file, line, col); wysna_runtime_fail(code, message);
 }
-void wysna_llvm_exit(int64_t status) { wysna_builtin_exit(wysna_int(status)); }
+void wysna_llvm_exit(int64_t status) { wysna_builtin_exit(wysna_borrow_int(status)); }
 
 void wysna_llvm_none(void* out) { wysna_assign(out, wysna_none()); }
 #define WYSNA_LLVM_OPERATION(name, code, ...) \
@@ -121,13 +121,13 @@ int32_t wysna_llvm_test(const void* input, int32_t kind, const char* first, cons
     WVal value = *(const WVal*)input;
     switch (kind) {
     case 0: return wysna_is_none(value);
-    case 1: return value.tag == W_ERR;
-    case 2: return value.tag == W_ERR || wysna_is_none(value);
-    case 3: return value.tag == W_TUPLE && value.as.tuple->len == count;
+    case 1: return wysna_is_err(value);
+    case 2: return wysna_is_err(value) || wysna_is_none(value);
+    case 3: return wysna_is_tuple_len(value, count);
     case 4: return wysna_value_is_error_type(value, first, second);
     case 5: return wysna_is_enum_variant(value, first, second);
     case 6: return !wysna_is_none(value);
-    case 7: return value.tag == W_OK;
+    case 7: return wysna_is_ok(value);
     default: wysna_runtime_fail("W9999", "Invalid LLVM predicate kind"); return 0;
     }
 }
@@ -146,15 +146,17 @@ void wysna_llvm_invoke(void* out, const void* function, int32_t count, const voi
 void wysna_llvm_virtual(void* out, const void* receiver, int32_t slot, int32_t count, const void* arguments) {
     wysna_assign(out, wysna_virtual_call(*(const WVal*)receiver, slot, count, arguments));
 }
-void wysna_llvm_set_vtable(void* value, const void* table) { ((WVal*)value)->as.st->vtable = table; }
+void wysna_llvm_set_vtable(void* value, const void* table) {
+    wysna_set_vtable(*(WVal*)value, (const WClassVTable*)table);
+}
 int32_t wysna_llvm_entry_status(const void* input) {
     WVal value = *(const WVal*)input;
-    if (value.tag == W_ERR) { wysna_report_entrypoint_error(value.as.box->val); return 1; }
+    if (wysna_is_err(value)) { wysna_report_entrypoint_error(wysna_as_box(value)->val); return 1; }
     return 0;
 }
 int64_t wysna_llvm_async_spawn(const void* fn) {
     return wysna_async_spawn_handle(*(const WVal*)fn);
 }
 void wysna_llvm_async_take_option(void* out, int64_t handle, const void* fallback) {
-    wysna_assign(out, wysna_spawn_take_option(wysna_int(handle), *(const WVal*)fallback));
+    wysna_assign(out, wysna_spawn_take_option(wysna_borrow_int(handle), *(const WVal*)fallback));
 }

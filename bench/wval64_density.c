@@ -1,8 +1,27 @@
-/* Benchmark W07-c: L1 cache-density comparison between 8-byte WVal64 and 32-byte WVal. */
+/* Benchmark W07-c: L1/L2 cache-density comparison between native 8-byte WVal (ABI v3) and legacy 32-byte WVal. */
 #include "runtime/wysna_runtime.h"
 #include <stdio.h>
 #include <stdint.h>
 #include <time.h>
+
+typedef struct {
+    int32_t tag;
+    uint32_t aux;
+    union {
+        int64_t i;
+        double f;
+        struct {
+            char* data;
+            void* owner;
+            size_t length;
+        } string;
+        void* pointer;
+    } as;
+} WValLegacy32;
+
+typedef char CheckWVal8[sizeof(WVal) == 8 ? 1 : -1];
+typedef char CheckWVal64[sizeof(WVal64) == 8 ? 1 : -1];
+typedef char CheckLegacy32[sizeof(WValLegacy32) == 32 ? 1 : -1];
 
 static uint64_t bench_ns(void) {
 #ifdef _WIN32
@@ -19,13 +38,15 @@ static uint64_t bench_ns(void) {
 
 int main(void) {
     enum { N = 131072, ROUNDS = 128 };
-    WVal* wide = (WVal*)calloc(N, sizeof(WVal));
-    WVal64* compact = (WVal64*)calloc(N, sizeof(WVal64));
+    WValLegacy32* wide = (WValLegacy32*)calloc(N, sizeof(WValLegacy32));
+    WVal* compact = (WVal*)calloc(N, sizeof(WVal));
     if (!wide || !compact) return 1;
 
     for (size_t i = 0; i < N; i++) {
-        wide[i] = wysna_int((int64_t)i);
-        compact[i] = wysna_val64_pack(wide[i]);
+        wide[i].tag = W_INT;
+        wide[i].aux = 0;
+        wide[i].as.i = (int64_t)i;
+        compact[i] = wysna_int((int64_t)i);
     }
 
     uint64_t t0 = bench_ns();
@@ -41,7 +62,7 @@ int main(void) {
     int64_t sum_compact = 0;
     for (int r = 0; r < ROUNDS; r++) {
         for (size_t i = 0; i < N; i++) {
-            sum_compact += wysna_val64_unpack(compact[i]).as.i;
+            sum_compact += wysna_as_int(compact[i]);
         }
     }
     uint64_t compact_ns = bench_ns() - t1;

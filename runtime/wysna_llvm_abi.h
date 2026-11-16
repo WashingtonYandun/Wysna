@@ -1,7 +1,7 @@
-/* Native ABI 2 uses pointer-based WVal boundaries and target-specific callback adapters. */
+/* Native ABI 3 unifies every runtime value into an 8-byte NaN-boxed word passed by value in GPRs. */
 #ifndef WYSNA_LLVM_ABI_H
 #define WYSNA_LLVM_ABI_H
-#define WYSNA_LLVM_RUNTIME_ABI 2
+#define WYSNA_LLVM_RUNTIME_ABI 3
 #include <stdint.h>
 void wysna_llvm_init(int32_t argc, char** argv);
 void wysna_llvm_cleanup(void);

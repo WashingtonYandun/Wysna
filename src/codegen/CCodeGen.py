@@ -105,7 +105,7 @@ class CCodeGen:
         """Protect an evaluated value before later operands can mutate its owner."""
         if value.startswith("_t"):
             return value
-        if value.startswith(("wysna_make_", "wysna_new_")):
+        if value.startswith(("wysna_make_", "wysna_new_", "wysna_enum")):
             return self._bind_call(value, out)
         return self._bind_call(f"wysna_clone({value})", out)
 
@@ -115,7 +115,7 @@ class CCodeGen:
     def _own_expr(self, val_expr: str) -> str:
         if val_expr.startswith("_t"):
             return f"wysna_move(&{val_expr})"
-        if val_expr.startswith("wysna_make_") or val_expr.startswith("wysna_new_") or val_expr.startswith("wysna_clone("):
+        if val_expr.startswith(("wysna_make_", "wysna_new_", "wysna_clone(", "wysna_enum")):
             return val_expr
         return f"wysna_clone({val_expr})"
 
@@ -362,7 +362,7 @@ class CCodeGen:
                 new_lines.append(f"    wysna_release_array({len(all_fields)}, _v);")
             else:
                 new_lines.append(f'    WVal v_self = wysna_make_object("{stmt.name}", 0, NULL, NULL);')
-            new_lines.append(f"    v_self.as.st->vtable = &wysna_vtable_{stmt.name};")
+            new_lines.append(f"    wysna_set_vtable(v_self, &wysna_vtable_{stmt.name});")
             if init_m is not None:
                 new_lines.append(f"    wysna_release(wysna_method_{init_cls}__init({', '.join(init_args)}));")
             new_lines.append("    return v_self;")
@@ -429,7 +429,7 @@ class CCodeGen:
                 self.fn_Definitions.append(f"static WVal {c_name}({params_sig}) {{\n    return wysna_parallel_map(v_{stmt.params[0].name}, v_{stmt.params[1].name});\n}}")
                 return
             if (f"{algo_mod}parallel_batch__" in c_name or c_name.endswith(f"{algo_mod}parallel_batch")) and len(stmt.params) == 3:
-                self.fn_Definitions.append(f"static WVal {c_name}({params_sig}) {{\n    return wysna_parallel_batch(v_{stmt.params[0].name}, (v_{stmt.params[1].name}).as.i, v_{stmt.params[2].name});\n}}")
+                self.fn_Definitions.append(f"static WVal {c_name}({params_sig}) {{\n    return wysna_parallel_batch(v_{stmt.params[0].name}, wysna_as_int(v_{stmt.params[1].name}), v_{stmt.params[2].name});\n}}")
                 return
             if (f"{algo_mod}parallel_filter__" in c_name or c_name.endswith(f"{algo_mod}parallel_filter")) and len(stmt.params) == 2:
                 self.fn_Definitions.append(f"static WVal {c_name}({params_sig}) {{\n    return wysna_parallel_filter(v_{stmt.params[0].name}, v_{stmt.params[1].name});\n}}")
@@ -508,7 +508,7 @@ class CCodeGen:
         which is indistinguishable from success for make/CI/shell.
         """
         out.append(
-            "if (_t_main.tag == W_ERR) { wysna_report_entrypoint_error(_t_main.as.box->val); "
+            "if (wysna_is_err(_t_main)) { wysna_report_entrypoint_error(wysna_as_box(_t_main)->val); "
             "wysna_release(_t_main); wysna_runtime_cleanup(); return 1; }"
         )
         out.append("wysna_release(_t_main);")
@@ -559,7 +559,7 @@ class CCodeGen:
             loop_inner: List[str] = []
             cond_val = self.emit_expr(stmt.condition, loop_inner)
             cond_b = self.new_aux("_cond")
-            loop_inner.append(f"bool {cond_b} = ({cond_val}).as.b;")
+            loop_inner.append(f"bool {cond_b} = wysna_as_bool({cond_val});")
             cond_cleanup: List[str] = []
             self._emit_cleanup_until_loop(cond_cleanup)
             if cond_cleanup:
@@ -594,7 +594,7 @@ class CCodeGen:
             self._declare_owned_var(iter_tmp, self._own_expr(iter_val), for_outer)
             for_outer.append(f"for (int32_t {idx_tmp} = 0; {idx_tmp} < wysna_list_iteration_length_at({iter_tmp}, {self.escape_c_str(self.file)}, {stmt.line}, {stmt.col}); {idx_tmp}++) {{")
             self._push_scope("loop")
-            loop_inner = [f"WVal {item_tmp} = {iter_tmp}.as.list->data[{idx_tmp}];"]
+            loop_inner = [f"WVal {item_tmp} = wysna_as_list({iter_tmp})->data[{idx_tmp}];"]
             self._emit_pattern_bindings(stmt.pattern, item_tmp, loop_inner)
             body_v = self.emit_block_value(stmt.body, loop_inner)
             loop_inner.append(f"(void){body_v};")
@@ -645,11 +645,11 @@ class CCodeGen:
                     self._emit_pattern_bindings(pattern.args[0], sub_tmp, out)
             else:
                 if len(pattern.args) == 1:
-                    sub_val = f"({val_expr}).as.en.box->val"
+                    sub_val = f"wysna_as_enum({val_expr})->payload"
                     self._emit_pattern_bindings(pattern.args[0], sub_val, out)
                 elif len(pattern.args) > 1:
                     for idx, arg_pat in enumerate(pattern.args):
-                        sub_val = f"({val_expr}).as.en.box->val.as.tuple->items[{idx}]"
+                        sub_val = f"wysna_as_tuple(wysna_as_enum({val_expr})->payload)->items[{idx}]"
                         self._emit_pattern_bindings(arg_pat, sub_val, out)
 
     def _emit_pattern_cond(self, pattern: Pattern, val_expr: str, out: List[str]) -> str:
@@ -657,7 +657,7 @@ class CCodeGen:
             return "true"
         if isinstance(pattern, IdentifierPattern):
             if pattern.name in ("None", "none"):
-                return f"(({val_expr}).tag == W_NONE || (({val_expr}).tag == W_ENUM && strcmp(({val_expr}).as.en.enum_name, \"Option\") == 0 && strcmp(({val_expr}).as.en.variant, \"None\") == 0))"
+                return f"wysna_is_none({val_expr})"
             return "true"
         if isinstance(pattern, LiteralPattern):
             lit_v = self.emit_expr(pattern.literal, out)
@@ -667,9 +667,9 @@ class CCodeGen:
             return f"wysna_value_is_error_type({val_expr}, {self.escape_c_str(kind)}, {self.escape_c_str(name)})"
         if isinstance(pattern, EnumPattern):
             if pattern.variant in ("None", "none") and (pattern.enum_name is None or pattern.enum_name.split("__", 1)[0] == "Option"):
-                return f"(({val_expr}).tag == W_NONE || (({val_expr}).tag == W_ENUM && strcmp(({val_expr}).as.en.enum_name, \"Option\") == 0 && strcmp(({val_expr}).as.en.variant, \"None\") == 0))"
+                return f"wysna_is_none({val_expr})"
             if pattern.variant == "Some" and (pattern.enum_name is None or pattern.enum_name.split("__", 1)[0] == "Option"):
-                base_cond = f"(!(({val_expr}).tag == W_NONE || (({val_expr}).tag == W_ENUM && strcmp(({val_expr}).as.en.enum_name, \"Option\") == 0 && strcmp(({val_expr}).as.en.variant, \"None\") == 0)))"
+                base_cond = f"(!wysna_is_none({val_expr}))"
                 if not pattern.args:
                     return base_cond
                 sub_cond = self._emit_pattern_cond(pattern.args[0], f"wysna_peek_optional({val_expr})", out)
@@ -677,7 +677,7 @@ class CCodeGen:
                     return base_cond
                 return f"({base_cond} && {sub_cond})"
             if pattern.variant == "Ok" and (pattern.enum_name is None or pattern.enum_name.split("__", 1)[0] == "Result"):
-                base_cond = f"(({val_expr}).tag == W_OK || (({val_expr}).tag == W_ENUM && strcmp(({val_expr}).as.en.enum_name, \"Result\") == 0 && strcmp(({val_expr}).as.en.variant, \"Ok\") == 0))"
+                base_cond = f"wysna_is_ok({val_expr})"
                 if not pattern.args:
                     return base_cond
                 sub_cond = self._emit_pattern_cond(pattern.args[0], f"wysna_peek_ok({val_expr})", out)
@@ -685,7 +685,7 @@ class CCodeGen:
                     return base_cond
                 return f"({base_cond} && {sub_cond})"
             if pattern.variant == "Err" and (pattern.enum_name is None or pattern.enum_name.split("__", 1)[0] == "Result"):
-                base_cond = f"(({val_expr}).tag == W_ERR || (({val_expr}).tag == W_ENUM && strcmp(({val_expr}).as.en.enum_name, \"Result\") == 0 && strcmp(({val_expr}).as.en.variant, \"Err\") == 0))"
+                base_cond = f"wysna_is_err({val_expr})"
                 if not pattern.args:
                     return base_cond
                 sub_cond = self._emit_pattern_cond(pattern.args[0], f"wysna_peek_err({val_expr})", out)
@@ -693,29 +693,29 @@ class CCodeGen:
                     return base_cond
                 return f"({base_cond} && {sub_cond})"
 
-            conds: List[str] = [f"(({val_expr}).tag == W_ENUM && strcmp(({val_expr}).as.en.variant, \"{pattern.variant}\") == 0)"]
+            conds: List[str] = [f"(wysna_as_enum({val_expr}) != NULL && strcmp(wysna_as_enum({val_expr})->variant, \"{pattern.variant}\") == 0)"]
             if pattern.enum_name:
-                conds.append(f"(wysna_builtin_name(({val_expr}).as.en.enum_name, \"{pattern.enum_name}\"))")
+                conds.append(f"(wysna_builtin_name(wysna_as_enum({val_expr})->enum_name, \"{pattern.enum_name}\"))")
             if not pattern.args:
                 return "(" + " && ".join(conds) + ")"
 
-            conds.append(f"(({val_expr}).as.en.box != NULL)")
+            conds.append(f"(wysna_as_enum({val_expr})->has_payload)")
             if len(pattern.args) == 1:
-                sub_c = self._emit_pattern_cond(pattern.args[0], f"({val_expr}).as.en.box->val", out)
+                sub_c = self._emit_pattern_cond(pattern.args[0], f"wysna_as_enum({val_expr})->payload", out)
                 if sub_c != "true":
                     conds.append(sub_c)
             else:
-                conds.append(f"(({val_expr}).as.en.box->val.tag == W_TUPLE && ({val_expr}).as.en.box->val.as.tuple->len == {len(pattern.args)})")
+                conds.append(f"wysna_is_tuple_len(wysna_as_enum({val_expr})->payload, {len(pattern.args)})")
                 for idx, arg_pat in enumerate(pattern.args):
-                    sub_c = self._emit_pattern_cond(arg_pat, f"({val_expr}).as.en.box->val.as.tuple->items[{idx}]", out)
+                    sub_c = self._emit_pattern_cond(arg_pat, f"wysna_as_tuple(wysna_as_enum({val_expr})->payload)->items[{idx}]", out)
                     if sub_c != "true":
                         conds.append(sub_c)
             return "(" + " && ".join(conds) + ")"
 
         if isinstance(pattern, TuplePattern):
-            conds = [f"(({val_expr}).tag == W_TUPLE && ({val_expr}).as.tuple->len == {len(pattern.elements)})"]
+            conds = [f"wysna_is_tuple_len({val_expr}, {len(pattern.elements)})"]
             for idx, elem_pat in enumerate(pattern.elements):
-                sub_c = self._emit_pattern_cond(elem_pat, f"({val_expr}).as.tuple->items[{idx}]", out)
+                sub_c = self._emit_pattern_cond(elem_pat, f"wysna_as_tuple({val_expr})->items[{idx}]", out)
                 if sub_c != "true":
                     conds.append(sub_c)
             return "(" + " && ".join(conds) + ")"
@@ -830,7 +830,7 @@ class CCodeGen:
             self._push_scope("block")
             inner: List[str] = []
             eb_cond = self.emit_expr(eb.condition, inner)
-            inner.append(f"if (({eb_cond}).as.b) {{")
+            inner.append(f"if (wysna_as_bool({eb_cond})) {{")
             self._push_scope("block")
             eb_stmts: List[str] = []
             eb_v = self.emit_block_value(eb.body, eb_stmts)
@@ -869,7 +869,7 @@ class CCodeGen:
             inner = []
             self._emit_pattern_bindings(arm.pattern, subj_tmp, inner)
             guard = self.emit_expr(arm.guard, inner)
-            inner.append(f"if (({guard}).as.b) {{")
+            inner.append(f"if (wysna_as_bool({guard})) {{")
             self._push_scope("block")
             body = []
             result = self.emit_block_value(arm.body, body)

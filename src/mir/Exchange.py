@@ -12,7 +12,7 @@ from mir.Nodes import (
 FORMAT = "wysna.mir"
 SCHEMA_VERSION = 1
 SEMANTIC_REVISION = "0.5.0"
-RUNTIME_ABI_VERSION = 2
+RUNTIME_ABI_VERSION = 3
 
 _NODE_TYPES = {
     item.__name__: item

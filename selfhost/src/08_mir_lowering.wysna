@@ -354,7 +354,7 @@ fn mir_module_json(module: MirModule) -> str {
     let mut enum_count = 0
     for record in module.records { if module.types[record.type_id].kind == "enum" { enum_count = enum_count + 1 } }
     let payload = "{\"$type\":\"Module\",\"file\":" + mir_quote(module.file) + ",\"arena_id\":\"compiler-native-core-v1\",\"functions\":" + functions + "],\"globals\":" + globals + ",\"layouts\":" + mir_layouts_json(module) + ",\"virtual_slots\":" + mir_virtual_slots_json(module) + ",\"externs\":" + mir_externs_json(module) + ",\"exports\":[],\"library_mode\":false,\"enum_count\":" + str(enum_count) + "}"
-    return "{\"format\":\"wysna.mir\",\"schema_version\":1,\"semantic_revision\":\"0.5.0\",\"runtime_abi_version\":2,\"type_arena\":" + mir_arena_json(module) + ",\"module\":" + payload + "}\n"
+    return "{\"format\":\"wysna.mir\",\"schema_version\":1,\"semantic_revision\":\"0.5.0\",\"runtime_abi_version\":3,\"type_arena\":" + mir_arena_json(module) + ",\"module\":" + payload + "}\n"
 }
 
 fn emit_mir_module(src: str, file: str) -> str {

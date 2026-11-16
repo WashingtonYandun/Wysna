@@ -101,36 +101,39 @@ static inline bool wysna_utf8_cp_offset_n(const char* s, size_t length, int64_t 
 
 /* Keep UTF-8 decoding and index construction out of cached index callers. */
 static W_RUNTIME_NOINLINE bool wysna_string_offset_slow(WVal value, int64_t index, size_t* offset, size_t* length) {
-    WStringBuf* owner = value.as.string.owner;
-    if (!owner) return wysna_utf8_cp_offset_n(value.as.string.data, value.as.string.length, index, offset, length);
+    char scratch[7];
+    size_t blen = 0;
+    const char* sdata = wysna_str_bytes(value, scratch, &blen);
+    WStringBuf* owner = wysna_str_owner(value);
+    if (!owner) return wysna_utf8_cp_offset_n(sdata, blen, index, offset, length);
     if (!owner->codepoint_offsets) {
         size_t ascii_pos = 0;
-        const unsigned char* bytes = (const unsigned char*)value.as.string.data;
-        while (ascii_pos < value.as.string.length && bytes[ascii_pos] < 0x80) {
+        const unsigned char* bytes = (const unsigned char*)sdata;
+        while (ascii_pos < blen && bytes[ascii_pos] < 0x80) {
             W_STRING_SCAN_STEP();
             ascii_pos++;
         }
-        if (ascii_pos == value.as.string.length) {
-            owner->codepoint_count = value.as.string.length;
-            if ((uint64_t)index > value.as.string.length) return false;
+        if (ascii_pos == blen) {
+            owner->codepoint_count = blen;
+            if ((uint64_t)index > blen) return false;
             *offset = (size_t)index;
-            *length = (uint64_t)index < value.as.string.length ? 1 : 0;
+            *length = (uint64_t)index < blen ? 1 : 0;
             return *length != 0;
         }
-        if (value.as.string.length > SIZE_MAX / sizeof(size_t) - 1) {
+        if (blen > SIZE_MAX / sizeof(size_t) - 1) {
             fprintf(stderr, "[W4003] RuntimeError: String index too large\n"); exit(1);
         }
         size_t count_hint = owner->codepoint_count;
-        if (count_hint == SIZE_MAX) count_hint = (size_t)wysna_utf8_cp_len_n(value.as.string.data, value.as.string.length);
+        if (count_hint == SIZE_MAX) count_hint = (size_t)wysna_utf8_cp_len_n(sdata, blen);
         owner->codepoint_offsets = (size_t*)wysna_alloc_safe((count_hint + 1) * sizeof(size_t));
         size_t position = 0, count = 0;
-        while (position < value.as.string.length) {
+        while (position < blen) {
             size_t step = 1;
             owner->codepoint_offsets[count++] = position;
-            wysna_utf8_valid_codepoint_at_n(value.as.string.data, value.as.string.length, position, &step, NULL);
+            wysna_utf8_valid_codepoint_at_n(sdata, blen, position, &step, NULL);
             position += step;
         }
-        owner->codepoint_offsets[count] = value.as.string.length;
+        owner->codepoint_offsets[count] = blen;
         owner->codepoint_count = count;
     }
     if ((uint64_t)index > owner->codepoint_count) return false;
@@ -142,28 +145,34 @@ static W_RUNTIME_NOINLINE bool wysna_string_offset_slow(WVal value, int64_t inde
 /* Lazily index shared owned strings once; repeated lexer indexing is O(1). */
 static inline bool wysna_string_offset(WVal value, int64_t index, size_t* offset, size_t* length) {
     if (index < 0) return false;
-    WStringBuf* owner = value.as.string.owner;
-    if (owner && owner->codepoint_count == value.as.string.length) {
-        if ((uint64_t)index > value.as.string.length) return false;
-        *offset = (size_t)index;
-        *length = (uint64_t)index < value.as.string.length ? 1 : 0;
-        return *length != 0;
-    }
-    if (owner && owner->codepoint_offsets) {
-        if ((uint64_t)index > owner->codepoint_count) return false;
-        *offset = owner->codepoint_offsets[index];
-        *length = (uint64_t)index < owner->codepoint_count ? owner->codepoint_offsets[index + 1] - *offset : 0;
-        return *length != 0;
+    WStringBuf* owner = wysna_str_owner(value);
+    if (owner) {
+        if (owner->codepoint_count == owner->byte_length) {
+            if ((uint64_t)index > owner->byte_length) return false;
+            *offset = (size_t)index;
+            *length = (uint64_t)index < owner->byte_length ? 1 : 0;
+            return *length != 0;
+        }
+        if (owner->codepoint_offsets) {
+            if ((uint64_t)index > owner->codepoint_count) return false;
+            *offset = owner->codepoint_offsets[index];
+            *length = (uint64_t)index < owner->codepoint_count ? owner->codepoint_offsets[index + 1] - *offset : 0;
+            return *length != 0;
+        }
     }
     return wysna_string_offset_slow(value, index, offset, length);
 }
 
 /* Owned strings cache counts independently of the lazy random-access index. */
 static inline int64_t wysna_string_length(WVal value) {
-    if (value.as.string.owner && value.as.string.owner->codepoint_count != SIZE_MAX)
-        return (int64_t)value.as.string.owner->codepoint_count;
-    int64_t count = wysna_utf8_cp_len_n(value.as.string.data, value.as.string.length);
-    if (value.as.string.owner) value.as.string.owner->codepoint_count = (size_t)count;
+    WStringBuf* owner = wysna_str_owner(value);
+    if (owner && owner->codepoint_count != SIZE_MAX)
+        return (int64_t)owner->codepoint_count;
+    char scratch[7];
+    size_t blen = 0;
+    const char* sdata = wysna_str_bytes(value, scratch, &blen);
+    int64_t count = wysna_utf8_cp_len_n(sdata, blen);
+    if (owner) owner->codepoint_count = (size_t)count;
     return count;
 }
 

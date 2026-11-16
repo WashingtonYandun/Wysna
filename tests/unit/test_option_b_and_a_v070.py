@@ -23,9 +23,9 @@ def test_wval64_nan_tagging_and_string_hash_cache():
 #include <stddef.h>
 #include <stdint.h>
 
-typedef char CheckWVal32[sizeof(WVal) == 32 ? 1 : -1];
+typedef char CheckWVal8[sizeof(WVal) == 8 ? 1 : -1];
 typedef char CheckWVal64[sizeof(WVal64) == 8 ? 1 : -1];
-typedef char CheckOffset[offsetof(WVal, as) == 8 ? 1 : -1];
+typedef char CheckOffset[offsetof(WVal, bits) == 0 ? 1 : -1];
 typedef char CheckLit48[sizeof(WStringLiteral) == 48 ? 1 : -1];
 
 int main(int argc, char** argv) {
@@ -36,10 +36,10 @@ int main(int argc, char** argv) {
     WVal64 n64 = wysna_val64_pack(wysna_none());
     WVal64 bt = wysna_val64_pack(wysna_bool(true));
     WVal64 bf = wysna_val64_pack(wysna_bool(false));
-    assert(wysna_val64_unpack(u64).tag == W_UNIT);
-    assert(wysna_val64_unpack(n64).tag == W_NONE);
-    assert(wysna_val64_unpack(bt).tag == W_BOOL && wysna_val64_unpack(bt).as.b == true);
-    assert(wysna_val64_unpack(bf).tag == W_BOOL && wysna_val64_unpack(bf).as.b == false);
+    assert(wysna_tag(wysna_val64_unpack(u64)) == W_UNIT);
+    assert(wysna_tag(wysna_val64_unpack(n64)) == W_NONE);
+    assert(wysna_tag(wysna_val64_unpack(bt)) == W_BOOL && wysna_as_bool(wysna_val64_unpack(bt)) == true);
+    assert(wysna_tag(wysna_val64_unpack(bf)) == W_BOOL && wysna_as_bool(wysna_val64_unpack(bf)) == false);
     assert(!wysna_val64_eq(u64, n64));
     assert(wysna_val64_eq(bt, bt) && !wysna_val64_eq(bt, bf));
 
@@ -48,24 +48,29 @@ int main(int argc, char** argv) {
     WVal64 f2 = wysna_val64_pack(wysna_float(0.0));
     WVal64 f3 = wysna_val64_pack(wysna_float(-0.0));
     WVal64 fnan = wysna_val64_pack(wysna_float(NAN));
-    assert(wysna_val64_is_double(f1) && wysna_val64_unpack(f1).as.f == -3.125);
+    assert(wysna_val64_is_double(f1) && wysna_as_float(wysna_val64_unpack(f1)) == -3.125);
     assert(wysna_val64_eq(f2, f3));
     assert(!wysna_val64_eq(fnan, fnan));
-    assert(isnan(wysna_val64_unpack(fnan).as.f));
+    assert(isnan(wysna_as_float(wysna_val64_unpack(fnan))));
 
     /* 3. 48-bit signed integers */
     int64_t max48 = (INT64_C(1) << 47) - 1;
     int64_t min48 = -(INT64_C(1) << 47);
     assert(wysna_val64_can_pack(wysna_int(max48)));
     assert(wysna_val64_can_pack(wysna_int(min48)));
-    assert(!wysna_val64_can_pack(wysna_int(max48 + 1)));
-    assert(!wysna_val64_can_pack(wysna_int(min48 - 1)));
+    WVal over48 = wysna_int(max48 + 1);
+    WVal under48 = wysna_int(min48 - 1);
+    assert(!wysna_val64_can_pack(over48));
+    assert(!wysna_val64_can_pack(under48));
+    assert(wysna_as_int(over48) == max48 + 1 && wysna_as_int(under48) == min48 - 1);
+    wysna_release(over48);
+    wysna_release(under48);
     WVal64 i_pos = wysna_val64_pack(wysna_int(max48));
     WVal64 i_neg = wysna_val64_pack(wysna_int(min48));
     WVal64 i_minus1 = wysna_val64_pack(wysna_int(-1));
-    assert(wysna_val64_unpack(i_pos).as.i == max48);
-    assert(wysna_val64_unpack(i_neg).as.i == min48);
-    assert(wysna_val64_unpack(i_minus1).as.i == -1);
+    assert(wysna_as_int(wysna_val64_unpack(i_pos)) == max48);
+    assert(wysna_as_int(wysna_val64_unpack(i_neg)) == min48);
+    assert(wysna_as_int(wysna_val64_unpack(i_minus1)) == -1);
 
     /* 4. Small String Optimization (0..6 bytes, zero alloc read + NUL safe) */
     WVal s0 = wysna_str("");
@@ -76,14 +81,17 @@ int main(int argc, char** argv) {
     WVal64 p3 = wysna_val64_pack(s3);
     WVal64 p6 = wysna_val64_pack(s6);
     WVal64 p6b = wysna_val64_pack(s6b);
-    assert(wysna_val64_unpack(p0).as.string.length == 0 && !wysna_val64_eq(p0, p3));
-    assert(p6 == p6b);
+    assert(wysna_str_len(wysna_val64_unpack(p0)) == 0 && !wysna_val64_eq(p0, p3));
+    assert(p6.bits == p6b.bits);
     assert(wysna_val64_eq(p6, p6b));
     char buf[7];
     size_t blen = 0;
     assert(wysna_val64_read_sso(p3, buf, &blen) && blen == 3 && buf[0] == 'a' && buf[1] == '\0' && buf[2] == 'b');
     WVal u3 = wysna_val64_unpack(p3);
-    assert(u3.tag == W_STR && u3.as.string.length == 3 && memcmp(u3.as.string.data, "a\0b", 3) == 0);
+    char u3_buf[7];
+    size_t u3_len = 0;
+    const char* u3_data = wysna_str_bytes(u3, u3_buf, &u3_len);
+    assert(wysna_tag(u3) == W_STR && u3_len == 3 && memcmp(u3_data, "a\0b", 3) == 0);
     wysna_release(u3);
     wysna_release(s6b);
 
@@ -92,12 +100,12 @@ int main(int argc, char** argv) {
     WVal long_borrow = wysna_str("wysna_agent_graph_key_long");
     static WStringLiteral lit = {0};
     WVal long_lit = wysna_literal_str_n(&lit, "wysna_agent_graph_key_long", 26);
-    assert(long_dyn.as.string.owner->hash_cache == 0);
+    assert(wysna_str_owner(long_dyn)->hash_cache == 0);
     uint64_t h1 = wysna_key_hash(long_dyn);
     uint64_t h2 = wysna_key_hash(long_borrow);
     uint64_t h3 = wysna_key_hash(long_lit);
     assert(h1 != 0 && h1 == h2 && h2 == h3);
-    assert(long_dyn.as.string.owner->hash_cache == (uint32_t)h1);
+    assert(wysna_str_owner(long_dyn)->hash_cache == (uint32_t)h1);
     assert(lit.buffer.hash_cache == (uint32_t)h3);
 
     WVal64 p_long_dyn = wysna_val64_pack(long_dyn);
@@ -105,8 +113,8 @@ int main(int argc, char** argv) {
     assert(wysna_val64_eq(p_long_dyn, p_long_lit));
 
     WVal d = wysna_make_dict(1, &long_dyn, &long_lit);
-    assert(d.as.dict->keys[0].aux == (uint32_t)h1);
-    assert(wysna_dict_find(d.as.dict, long_borrow) == 0);
+    assert(wysna_str_owner(wysna_as_dict(d)->keys[0])->hash_cache == (uint32_t)h1);
+    assert(wysna_dict_find(wysna_as_dict(d), long_borrow) == 0);
 
     wysna_release(d);
     wysna_release(long_dyn);

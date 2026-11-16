@@ -176,6 +176,13 @@ class LlvmCodeGen:
             self.emit('call void @wysna_llvm_box_' + name + '(ptr ' + pointer + ', ' + type_ + ' ' + value + ')')
         return pointer
 
+    def release_boxed(self, index, offset=0, moved=False):
+        if moved:
+            return
+        slot = self.slots[index]
+        if slot.storage != 'value' and slot.type_id == TYPE_INT:
+            self.emit('call void @wysna_llvm_release(ptr ' + self.cell(offset) + ')')
+
     @staticmethod
     def _async_runtime_helper(function):
         name = function.name
@@ -278,11 +285,12 @@ class LlvmCodeGen:
             value = data['value']
             if type_ == TYPE_STR and value is not None:
                 cache = 'null'
-                if len(value) > 1:
+                utf8_len = len(value.encode('utf-8'))
+                if utf8_len > 6:
                     cache = '@literal' + str(len(self.pool))
                     self.pool.append(cache + ' = internal global [' + str(LITERAL_BYTES) + ' x i8] zeroinitializer, align ' + str(ALIGNMENT))
                 self.emit('call void @wysna_llvm_literal(ptr ' + self.pointer(result) + ', ptr ' + cache +
-                          ', ptr ' + self.string(value) + ', i64 ' + str(len(value.encode('utf-8'))) + ')')
+                          ', ptr ' + self.string(value) + ', i64 ' + str(utf8_len) + ')')
             elif value is None and type_ != TYPE_UNIT and not data.get('placeholder'):
                 self.emit('call void @wysna_llvm_none(ptr ' + self.pointer(result) + ')')
             elif type_ == TYPE_UNIT or value is None:
@@ -299,6 +307,7 @@ class LlvmCodeGen:
             if self.slots[result].storage == 'value':
                 method = 'move' if operation.moves else 'clone'
                 self.emit('call void @wysna_llvm_' + method + '(ptr ' + self.pointer(result) + ', ptr ' + self.boxed(args[0]) + ')')
+                self.release_boxed(args[0], moved=bool(operation.moves))
             else:
                 if self.slots[args[0]].storage == 'value' and self.slots[args[0]].type_id != self.slots[result].type_id:
                     self.managed.complete(result, self.pointer(args[0]))
@@ -319,10 +328,12 @@ class LlvmCodeGen:
                 values = self.managed.arguments(args)
                 output = self.managed.output(result)
                 self.emit('call void @wysna_llvm_ffi_' + data['name'] + '(ptr ' + output + ', ptr ' + values + ')')
+                self.managed.release_arguments(args)
                 self.managed.complete(result, output)
                 return
             function = self.functions[data['name']]
             parameters = []
+            boxed_args = []
             if is_managed(function.return_type):
                 parameters.append('ptr ' + self.pointer(result))
             for position, (index, parameter) in enumerate(zip(args, function.params)):
@@ -334,10 +345,12 @@ class LlvmCodeGen:
                         method = {TYPE_INT: 'int', TYPE_FLOAT: 'float', TYPE_BOOL: 'bool'}[type_]
                         loaded_type = 'i32' if type_ == TYPE_BOOL else SCALAR_TYPES[type_]
                         value = self.result('call ' + loaded_type + ' @wysna_llvm_' + method + '(ptr ' + self.boxed(index, position) + ')')
+                        boxed_args.append((index, position))
                         if type_ == TYPE_BOOL:
                             value = self.result('icmp ne i32 ' + value + ', 0')
                 else:
                     value = self.boxed(index, position)
+                    boxed_args.append((index, position))
                 parameters.append(SCALAR_TYPES.get(type_, 'ptr') + ' ' + value)
             returned = SCALAR_TYPES.get(function.return_type, 'void')
             cc = 'fastcc ' if function.name != 'wysna_program' else ''
@@ -346,6 +359,8 @@ class LlvmCodeGen:
                 self.emit(call)
             else:
                 self.write(result, self.result(call))
+            for index, position in boxed_args:
+                self.release_boxed(index, position)
         elif kind == 'runtime':
             self.runtime(operation)
         elif kind == 'test':
@@ -383,6 +398,8 @@ class LlvmCodeGen:
         if type_ not in SCALAR_TYPES or type_ != self.slots[args[1]].type_id:
             left, right = self.boxed(args[0], 0), self.boxed(args[1], 1)
             value = self.result('call i32 @wysna_llvm_compare(ptr ' + left + ', ptr ' + right + ', i32 ' + str(codes[name]) + ')')
+            self.release_boxed(args[0], 0)
+            self.release_boxed(args[1], 1)
             compared = self.result('icmp ne i32 ' + value + ', 0')
         else:
             left, right = self.load(args[0]), self.load(args[1])
@@ -400,6 +417,8 @@ class LlvmCodeGen:
             pointer = self.cell(0) if args else 'null'
             self.emit('call void @wysna_llvm_print(i32 ' + str(len(args)) + ', ptr ' + pointer +
                       ', i32 ' + str(int(name == 'wysna_builtin_eprint')) + ')')
+            for offset, index in enumerate(args):
+                self.release_boxed(index, offset)
         elif name == 'wysna_builtin_exit':
             self.emit('call void @wysna_llvm_exit(i64 ' + self.load(args[0]) + ')')
         elif name in CONVERSIONS:
@@ -421,9 +440,12 @@ class LlvmCodeGen:
                     out = self.cell(1)
                     self.emit('store %WysnaValue zeroinitializer, ptr ' + out)
                 self.emit('call void @wysna_llvm_convert(ptr ' + out + ', ptr ' + source + ', i32 ' + str(CONVERSIONS[name]) + ')')
+                self.release_boxed(args[0], 0)
                 if self.slots[result].storage != 'value':
                     method = 'int' if self.slots[result].type_id == TYPE_INT else 'float'
                     value = self.result('call ' + TYPES[self.slots[result].type_id] + ' @wysna_llvm_' + method + '(ptr ' + out + ')')
+                    if self.slots[result].type_id == TYPE_INT:
+                        self.emit('call void @wysna_llvm_release(ptr ' + out + ')')
                     self.write(result, value)
         elif name in ('wysna_equal', 'wysna_not_equal', 'wysna_lt', 'wysna_le', 'wysna_gt', 'wysna_ge'):
             self.compare(operation, name)

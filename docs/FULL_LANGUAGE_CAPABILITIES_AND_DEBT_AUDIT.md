@@ -304,7 +304,7 @@ Despite the architectural achievements of v0.6.0, an exhaustive audit reveals cl
 | **Cyclic Class References Leak (Mitigated via Opt-In / Quota Bacon-Rajan)** | Strong reference cycles between classes (`a.b = b; b.a = a`) leak under pure ARC alone; deferred Bacon-Rajan cycle collection (`wysna_collect_cycles()`) reclaims dead `W_OBJECT` subgraphs when `WYSNA_COLLECT_CYCLES=1` or under `--max-heap-mb` pressure. | `runtime/wysna_runtime_memory.h`<br>`docs/KNOWN_LIMITS.md §5` | Default builds without `WYSNA_COLLECT_CYCLES=1` preserve strict deterministic ARC timing unless heap budget triggers collection or `Weak[C]` is used. |
 | **Opt-In Memory Leak Verification** | Runtime leak detection (`WYSNA_MEM_CHECK=1`) is strictly opt-in and does not run by default in production. | `runtime/wysna_runtime_core.h` | Production builds exit silently on cyclic leaks to avoid altering stdout/stderr for programs retaining process-lifetime objects. |
 | **No Stack Unwinding on `exit(code)`** | Calling `exit(code)` terminates the host process immediately without executing LIFO `CleanupScope` destructors for active stack frames. | `src/codegen/CCodeGen.py` | Resources (files, network connections) rely on the OS kernel for cleanup on immediate exit. |
-| **32-Byte General `WVal` ABI + Compact `WVal64` (8B NaN-Tagging)** | General ABI v2 `WVal` stays 32 bytes (`tag + aux + payload`) with inline `uint32_t aux` / `WStringBuf.hash_cache` ($O(1)$ string hashing & fast inequality), alongside the 8-byte `WVal64` NaN-boxed representation (`0..6B` SSO, 48-bit ints/pointers, floats, bools, sentinels; 8 slots per 64B cache line) in `wysna_runtime_values.h`. | `runtime/wysna_runtime_core.h`<br>`runtime/wysna_runtime_values.h` | Default C99 and `llvm-native-v1` preserve 32B `WVal` ABI parity (`WysnaLlvmValueSize`) while compact `WVal64` kernels operate without heap allocation on scalars and short strings. |
+| **Unified 8-Byte `WVal` NaN-Tagging ABI v3 (Closed `v0.7.0`)** | General runtime `WVal` is natively unified with 8-byte NaN-boxed `WVal64` (`W_RUNTIME_ABI_VERSION = 3`, `ABI_VERSION = 3`, `sizeof(WVal) == 8`: `0..6B` SSO inline strings, inline 48-bit ints + `WIntBox` full-64-bit fallback, inline IEEE-754 doubles, inline `unit`/`none`/`bool`/47-bit `W_POINTER`, direct `WEnumBuf.payload`, and $O(1)$ `WStringBuf.hash_cache`) — 8 slots per 64B L1 cache line ($4\times$ density). | `runtime/wysna_runtime_core.h`<br>`runtime/wysna_runtime_values.h`<br>`src/mir/LlvmProfile.py` | Default C99 (Seed AST, Seed MIR, Selfhost) and `llvm-native-v1` share ABI v3 parity (`sizeof(WVal) == 8`, portable `i64` GPR `WInvoke` adapters). |
 
 ---
 
@@ -435,37 +435,27 @@ sequenceDiagram
 
 ---
 
-### 3. Dilemma 3: WVal Memory Footprint Reduction (32B → 8B NaN-Tagging)
+### 3. Dilemma 3: WVal Memory Footprint Reduction (32B → 8B NaN-Tagging ABI v3 — Implemented)
 
-#### The Production Dilemma
-On 64-bit architectures, general `WVal` consumes 32 bytes (8-byte tag, 8-byte refcount/payload, 16-byte union data). This creates significant cache pressure: a standard 64-byte L1 cache line fits only **two** `WVal` instances, causing memory bandwidth bottlenecks on large JSON or graph traversals.
+#### The Historical Bottleneck
+Prior to ABI v3 (`W_RUNTIME_ABI_VERSION = 2`), general `WVal` consumed 32 bytes (`tag + aux + union`), fitting only **two** instances per 64-byte cache line.
 
-#### The Architectural Resolution: 64-bit NaN-Tagging (8-Byte WVal)
-Wysna will adopt **64-bit NaN-Tagging**, utilizing the $51$ unused mantissa bits of IEEE-754 Quiet NaNs to represent all scalar primitives, pointers, and small values in a single 64-bit word ($4\times$ density increase):
+#### The Delivered Resolution: Unified 64-bit NaN-Boxed `WVal` (ABI v3, 8 Bytes)
+All C99 emitters (AST, MIR Seed, Selfhost) and `llvm-native-v1` natively use unified 8-byte `WVal` (`typedef WVal WVal64; sizeof(WVal) == 8`) with `WVAL_DOUBLE_OFFSET` (`0x0001_0000_0000_0000`) biased IEEE-754 encoding and top 16-bit tag bands (`0xFFF2..0xFFFF`):
 
-```text
-Double:       [0] [11-bit Exponent != 0x7FF] [52-bit Fraction]
-Quiet NaN:    [1] [11-bit Exponent == 0x7FF] [1] [50-bit Payload]
-
-Wysna NaN Tagging Bit Layout (64 bits):
-[ 1 ][ 11111111111 ][ 1 ][ 3-bit Tag ][ 48-bit Value / Pointer ]
-  Sign     Exponent   QNaN   Tag (0..7)          Payload
-```
-
-| Tag Bitfield | Type Represented | Payload Interpretation |
+| Tag / Encoding Band | Type Represented | Payload Interpretation |
 | :---: | :--- | :--- |
-| `000` | **Raw IEEE-754 Double** | Stored directly when not matching Quiet NaN mask. |
-| `001` | **Signed Integer (`int`)** | 48-bit signed integer (immediate, zero allocation). |
-| `010` | **Boolean (`bool`)** | `0` = false, `1` = true. |
-| `011` | **Unit / None Sentinels** | `0` = unit, `1` = none. |
-| `100` | **Heap Object Pointer** | Canonical 48-bit virtual address pointing to ARC-managed header. |
-| `101` | **Small String (SSO)** | Inline string literal up to 6 ASCII bytes without heap allocation. |
-| `110` | **Small Symbol / Enum** | Interned enum variant identity (DefId: 24b, Variant: 24b). |
-| `111` | **Reserved Sentinel** | Poison/Error recovery handle. |
+| `0x0000..0x0003` | **Immediates (`unit`, `none`, `false`, `true`)** | Zero heap allocation, zero release/retain cost. |
+| `0x0000_8000_xxxx` | **Opaque Pointer (`W_POINTER`)** | Raw 47-bit address (or `WVAL_HI_EXT` `WPointerOwner` if managed). |
+| `0x0001..0xFFF1` | **IEEE-754 `double` (`float`)** | Biased inline 64-bit `double` (`WVAL_DOUBLE_OFFSET`). |
+| `0xFFF2` | **Inline `int48`** | 48-bit signed immediate integer (full 64-bit overflows promote to `WIntBox` `-1` literal / `-2` stack borrow / `>=1` ARC). |
+| `0xFFF3` / `0xFFF4` | **Small String (SSO `0..6B`)** | Inline UTF-8 bytes directly inside the 64-bit word (NUL-safe, 0 heap alloc). |
+| `0xFFF5` / `0xFFF6` | **Unowned `CSTR` / `WStringBuf*`** | Borrowed >6B literal pointer or refcounted `WStringBuf` / `WStringLiteral` (`hash_cache` $O(1)$). |
+| `0xFFF7..0xFFFF` | **Heap Handles & Boxes** | `List`, `Dict`, `Tuple`, `Struct`, `Object`, `Enum` (`WEnumBuf`), `Ok`, `Err`, `Ext` (`WIntBox` / `WPointerOwner` / `WWeakControl` / `WFunctionBuf`). |
 
-**Performance Payoff:**
-- **L1 Cache Utilization:** 8 values per cache line instead of 2 ($400\%$ improvement).
-- **Zero Heap Allocation for Scalars:** Integers, booleans, unit, and small strings require zero dynamic heap allocations.
+**Measured Outcome:**
+- **4× General Value Density:** `sizeof(WVal)` reduced from `32` to `8` bytes (`8` slots per 64B cache line).
+- **Zero Packing Overhead & Unified LLVM Adapters:** Eliminated ABI v2 `WVal`/`WVal64` conversion overhead (`bench/wval64_density.c`: `speedup` improved from `0.58x` (`13.84 ms`) with packing to `0.88x` (`13.45 ms` vs `11.81 ms` raw 32B array) on direct native `WVal`), while `llvm-native-v1` uses uniform `i64` GPR callback adapters (`@adapter_*`) across arm64 and x86_64.
 
 ---
 
@@ -490,7 +480,7 @@ flowchart LR
 2. **Stage 2 (Wysna v0.7.0 Partial Delivery + Open Target):**
    - **Delivered (`v0.7.0` Increment in PR #146):**
      - **Native `--fmt` / `--fmt-write` in Selfhost:** Deterministically formats verified source lines directly inside `selfhost/src/09_main.wysna`, wired into `packaging/native/driver.c` and `NativeToolchain.format_compiler`.
-     - **Option B Runtime Compaction & Cache:** Added 8-byte `WVal64` NaN-Tagging (`wysna_val64_pack`/`unpack`/`eq` with 48-bit signed ints, floats, booleans, sentinels, 48-bit pointers, 0..6B SSO inline strings) alongside $O(1)$ `WStringBuf.hash_cache` + `WVal.aux` string hashing without breaking `llvm-native-v1` 32B `WVal` contracts.
+     - **Option B + Native ABI v3 Unified 8-Byte `WVal`:** Unified `WVal == WVal64` (`sizeof(WVal) == 8`, 48-bit signed ints + `WIntBox` full-64-bit fallback, `0..6B` SSO inline strings, $O(1)$ `WStringBuf.hash_cache`, inline doubles/booleans/sentinels, direct `WEnumBuf.payload`) across C99 (AST, MIR Seed, Selfhost) and `llvm-native-v1` (`W_RUNTIME_ABI_VERSION = 3`, `ABI_VERSION = 3`, `RUNTIME_ABI_VERSION = 3`), gaining 4× cache density with portable `i64` GPR callback adapters.
      - **Option A Lock-Free Concurrency & Async Multiplexing:** Added lock-free atomic ARC + spinlock cycle buffer + copy-first thread-safe CoW detach, real OS-thread worker pool (`pthread` / `CreateThread`) for `std/algorithms.parallel_*` across Interpreter/AST/MIR/Selfhost, and cooperative monotonic timers (`std/async.sleep_ms`, `spawn`, `all`, `race`), plus fixed cross-module generic deduplication (`CompilationSession.link`) and `wysna_await` borrowed-field double-free.
    - **Open Stage 2 Target:** Port multi-file `wysna test` discovery/TAP reporting into native binary and implement full CPS state-machine lowering for suspendable `async fn`.
 3. **Stage 3 (Wysna v0.8.0 Target):**

@@ -195,7 +195,7 @@ main()
         names = {p["name"] for p in ext["programs"]}
         self.assertEqual(names, {"memory_pressure.wysna", "dict_hash_cache.wysna"})
         self.assertIsNotNone(ext["wval64"])
-        self.assertIn("sizeof(WVal)=32 sizeof(WVal64)=8", ext["wval64"])
+        self.assertIn("sizeof(WVal)=8 sizeof(WVal64)=8", ext["wval64"])
         self.assertIn("sum_match=1", ext["wval64"])
 
     @unittest.skipIf(os.name == "nt", "POSIX shell compiler shim used in unit harness")

@@ -272,10 +272,16 @@ Formatting uses an iterative traversal. A class already active on the current an
 path renders as `<cycle>`; aliases reached in independent branches render fully. This
 prevents recursive formatting from failing to terminate, but does not collect ARC cycles.
 
-Runtime ABI v2 places string data, owner and byte length inside the string variant.
-WVal occupies 32 bytes on the checked arm64 ABI. Generated C and adapters that depend
-on its internal layout must be rebuilt with the matching header. The scalar/opaque
-external C ABI keeps its declared signatures.
+Runtime ABI v3 unifies every `WVal` (`WVal == WVal64`) into an 8-byte NaN-boxed word
+(`sizeof(WVal) == 8`) across C99 (Seed AST, Seed MIR, Selfhost MIR) and `llvm-native-v1`.
+Scalars (`unit`, `none`, `bool`, IEEE-754 `double`, 48-bit signed integers), 0..6-byte
+UTF-8 strings (inline SSO), borrowed >6B C string literals, and 47-bit opaque handles
+store zero heap pointers inline; signed integers outside 48 bits (`WIntBox` with
+`-1` literal, `-2` stack borrow, `>= 1` ARC), strings >6 bytes (`WStringBuf` /
+`WStringLiteral`), and heap containers are tagged with 48-bit aligned pointers.
+Generated C and LLVM adapters that depend on this layout are compiled against ABI v3
+headers (`W_RUNTIME_ABI_VERSION == 3`). The external scalar/opaque C ABI keeps its
+declared signatures.
 
 `std/resources` provides checked borrowing, idempotent close and explicit scopes.
 Raw aliases remain unsafe after close. Panic, exit and process termination do not unwind

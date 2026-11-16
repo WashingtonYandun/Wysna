@@ -38,8 +38,8 @@ int main(void) {
     wysna_cow_reset_stats();
     wysna_dict_detach(&dict);
     assert(wysna_g_cow_copied_slots == 10 && wysna_g_cow_detach_dict == 1);
-    assert(wysna_g_cow_copied_bytes == 10 * sizeof(WVal) + dict.as.dict->bucket_count * sizeof(int32_t));
-    assert(wysna_g_cow_allocated_bytes == sizeof(WDictBuf) + 16 * sizeof(WVal) + dict.as.dict->bucket_count * sizeof(int32_t));
+    assert(wysna_g_cow_copied_bytes == 10 * sizeof(WVal) + wysna_as_dict(dict)->bucket_count * sizeof(int32_t));
+    assert(wysna_g_cow_allocated_bytes == sizeof(WDictBuf) + 16 * sizeof(WVal) + wysna_as_dict(dict)->bucket_count * sizeof(int32_t));
     assert(wysna_g_cow_alloc_count == 4);
     wysna_release(alias); wysna_release(dict);
     WVal record = wysna_make_struct("Empty", 0, NULL, NULL);
@@ -57,9 +57,9 @@ int main(void) {
     wysna_cow_reset_stats();
     wysna_assign(wysna_index_ref(wysna_index_ref(&matrix, wysna_int(0)), wysna_int(0)), wysna_int(99));
     assert(wysna_g_cow_detach_list == 2 && wysna_g_cow_copied_slots == 5);
-    assert(matrix.as.list->data[0].as.list != alias.as.list->data[0].as.list);
-    assert(matrix.as.list->data[1].as.list == alias.as.list->data[1].as.list);
-    assert(matrix.as.list->data[2].as.list == alias.as.list->data[2].as.list);
+    assert(wysna_as_list(wysna_as_list(matrix)->data[0]) != wysna_as_list(wysna_as_list(alias)->data[0]));
+    assert(wysna_as_list(wysna_as_list(matrix)->data[1]) == wysna_as_list(wysna_as_list(alias)->data[1]));
+    assert(wysna_as_list(wysna_as_list(matrix)->data[2]) == wysna_as_list(wysna_as_list(alias)->data[2]));
     wysna_assign(wysna_index_ref(wysna_index_ref(&matrix, wysna_int(0)), wysna_int(1)), wysna_int(88));
     assert(wysna_g_cow_detach_list == 2 && wysna_g_cow_copied_slots == 5);
     wysna_release(alias); wysna_release(matrix);

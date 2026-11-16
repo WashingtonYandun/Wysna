@@ -176,8 +176,8 @@ int main(void) {
     /* Dead cycles are reclaimed while anchored live cycle stays alive. */
     int64_t freed = wysna_collect_cycles();
     assert(freed == 3);
-    assert(anchor.as.st != NULL && anchor.as.st->control != NULL);
-    assert(anchor.as.st->control->strong == 2);
+    assert(wysna_as_struct(anchor) != NULL && wysna_as_struct(anchor)->control != NULL);
+    assert(wysna_as_struct(anchor)->control->strong == 2);
 
     /* Drop external anchor, collect remaining cycle, verify zero live objects. */
     wysna_release(anchor);

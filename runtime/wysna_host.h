@@ -533,7 +533,7 @@ static inline WVal wysna_spawn_clone_result(int64_t handle_id) {
 }
 
 static inline WVal wysna_spawn_take_option(WVal handle_val, WVal fallback) {
-    int64_t handle_id = (handle_val.tag == W_INT) ? handle_val.as.i : 0;
+    int64_t handle_id = (wysna_tag(handle_val) == W_INT) ? wysna_as_int(handle_val) : 0;
     if (handle_id >= WYSNA_SPAWN_HANDLE_BASE) {
         return wysna_enum_payload("Option", "Some", wysna_spawn_clone_result(handle_id));
     }
@@ -1416,10 +1416,12 @@ static int64_t wysna_host_http_async_cancel(int64_t id) { (void)id; return 0; }
 #endif /* WYSNA_HAS_HTTP && !__wasi__ */
 
 static inline WVal wysna_await(WVal val) {
-    if (val.tag == W_STRUCT || val.tag == W_OBJECT) {
+    uint32_t hi = wysna_hi(val);
+    if (hi == WVAL_HI_STRUCT || hi == WVAL_HI_OBJECT) {
+        WStructBuf* st = wysna_as_struct(val);
         bool is_task = false;
-        for (int32_t i = 0; i < val.as.st->len; i++) {
-            if (val.as.st->keys[i] && strcmp(val.as.st->keys[i], "is_ready") == 0) {
+        for (int32_t i = 0; i < st->len; i++) {
+            if (st->keys[i] && strcmp(st->keys[i], "is_ready") == 0) {
                 is_task = true;
                 break;
             }
@@ -1428,26 +1430,27 @@ static inline WVal wysna_await(WVal val) {
             int64_t spawn_handle = 0;
             {
                 WVal h_init = wysna_member_get(val, "handle");
-                if (h_init.tag == W_INT) spawn_handle = h_init.as.i;
+                if (wysna_tag(h_init) == W_INT) spawn_handle = wysna_as_int(h_init);
             }
             while (true) {
                 WVal r = wysna_member_get(val, "is_ready");
                 WVal f = wysna_member_get(val, "is_failed");
-                bool ready = (r.tag == W_BOOL && r.as.b);
-                bool failed = (f.tag == W_BOOL && f.as.b);
-                wysna_release(r);
-                wysna_release(f);
+                bool ready = (wysna_tag(r) == W_BOOL && wysna_as_bool(r));
+                bool failed = (wysna_tag(f) == W_BOOL && wysna_as_bool(f));
                 if (ready) break;
                 if (failed) {
                     WVal err = wysna_member_get(val, "error");
                     char* msg_copy = NULL;
-                    if (err.tag == W_ENUM && strcmp(err.as.en.variant, "Some") == 0 && err.as.en.box) {
-                        WVal inner_err = err.as.en.box->val;
-                        if (inner_err.tag == W_STR && inner_err.as.string.data) {
-                            size_t len = inner_err.as.string.length;
+                    WEnumBuf* en = wysna_as_enum(err);
+                    if (en && en->variant && strcmp(en->variant, "Some") == 0 && en->has_payload) {
+                        WVal inner_err = en->payload;
+                        if (wysna_tag(inner_err) == W_STR) {
+                            char err_buf[7];
+                            size_t len = 0;
+                            const char* data = wysna_str_bytes(inner_err, err_buf, &len);
                             msg_copy = (char*)malloc(len + 1);
                             if (msg_copy) {
-                                if (len) memcpy(msg_copy, inner_err.as.string.data, len);
+                                if (len) memcpy(msg_copy, data, len);
                                 msg_copy[len] = '\0';
                             }
                         }
@@ -1461,8 +1464,7 @@ static inline WVal wysna_await(WVal val) {
                     return wysna_unit();
                 }
                 WVal h = wysna_member_get(val, "handle");
-                int64_t handle_val = (h.tag == W_INT) ? h.as.i : 0;
-                wysna_release(h);
+                int64_t handle_val = (wysna_tag(h) == W_INT) ? wysna_as_int(h) : 0;
                 if (handle_val > 0) {
                     spawn_handle = handle_val;
                     wysna_host_http_multi_poll(10);
@@ -1493,8 +1495,9 @@ static inline WVal wysna_await(WVal val) {
             }
             WVal v = wysna_member_get(val, "value");
             WVal res;
-            if (v.tag == W_ENUM && strcmp(v.as.en.variant, "Some") == 0 && v.as.en.box) {
-                res = wysna_clone(v.as.en.box->val);
+            WEnumBuf* ven = wysna_as_enum(v);
+            if (ven && ven->variant && strcmp(ven->variant, "Some") == 0 && ven->has_payload) {
+                res = wysna_clone(ven->payload);
             } else {
                 res = wysna_clone(v);
             }
@@ -1539,13 +1542,14 @@ static DWORD WINAPI wysna_parallel_win32_entry(LPVOID raw) {
 
 static inline WVal wysna_parallel_map(WVal values, WVal transform) {
     wysna_step_tick();
-    if (values.tag != W_LIST || !values.as.list) {
+    WListBuf* list = wysna_as_list(values);
+    if (!list) {
         wysna_runtime_fail("W4003", "parallel_map() expects list");
     }
-    if (transform.tag != W_FUNCTION || !transform.as.function) {
+    if (!wysna_as_function(transform)) {
         wysna_runtime_fail("W4003", "parallel_map() expects function");
     }
-    int32_t len = values.as.list->len;
+    int32_t len = list->len;
     if (len <= 0) {
         return wysna_make_list(0, NULL);
     }
@@ -1576,7 +1580,7 @@ static inline WVal wysna_parallel_map(WVal values, WVal transform) {
     if (workers <= 1 || len <= 1) {
         WVal* outputs = (WVal*)wysna_alloc_safe(sizeof(WVal) * (size_t)len);
         for (int32_t i = 0; i < len; i++) {
-            WVal item = values.as.list->data[i];
+            WVal item = list->data[i];
             outputs[i] = wysna_call(transform, 1, &item);
         }
         WVal result = wysna_make_list(len, outputs);
@@ -1589,7 +1593,7 @@ static inline WVal wysna_parallel_map(WVal values, WVal transform) {
     WVal* inputs = (WVal*)wysna_alloc_safe(sizeof(WVal) * (size_t)len);
     WVal* outputs = (WVal*)wysna_alloc_safe(sizeof(WVal) * (size_t)len);
     for (int32_t i = 0; i < len; i++) {
-        inputs[i] = wysna_clone(values.as.list->data[i]);
+        inputs[i] = wysna_clone(list->data[i]);
         outputs[i] = wysna_unit();
     }
 
@@ -1651,10 +1655,11 @@ static inline WVal wysna_parallel_map(WVal values, WVal transform) {
 
 static inline WVal wysna_parallel_batch(WVal values, int64_t batch_size, WVal transform) {
     wysna_step_tick();
-    if (values.tag != W_LIST || !values.as.list) {
+    WListBuf* list = wysna_as_list(values);
+    if (!list) {
         wysna_runtime_fail("W4003", "parallel_batch() expects list");
     }
-    int32_t len = values.as.list->len;
+    int32_t len = list->len;
     if (len <= 0) return wysna_make_list(0, NULL);
     int64_t step = batch_size > 0 ? batch_size : 1;
     if (step >= (int64_t)len) {
@@ -1664,10 +1669,11 @@ static inline WVal wysna_parallel_batch(WVal values, int64_t batch_size, WVal tr
     int32_t offset = 0;
     while (offset < len) {
         int32_t chunk = (step < (int64_t)(len - offset)) ? (int32_t)step : (len - offset);
-        WVal slice_list = wysna_make_list(chunk, values.as.list->data + offset);
+        WVal slice_list = wysna_make_list(chunk, list->data + offset);
         WVal mapped = wysna_parallel_map(slice_list, transform);
+        WListBuf* mapped_list = wysna_as_list(mapped);
         for (int32_t i = 0; i < chunk; i++) {
-            outputs[offset + i] = wysna_clone(mapped.as.list->data[i]);
+            outputs[offset + i] = wysna_clone(mapped_list->data[i]);
         }
         wysna_release(mapped);
         wysna_release(slice_list);
@@ -1681,18 +1687,20 @@ static inline WVal wysna_parallel_batch(WVal values, int64_t batch_size, WVal tr
 
 static inline WVal wysna_parallel_filter(WVal values, WVal predicate) {
     wysna_step_tick();
-    if (values.tag != W_LIST || !values.as.list) {
+    WListBuf* list = wysna_as_list(values);
+    if (!list) {
         wysna_runtime_fail("W4003", "parallel_filter() expects list");
     }
-    int32_t len = values.as.list->len;
+    int32_t len = list->len;
     if (len <= 0) return wysna_make_list(0, NULL);
     WVal flags = wysna_parallel_map(values, predicate);
+    WListBuf* flags_list = wysna_as_list(flags);
     WVal* kept = (WVal*)wysna_alloc_safe(sizeof(WVal) * (size_t)len);
     int32_t kept_count = 0;
     for (int32_t i = 0; i < len; i++) {
-        WVal flag = flags.as.list->data[i];
-        if (flag.tag == W_BOOL && flag.as.b) {
-            kept[kept_count++] = wysna_clone(values.as.list->data[i]);
+        WVal flag = flags_list->data[i];
+        if (wysna_tag(flag) == W_BOOL && wysna_as_bool(flag)) {
+            kept[kept_count++] = wysna_clone(list->data[i]);
         }
     }
     WVal result = wysna_make_list(kept_count, kept);
