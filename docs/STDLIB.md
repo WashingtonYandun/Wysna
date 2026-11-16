@@ -34,7 +34,7 @@ Wysna distributes modules under `std/` imported via canonical paths such as `imp
   - `json.null()`, `boolean()`, `number()`, `string()`, `array()` and `object()` construct values. `number()` validates its input.
   - `json.is_null()`, `as_bool()`, `as_number()`, `as_string()`, `as_array()`, `as_object()`, `get()` and `at()` inspect values; optional accessors return `none` for a type mismatch or missing index/key.
   - Objects use string keys. Repeated keys during parsing keep the last value. Parsing rejects unpaired UTF-16 surrogates, malformed number syntax, trailing content and inputs beyond the selected budgets.
-- `std/text`: string manipulation and query operations.
+- `std/text`: string manipulation, Unicode normalization, and query operations.
   - `text.join(parts, separator) -> str`: join string list with separator.
   - `text.pad_left(text, width, fill) -> str`: pad text on the left with fill character.
   - `text.lines(text) -> list[str]`: split text by LF or CRLF lines.
@@ -50,13 +50,15 @@ Wysna distributes modules under `std/` imported via canonical paths such as `imp
   - `text.to_lower(text) -> str`: convert ASCII characters to lowercase.
   - `text.to_upper(text) -> str`: convert ASCII characters to uppercase.
   - `text.repeat(text, count) -> str`: repeat text count times.
+  - `text.normalize_nfc(text) -> str` / `normalize_nfd(text) -> str` / `canonical_equal(a, b) -> bool`: UAX #15 canonical Unicode normalization (Unicode 16.0.0) and canonical equivalence checking.
 - `std/path`: file path utilities.
   - `path.join(base, child) -> str`: join paths with directory separator `/`.
   - `path.basename(path) -> str`: extract filename component.
   - `path.dirname(path) -> str`: extract directory component.
-- `std/io`: text file convenience wrappers.
+- `std/io`: text file and stream convenience wrappers.
   - `io.read_text(path) -> str ! IoError`: read full UTF-8 file to string.
   - `io.write_text(path, content) -> unit ! IoError`: write full string to file.
+  - `io.read_line() -> str?` / `io.read_all() -> str` / `io.flush() -> bool`: read standard input line/stream and flush standard output.
 - `std/algorithms`: functional collection algorithms.
   - `algorithms.map[T, R]` `(values, fn(T) -> R) -> list[R]`: transform list elements.
   - `algorithms.filter[T]` `(values, fn(T) -> bool) -> list[T]`: filter list elements satisfying predicate.
@@ -74,17 +76,22 @@ Wysna distributes modules under `std/` imported via canonical paths such as `imp
 - `std/bytes`: UTF-8 codec operations.
   - `bytes.encode(text) -> list[int]`: encode UTF-8 string into byte values (0–255).
   - `bytes.decode(bytes) -> str ! Utf8Error`: decode byte values into validated UTF-8 string.
-- `std/crypto`: cryptographic hashing and message authentication primitives.
+- `std/crypto`: cryptographic hashing, message authentication, and authenticated encryption primitives.
   - `crypto.sha256(text: str) -> str ! CryptoError`: compute SHA-256 digest of UTF-8 string, returning 64-character lowercase hexadecimal string.
   - `crypto.sha256_bytes(data: Bytes) -> Bytes ! CryptoError`: compute raw 32-byte SHA-256 digest of byte buffer.
   - `crypto.hmac_sha256(key: str, message: str) -> str ! CryptoError`: compute HMAC-SHA256 message authentication code as 64-character lowercase hex string.
   - `crypto.hmac_sha256_bytes(key: Bytes, message: Bytes) -> Bytes ! CryptoError`: compute raw 32-byte HMAC-SHA256 digest.
   - `crypto.bytes_to_hex(data: Bytes) -> str`: encode binary bytes into lowercase hexadecimal string.
-- `std/environment`: runner arguments and environment lookup.
+  - `crypto.aead_seal(key, nonce, plaintext, aad) -> Bytes ! CryptoError` / `aead_open(key, nonce, ciphertext_with_tag, aad) -> Bytes ! CryptoError`: RFC 8439 ChaCha20-Poly1305 authenticated encryption/decryption with CSPRNG helpers `generate_key()` and `generate_nonce()`.
+- `std/environment`: runner arguments, working directory, and environment lookup.
   - `environment.arguments() -> list[str]`: return the runner-defined argument vector; interpreted file and project runs use `"wysna"` at index zero.
   - `environment.get(name) -> str?`: read an environment variable, preserving the difference between an absent value and an empty string.
-- `std/time`: host wall-clock access.
-  - `time.unix_seconds() -> int`: return seconds since the Unix epoch.
+  - `environment.has(name) -> bool` / `get_or(name, default) -> str` / `current_directory() -> str ! FsError`: convenience environment probes and working directory lookup.
+- `std/time`: host wall-clock, monotonic timer, sleep, and ISO-8601 calendar math.
+  - `time.unix_seconds() -> int`, `now_ms() -> int`, `monotonic_ms() -> int`, `elapsed_ms(start) -> int`, `sleep(ms) -> unit`, `from_unix_ms(ms) -> DateTime`, `to_unix_ms(dt) -> int`, `format_iso8601(dt) -> str`, `parse_iso8601(text) -> DateTime ! ParseError`.
+- `std/async`: structured concurrent tasks (`Task[T]`), background OS-thread execution, timers, and polling combinators.
+  - `async.ready`, `failed`, `sleep_ms(ms) -> Task[int]`, and `spawn` (parameterized `Task[T]` constructors taking `T`, `Error`, or `fn() -> T`): create immediate, timer, or real background OS-thread tasks (`pthread` / `CreateThread` / Python pool).
+  - `async.poll_events(timeout_ms) -> int`, `is_ready(task) -> bool`, `wait(task) -> T ! str`, `all(tasks) -> list[T] ! str`, `race(tasks) -> T ! str`: multiplex, await, and race tasks safely with automatic result hydration and exit cleanup.
 - `std/process`: bounded child-process execution.
   - `process.run(executable, arguments, timeout_ms) -> int ! ProcessError`: invoke an executable directly with an argument vector and no implicit shell. Child stdout/stderr inherit the parent streams. The timeout is 1–600,000 ms; at most 256 arguments are accepted, each up to 1 MiB, with a 16 MiB total encoded-argument limit.
 - `std/http`: synchronous HTTP and HTTPS client for bounded JSON API calls.

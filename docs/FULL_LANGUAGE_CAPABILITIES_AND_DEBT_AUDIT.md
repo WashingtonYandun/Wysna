@@ -67,7 +67,7 @@ flowchart TD
 | **Anonymous Lambdas** | `\|x: int, y: int\| -> int { x + y }` | Seed + Compiler | Closures convert to environment structs (`ClosureConversion.py`). Capture by immutable snapshot. |
 | **Statement Separators** | Newlines as logical boundaries; semicolons optional | Seed + Compiler | Pratt parser deduces statement termination while supporting multiline fluent dot-chaining. |
 | **Module Import System** | `from "path/mod" use { sym1, sym2 }`<br>`import "path/mod"` | Seed + Compiler | Predictable left-to-right lexical resolution; module caching and circular dependency rejection (`W1003`). |
-| **Comments & Escapes** | `# Single-line comment`<br>`\n`, `\t`, `\r`, `\"`, `\\`, `\xHH`, `\u{HHHH}` | Seed + Compiler | Full UTF-8 codepoint support in string literals and validated Unicode scalar escapes (`W0005`). |
+| **Comments & Escapes** | `# Single-line comment`, nested `/* ... */` block comments<br>`\n`, `\t`, `\r`, `\"`, `\\`, `\xHH`, `\u{HHHH}` | Seed + Compiler + LLVM | Full UTF-8 codepoint support in string literals, validated Unicode scalar escapes (`W0005`), nested block comments, and trivia-preserving `wysna fmt`. |
 
 ---
 
@@ -206,17 +206,18 @@ All standard library modules live under `stdlib/*.wysna`:
 | **`std/buffer`** | `from_text`, `clone`, `append`, `get`, `size`, `close` | Direct mutable byte arrays (`Bytes`) with boundary checking and explicit lifecycle tracking. |
 | **`std/files`** | `open`, `read`, `write`, `close` | Low-level file handle I/O with structured modes (`read`, `write`, `append`) and `FileError`. |
 | **`std/fs`** | `exists`, `size`, `mkdir`, `remove`, `rename` | Direct host filesystem queries and manipulation returning `FsError`. |
-| **`std/io`** | `read_text`, `write_text` | High-level text reading and writing returning `IoError`. |
-| **`std/text`** | `join`, `split`, `lines`, `trim`, `replace`, `find`, `starts_with`, `ends_with`, `pad_left`, `to_lower`, `to_upper`, `repeat` | Unicode-aware and ASCII string manipulation with scalar index safety. |
+| **`std/io`** | `read_text`, `write_text`, `read_line`, `read_all`, `flush` | High-level file I/O returning `IoError` plus stdin line/stream readers and stdout flush. |
+| **`std/text`** | `join`, `split`, `lines`, `trim`, `replace`, `find`, `starts_with`, `ends_with`, `pad_left`, `to_lower`, `to_upper`, `repeat`, `normalize_nfc`, `normalize_nfd`, `canonical_equal` | Unicode-aware string manipulation with UAX #15 (`16.0.0`) NFC/NFD canonical normalization and codepoint-safe indexing. |
 | **`std/parse`** | `parse_int`, `parse_float` | Safe string-to-number parsing returning `Result` with `ParseError` (no unhandled exceptions). |
 | **`std/path`** | `join`, `basename`, `dirname` | Cross-platform filesystem path manipulation using `/` separators. |
 | **`std/bytes`** | `encode`, `decode` | UTF-8 byte array codec with explicit `Utf8Error` on invalid surrogate pairs. |
 | **`std/process`** | `run`, `ProcessResult` | Spawns external system processes with captured stdout, stderr, and exit codes. |
 | **`std/http`** | `get`, `post`, `batch_get` | High-level HTTP client with JSON payload support and deterministic multi-request dispatch. |
 | **`std/resources`**| Scoped resource tracking | Manages file descriptors and external handles to ensure cleanup at last reference. |
-| **`std/crypto`** | `sha256`, `sha256_bytes`, `hmac_sha256`, `hmac_sha256_bytes`, `bytes_to_hex` | Cryptographic hashing and message authentication primitives; standard FIPS 180-4 and RFC 2104 implementation with zero external dependencies. |
-| **`std/environment`**| `arguments`, `get` | Accesses CLI arguments and host environment variables. |
-| **`std/time`** | `unix_seconds` | Returns 64-bit UTC epoch timestamp. |
+| **`std/crypto`** | `sha256`, `sha256_bytes`, `hmac_sha256`, `hmac_sha256_bytes`, `bytes_to_hex`, `aead_seal`, `aead_open`, `generate_key`, `generate_nonce` | FIPS 180-4 SHA-256, RFC 2104 HMAC-SHA256, CSPRNG, and RFC 8439 ChaCha20-Poly1305 AEAD authenticated encryption with zero external dependencies. |
+| **`std/environment`**| `arguments`, `get`, `has`, `get_or`, `current_directory` | Accesses CLI arguments, host environment variables, and working directory queries. |
+| **`std/time`** | `unix_seconds`, `now_ms`, `monotonic_ms`, `elapsed_ms`, `sleep`, `from_unix_ms`, `to_unix_ms`, `format_iso8601`, `parse_iso8601` | Wall-clock and monotonic timers, sleep, and UTC ISO-8601 calendar conversions. |
+| **`std/async`** | `Task[T]`, `ready`, `failed`, `sleep_ms`, `spawn`, `poll_events`, `is_ready`, `wait`, `all`, `race` | Cooperative timers/HTTP multiplexing plus OS-thread background `spawn` (`pthread`/`CreateThread`) with result hydration across all engines. |
 | **`std/test`** | `expect`, `expect_equal_int`, `expect_equal_text` | Minimalist zero-dependency unit assertion framework. |
 
 ---
@@ -274,24 +275,24 @@ flowchart TD
 
 Despite the architectural achievements of v0.6.0, an exhaustive audit reveals clear technical limits, deficits, and deliberate design deferrals across the codebase:
 
-### 1. Frontend & Parsing Deficits
+### 1. Frontend & Parsing Status (Updated v0.7.0)
 
-| Limitation | Technical Description | Root Cause / File | Impact / Workaround |
+| Item | Technical Description | Root Cause / File | Impact / Workaround |
 | :--- | :--- | :--- | :--- |
-| **No Multiline Comments** | Wysna only supports single-line comments starting with `#`. Block comments (`/* ... */`) are not recognized. | `src/lexer/Lexer.py` | Commenting large blocks requires prefixing `#` on every line. |
+| **Nested Block Comments (Closed v0.7.0)** | Both Seed and Selfhost lexers, formatters (`wysna fmt`), and LSP `semanticTokens` support nested `/* /* ... */ */` block comments with statement-boundary awareness and `W0002` checks. | `src/lexer/Lexer.py`<br>`selfhost/src/02_lexer.wysna`<br>`src/formatter/Trivia.py` | Closed cleanly across Seed, Selfhost, LLVM, formatter, and LSP. |
 | **Heuristic Error Recovery Limit** | Parser recovers up to 100 diagnostics before stopping; the recovered AST is **not executable**. | `src/parser/Parser.py` | Partially broken programs can be checked for errors, but cannot be run or lowered to MIR until all syntax errors are resolved. |
 | **Multiline Dot Chaining Boundary** | Dot-chaining across lines is supported only when the newline immediately precedes the dot (`.method()`). Incomplete trailing expressions cause immediate syntax errors. | `src/parser/Parser.py` | Builder patterns must place the dot on the continuation line. |
 
 ---
 
-### 2. Type System & Semantics Deficits
+### 2. Type System & Semantics Status (Updated v0.7.0)
 
-| Limitation | Technical Description | Root Cause / File | Impact / Workaround |
+| Item | Technical Description | Root Cause / File | Impact / Workaround |
 | :--- | :--- | :--- | :--- |
-| **Immutable Snapshot Closures** | Lambdas capture outer variables by **immutable snapshot only**. Captured mutable variables cannot be modified inside a closure, and mutations outside after capture are not observed. | `src/checker/ClosureConversion.py`<br>`docs/KNOWN_LIMITS.md §1` | Stateful closures (e.g. `make_counter()`) are impossible. Workaround: Use a `class` with private fields. |
-| **Restricted Error Unions** | Error unions (`T ! E1 \| E2`) only accept primitive scalars, non-generic `struct`, and non-generic `enum`. Classes, generic types, collections, and functions are rejected. | `src/checker/ResultRules.py`<br>`docs/KNOWN_LIMITS.md §2` | Rich error hierarchies with inherited classes or generic payloads cannot be used in error unions without manual boxing. |
-| **Dictionary Key Restrictions** | Only `int`, `str`, `bool`, and `enum` can be dictionary keys. Floating-point numbers (`float`), structs, and collections are rejected (`W2010`). | `src/checker/CollectionRules.py`<br>`W2010` | Prevents NaN comparison anomalies and float hashing instability. Float keys require string formatting before insertion. |
-| **No Independent Generic Methods in Classes** | Parameterized classes can use class-level type arguments in methods, but individual methods cannot introduce independent type parameters: `class Box[T] { fn transform[R] (...) }` is unsupported. | `src/checker/OopGenerics.py` | Generic mapping patterns must be written as standalone functions (`fn transform[T, R] (...)`) instead of class methods. |
+| **Immutable Snapshot Closures** | Lambdas capture outer variables by **immutable snapshot only**. Captured mutable variables cannot be modified inside a closure, and mutations outside after capture are not observed. | `src/checker/ClosureConversion.py`<br>`docs/KNOWN_LIMITS.md §1` | Intentional design contract unless opt-in mutable cells are decided. Workaround: Use a `class` with fields. |
+| **Expanded Error Unions (Closed v0.7.0)** | `T ! E1 \| E2` supports scalars, non-generic & concrete generic `struct`/`enum`, and `class` error alternatives across Seed & LLVM (`Selfhost` supports scalars, non-generic ADTs, and non-generic `class`). Collections, tuples, and functions remain excluded. | `src/checker/TypeChecker.py`<br>`runtime/wysna_runtime_core.h`<br>`selfhost/src/08_semantics.wysna` | Rich OOP and generic ADT error types work directly in error unions without manual wrapping. |
+| **Tuple Dictionary Keys (Closed v0.7.0)** | `dict[K, V]` accepts `int`, `str`, `bool`, `enum`, and hashable `tuple` composites across all 5 engines; `float` and composites containing `float`/collections/classes remain rejected (`W2010`). | `src/checker/TypeInterner.py`<br>`runtime/wysna_runtime_memory.h`<br>`selfhost/src/08_semantics.wysna` | Composite tuple keys (`dict[tuple[int, str], V]`) hash and compare structurally without workarounds. |
+| **Independent Generic Class Methods (Closed v0.7.0 in Seed/LLVM)** | Both concrete and parameterized classes support independent generic methods (`Box[T].transform[R]`) with interface bounds and inheritance across Interpreter, AST, HIR/MIR C99, and LLVM. Selfhost keeps explicit `W2013` boundary for parameterized class generic methods. | `src/checker/OopGenerics.py`<br>`src/checker/TypeChecker.py`<br>`src/checker/Generics.py` | Generic OOP transform chains compile and specialize cleanly in Seed and LLVM. |
 | **No Complex Trait / Typeclass System** | Interfaces are strictly nominal and apply only to classes (`class A implements Interface`). Structural typing, duck typing, and retroactive trait implementations for primitives/structs do not exist. | `src/checker/TypeRelations.py` | Code cannot define interfaces that apply retroactively to built-in types like `int` or `str`. |
 
 ---
@@ -307,11 +308,11 @@ Despite the architectural achievements of v0.6.0, an exhaustive audit reveals cl
 
 ---
 
-### 4. Concurrency & Asynchronous I/O Deficits
+### 4. Concurrency & Asynchronous I/O Status
 
-| Limitation | Technical Description | Root Cause / File | Impact / Workaround |
+| Item | Technical Description | Root Cause / File | Impact / Workaround |
 | :--- | :--- | :--- | :--- |
-| **OS-Thread `parallel_*`, Cooperative Timers/HTTP & Eager `async fn`** | `std/algorithms` (`parallel_map`, `parallel_batch`, `parallel_filter`, `parallel_reduce`) dispatches across a bounded OS worker pool (`pthread` / `CreateThread`) backed by lock-free atomic ARC and copy-first CoW detach across Interpreter, AST C99, MIR C99, and Selfhost. `std/async` multiplexes cooperative monotonic timers (`sleep_ms`, `all`, `race`) and non-blocking `curl_multi` HTTP transfers (`std/http`), while `wysna_await` safely borrows `Task` fields without double-free. However, general user `async fn` still lowers eagerly (no CPS state-machine suspension). | `runtime/wysna_host.h`<br>`runtime/wysna_runtime_memory.h`<br>`stdlib/async.wysna`<br>`stdlib/algorithms.wysna` | Data-parallel CoW transforms and HTTP/timer multiplexing run concurrently; arbitrary suspendable user coroutines remain open for CPS transformation. |
+| **OS-Thread `parallel_*`, OS-Thread `std/async.spawn`, Timers/HTTP & Eager `async fn`** | `std/algorithms` (`parallel_map`, `parallel_batch`, `parallel_filter`, `parallel_reduce`) and `std/async.spawn` dispatch across OS worker threads (`pthread` / `CreateThread` / Python pool) backed by atomic ARC and copy-first CoW detach across all 5 engines (`interpreter`, `ast`, `hir`, `selfhost`, `llvm`), with automatic task result hydration in `wait`/`all`/`race`/`await` and deterministic exit thread-join cleanup under `WYSNA_MEM_CHECK=1`. `std/async` also multiplexes monotonic timers (`sleep_ms`) and non-blocking `curl_multi` HTTP transfers. User `async fn` declarations still lower eagerly without stackless CPS state-machine suspension. | `runtime/wysna_host.h`<br>`runtime/HostAbi.py`<br>`stdlib/async.wysna`<br>`stdlib/algorithms.wysna` | Multi-threaded background tasks, timer/HTTP racing, and data-parallel CoW transforms run concurrently across all engines; stackless single-thread CPS lowering for arbitrary `async fn` remains open. |
 
 ---
 
@@ -325,32 +326,31 @@ Despite the architectural achievements of v0.6.0, an exhaustive audit reveals cl
 
 ---
 
-### 6. Self-Hosted Compiler Profile Gap
+### 6. Self-Hosted Compiler Profile Status
 
-| Limitation | Technical Description | Root Cause / File | Impact / Workaround |
+| Item | Technical Description | Root Cause / File | Impact / Workaround |
 | :--- | :--- | :--- | :--- |
-| **Incomplete Seed Feature Parity in Selfhost** | `selfhost/compiler.wysna` implements the `native-core-v1` profile plus native formatting (`--fmt` / `--fmt-write` via `packaging/native/driver.c` and `NativeToolchain.format_compiler`). It still lacks project manifest management (`wysna.toml`), lockfiles, native multi-file test discovery, and LSP services. | `selfhost/src/`<br>`packaging/native/driver.c`<br>`docs/COMPILER_ARCHITECTURE.md` | Single-module compilation, verification, MIR export, and formatting run without Python; full package workspaces and LSP continue to use Seed. |
-| **Parameterized Class Inheritance Gap in Selfhost** | Classes parameterized with generic types that also inherit from other generic classes are unsupported in the self-hosted MIR lowering pass. | `selfhost/src/08_mir_classes.wysna` | Complex generic class hierarchies must be compiled using Seed. |
+| **Native Selfhost Tooling & Parity Scope** | `selfhost/compiler.wysna` implements the `native-core-v1` profile plus native formatting (`--fmt` / `--fmt-write` via `selfhost/src/09_main.wysna`) and multi-file directory `wysna test` discovery with `.expected` / `# RUNTIME_PANIC:` parity in `packaging/native/driver.c`. It still lacks project manifest management (`wysna.toml`), lockfiles, parameterized class inheritance, generic methods on parameterized classes (`W2013`), and Stage-3 LSP services. | `selfhost/src/`<br>`packaging/native/driver.c`<br>`packaging/native/platform.h`<br>`docs/COMPILER_ARCHITECTURE.md` | Single/multi-file compilation, verification, MIR export, formatting, and test-directory execution run without Python; package manifests and LSP continue to use Seed. |
 
 ---
 
-### 7. Standard Library Gaps
+### 7. Standard Library Status (Closed v0.7.0)
 
-| Limitation | Technical Description | Root Cause / File | Impact / Workaround |
+| Item | Technical Description | Root Cause / File | Impact / Workaround |
 | :--- | :--- | :--- | :--- |
-| **Cryptography Module Scope** | `stdlib/crypto` implements FIPS 180-4 SHA-256 and RFC 2104 HMAC-SHA256 (closed in v0.6.1 / PR #146). Symmetric/asymmetric ciphers (AES, RSA, ChaCha20) remain open for future increments. | `stdlib/crypto.wysna`<br>`runtime/wysna_host_crypto.h` | Basic hashing and authentication are fully operational; full encryption suites require external FFI or future modules. |
-| **No Full Unicode Normalization** | `std/text` only implements ASCII `to_lower` / `to_upper`. It lacks Unicode normalization (NFC, NFD) and language-specific collation. | `stdlib/text.wysna` | Multi-language text sorting and case conversions are limited to ASCII code points. |
-| **Minimal Stub Modules** | Several standard modules are minimalist wrappers: `std/time` has only 3 lines (`unix_seconds`), `std/environment` has 7 lines, and `std/io` has 6 lines. | `stdlib/time.wysna`<br>`stdlib/environment.wysna` | Comprehensive date/time manipulation (timezones, durations, formatting) is absent. |
+| **AEAD Cryptography (`std/crypto`)** | Implements FIPS 180-4 SHA-256, RFC 2104 HMAC-SHA256, CSPRNG (`generate_key`/`generate_nonce`), and RFC 8439 ChaCha20-Poly1305 AEAD (`aead_seal`/`aead_open`) verified under ASan/UBSan. | `stdlib/crypto.wysna`<br>`runtime/wysna_host_crypto.h` | Hashing, authentication, and symmetric AEAD encryption are available natively. |
+| **Unicode Normalization (`std/text`)** | Implements full Unicode 16.0.0 UAX #15 `normalize_nfc`, `normalize_nfd`, and `canonical_equal` backed by generated deterministic tables (`tools/gen_unicode_tables.py`, >1M test checks vs Python `unicodedata`). Locale-specific collation rules remain out of scope. | `stdlib/text.wysna`<br>`runtime/wysna_host_unicode.h`<br>`runtime/wysna_unicode_tables.h` | Canonical Unicode normalization and equality work identically across all 4 engines. |
+| **Time, Env & Stream I/O (`std/time`, `std/io`, `std/environment`)** | Expanded `std/time` (`now_ms`, `monotonic_ms`, `elapsed_ms`, `sleep`, calendar/ISO-8601), `std/io` (`read_line`, `read_all`, `flush`), and `std/environment` (`has`, `get_or`, `current_directory`). | `stdlib/time.wysna`<br>`stdlib/io.wysna`<br>`stdlib/environment.wysna`<br>`runtime/wysna_host_system.h` | Complete baseline host time, streaming I/O, and directory APIs across all 4 engines. |
 
 ---
 
-### 8. Tooling & IDE Limitations
+### 8. Tooling & IDE Status
 
-| Limitation | Technical Description | Root Cause / File | Impact / Workaround |
+| Item | Technical Description | Root Cause / File | Impact / Workaround |
 | :--- | :--- | :--- | :--- |
-| **Document-Local LSP Rename** | The Language Server Protocol `rename` command operates strictly on non-exported symbols within the active document. Cross-module renames are refused. | `src/tooling/LanguageServer.py` | Refactoring a public symbol across multiple files requires manual search and replace. |
-| **No Semantic Tokens in LSP** | The LSP implementation does not emit semantic highlighting tokens (`textDocument/semanticTokens`). | `src/tooling/LanguageServer.py` | Syntax highlighting in editors depends entirely on TextMate grammars (`syntaxes/wysna.tmLanguage.json`). |
-| **Unsigned Binary Installers** | Distributed desktop packages (macOS PKG, Windows NSIS) are unsigned and unnotarized. | `packaging/` | macOS Gatekeeper and Windows Defender SmartScreen flag installers with security warnings upon manual installation. |
+| **Workspace-Wide LSP Rename (Closed v0.7.0)** | `LanguageServer` supports workspace-wide cross-file `rename` across checked workspace files, refusing collisions and broken dependents safely when `rootUri`/`workspaceFolders` are set. | `src/tooling/LanguageServer.py` | Refactoring exported symbols updates all dependents across the workspace cleanly. |
+| **Semantic Tokens in LSP (Closed v0.7.0)** | `LanguageServer` advertises and serves `textDocument/semanticTokens/full` classifying declarations, references, parameters, properties, keywords, literals, and `#` / nested `/* ... */` comments. | `src/tooling/LanguageServer.py` | Rich semantic highlighting available via LSP alongside TextMate grammars. |
+| **Unsigned Binary Installers** | Distributed desktop packages (macOS PKG, Windows NSIS) remain unsigned and unnotarized. | `packaging/` | macOS Gatekeeper and Windows Defender SmartScreen flag installers without code-signing certificates. |
 
 ---
 
