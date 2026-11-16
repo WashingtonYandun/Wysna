@@ -86,6 +86,7 @@ fn mir_verify_runtime(module: MirModule, operation: MirOperation, slots: list[Mi
         if name == "wysna_not" { return type_ == 2 and returned == 2 }
         if name == "wysna_builtin_int" { return type_ >= 2 and type_ <= 6 and returned == 3 }
         if name == "wysna_builtin_float" { return type_ >= 2 and type_ <= 6 and returned == 4 }
+        if name == "wysna_await" { return true }
         return false
     }
     if len(operation.args) != 2 { return false }

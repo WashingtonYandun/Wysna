@@ -118,6 +118,7 @@ static void wysna_sha256_init(WysnaSha256Context* ctx) {
 }
 
 static void wysna_sha256_update(WysnaSha256Context* ctx, const uint8_t data[], size_t len) {
+    if (len == 0 || data == NULL) return;
     for (size_t i = 0; i < len; ++i) {
         ctx->data[ctx->datalen] = data[i];
         ctx->datalen++;
@@ -182,7 +183,7 @@ static void wysna_hmac_sha256_compute(const uint8_t* key, size_t key_len,
     memset(k_block, 0, 64);
     if (key_len > 64) {
         wysna_sha256_compute(key, key_len, k_block);
-    } else {
+    } else if (key_len > 0 && key != NULL) {
         memcpy(k_block, key, key_len);
     }
 
@@ -290,6 +291,7 @@ static void wysna_sha512_init(WysnaSha512Context* ctx) {
 }
 
 static void wysna_sha512_update(WysnaSha512Context* ctx, const uint8_t data[], size_t len) {
+    if (len == 0 || data == NULL) return;
     for (size_t i = 0; i < len; ++i) {
         ctx->data[ctx->datalen++] = data[i];
         if (ctx->datalen == 128) {
@@ -344,7 +346,7 @@ static void wysna_hmac_sha512_compute(const uint8_t* key, size_t key_len,
     memset(k_block, 0, 128);
     if (key_len > 128) {
         wysna_sha512_compute(key, key_len, k_block);
-    } else {
+    } else if (key_len > 0 && key != NULL) {
         memcpy(k_block, key, key_len);
     }
 
@@ -500,6 +502,7 @@ static void wysna_md5_transform(uint32_t state[4], const uint8_t block[64]) {
 }
 
 static void wysna_md5_update(WysnaMd5Context* ctx, const uint8_t* input, size_t input_len) {
+    if (input_len == 0 || input == NULL) return;
     size_t i, index, part_len;
     index = (size_t)((ctx->count[0] >> 3) & 0x3f);
     if ((ctx->count[0] += ((uint32_t)input_len << 3)) < ((uint32_t)input_len << 3)) {
@@ -518,7 +521,9 @@ static void wysna_md5_update(WysnaMd5Context* ctx, const uint8_t* input, size_t 
     } else {
         i = 0;
     }
-    memcpy(&ctx->buffer[index], &input[i], input_len - i);
+    if (input_len > i) {
+        memcpy(&ctx->buffer[index], &input[i], input_len - i);
+    }
 }
 
 static void wysna_md5_final(WysnaMd5Context* ctx, uint8_t digest[16]) {

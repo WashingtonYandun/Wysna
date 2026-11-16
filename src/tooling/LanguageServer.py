@@ -10,6 +10,7 @@ from checker.Lints import lint_discarded_expressions
 from common.constants import KEYWORDS
 from compiler.CheckedProgram import SymbolInfo
 from compiler.CompilerService import CompilerService
+from compiler.SemanticGraph import build_semantic_graph, find_graph_node
 from error.Error import WysnaError
 from formatter.Formatter import Formatter
 from lexer.Lexer import Lexer
@@ -77,7 +78,17 @@ class LanguageServer:
         self.documents = {}
         self.checked = {}
         self.fixes = {}
+        self._graphs = {}
         self.stopping = False
+
+    def _graph_for(self, uri):
+        unit = self.checked.get(uri)
+        if unit is None:
+            return None, None
+        key = id(unit)
+        if self._graphs.get(uri, (None, None))[0] != key:
+            self._graphs[uri] = (key, build_semantic_graph(unit))
+        return unit, self._graphs[uri][1]
 
     def _diagnostic_entry(self, item, path, source, severity=1):
         message = item.message
@@ -276,7 +287,105 @@ class LanguageServer:
         label = f"{symbol.kind} {self._source_name(symbol.name)}"
         if symbol.type:
             label += f": {symbol.type}"
-        return {'contents': {'kind': 'markdown', 'value': f'```wysna\n{label}\n```'}}
+        lines = [f'```wysna\n{label}\n```']
+        if symbol.kind in ('interface', 'class', 'struct', 'enum'):
+            _, graph = self._graph_for(uri)
+            if graph is not None:
+                gnode = find_graph_node(graph, symbol.name) or find_graph_node(graph, self._source_name(symbol.name))
+                if gnode is not None:
+                    node_names = {n['id']: n['qualified_name'] for n in graph.get('nodes', ())}
+                    def fmt_ids(ids):
+                        return ', '.join(node_names.get(item, item) for item in ids)
+                    relations = []
+                    if gnode.get('implemented_by'):
+                        relations.append(f"- **Implemented by:** {fmt_ids(gnode['implemented_by'])}")
+                    if gnode.get('implements'):
+                        relations.append(f"- **Implements:** {fmt_ids(gnode['implements'])}")
+                    if gnode.get('super_class'):
+                        relations.append(f"- **Extends:** {node_names.get(gnode['super_class'], gnode['super_class'])}")
+                    if gnode.get('subclasses'):
+                        relations.append(f"- **Subclasses:** {fmt_ids(gnode['subclasses'])}")
+                    if gnode.get('instantiated_by'):
+                        relations.append(f"- **Instantiated by:** {fmt_ids(gnode['instantiated_by'])}")
+                    if gnode.get('used_by'):
+                        relations.append(f"- **Used by:** {fmt_ids(gnode['used_by'])}")
+                    if relations:
+                        lines.append('\n'.join(relations))
+        return {'contents': {'kind': 'markdown', 'value': '\n\n'.join(lines)}}
+
+    def implementation(self, uri, position):
+        unit, graph = self._graph_for(uri)
+        if unit is None or graph is None:
+            return []
+        symbol = self.symbol_at(uri, position)
+        candidates = []
+        if symbol is not None:
+            candidates.extend((symbol.name, self._source_name(symbol.name)))
+        token = self.token_at(uri, position)
+        if token is not None and token.value:
+            candidates.append(token.value)
+
+        gnode = None
+        for name in candidates:
+            gnode = find_graph_node(graph, name)
+            if gnode is not None:
+                break
+
+        # If cursor sits on an interface method call (MemberExpr), resolve its interface_method node.
+        if (gnode is None or gnode['kind'] not in ('interface', 'interface_method', 'class')) and token is not None:
+            for ast_node in nodes(unit.program):
+                if isinstance(ast_node, MemberExpr) and ast_node.property == token.value and ast_node.line == token.line:
+                    recv_type = getattr(ast_node.object, 'inferred_type', None)
+                    recv_name = getattr(recv_type, 'display', '').split('[', 1)[0].strip() if recv_type else ''
+                    if recv_name:
+                        cand_node = find_graph_node(graph, f'{recv_name}.{token.value}')
+                        if cand_node is not None:
+                            gnode = cand_node
+                            break
+
+        if gnode is None:
+            return []
+
+        target_ids = []
+        if gnode['kind'] in ('interface', 'interface_method'):
+            target_ids = list(gnode.get('implemented_by', ()))
+        elif gnode['kind'] == 'class':
+            target_ids = list(gnode.get('subclasses', ()))
+
+        nodes_by_id = {n['id']: n for n in graph.get('nodes', ())}
+        locations, seen = [], set()
+        for tid in target_ids:
+            tnode = nodes_by_id.get(tid)
+            if tnode is None:
+                continue
+            path = tnode['file']
+            source = unit.source_text(path)
+            if not source and Path(path).is_file():
+                try:
+                    source = Path(path).read_text(encoding='utf-8')
+                except OSError:
+                    source = ''
+            if not source:
+                continue
+            tok = next(
+                (t for t in Lexer(source).tokenize()
+                 if t.line >= tnode['line'] and t.value == tnode['name']),
+                None,
+            )
+            if tok is None:
+                continue
+            loc = {
+                'uri': Path(path).as_uri(),
+                'range': {
+                    'start': position_at(source, tok.start_offset),
+                    'end': position_at(source, tok.end_offset),
+                },
+            }
+            key = (loc['uri'], loc['range']['start']['line'], loc['range']['start']['character'])
+            if key not in seen:
+                seen.add(key)
+                locations.append(loc)
+        return sorted(locations, key=lambda item: (item['uri'], item['range']['start']['line'], item['range']['start']['character']))
 
     @staticmethod
     def _source_name(name):
@@ -514,6 +623,7 @@ class LanguageServer:
         if method == 'initialize':
             result = {'capabilities': {'positionEncoding': 'utf-16', 'textDocumentSync': {'openClose': True, 'change': 2},
                                       'definitionProvider': True, 'hoverProvider': True,
+                                      'implementationProvider': True,
                                       'documentFormattingProvider': True,
                                       'referencesProvider': True, 'renameProvider': True,
                                       'codeActionProvider': True,
@@ -546,6 +656,8 @@ class LanguageServer:
             self.send({'jsonrpc': '2.0', 'method': 'textDocument/publishDiagnostics', 'params': {'uri': uri, 'diagnostics': []}})
         elif method == 'textDocument/definition':
             result = self.definition(params['textDocument']['uri'], params['position'])
+        elif method == 'textDocument/implementation':
+            result = self.implementation(params['textDocument']['uri'], params['position'])
         elif method == 'textDocument/completion':
             result = self.completion(params['textDocument']['uri'], params['position'])
         elif method == 'textDocument/hover':

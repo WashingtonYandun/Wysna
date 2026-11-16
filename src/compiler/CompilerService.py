@@ -5,6 +5,7 @@ import time
 
 from compiler.CheckedProgram import CheckedProgram, ParsedProgram, SourceSnapshot, clone_syntax
 from compiler.CompilationSession import CompilationSession
+from compiler.NativeToolchain import HTTP_TRANSPORT_SYMBOLS, source_uses_http_transport
 from error.Error import WysnaError
 from node.NodeType import Node, Program
 
@@ -198,6 +199,14 @@ class CompilerService:
         """Analyze verified resolved MIR without interpreting, linking or loading FFI."""
         return self.explain_with_foreign_bindings(checked)[0]
 
+    def graph(self, checked, *, symbol=None, relation=None, include_effects=True):
+        """Build or query the compile-time semantic relationship graph for a checked program."""
+        self._validate(checked)
+        from compiler.SemanticGraph import build_semantic_graph, query_semantic_graph
+        effects = self.explain(checked) if include_effects else None
+        payload = build_semantic_graph(checked, effects_report=effects)
+        return query_semantic_graph(payload, symbol=symbol, relation=relation)
+
     def analyze_reference_cycles(self, checked):
         """Analyze nominal class declarations for ARC retain cycles and weak-reference health."""
         self._validate(checked)
@@ -280,11 +289,11 @@ class CompilerService:
         from compiler.LlvmForeign import runtime_adapters
         adapters = runtime_adapters(module)
         return LlvmEmission(source, toolchain.target, files, timings, adapters,
-                            any(item['native'].startswith('wysna_host_http_') for item in module.externs.values()))
+                            any(item['native'] in HTTP_TRANSPORT_SYMBOLS for item in module.externs.values()))
 
     @staticmethod
     def _enable_http_runtime(source):
-        if 'wysna_host_http_' not in source or 'WYSNA_HAS_HTTP' in source:
+        if not source_uses_http_transport(source) or 'WYSNA_HAS_HTTP' in source:
             return source
         include = '#include "runtime/wysna_runtime.h"'
         if include in source:

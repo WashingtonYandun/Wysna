@@ -93,7 +93,7 @@ fn mir_is_result(types: list[MirType], type_id: int) -> bool { return mir_valid_
 fn mir_is_optional(types: list[MirType], type_id: int) -> bool { return mir_valid_type(types, type_id) and types[type_id].kind == "optional" }
 
 fn mir_consumes(operation: MirOperation) -> bool {
-    return operation.opcode == "function" and len(operation.args) > 0 or operation.opcode == "store" or operation.opcode == "store_place" or operation.opcode == "global_store" or operation.opcode == "runtime" and (operation.name == "wysna_ok" or operation.name == "wysna_err" or operation.name == "wysna_enum_payload" or operation.name == "wysna_builtin_weak_owned")
+    return operation.opcode == "function" and len(operation.args) > 0 or operation.opcode == "store" or operation.opcode == "store_place" or operation.opcode == "global_store" or operation.opcode == "runtime" and (operation.name == "wysna_ok" or operation.name == "wysna_err" or operation.name == "wysna_enum_payload" or operation.name == "wysna_builtin_weak_owned" or operation.name == "wysna_await")
 }
 
 fn mir_new_block(context: MirBuilder, source: Token) -> int {

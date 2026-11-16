@@ -98,7 +98,11 @@ def print_help(prog: Optional[str] = None) -> None:
     print("Usage:")
     print("Core tools (native C99 builds by default):")
     print(f"  {prog} lsp                                       # LSP over stdio")
-    print(f"  {prog} explain <file.wysna> [--function NAME] [--output-format=json-v1] # Conservative effects and capability report")
+    print(f"  {prog} graph <file.wysna> [--symbol NAME] [--rel implements|hierarchy|usages|callers|callees|impact] [--output-format=json-v1] # Compile-time semantic relationship graph")
+    print(f"  {prog} inspect <file.wysna> [--symbol NAME] [--with-deps] [--output-format=json-v1] # Surgical symbol slice and dependency context")
+    print(f"  {prog} patch <file.wysna> --symbol NAME (--with CODE | --with-file PATH) [--expect-graph-hash HASH] [--apply] [--output-format=json-v1] # Checked semantic patch")
+    print(f"  {prog} skills [topic] [--output-format=json-v1]  # Embedded version-matched agent coding guides")
+    print(f"  {prog} explain <file.wysna|--code Wxxxx> [--function NAME] [--output-format=json-v1] # Effects report or diagnostic explanation")
     print(f"  {prog} project <new|lock|check|build|run|test> [options] # Reproducible local projects")
     print(f"  {prog} fix [--apply] [--include-maybe] [--output-format=json-v1] <file.wysna> # Apply machine-applicable diagnostic fixes")
     print(f"  {prog} schema [--all] [--function NAME] [--output-format=json-v1] <file.wysna> # Emit JSON Schema and LLM tool definitions")
@@ -162,6 +166,18 @@ def main(argv=None) -> None:
     if args and args[0] == "explain":
         from tooling.ExplainCLI import run_explain_command
         raise SystemExit(run_explain_command(args[1:]))
+    if args and args[0] == "graph":
+        from tooling.AgentGraphCLI import run_graph_command
+        raise SystemExit(run_graph_command(args[1:]))
+    if args and args[0] == "inspect":
+        from tooling.AgentGraphCLI import run_inspect_command
+        raise SystemExit(run_inspect_command(args[1:]))
+    if args and args[0] == "patch":
+        from tooling.AgentGraphCLI import run_patch_command
+        raise SystemExit(run_patch_command(args[1:]))
+    if args and args[0] == "skills":
+        from tooling.AgentGraphCLI import run_skills_command
+        raise SystemExit(run_skills_command(args[1:]))
     if args and args[0] == "fix":
         from tooling.FixCLI import run_fix_command
         raise SystemExit(run_fix_command(args[1:]))

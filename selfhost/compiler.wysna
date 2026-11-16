@@ -1854,6 +1854,7 @@ fn sem_collect_record(context: SemanticContext, kind: str) {
         if sem_is(context, "RBRACE") { break }
         let mut visible = true
         if sem_match(context, "PRIVATE") { visible = false } else { sem_match(context, "PUBLIC") }
+        if sem_is(context, "IDENT") and sem_at(context).val == "async" and context.tokens[context.pos + 1].kind == "FN" { sem_take(context) }
         if sem_is(context, "FN") {
             sem_collect_function(context, name + ".", visible)
         }
@@ -2279,6 +2280,23 @@ fn sem_prefix(context: SemanticContext, allow_struct: bool, statement: bool) -> 
         let operand = sem_expression(context, 9, allow_struct)
         sem_require_at(context, operand.type_id, context.boolean_type, "W2001", operand_source)
         return sem_expr(context, "unary", sem_value(context.boolean_type), source, "NOT", [operand.node], -1, -1)
+    }
+    if sem_is(context, "IDENT") and sem_at(context).val == "await" and expression_starter(context.tokens[context.pos + 1].kind) {
+        sem_take(context)
+        let operand = sem_expression(context, 9, allow_struct)
+        let mut awaited_type = operand.type_id
+        let op_type = context.types[awaited_type]
+        if (op_type.kind == "struct" or op_type.kind == "class") and len(op_type.args) > 0 {
+            awaited_type = op_type.args[0]
+        } elif op_type.kind == "struct" or op_type.kind == "class" {
+            for field in context.fields {
+                if field.owner == op_type.name and field.name == "value" {
+                    let ft = field.type_id
+                    if sem_kind(context, ft) == "optional" { awaited_type = context.types[ft].args[0] } else { awaited_type = ft }
+                }
+            }
+        }
+        return sem_expr(context, "unary", sem_value(awaited_type), source, "AWAIT", [operand.node], -1, -1)
     }
     if sem_match(context, "LPAREN") {
         if sem_match(context, "RPAREN") {
@@ -3548,6 +3566,7 @@ fn sem_validate(context: SemanticContext, tokens: list[Token]) {
         sem_skip_separators(context)
         if sem_is(context, "EOF") { break }
         sem_match(context, "PUB")
+        if sem_is(context, "IDENT") and sem_at(context).val == "async" and context.tokens[context.pos + 1].kind == "FN" { sem_take(context) }
         let declaration_source = sem_at(context)
         if sem_match(context, "EXTERN") {
             if sem_expect(context, "STR").val != "C" { report_error_at("W2013", declaration_source, "only C ABI is supported") }
@@ -3578,6 +3597,7 @@ fn sem_validate(context: SemanticContext, tokens: list[Token]) {
         sem_skip_separators(context)
         if sem_is(context, "RBRACE") or sem_is(context, "EOF") { break }
         sem_match(context, "PUB")
+        if sem_is(context, "IDENT") and sem_at(context).val == "async" and context.tokens[context.pos + 1].kind == "FN" { sem_take(context) }
         let mut declaration = false
         for function in context.functions {
             if function.body >= 0 and context.pos < function.body and sem_is(context, "FN") and context.tokens[context.pos + 1].val == function.name {
@@ -4111,7 +4131,7 @@ fn mir_is_result(types: list[MirType], type_id: int) -> bool { return mir_valid_
 fn mir_is_optional(types: list[MirType], type_id: int) -> bool { return mir_valid_type(types, type_id) and types[type_id].kind == "optional" }
 
 fn mir_consumes(operation: MirOperation) -> bool {
-    return operation.opcode == "function" and len(operation.args) > 0 or operation.opcode == "store" or operation.opcode == "store_place" or operation.opcode == "global_store" or operation.opcode == "runtime" and (operation.name == "wysna_ok" or operation.name == "wysna_err" or operation.name == "wysna_enum_payload" or operation.name == "wysna_builtin_weak_owned")
+    return operation.opcode == "function" and len(operation.args) > 0 or operation.opcode == "store" or operation.opcode == "store_place" or operation.opcode == "global_store" or operation.opcode == "runtime" and (operation.name == "wysna_ok" or operation.name == "wysna_err" or operation.name == "wysna_enum_payload" or operation.name == "wysna_builtin_weak_owned" or operation.name == "wysna_await")
 }
 
 fn mir_new_block(context: MirBuilder, source: Token) -> int {
@@ -5714,7 +5734,7 @@ fn mir_expression(context: MirBuilder, id: int) -> int {
         if node.text == "MINUS" and operand_node.kind == "integer" { return mir_integer(context, operand_node.text, true, source) }
         let operand = mir_expression(context, node.children[0])
         if context.current < 0 { return -1 }
-        return mir_op(context, "runtime", mir_type(context, node.type_id, source), [operand], if node.text == "MINUS" { "wysna_neg" } else { "wysna_not" }, mir_literal_unit(), source)
+        return mir_op(context, "runtime", mir_type(context, node.type_id, source), [operand], if node.text == "MINUS" { "wysna_neg" } elif node.text == "AWAIT" { "wysna_await" } else { "wysna_not" }, mir_literal_unit(), source)
     }
     if node.kind == "propagate" or node.kind == "handler" {
         let value = mir_expression(context, node.children[0])
@@ -6058,6 +6078,7 @@ fn mir_verify_runtime(module: MirModule, operation: MirOperation, slots: list[Mi
         if name == "wysna_not" { return type_ == 2 and returned == 2 }
         if name == "wysna_builtin_int" { return type_ >= 2 and type_ <= 6 and returned == 3 }
         if name == "wysna_builtin_float" { return type_ >= 2 and type_ <= 6 and returned == 4 }
+        if name == "wysna_await" { return true }
         return false
     }
     if len(operation.args) != 2 { return false }

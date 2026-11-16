@@ -268,12 +268,12 @@ async fn compute_job(id: int) -> int {
     return id * 10
 }
 
-let task_a = async.ready(42)
-let task_b = async.ready(100)
+let base = await compute_job(4)
+let task_a = async.ready[int] (base + 2)
+let task_b = async.ready[int] (100)
 
 # Combinators: wait for all or race the first resolved task
-let both = async.all([task_a, task_b])
-let values = await both
+let values = async.all[int] ([task_a, task_b]) else err { [] }
 print(values)  # [42, 100]
 ```
 
@@ -284,15 +284,15 @@ Wysna provides structured, cooperative asynchronous I/O via `async fn` and `awai
 ```wysna
 import "std/crypto"
 
-let digest = crypto.sha512("wysna-agent-security")
-let session_id = crypto.random_hex(16)
+let digest = crypto.sha512("wysna-agent-security") else err { "" }
+let session_id = crypto.random_hex(16) else err { "" }
 let token = "expected-bearer-secret"
 
 # Timing-attack resistant verification
 let is_valid = crypto.constant_time_eq(token, token)
 
-print("Hash prefix: " + digest[0..16])
-print("Session: " + session_id)
+print("Hash prefix: " + slice(digest, 0, 16))
+print("Session hex length: " + str(len(session_id)))
 print("Constant-time valid: " + str(is_valid))
 ```
 
@@ -311,13 +311,17 @@ error channels, contracts and pattern matching.
 | :--- | :--- |
 | `wysna check` | Typecheck without executing; supports `--engine=compiler` (native MIR) and `--output-format=json-v1`. |
 | `wysna fix` | Apply deterministic compiler self-healing repairs with verified SHA-256 edits. |
+| `wysna graph` | Build and query the compile-time semantic relationship graph (`implements`, `usages`, `calls`, `impact`) in `json-v1`. |
+| `wysna inspect` | Extract a surgical, token-efficient symbol slice, dependencies (`--with-deps`), contracts, and effects. |
+| `wysna patch` | Apply hash-guarded (`--expect-graph-hash`), in-memory typechecked declaration patches cleanly before writing disk. |
+| `wysna skills` | Serve embedded, version-matched agent coding workflows (`overview`, `agent-loop`, `syntax`, `graph`, `patch`, `contracts`, `stdlib`). |
+| `wysna explain` | Conservative MIR effect report (`file.wysna`) or structured diagnostic guide (`--code Wxxxx`). |
 | `wysna run` | Execute source through the reference runtime or native binary (`--engine=compiler`), with `--max-steps` / `--max-heap-mb`. |
 | `wysna build` | Compile a native executable through verified MIR → C99. |
 | `wysna fmt` | Canonical, deterministic formatting; supports `--engine=compiler` verification. |
 | `wysna test` | Run conformance, differential, fuzz, or native test runner (`--engine=compiler` / `--native`). |
-| `wysna explain` | Conservative effect and capability report over verified MIR. |
 | `wysna schema` | Export function contracts and struct shapes to JSON Schema (Draft 2020-12). |
-| `wysna mcp` | In-memory Model Context Protocol daemon for AI agents and IDE integrations. |
+| `wysna mcp` | In-memory Model Context Protocol daemon exposing `check`, `fix`, `fmt`, `graph`, `inspect`, `patch`, `skills`, `explain`, `schema`, `api`, and `capabilities`. |
 | `wysna project` | Create, lock, check, build, run and test local projects. |
 | `wysna api` / `wysna capabilities` | Discover standard-library APIs and target availability. |
 | `wysna lsp` | Language server over stdio with code action quickfixes. |

@@ -104,7 +104,7 @@ fn mir_expression(context: MirBuilder, id: int) -> int {
         if node.text == "MINUS" and operand_node.kind == "integer" { return mir_integer(context, operand_node.text, true, source) }
         let operand = mir_expression(context, node.children[0])
         if context.current < 0 { return -1 }
-        return mir_op(context, "runtime", mir_type(context, node.type_id, source), [operand], if node.text == "MINUS" { "wysna_neg" } else { "wysna_not" }, mir_literal_unit(), source)
+        return mir_op(context, "runtime", mir_type(context, node.type_id, source), [operand], if node.text == "MINUS" { "wysna_neg" } elif node.text == "AWAIT" { "wysna_await" } else { "wysna_not" }, mir_literal_unit(), source)
     }
     if node.kind == "propagate" or node.kind == "handler" {
         let value = mir_expression(context, node.children[0])

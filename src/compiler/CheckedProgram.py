@@ -155,7 +155,7 @@ class CheckedProgram:
     """
     __slots__ = ('_session', '_unit', '_interner', '_generation', '_options_key',
                  '_source', '_sources', '_modules', '_declarations', '_telemetry',
-                 '_symbols', '_scope_symbols', '_root_symbols', '_program')
+                 '_symbols', '_scope_symbols', '_root_symbols', '_program', '_unit_programs')
 
     def __init__(self, session, unit, *, revision=None):
         self._session = session
@@ -210,6 +210,10 @@ class CheckedProgram:
         self._scope_symbols = tuple((start, end, self._capture_scope(scope, symbol_info, scope_cache))
                                     for start, end, scope in unit.checker.scope_spans)
         self._program = clone_syntax(unit.program, detached=True, inspection=True)
+        self._unit_programs = MappingProxyType({
+            current.path: (self._program if current is unit else clone_syntax(current.program, detached=True, inspection=True))
+            for current in units
+        })
 
     @staticmethod
     def _capture_scope(scope, symbol_info, cache):
@@ -253,6 +257,13 @@ class CheckedProgram:
     @property
     def ast(self):
         return self.program
+
+    @property
+    def unit_programs(self):
+        return MappingProxyType({
+            path: clone_syntax(program, detached=True, inspection=True)
+            for path, program in self._unit_programs.items()
+        })
 
     @property
     def is_current(self):

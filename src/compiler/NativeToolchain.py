@@ -12,6 +12,19 @@ import time
 
 from common.Platform import compiler_command, executable_name, native_stack_link_args
 
+HTTP_TRANSPORT_SYMBOLS = (
+    'wysna_host_http_request',
+    'wysna_host_http_batch',
+    'wysna_host_http_async_start',
+    'wysna_host_http_async_finish',
+    'wysna_host_http_async_cancel',
+)
+
+
+def source_uses_http_transport(c_source: str) -> bool:
+    """Return True only when emitted C requires libcurl HTTP transport rather than async poll stubs."""
+    return any(symbol in c_source for symbol in HTTP_TRANSPORT_SYMBOLS)
+
 
 @dataclass(frozen=True)
 class NativeBuildResult:
@@ -45,7 +58,7 @@ class NativeToolchain:
 
     def build(self, c_source, output, sanitize=False, link_libraries=(), *, profile=None):
         """Compile C and explicit adapters, then link without owning caller inputs."""
-        uses_http = 'wysna_host_http_' in c_source
+        uses_http = source_uses_http_transport(c_source)
         if uses_http and 'WYSNA_HAS_HTTP' not in c_source:
             include = '#include "runtime/wysna_runtime.h"'
             if include in c_source:
@@ -212,7 +225,7 @@ class NativeToolchain:
                     'selfhost', 'Wysna Compiler Error', result.stderr, result.returncode,
                 )
             source = Path(output_path).read_text(encoding='utf-8')
-            if 'wysna_host_http_' in source and 'WYSNA_HAS_HTTP' not in source:
+            if source_uses_http_transport(source) and 'WYSNA_HAS_HTTP' not in source:
                 include = '#include "runtime/wysna_runtime.h"'
                 if include in source:
                     source = source.replace(include, '#define WYSNA_HAS_HTTP 1\n' + include, 1)

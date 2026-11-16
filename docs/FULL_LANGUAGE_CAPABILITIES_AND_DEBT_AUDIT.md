@@ -484,7 +484,9 @@ flowchart LR
 ```
 
 1. **Stage 1 (v0.6.1 - Delivered in PR #146):**
-   - Implemented native `std/crypto` with zero-dependency C99 SHA-256 and HMAC-SHA256, verified across interpreter and native C99.
+   - Implemented native `std/crypto` (SHA-256, SHA-512, MD5, HMAC, CSPRNG, constant-time compare) hardened under ASan/UBSan.
+   - Implemented cooperative async I/O (`async fn`, `await`, `std/async`, `curl_multi`) across Seed, LLVM, and Selfhost (`native-core-v1`), decoupled from mandatory libcurl headers when `std/http` transport is unused.
+   - Implemented compile-time Semantic Relationship Graph (`wysna graph`), surgical slicing (`wysna inspect`), hash-guarded checked patching (`wysna patch`), versioned skills (`wysna skills`), diagnostic code guides (`wysna explain --code`), and LSP `textDocument/implementation` + hover relationships (`wysna.graph/1`).
 2. **Stage 2 (Wysna v0.7.0 Target):**
    - **Port `wysna test` to Native Binary:** Extract the test discovery, assertion runner, and TAP/JSON reporting into `selfhost/src/10_test_runner.wysna`. Compile and link directly into the standalone binary.
    - **Port `wysna fmt` to Native Binary:** Re-implement AST trivia preservation and pretty-printing in Wysna source, enabling lightning-fast code formatting with zero Python overhead.
