@@ -48,6 +48,55 @@ BENCHMARK_ORDER: List[str] = [
     "dynamic_dispatch.wysna",
 ]
 
+EXTENDED_BENCHMARK_ORDER: List[str] = [
+    "memory_pressure.wysna",
+    "dict_hash_cache.wysna",
+]
+
+
+def run_extended_benchmarks(repo_root: str, selfhost_bin: str) -> Dict[str, object]:
+    """Run sustained memory pressure, hash cache, and WVal64 cache-density benchmarks."""
+    bench_dir = os.path.join(repo_root, "bench")
+    results: Dict[str, object] = {"programs": [], "wval64": None}
+    cc = os.environ.get("CC", "cc")
+    with tempfile.TemporaryDirectory() as tmpdir:
+        for fname in EXTENDED_BENCHMARK_ORDER:
+            path = os.path.join(bench_dir, fname)
+            if not os.path.exists(path):
+                continue
+            from compiler.CompilerService import CompilerService
+            service = CompilerService(project_root=repo_root)
+            checked = service.check_file(path)
+            c_code = service.emit_c(checked).source
+            seed_c = os.path.join(tmpdir, f"ext_seed_{fname}.c")
+            seed_bin = os.path.join(tmpdir, f"ext_seed_{fname}.out")
+            with open(seed_c, "w", encoding="utf-8") as cf:
+                cf.write(c_code)
+            subprocess.run([cc, "-std=c99", "-O2", f"-I{repo_root}", seed_c, "-lm", "-o", seed_bin],
+                           check=True, capture_output=True, text=True)
+            self_c = os.path.join(tmpdir, f"ext_self_{fname}.c")
+            self_bin = os.path.join(tmpdir, f"ext_self_{fname}.out")
+            subprocess.run([selfhost_bin, path, self_c], check=True, capture_output=True, text=True, cwd=repo_root)
+            subprocess.run([cc, "-std=c99", "-O2", f"-I{repo_root}", self_c, "-lm", "-o", self_bin],
+                           check=True, capture_output=True, text=True)
+            t0 = time.perf_counter()
+            seed_proc = subprocess.run([seed_bin], check=True, capture_output=True, text=True, cwd=repo_root)
+            seed_ms = (time.perf_counter() - t0) * 1000.0
+            t1 = time.perf_counter()
+            self_proc = subprocess.run([self_bin], check=True, capture_output=True, text=True, cwd=repo_root)
+            self_ms = (time.perf_counter() - t1) * 1000.0
+            assert seed_proc.stdout == self_proc.stdout, f"Output mismatch on {fname}"
+            results["programs"].append({"name": fname, "seed_ms": seed_ms, "selfhost_ms": self_ms})
+
+        density_c = os.path.join(bench_dir, "wval64_density.c")
+        if os.path.exists(density_c):
+            density_bin = os.path.join(tmpdir, "wval64_density")
+            subprocess.run([cc, "-std=c99", "-O2", f"-I{repo_root}", density_c, "-lm", "-o", density_bin],
+                           check=True, capture_output=True, text=True)
+            density_out = subprocess.run([density_bin], check=True, capture_output=True, text=True)
+            results["wval64"] = density_out.stdout.strip()
+    return results
+
 
 def run_benchmark_suite(repo_root: str, selfhost_bin: str, update_baseline: bool = False) -> bool:
     bench_dir = os.path.join(repo_root, "bench")
@@ -214,5 +263,12 @@ def run_benchmark_suite(repo_root: str, selfhost_bin: str, update_baseline: bool
 if __name__ == "__main__":
     from main import ensure_selfhost_compiler_binary
     selfhost_bin_path = ensure_selfhost_compiler_binary(str(ROOT))
-    update_base = "--update-baseline" in sys.argv
-    run_benchmark_suite(str(ROOT), selfhost_bin_path, update_baseline=update_base)
+    if "--extended" in sys.argv:
+        ext = run_extended_benchmarks(str(ROOT), selfhost_bin_path)
+        for item in ext["programs"]:
+            print(f"[EXT] {item['name']}: seed={item['seed_ms']:.2f}ms selfhost={item['selfhost_ms']:.2f}ms")
+        if ext["wval64"]:
+            print(f"[WVAL64] {ext['wval64']}")
+    else:
+        update_base = "--update-baseline" in sys.argv
+        run_benchmark_suite(str(ROOT), selfhost_bin_path, update_baseline=update_base)

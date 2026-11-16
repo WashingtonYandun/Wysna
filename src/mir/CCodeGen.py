@@ -287,11 +287,40 @@ class CCodeGen:
                 return 'wysna_parallel_filter'
         return None
 
+    @staticmethod
+    def _async_runtime_helper(function):
+        name = function.name
+        async_mod = '6173796e632e7779736e61__'
+        if async_mod not in name:
+            return None
+        if f'{async_mod}_spawn_handle__' in name or name.endswith(f'{async_mod}_spawn_handle'):
+            if len(function.params) == 1:
+                return 'wysna_async_spawn_handle'
+        elif f'{async_mod}_take_task_value__' in name or name.endswith(f'{async_mod}_take_task_value'):
+            if len(function.params) == 2:
+                return 'wysna_spawn_take_option'
+        return None
+
     def function(self, function):
         self.slots = {slot.id: slot for slot in self.module.globals}
         self.slots.update({slot.id: slot for slot in function.slots})
         params = ', '.join(self.ctype(function.slots[index].type_id) + ' ' + self.name(index) for index in function.params) or 'void'
         lines = [f'static {self.ctype(function.return_type)} {function.name}({params}) {{']
+        async_helper = self._async_runtime_helper(function)
+        if async_helper is not None:
+            p_names = [self.name(index) for index in function.params]
+            if async_helper == 'wysna_async_spawn_handle' and len(p_names) == 1:
+                if self.ctype(function.return_type) == 'WVal':
+                    lines.append(f'    return wysna_int(wysna_async_spawn_handle({p_names[0]}));')
+                else:
+                    lines.append(f'    return wysna_async_spawn_handle({p_names[0]});')
+                lines.extend(['}', ''])
+                return lines
+            if async_helper == 'wysna_spawn_take_option' and len(p_names) == 2 and self.ctype(function.return_type) == 'WVal':
+                p0_boxed = p_names[0] if self.slots[function.params[0]].storage == 'value' else self.box_expression(p_names[0], self.slots[function.params[0]].type_id)
+                lines.append(f'    return wysna_spawn_take_option({p0_boxed}, {p_names[1]});')
+                lines.extend(['}', ''])
+                return lines
         parallel_helper = self._parallel_runtime_helper(function)
         if parallel_helper is not None and self.ctype(function.return_type) == 'WVal':
             p_names = [self.name(index) for index in function.params]

@@ -344,6 +344,14 @@ class Parser:
             # alternatives become ErrorTypePattern once the subject type is known.
             if self.match(TokenType.DOT):
                 variant_tok = self.expect(TokenType.IDENTIFIER, code="W0001", msg="Expected enum variant name after '.'")
+                pat_type_args = None
+                if self.check(TokenType.LBRACKET):
+                    saved_pat = self.pos
+                    maybe_args = self._try_parse_generic_type_args(allow_struct_init=False)
+                    if maybe_args and self.check(TokenType.LPAREN):
+                        pat_type_args = maybe_args
+                    else:
+                        self.pos = saved_pat
                 payload_args: List[Pattern] = []
                 if self.match(TokenType.LPAREN):
                     if not self.check(TokenType.RPAREN):
@@ -353,9 +361,19 @@ class Parser:
                                 break
                             payload_args.append(self.parse_pattern(allow_tuple=False))
                     self.expect(TokenType.RPAREN, code="W0006", msg="Expected ')' after pattern arguments")
-                return EnumPattern(enum_name=first_name, variant=variant_tok.value, args=payload_args, line=token.line, col=token.col)
+                return EnumPattern(enum_name=first_name, variant=variant_tok.value, args=payload_args, line=token.line, col=token.col, type_args=pat_type_args)
 
-            # Check for unqualified Enum variant with payload: Some(x), Ok(v), Err(e)
+            # Check for generic error/enum pattern: Name[T](x)
+            pat_type_args = None
+            if self.check(TokenType.LBRACKET):
+                saved_pat = self.pos
+                maybe_args = self._try_parse_generic_type_args(allow_struct_init=False)
+                if maybe_args and self.check(TokenType.LPAREN):
+                    pat_type_args = maybe_args
+                else:
+                    self.pos = saved_pat
+
+            # Check for unqualified Enum variant / error type pattern: Some(x), BoxErr[int](e)
             if self.match(TokenType.LPAREN):
                 payload_args = []
                 if not self.check(TokenType.RPAREN):
@@ -365,7 +383,7 @@ class Parser:
                             break
                         payload_args.append(self.parse_pattern(allow_tuple=False))
                 self.expect(TokenType.RPAREN, code="W0006", msg="Expected ')' after pattern arguments")
-                return EnumPattern(enum_name=None, variant=first_name, args=payload_args, line=token.line, col=token.col)
+                return EnumPattern(enum_name=None, variant=first_name, args=payload_args, line=token.line, col=token.col, type_args=pat_type_args)
 
             if first_name in ("None", "none"):
                 return EnumPattern(enum_name=None, variant="None", args=[], line=token.line, col=token.col)
@@ -644,6 +662,15 @@ class Parser:
             self.match(TokenType.PUBLIC)
             fn_tok = self.expect(TokenType.FN, code="W0006", msg="Expected 'fn' in interface method declaration")
             m_name = self.expect(TokenType.IDENTIFIER, code="W0006", msg="Expected method name after 'fn'")
+            if self.check(TokenType.LBRACKET):
+                tok = self.peek()
+                raise ParserError(
+                    message="Interface methods cannot declare independent generic type parameters",
+                    line=tok.line,
+                    col=tok.col,
+                    file=self.file,
+                    code="W2001",
+                )
             self.expect(TokenType.LPAREN, code="W0006", msg="Expected '(' after interface method name")
             params = self._parse_param_list(allow_receiver=True)
             self.expect(TokenType.RPAREN, code="W0006", msg="Expected ')' after interface method parameters")
@@ -722,6 +749,15 @@ class Parser:
             if self.check(TokenType.FN):
                 fn_tok = self.advance()
                 m_name = self.expect(TokenType.IDENTIFIER, code="W0006", msg="Expected method name after 'fn'")
+                m_type_params = self._parse_type_params()
+                if m_name.value == "init" and m_type_params:
+                    raise ParserError(
+                        message="Constructor 'init' cannot declare generic type parameters",
+                        line=m_name.line,
+                        col=m_name.col,
+                        file=self.file,
+                        code="W2001",
+                    )
                 self.expect(TokenType.LPAREN, code="W0006", msg="Expected '(' after method name")
                 params = self._parse_param_list(allow_receiver=True)
                 self.expect(TokenType.RPAREN, code="W0006", msg="Expected ')' after method parameters")
@@ -744,6 +780,7 @@ class Parser:
                         col=fn_tok.col,
                         requires=requires,
                         ensures=ensures,
+                        type_params=m_type_params,
                     )
                 )
             else:

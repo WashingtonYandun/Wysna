@@ -557,9 +557,30 @@ def _execute_http_transfer(url, method, headers, request_body, timeout_ms, max_r
 _async_http_transfers = {}
 _async_http_next_id = 1
 _TIMER_HANDLE_BASE = 1000000
+_SPAWN_HANDLE_BASE = 2000000
 _async_timers = {}
 _async_timer_next_id = _TIMER_HANDLE_BASE
+_async_spawn_tasks = {}
+_async_spawn_next_id = _SPAWN_HANDLE_BASE
 _async_http_executor = concurrent.futures.ThreadPoolExecutor(max_workers=16)
+
+
+def spawn_async_task(worker_callable):
+    global _async_spawn_next_id
+    with _host_lock:
+        tid = _async_spawn_next_id
+        _async_spawn_next_id += 1
+        future = _async_http_executor.submit(worker_callable)
+        _async_spawn_tasks[tid] = future
+    return tid
+
+
+def spawn_get_result(handle_id):
+    with _host_lock:
+        future = _async_spawn_tasks.get(handle_id)
+    if future is None:
+        raise RuntimeError(f"Invalid spawned task handle {handle_id}")
+    return future.result()
 
 
 def http_async_start(url_handle, method_handle, request_headers_handle, request_body_handle,
@@ -617,6 +638,12 @@ def http_async_poll(transfer_id):
             _async_timer_next_id += 1
             _async_timers[tid] = (now + duration_ms / 1000.0, duration_ms == 0)
         return tid
+    if transfer_id >= _SPAWN_HANDLE_BASE:
+        with _host_lock:
+            future = _async_spawn_tasks.get(transfer_id)
+        if future is None:
+            return -1
+        return 1 if future.done() else 0
     if transfer_id >= _TIMER_HANDLE_BASE:
         now = time.monotonic()
         with _host_lock:
@@ -644,7 +671,9 @@ def http_async_poll(transfer_id):
 def http_multi_poll(timeout_ms):
     now = time.monotonic()
     with _host_lock:
-        pending = [f for f in _async_http_transfers.values() if not f.done()]
+        pending_http = [f for f in _async_http_transfers.values() if not f.done()]
+        pending_spawns = [f for f in _async_spawn_tasks.values() if not f.done()]
+        pending = pending_http + pending_spawns
         pending_deadlines = []
         for tid, (deadline, done) in list(_async_timers.items()):
             if not done:
@@ -941,7 +970,177 @@ def crypto_constant_time_compare(a_handle, b_handle):
     return 1 if hmac.compare_digest(bytes(a), bytes(b)) else 0
 
 
+def monotonic_ms():
+    return int(time.monotonic() * 1000)
+
+
+def wall_ms():
+    return int(time.time() * 1000)
+
+
+def sleep(duration_ms):
+    if duration_ms < 0:
+        return -1
+    time.sleep(duration_ms / 1000.0)
+    return 0
+
+
+def stdout_flush():
+    import sys
+    try:
+        sys.stdout.flush()
+    except (OSError, ValueError):
+        return -1
+    return 0
+
+
+def stdin_read_line(output_handle):
+    import sys
+    out = find(output_handle, 'buffer')
+    if out is None:
+        return failure(ValueError("Invalid buffer handle"))
+    out.clear()
+    stream = getattr(sys.stdin, 'buffer', None)
+    if stream is None:
+        return -1
+    line = stream.readline()
+    if not line:
+        return 0
+    if line.endswith(b'\n'):
+        line = line[:-1]
+    if line.endswith(b'\r'):
+        line = line[:-1]
+    out.extend(line)
+    return 1
+
+
+def stdin_read_all(output_handle):
+    import sys
+    out = find(output_handle, 'buffer')
+    if out is None:
+        return failure(ValueError("Invalid buffer handle"))
+    out.clear()
+    stream = getattr(sys.stdin, 'buffer', None)
+    if stream is None:
+        return -1
+    out.extend(stream.read())
+    return len(out)
+
+
+def getcwd(output_handle):
+    out = find(output_handle, 'buffer')
+    if out is None:
+        return failure(ValueError("Invalid buffer handle"))
+    data = os.getcwd().encode('utf-8')
+    out.clear()
+    out.extend(data)
+    return len(data)
+
+
+def _rotl32(value, count):
+    return ((value << count) & 0xFFFFFFFF) | (value >> (32 - count))
+
+
+def _chacha20_block(key, counter, nonce):
+    import struct
+    constants = (0x61707865, 0x3320646E, 0x79622D32, 0x6B206574)
+    state = list(constants) + list(struct.unpack('<8I', key)) + [counter & 0xFFFFFFFF] + list(struct.unpack('<3I', nonce))
+    x = list(state)
+
+    def quarter(a, b, c, d):
+        x[a] = (x[a] + x[b]) & 0xFFFFFFFF; x[d] = _rotl32(x[d] ^ x[a], 16)
+        x[c] = (x[c] + x[d]) & 0xFFFFFFFF; x[b] = _rotl32(x[b] ^ x[c], 12)
+        x[a] = (x[a] + x[b]) & 0xFFFFFFFF; x[d] = _rotl32(x[d] ^ x[a], 8)
+        x[c] = (x[c] + x[d]) & 0xFFFFFFFF; x[b] = _rotl32(x[b] ^ x[c], 7)
+
+    for _ in range(10):
+        quarter(0, 4, 8, 12); quarter(1, 5, 9, 13); quarter(2, 6, 10, 14); quarter(3, 7, 11, 15)
+        quarter(0, 5, 10, 15); quarter(1, 6, 11, 12); quarter(2, 7, 8, 13); quarter(3, 4, 9, 14)
+    return struct.pack('<16I', *[(x[i] + state[i]) & 0xFFFFFFFF for i in range(16)])
+
+
+def _chacha20_xor(key, counter, nonce, data):
+    out = bytearray()
+    for offset in range(0, len(data), 64):
+        block = _chacha20_block(key, counter + offset // 64, nonce)
+        chunk = data[offset:offset + 64]
+        out.extend(byte ^ mask for byte, mask in zip(chunk, block))
+    return bytes(out)
+
+
+def _poly1305(key, message):
+    r = int.from_bytes(key[:16], 'little') & 0x0FFFFFFC0FFFFFFC0FFFFFFC0FFFFFFF
+    s = int.from_bytes(key[16:32], 'little')
+    modulus = (1 << 130) - 5
+    accumulator = 0
+    for offset in range(0, len(message), 16):
+        block = message[offset:offset + 16]
+        accumulator = ((accumulator + int.from_bytes(block + b'\x01', 'little')) * r) % modulus
+    return ((accumulator + s) & ((1 << 128) - 1)).to_bytes(16, 'little')
+
+
+def _aead_tag(otk, aad, ciphertext):
+    import struct
+    pad = lambda data: b'\x00' * (-len(data) % 16)
+    mac_data = aad + pad(aad) + ciphertext + pad(ciphertext) + struct.pack('<QQ', len(aad), len(ciphertext))
+    return _poly1305(otk, mac_data)
+
+
+def crypto_chacha20_poly1305_seal(key_handle, nonce_handle, aad_handle, plain_handle, output_handle):
+    key, nonce, aad = find(key_handle, 'buffer'), find(nonce_handle, 'buffer'), find(aad_handle, 'buffer')
+    plain, out = find(plain_handle, 'buffer'), find(output_handle, 'buffer')
+    if None in (key, nonce, aad, plain, out) or len(key) != 32 or len(nonce) != 12:
+        return -1
+    key, nonce = bytes(key), bytes(nonce)
+    otk = _chacha20_block(key, 0, nonce)[:32]
+    ciphertext = _chacha20_xor(key, 1, nonce, bytes(plain))
+    tag = _aead_tag(otk, bytes(aad), ciphertext)
+    out.clear()
+    out.extend(ciphertext + tag)
+    return 0
+
+
+def crypto_chacha20_poly1305_open(key_handle, nonce_handle, aad_handle, sealed_handle, output_handle):
+    import hmac
+    key, nonce, aad = find(key_handle, 'buffer'), find(nonce_handle, 'buffer'), find(aad_handle, 'buffer')
+    sealed, out = find(sealed_handle, 'buffer'), find(output_handle, 'buffer')
+    if None in (key, nonce, aad, sealed, out) or len(key) != 32 or len(nonce) != 12 or len(sealed) < 16:
+        return -1
+    key, nonce, sealed = bytes(key), bytes(nonce), bytes(sealed)
+    ciphertext, tag = sealed[:-16], sealed[-16:]
+    otk = _chacha20_block(key, 0, nonce)[:32]
+    if not hmac.compare_digest(_aead_tag(otk, bytes(aad), ciphertext), tag):
+        return -2
+    out.clear()
+    out.extend(_chacha20_xor(key, 1, nonce, ciphertext))
+    return 0
+
+
+def unicode_normalize(input_handle, form, output_handle):
+    import unicodedata
+    source = find(input_handle, 'buffer')
+    out = find(output_handle, 'buffer')
+    if source is None or out is None or form not in (0, 1):
+        return -1
+    try:
+        text = bytes(source).decode('utf-8')
+    except UnicodeDecodeError:
+        return -1
+    normalized = unicodedata.normalize('NFC' if form == 0 else 'NFD', text)
+    out.clear()
+    out.extend(normalized.encode('utf-8'))
+    return 0
+
+
 FUNCTIONS = {
+    'wysna_host_monotonic_ms': monotonic_ms,
+    'wysna_host_wall_ms': wall_ms,
+    'wysna_host_sleep': sleep,
+    'wysna_host_stdout_flush': stdout_flush,
+    'wysna_host_stdin_read_line': stdin_read_line,
+    'wysna_host_stdin_read_all': stdin_read_all,
+    'wysna_host_getcwd': getcwd,
+    'wysna_host_unicode_normalize': unicode_normalize,
     'wysna_host_last_error': lambda: _error_code,
     'wysna_host_last_error_domain': lambda: _error_domain,
     'wysna_host_borrow': lambda handle: handle,
@@ -974,4 +1173,6 @@ FUNCTIONS = {
     'wysna_host_crypto_md5': crypto_md5,
     'wysna_host_crypto_random_bytes': crypto_random_bytes,
     'wysna_host_crypto_constant_time_compare': crypto_constant_time_compare,
+    'wysna_host_crypto_chacha20_poly1305_seal': crypto_chacha20_poly1305_seal,
+    'wysna_host_crypto_chacha20_poly1305_open': crypto_chacha20_poly1305_open,
 }

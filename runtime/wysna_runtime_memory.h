@@ -666,6 +666,13 @@ static inline uint64_t wysna_key_hash(WVal value) {
         number ^= number >> 27; number *= UINT64_C(0x94d049bb133111eb);
         return hash ^ number ^ (number >> 31);
     }
+    if (value.tag == W_TUPLE && value.as.tuple) {
+        for (int32_t i = 0; i < value.as.tuple->len; i++) {
+            uint64_t elem_h = wysna_key_hash(value.as.tuple->items[i]);
+            hash = (hash ^ elem_h) * UINT64_C(1099511628211);
+        }
+        return hash;
+    }
     if (value.tag == W_ENUM) {
         hash = wysna_key_hash_bytes((const unsigned char*)value.as.en.enum_name, strlen(value.as.en.enum_name), hash);
         hash = wysna_key_hash_bytes((const unsigned char*)value.as.en.variant, strlen(value.as.en.variant), hash);

@@ -189,11 +189,12 @@ class TuplePattern(Pattern):
         }
 
 class EnumPattern(Pattern):
-    def __init__(self, enum_name: Optional[str], variant: str, args: Optional[List[Pattern]] = None, line: int = 1, col: int = 1):
+    def __init__(self, enum_name: Optional[str], variant: str, args: Optional[List[Pattern]] = None, line: int = 1, col: int = 1, type_args: Optional[List[TypeNode]] = None):
         super().__init__(line, col)
         self.enum_name = enum_name
         self.variant = variant
         self.args = args or []
+        self.type_args = list(type_args) if type_args else []
 
     def to_dict(self) -> dict:
         d = {
@@ -492,6 +493,7 @@ class MethodDecl(Node):
         col: int = 1,
         requires: Optional[List['Expr']] = None,
         ensures: Optional[List['Expr']] = None,
+        type_params: Optional[List['TypeParam']] = None,
     ):
         super().__init__(line, col)
         self.name = name
@@ -501,6 +503,7 @@ class MethodDecl(Node):
         self.is_public = is_public
         self.requires = list(requires) if requires else []
         self.ensures = list(ensures) if ensures else []
+        self.type_params = list(type_params) if type_params else []
 
     def to_dict(self) -> dict:
         d = {
@@ -513,6 +516,8 @@ class MethodDecl(Node):
             "line": self.line,
             "col": self.col
         }
+        if self.type_params:
+            d["type_params"] = [p.to_dict() for p in self.type_params]
         if self.requires:
             d["requires"] = [r.to_dict() for r in self.requires]
         if self.ensures:

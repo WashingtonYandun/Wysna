@@ -434,6 +434,14 @@ class CCodeGen:
             if (f"{algo_mod}parallel_filter__" in c_name or c_name.endswith(f"{algo_mod}parallel_filter")) and len(stmt.params) == 2:
                 self.fn_Definitions.append(f"static WVal {c_name}({params_sig}) {{\n    return wysna_parallel_filter(v_{stmt.params[0].name}, v_{stmt.params[1].name});\n}}")
                 return
+        async_mod = "6173796e632e7779736e61__"
+        if async_mod in c_name:
+            if (f"{async_mod}_spawn_handle__" in c_name or c_name.endswith(f"{async_mod}_spawn_handle")) and len(stmt.params) == 1:
+                self.fn_Definitions.append(f"static WVal {c_name}({params_sig}) {{\n    return wysna_int(wysna_async_spawn_handle(v_{stmt.params[0].name}));\n}}")
+                return
+            if (f"{async_mod}_take_task_value__" in c_name or c_name.endswith(f"{async_mod}_take_task_value")) and len(stmt.params) == 2:
+                self.fn_Definitions.append(f"static WVal {c_name}({params_sig}) {{\n    return wysna_spawn_take_option(v_{stmt.params[0].name}, v_{stmt.params[1].name});\n}}")
+                return
         prev_fallible = self.current_fn_fallible
         prev_err_type = self.current_fn_err_type
         self.current_fn_fallible = isinstance(stmt.return_type, ResultType)
@@ -715,7 +723,7 @@ class CCodeGen:
 
     @staticmethod
     def _error_type_descriptor(error_type) -> Tuple[str, str]:
-        from checker.WysnaType import IntType, FloatType, BoolType, StrType, StructType, EnumType
+        from checker.WysnaType import IntType, FloatType, BoolType, StrType, StructType, EnumType, ClassType
         if error_type == IntType:
             return "int", "int"
         if error_type == FloatType:
@@ -728,6 +736,8 @@ class CCodeGen:
             return "struct", error_type.name
         if isinstance(error_type, EnumType):
             return "enum", error_type.name
+        if isinstance(error_type, ClassType):
+            return "class", error_type.name
         raise ValueError(f"Unsupported error union pattern type: {error_type}")
 
     # ==========================================

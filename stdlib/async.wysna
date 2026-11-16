@@ -55,7 +55,27 @@ pub fn sleep_ms(duration_ms: int) -> Task[int] {
     }
 }
 
+pub fn _spawn_handle[T](work: fn() -> T) -> int {
+    return 0
+}
+
+pub fn _take_task_value[T](handle: int, fallback: T?) -> T? {
+    return fallback
+}
+
 pub fn spawn[T](work: fn() -> T) -> Task[T] {
+    let h = _spawn_handle[T](work)
+    if h > 0 {
+        let empty_val: T? = none
+        return Task[T] {
+            id: h,
+            handle: h,
+            is_ready: false,
+            is_failed: false,
+            value: empty_val,
+            error: none,
+        }
+    }
     return ready[T](work())
 }
 
@@ -102,7 +122,7 @@ pub fn wait[T](task: Task[T]) -> T ! str {
         }
     }
 
-    match task.value {
+    match _take_task_value[T](task.handle, task.value) {
         Some(v) => { return v },
         None => { return Err("Task completed without value") },
     }
@@ -137,7 +157,7 @@ pub fn all[T](tasks: list[Task[T]]) -> list[T] ! str {
                 None => { return Err("Task failed in async.all") },
             }
         }
-        match t.value {
+        match _take_task_value[T](t.handle, t.value) {
             Some(val) => results.append(val),
             None => { return Err("Task in async.all had no value") },
         }
@@ -160,7 +180,7 @@ pub fn race[T](tasks: list[Task[T]]) -> T ! str {
                         None => { return Err("Task failed in async.race") },
                     }
                 }
-                match t.value {
+                match _take_task_value[T](t.handle, t.value) {
                     Some(val) => { return val },
                     None => { return Err("Raced task had no value") },
                 }

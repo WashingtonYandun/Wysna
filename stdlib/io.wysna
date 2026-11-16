@@ -1,6 +1,66 @@
+import "std/buffer"
+import "std/bytes" as utf8
+
+extern "C" fn wysna_host_stdin_read_line(output: opaque) -> int
+extern "C" fn wysna_host_stdin_read_all(output: opaque) -> int
+extern "C" fn wysna_host_stdout_flush() -> int
+
+# std/io: standard streams plus the convenience file helpers that used to live here.
+
+fn collect(data: buffer.Bytes) -> str ! IoError {
+    let mut octets: list[int] = []
+    for index in 0..data.size() {
+        let value = data.get(index) else err {
+            data.close()
+            return Err(IoError { message: "stdin buffer became invalid" })
+        }
+        octets.append(value)
+    }
+    data.close()
+    let decoded = utf8.decode(octets) else err {
+        return Err(IoError { message: "stdin is not valid UTF-8" })
+    }
+    return decoded
+}
+
+pub struct Line { text: str, eof: bool }
+
+# Reads one line without its terminator; `eof` is true when stdin is exhausted.
+pub fn read_line() -> Line ! IoError {
+    let data = new buffer.Bytes()
+    let status = wysna_host_stdin_read_line(data.borrow())
+    if status < 0 {
+        data.close()
+        return Err(IoError { message: "stdin read failed" })
+    }
+    if status == 0 {
+        data.close()
+        return Line { text: "", eof: true }
+    }
+    let line = collect(data)?
+    return Line { text: line, eof: false }
+}
+
+# Reads the remainder of stdin.
+pub fn read_all() -> str ! IoError {
+    let data = new buffer.Bytes()
+    if wysna_host_stdin_read_all(data.borrow()) < 0 {
+        data.close()
+        return Err(IoError { message: "stdin read failed" })
+    }
+    return collect(data)
+}
+
+pub fn flush() -> unit ! IoError {
+    if wysna_host_stdout_flush() != 0 {
+        return Err(IoError { message: "stdout flush failed" })
+    }
+}
+
 pub fn read_text(path: str) -> str ! IoError {
     return read_file(path)
 }
+
 pub fn write_text(path: str, content: str) -> unit ! IoError {
     return write_file(path, content)
 }

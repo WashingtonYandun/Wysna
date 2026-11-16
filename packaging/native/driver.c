@@ -7,6 +7,7 @@
 #endif
 #include "runtime/wysna_runtime.h"
 #include "platform.h"
+#include <fcntl.h>
 #include <signal.h>
 
 #ifndef WYSNA_NATIVE_VERSION
@@ -65,7 +66,7 @@ static void sdk_help(void) {
          "       wysna emit-c|emit-mir SOURCE [-o OUTPUT]\n"
          "       wysna build SOURCE [-o OUTPUT] [--profile dev|release|size]\n"
          "       wysna run SOURCE [--profile dev|release|size] [--timeout-ms N] [-- ARGUMENTS]\n"
-         "       wysna test SOURCE [--timeout-ms N] [-- ARGUMENTS]\n"
+         "       wysna test TARGET [--timeout-ms N] [-- ARGUMENTS]\n"
          "       wysna fmt SOURCE\n"
          "Build and run accept --include-dir DIR, --link FILE, --library-dir DIR and --library NAME.\n"
          "This SDK compiles through verified MIR without Python. See native-sdk.json for its profile.");
@@ -218,13 +219,212 @@ static int sdk_build(SdkInvocation* invocation, const SdkOptions* options) {
     if (!restored_local || !restored_global) return sdk_error("W5001", "Cannot restore the application environment", NULL);
     return status;
 }
+static int sdk_child_captured(const char* executable, int argc, const char** argv, int64_t timeout,
+                              const char* stdout_path, const char* stderr_path) {
+    fflush(stdout);
+    fflush(stderr);
+#ifdef _WIN32
+    int saved_out = _dup(1);
+    int saved_err = _dup(2);
+    HANDLE orig_std_out = GetStdHandle(STD_OUTPUT_HANDLE);
+    HANDLE orig_std_err = GetStdHandle(STD_ERROR_HANDLE);
+    int out_fd = _open(stdout_path, _O_WRONLY | _O_CREAT | _O_TRUNC, 0600);
+    int err_fd = _open(stderr_path, _O_WRONLY | _O_CREAT | _O_TRUNC, 0600);
+    if (out_fd < 0 || err_fd < 0 || saved_out < 0 || saved_err < 0) {
+        if (out_fd >= 0) _close(out_fd);
+        if (err_fd >= 0) _close(err_fd);
+        if (saved_out >= 0) _close(saved_out);
+        if (saved_err >= 0) _close(saved_err);
+        return -1;
+    }
+    _dup2(out_fd, 1);
+    _dup2(err_fd, 2);
+    SetStdHandle(STD_OUTPUT_HANDLE, (HANDLE)_get_osfhandle(1));
+    SetStdHandle(STD_ERROR_HANDLE, (HANDLE)_get_osfhandle(2));
+    _close(out_fd);
+    _close(err_fd);
+    int result = sdk_child(executable, argc, argv, timeout);
+    fflush(stdout); fflush(stderr);
+    _dup2(saved_out, 1); _dup2(saved_err, 2);
+    SetStdHandle(STD_OUTPUT_HANDLE, orig_std_out);
+    SetStdHandle(STD_ERROR_HANDLE, orig_std_err);
+    _close(saved_out); _close(saved_err);
+    return result;
+#else
+    int saved_out = dup(STDOUT_FILENO);
+    int saved_err = dup(STDERR_FILENO);
+    int out_fd = open(stdout_path, O_WRONLY | O_CREAT | O_TRUNC, 0600);
+    int err_fd = open(stderr_path, O_WRONLY | O_CREAT | O_TRUNC, 0600);
+    if (out_fd < 0 || err_fd < 0 || saved_out < 0 || saved_err < 0) {
+        if (out_fd >= 0) close(out_fd);
+        if (err_fd >= 0) close(err_fd);
+        if (saved_out >= 0) close(saved_out);
+        if (saved_err >= 0) close(saved_err);
+        return -1;
+    }
+    dup2(out_fd, STDOUT_FILENO);
+    dup2(err_fd, STDERR_FILENO);
+    close(out_fd);
+    close(err_fd);
+    int result = sdk_child(executable, argc, argv, timeout);
+    fflush(stdout); fflush(stderr);
+    dup2(saved_out, STDOUT_FILENO); dup2(saved_err, STDERR_FILENO);
+    close(saved_out); close(saved_err);
+    return result;
+#endif
+}
+
+static size_t sdk_normalize_newlines(char* text, size_t len) {
+    size_t write = 0;
+    for (size_t i = 0; i < len; i++) {
+        if (text[i] == '\r' && i + 1 < len && text[i + 1] == '\n') continue;
+        text[write++] = text[i];
+    }
+    text[write] = 0;
+    return write;
+}
+
+static int sdk_parse_panic_expectation(const char* expected, char* panic_buf, size_t cap) {
+    const char* p = expected;
+    while (*p == ' ' || *p == '\t' || *p == '\r' || *p == '\n') p++;
+    const char* prefix = "# RUNTIME_PANIC:";
+    size_t plen = strlen(prefix);
+    if (strncmp(p, prefix, plen) != 0) return 0;
+    p += plen;
+    while (*p == ' ' || *p == '\t') p++;
+    size_t n = 0;
+    while (p[n] && p[n] != '\n' && p[n] != '\r') n++;
+    while (n > 0 && (p[n - 1] == ' ' || p[n - 1] == '\t')) n--;
+    if (n == 0 || n >= cap) return 0;
+    memcpy(panic_buf, p, n);
+    panic_buf[n] = 0;
+    return 1;
+}
+
+static int sdk_compile_source(SdkInvocation* invocation, const SdkOptions* options, const char* command_mode, const char* source_path, int need_product_dir) {
+    if (!sdk_join(invocation->generated, invocation->workspace, "program.c") ||
+        !sdk_join(invocation->product, invocation->workspace, SDK_PROGRAM)) return sdk_error("W5002", "Staging path is too long", NULL);
+    const char* engine_arguments[6]; int engine_count = 0;
+    engine_arguments[engine_count++] = "--stdlib-root";
+    engine_arguments[engine_count++] = invocation->stdlib;
+    engine_arguments[engine_count++] = command_mode;
+    engine_arguments[engine_count++] = source_path;
+    if (need_product_dir || options->output) engine_arguments[engine_count++] = invocation->generated;
+    return sdk_child(invocation->engine, engine_count, engine_arguments, SDK_COMPILE_TIMEOUT_MS);
+}
+
+static int sdk_run_test_case(SdkInvocation* invocation, const SdkOptions* options, const char* source_path, const char* display_name, int argc, char** argv) {
+    if (!sdk_temp(invocation->workspace, NULL)) return sdk_error("W5001", "Cannot create a private staging directory", NULL);
+    int status = sdk_compile_source(invocation, options, "--emit-c-mir", source_path, 1);
+    if (!status) status = sdk_build(invocation, options);
+    if (status) {
+        fprintf(stderr, "[FAIL] %s (native compilation failed)\n", display_name);
+        goto cleanup;
+    }
+
+    char expected_path[SDK_PATH_CAP];
+    size_t slen = strlen(source_path);
+    int has_expected = 0;
+    if (slen > 6 && strcmp(source_path + slen - 6, ".wysna") == 0 && slen + 4 < SDK_PATH_CAP) {
+        memcpy(expected_path, source_path, slen - 6);
+        memcpy(expected_path + slen - 6, ".expected", 10);
+        has_expected = sdk_is_file(expected_path);
+    }
+
+    int arg_count = options->arguments ? argc - options->arguments : 0;
+    const char** child_args = options->arguments ? (const char**)(argv + options->arguments) : NULL;
+    if (!has_expected) {
+        int result = sdk_child(invocation->product, arg_count, child_args, options->timeout);
+        if (result == 0) {
+            printf("[PASS] %s (native)\n", display_name);
+            status = 0;
+        } else {
+            fprintf(stderr, "[FAIL] %s (native, exit code %d)\n", display_name, result);
+            status = result;
+        }
+        goto cleanup;
+    }
+
+    char out_file[SDK_PATH_CAP], err_file[SDK_PATH_CAP];
+    if (!sdk_join(out_file, invocation->workspace, "test_stdout.txt") ||
+        !sdk_join(err_file, invocation->workspace, "test_stderr.txt")) {
+        status = sdk_error("W5002", "Test staging path too long", NULL);
+        goto cleanup;
+    }
+    int result = sdk_child_captured(invocation->product, arg_count, child_args, options->timeout, out_file, err_file);
+    char *exp_buf = NULL, *got_out = NULL, *got_err = NULL;
+    size_t exp_len = 0, out_len = 0, err_len = 0;
+    if (!sdk_read_file(expected_path, &exp_buf, &exp_len) ||
+        !sdk_read_file(out_file, &got_out, &out_len) ||
+        !sdk_read_file(err_file, &got_err, &err_len)) {
+        free(exp_buf); free(got_out); free(got_err);
+        fprintf(stderr, "[FAIL] %s (native output capture failed)\n", display_name);
+        status = 1;
+        goto cleanup;
+    }
+    exp_len = sdk_normalize_newlines(exp_buf, exp_len);
+    out_len = sdk_normalize_newlines(got_out, out_len);
+    char panic_code[64];
+    if (sdk_parse_panic_expectation(exp_buf, panic_code, sizeof(panic_code))) {
+        if (result != 0 && strstr(got_err, panic_code) != NULL) {
+            printf("[PASS] %s (native panic %s)\n", display_name, panic_code);
+            status = 0;
+        } else {
+            fprintf(stderr, "[FAIL] %s (expected panic %s, exit code %d)\n", display_name, panic_code, result);
+            status = 1;
+        }
+    } else if (result != 0) {
+        fprintf(stderr, "[FAIL] %s (native exit code %d)\n", display_name, result);
+        status = result;
+    } else if (out_len != exp_len || (out_len > 0 && memcmp(got_out, exp_buf, exp_len) != 0)) {
+        fprintf(stderr, "[FAIL] %s (native output mismatch: expected %zu bytes, got %zu bytes)\n",
+                display_name, exp_len, out_len);
+        status = 1;
+    } else {
+        printf("[PASS] %s (native)\n", display_name);
+        status = 0;
+    }
+    free(exp_buf); free(got_out); free(got_err);
+
+cleanup:
+    for (int i = 0; i < invocation->owned_count; i++) free(invocation->owned[i]);
+    invocation->owned_count = 0;
+    if (invocation->workspace[0]) {
+        sdk_remove_tree(invocation->workspace);
+        invocation->workspace[0] = 0;
+    }
+    return status;
+}
+
 static int sdk_execute(SdkInvocation* invocation, const SdkOptions* options, int argc, char** argv) {
     if (!sdk_component_paths(invocation)) return sdk_error("W5001", "Cannot locate the native compiler beside this SDK", NULL);
-    if (!sdk_absolute(invocation->source, options->source, 1) || !sdk_is_file(invocation->source)) return sdk_error("W5001", "Source is not an accessible regular file", options->source);
     int build = strcmp(options->command, "build") == 0;
     int run = strcmp(options->command, "run") == 0;
     int test = strcmp(options->command, "test") == 0;
     int fmt = strcmp(options->command, "fmt") == 0;
+    if (!sdk_absolute(invocation->source, options->source, 1)) return sdk_error("W5001", "Source is not an accessible regular file", options->source);
+    if (test && sdk_is_directory(invocation->source)) {
+        char** test_files = NULL;
+        size_t test_count = 0;
+        if (!sdk_list_wysna_tests(invocation->source, &test_files, &test_count)) {
+            return sdk_error("W5001", "Cannot enumerate tests in directory", options->source);
+        }
+        if (test_count == 0) {
+            free(test_files);
+            return sdk_error("W5002", "No .wysna test files found in directory", options->source);
+        }
+        size_t passed = 0, failed = 0;
+        for (size_t idx = 0; idx < test_count; idx++) {
+            int rc = sdk_run_test_case(invocation, options, test_files[idx], test_files[idx], argc, argv);
+            if (rc == 0) passed++;
+            else failed++;
+            free(test_files[idx]);
+        }
+        free(test_files);
+        printf("Ran %zu test(s): %zu passed, %zu failed.\n", test_count, passed, failed);
+        return failed == 0 ? 0 : 1;
+    }
+    if (!sdk_is_file(invocation->source)) return sdk_error("W5001", "Source is not an accessible regular file", options->source);
     if (fmt) {
         const char* engine_arguments[4];
         engine_arguments[0] = "--stdlib-root";
@@ -232,6 +432,9 @@ static int sdk_execute(SdkInvocation* invocation, const SdkOptions* options, int
         engine_arguments[2] = "--fmt";
         engine_arguments[3] = invocation->source;
         return sdk_child(invocation->engine, 4, engine_arguments, options->timeout);
+    }
+    if (test) {
+        return sdk_run_test_case(invocation, options, invocation->source, options->source, argc, argv);
     }
     if (build || options->output) {
         const char* target = options->output;
@@ -265,37 +468,20 @@ static int sdk_execute(SdkInvocation* invocation, const SdkOptions* options, int
         if (source_suffix) return sdk_error("W5002", "Output must not replace a Wysna source file", invocation->output);
         if (!sdk_parent(invocation->parent, invocation->output) || !sdk_temp(invocation->workspace, invocation->parent)) return sdk_error("W5001", "Cannot create a staging directory beside the output", invocation->output);
     } else if (!sdk_temp(invocation->workspace, NULL)) return sdk_error("W5001", "Cannot create a private staging directory", NULL);
-    if (!sdk_join(invocation->generated, invocation->workspace, "program.c") ||
-        !sdk_join(invocation->product, invocation->workspace, SDK_PROGRAM)) return sdk_error("W5002", "Staging path is too long", NULL);
-    const char* engine_arguments[6]; int engine_count = 0;
-    engine_arguments[engine_count++] = "--stdlib-root";
-    engine_arguments[engine_count++] = invocation->stdlib;
-    engine_arguments[engine_count++] = strcmp(options->command, "check") == 0 ? "--check-mir" : strcmp(options->command, "emit-mir") == 0 ? "--emit-mir" : "--emit-c-mir";
-    engine_arguments[engine_count++] = invocation->source;
-    if (build || run || test || options->output) engine_arguments[engine_count++] = invocation->generated;
-    int status = sdk_child(invocation->engine, engine_count, engine_arguments, SDK_COMPILE_TIMEOUT_MS);
+    const char* mode = strcmp(options->command, "check") == 0 ? "--check-mir" : strcmp(options->command, "emit-mir") == 0 ? "--emit-mir" : "--emit-c-mir";
+    int status = sdk_compile_source(invocation, options, mode, invocation->source, build || run);
     if (status) return status;
-    if (build || run || test) {
+    if (build || run) {
         status = sdk_build(invocation, options); if (status) return status;
     }
     if (invocation->output[0]) {
         if (sdk_same_file(invocation->source, invocation->output)) return sdk_error("W5002", "Output became a source alias during compilation", NULL);
         if (!sdk_publish(build ? invocation->product : invocation->generated, invocation->output)) return sdk_error("W5001", "Cannot publish the completed output", invocation->output);
     }
-    if (run || test) {
+    if (run) {
         int count = options->arguments ? argc - options->arguments : 0;
-        int result = sdk_child(invocation->product, count,
+        return sdk_child(invocation->product, count,
                          options->arguments ? (const char**)(argv + options->arguments) : NULL, options->timeout);
-        if (test) {
-            if (result == 0) {
-                printf("[PASS] %s (native)\n", options->source);
-                return 0;
-            } else {
-                fprintf(stderr, "[FAIL] %s (native, exit code %d)\n", options->source, result);
-                return result;
-            }
-        }
-        return result;
     }
     return 0;
 }

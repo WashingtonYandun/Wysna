@@ -18,6 +18,8 @@ declare void @wysna_llvm_invoke(ptr nocapture, ptr nocapture readonly, i32, ptr 
 declare void @wysna_llvm_virtual(ptr nocapture, ptr nocapture readonly, i32, i32, ptr nocapture readonly)
 declare void @wysna_llvm_set_vtable(ptr nocapture, ptr)
 declare i32 @wysna_llvm_entry_status(ptr nocapture readonly) readonly
+declare i64 @wysna_llvm_async_spawn(ptr nocapture readonly)
+declare void @wysna_llvm_async_take_option(ptr nocapture, i64, ptr nocapture readonly)
 ''' + '\n'.join('declare void @wysna_llvm_rt_' + name + '(ptr nocapture, i32, ptr, ptr nocapture readonly, ptr nocapture readonly, i32, ptr nocapture readonly, i32, i32)' for name in sorted(OPERATION_CODES)) + '\n'
 
 

@@ -176,6 +176,20 @@ class LlvmCodeGen:
             self.emit('call void @wysna_llvm_box_' + name + '(ptr ' + pointer + ', ' + type_ + ' ' + value + ')')
         return pointer
 
+    @staticmethod
+    def _async_runtime_helper(function):
+        name = function.name
+        async_mod = '6173796e632e7779736e61__'
+        if async_mod not in name:
+            return None
+        if f'{async_mod}_spawn_handle__' in name or name.endswith(f'{async_mod}_spawn_handle'):
+            if len(function.params) == 1:
+                return '_spawn_handle'
+        elif f'{async_mod}_take_task_value__' in name or name.endswith(f'{async_mod}_take_task_value'):
+            if len(function.params) == 2:
+                return '_take_task_value'
+        return None
+
     def function(self, function):
         self.slots = {slot.id: slot for slot in self.module.globals}
         self.slots.update({slot.id: slot for slot in function.slots})
@@ -195,6 +209,17 @@ class LlvmCodeGen:
         attrs = ' nounwind mustprogress'
         self.lines = ['define internal ' + cc + returned + ' @' + function.name + '(' + ', '.join(parameters) +
                       ')' + attrs + ' !dbg !' + str(self.scope) + ' {', 'entry:']
+        async_helper = self._async_runtime_helper(function)
+        if async_helper is not None:
+            loc = self.debug.location(function.source, self.scope, self.scope_file)
+            if async_helper == '_spawn_handle' and returned == 'i64' and self.slots[function.params[0]].storage == 'value':
+                self.lines.append('  %r0 = call i64 @wysna_llvm_async_spawn(ptr %arg' + str(function.params[0]) + ')' + loc)
+                self.lines.append('  ret i64 %r0' + loc)
+                return self.lines + ['}', '']
+            if async_helper == '_take_task_value' and is_managed(function.return_type) and self.slots[function.params[0]].type_id == TYPE_INT and self.slots[function.params[1]].storage == 'value':
+                self.lines.append('  call void @wysna_llvm_async_take_option(ptr %out, i64 %arg' + str(function.params[0]) + ', ptr %arg' + str(function.params[1]) + ')' + loc)
+                self.lines.append('  ret void' + loc)
+                return self.lines + ['}', '']
         for slot in function.slots:
             if slot.parameter and slot.storage == 'value':
                 self.lines.append('  ' + self.pointer(slot.id) + ' = getelementptr i8, ptr %arg' + str(slot.id) + ', i64 0')

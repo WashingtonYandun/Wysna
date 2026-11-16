@@ -1,3 +1,216 @@
+import "std/text"
+import "std/parse"
+
+extern "C" fn wysna_host_monotonic_ms() -> int
+extern "C" fn wysna_host_wall_ms() -> int
+extern "C" fn wysna_host_sleep(duration_ms: int) -> int
+
+# std/time: wall clock, monotonic clock, blocking sleep and proleptic-Gregorian UTC calendar math.
+# All calendar values are UTC. Time zones and locale formatting are intentionally out of scope.
+
+pub struct TimeError { message: str }
+
+pub struct DateTime {
+    year: int,
+    month: int,
+    day: int,
+    hour: int,
+    minute: int,
+    second: int,
+    millisecond: int,
+}
+
 pub fn unix_seconds() -> int {
     return unix_time()
+}
+
+# Milliseconds since 1970-01-01T00:00:00Z.
+pub fn now_ms() -> int {
+    return wysna_host_wall_ms()
+}
+
+# Monotonic milliseconds from an unspecified origin; never goes backwards.
+pub fn monotonic_ms() -> int {
+    return wysna_host_monotonic_ms()
+}
+
+pub fn elapsed_ms(start_ms: int) -> int {
+    return wysna_host_monotonic_ms() - start_ms
+}
+
+# Blocking sleep. Use std/async.sleep_ms for cooperative waiting.
+pub fn sleep(duration_ms: int) -> unit ! TimeError {
+    if wysna_host_sleep(duration_ms) != 0 {
+        return Err(TimeError { message: "sleep duration must not be negative" })
+    }
+}
+
+fn floor_div(numerator: int, denominator: int) -> int {
+    let quotient = numerator / denominator
+    if numerator % denominator != 0 and ((numerator < 0) != (denominator < 0)) {
+        return quotient - 1
+    }
+    return quotient
+}
+
+fn floor_mod(numerator: int, denominator: int) -> int {
+    return numerator - floor_div(numerator, denominator) * denominator
+}
+
+pub fn is_leap_year(year: int) -> bool {
+    if year % 400 == 0 { return true }
+    if year % 100 == 0 { return false }
+    return year % 4 == 0
+}
+
+pub fn days_in_month(year: int, month: int) -> int {
+    if month == 2 {
+        if is_leap_year(year) { return 29 }
+        return 28
+    }
+    if month == 4 or month == 6 or month == 9 or month == 11 { return 30 }
+    return 31
+}
+
+# Days since 1970-01-01 for a civil date (Howard Hinnant's algorithm).
+pub fn days_from_civil(year: int, month: int, day: int) -> int {
+    let y = if month <= 2 { year - 1 } else { year }
+    let era = floor_div(y, 400)
+    let year_of_era = y - era * 400
+    let shifted = if month > 2 { month - 3 } else { month + 9 }
+    let day_of_year = (153 * shifted + 2) / 5 + day - 1
+    let day_of_era = year_of_era * 365 + year_of_era / 4 - year_of_era / 100 + day_of_year
+    return era * 146097 + day_of_era - 719468
+}
+
+# 0 = Sunday ... 6 = Saturday.
+pub fn weekday_from_days(days: int) -> int {
+    return floor_mod(days + 4, 7)
+}
+
+pub fn from_unix_ms(unix_ms: int) -> DateTime {
+    let days = floor_div(unix_ms, 86400000)
+    let ms_of_day = unix_ms - days * 86400000
+    let z = days + 719468
+    let era = floor_div(z, 146097)
+    let day_of_era = z - era * 146097
+    let year_of_era = (day_of_era - day_of_era / 1460 + day_of_era / 36524 - day_of_era / 146096) / 365
+    let day_of_year = day_of_era - (365 * year_of_era + year_of_era / 4 - year_of_era / 100)
+    let shifted = (5 * day_of_year + 2) / 153
+    let day = day_of_year - (153 * shifted + 2) / 5 + 1
+    let month = if shifted < 10 { shifted + 3 } else { shifted - 9 }
+    let base_year = year_of_era + era * 400
+    let year = if month <= 2 { base_year + 1 } else { base_year }
+    return DateTime {
+        year: year,
+        month: month,
+        day: day,
+        hour: ms_of_day / 3600000,
+        minute: (ms_of_day % 3600000) / 60000,
+        second: (ms_of_day % 60000) / 1000,
+        millisecond: ms_of_day % 1000,
+    }
+}
+
+pub fn validate(value: DateTime) -> unit ! TimeError {
+    if value.month < 1 or value.month > 12 {
+        return Err(TimeError { message: "month out of range" })
+    }
+    if value.day < 1 or value.day > days_in_month(value.year, value.month) {
+        return Err(TimeError { message: "day out of range" })
+    }
+    if value.hour < 0 or value.hour > 23 {
+        return Err(TimeError { message: "hour out of range" })
+    }
+    if value.minute < 0 or value.minute > 59 {
+        return Err(TimeError { message: "minute out of range" })
+    }
+    if value.second < 0 or value.second > 59 {
+        return Err(TimeError { message: "second out of range" })
+    }
+    if value.millisecond < 0 or value.millisecond > 999 {
+        return Err(TimeError { message: "millisecond out of range" })
+    }
+}
+
+pub fn to_unix_ms(value: DateTime) -> int ! TimeError {
+    validate(value)?
+    let days = days_from_civil(value.year, value.month, value.day)
+    return days * 86400000 + value.hour * 3600000 + value.minute * 60000 + value.second * 1000 + value.millisecond
+}
+
+fn digits(value: int, width: int) -> str {
+    return text.pad_left(str(value), width, "0")
+}
+
+# RFC 3339 / ISO 8601 UTC: YYYY-MM-DDTHH:MM:SS.mmmZ
+pub fn format_iso8601(value: DateTime) -> str {
+    return digits(value.year, 4) + "-" + digits(value.month, 2) + "-" + digits(value.day, 2) + "T" + digits(value.hour, 2) + ":" + digits(value.minute, 2) + ":" + digits(value.second, 2) + "." + digits(value.millisecond, 3) + "Z"
+}
+
+fn all_digits(value: str) -> bool {
+    if len(value) == 0 { return false }
+    for index in 0..len(value) {
+        let code = ord(value[index])
+        if code < 48 or code > 57 { return false }
+    }
+    return true
+}
+
+fn field(source: str, start: int, end: int, name: str) -> int ! TimeError {
+    let part = slice(source, start, end)
+    if not all_digits(part) {
+        return Err(TimeError { message: "expected digits in " + name })
+    }
+    let parsed = parse.parse_int(part) else err {
+        return Err(TimeError { message: "invalid " + name })
+    }
+    return parsed
+}
+
+# Accepts YYYY-MM-DDTHH:MM:SSZ with an optional .fraction (1-3 digits kept as milliseconds).
+pub fn parse_iso8601(source: str) -> DateTime ! TimeError {
+    if len(source) < 20 {
+        return Err(TimeError { message: "timestamp too short" })
+    }
+    if source[4] != "-" or source[7] != "-" or source[10] != "T" or source[13] != ":" or source[16] != ":" {
+        return Err(TimeError { message: "expected YYYY-MM-DDTHH:MM:SS" })
+    }
+    let year = field(source, 0, 4, "year")?
+    let month = field(source, 5, 7, "month")?
+    let day = field(source, 8, 10, "day")?
+    let hour = field(source, 11, 13, "hour")?
+    let minute = field(source, 14, 16, "minute")?
+    let second = field(source, 17, 19, "second")?
+    let mut millisecond = 0
+    let mut cursor = 19
+    if source[cursor] == "." {
+        let mut end = cursor + 1
+        while end < len(source) and all_digits(source[end]) { end = end + 1 }
+        let fraction = slice(source, cursor + 1, end)
+        if len(fraction) == 0 {
+            return Err(TimeError { message: "empty fractional seconds" })
+        }
+        let kept = if len(fraction) < 3 {
+            fraction + text.repeat("0", 3 - len(fraction))
+        } else {
+            slice(fraction, 0, 3)
+        }
+        millisecond = field(kept, 0, 3, "millisecond")?
+        cursor = end
+    }
+    if cursor + 1 != len(source) or source[cursor] != "Z" {
+        return Err(TimeError { message: "expected trailing Z (UTC)" })
+    }
+    let value = DateTime {
+        year: year,
+        month: month,
+        day: day,
+        hour: hour,
+        minute: minute,
+        second: second,
+        millisecond: millisecond,
+    }
+    validate(value)?
+    return value
 }

@@ -6,7 +6,7 @@ from typing import Any, Dict, List, Optional, TextIO, Tuple
 from common.ExpressionDispatch import reject_unknown_node
 from runtime.ExpressionRules import EXPRESSION_RULES
 from error.Error import WysnaRuntimeError
-from checker.WysnaType import IntType, FloatType, BoolType, StrType, StructType, EnumType
+from checker.WysnaType import IntType, FloatType, BoolType, StrType, StructType, EnumType, ClassType
 from node.NodeType import (
     LambdaExpr, Program, Stmt, Expr, ExprStmt, LetDecl, FnDecl, StructDecl, EnumDecl, ImportDecl,
     InterfaceDecl, ClassDecl, MethodDecl,
@@ -792,6 +792,8 @@ class Interpreter:
             return isinstance(value, WysnaStr)
         if isinstance(error_type, StructType):
             return isinstance(value, WysnaStructInstance) and value.struct_name == error_type.name
+        if isinstance(error_type, ClassType):
+            return isinstance(value, WysnaObjectInstance) and value.class_name == error_type.name
         if isinstance(error_type, EnumType):
             return isinstance(value, WysnaEnumValue) and value.enum_name == error_type.name
         return False

@@ -80,6 +80,16 @@ HOST_EFFECTS = {
     'wysna_host_file_write': {'filesystem.write', 'memory.read'},
     'wysna_host_http_request': {'network.http', 'memory.write'},
     'wysna_host_process_run': {'process.spawn', 'process.wait', 'memory.write'},
+    'wysna_host_monotonic_ms': {'clock.read'},
+    'wysna_host_wall_ms': {'clock.read'},
+    'wysna_host_sleep': {'clock.read'},
+    'wysna_host_stdout_flush': {'stdio.write'},
+    'wysna_host_stdin_read_line': {'stdio.read', 'memory.write'},
+    'wysna_host_stdin_read_all': {'stdio.read', 'memory.write'},
+    'wysna_host_getcwd': {'environment.read', 'memory.write'},
+    'wysna_host_unicode_normalize': {'memory.read', 'memory.write'},
+    'wysna_host_crypto_chacha20_poly1305_seal': {'memory.read', 'memory.write'},
+    'wysna_host_crypto_chacha20_poly1305_open': {'memory.read', 'memory.write'},
 }
 
 OPERATION_EFFECTS = {
@@ -96,7 +106,7 @@ OPERATION_EFFECTS = {
 }
 
 CAPABILITIES = {
-    'stdio.write': 'stdio', 'arguments.read': 'arguments',
+    'stdio.write': 'stdio', 'stdio.read': 'stdio', 'arguments.read': 'arguments',
     'environment.read': 'environment', 'clock.read': 'clock',
     'filesystem.read': 'filesystem.read', 'filesystem.write': 'filesystem.write',
     'network.http': 'network', 'process.spawn': 'processes',

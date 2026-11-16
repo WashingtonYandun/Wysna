@@ -1,7 +1,44 @@
+import "std/buffer"
+import "std/bytes" as utf8
+
+extern "C" fn wysna_host_getcwd(output: opaque) -> int
+
+# std/environment: process arguments, environment variables and working directory.
+
+pub struct EnvironmentError { message: str }
+
 pub fn arguments() -> list[str] {
     return args()
 }
 
 pub fn get(name: str) -> str? {
     return env(name)
+}
+
+pub fn has(name: str) -> bool {
+    match env(name) {
+        Some(value) => { return true },
+        None => { return false },
+    }
+}
+
+pub fn get_or(name: str, fallback: str) -> str {
+    return env(name) else { fallback }
+}
+
+pub fn current_directory() -> str ! EnvironmentError {
+    let data = new buffer.Bytes()
+    if wysna_host_getcwd(data.borrow()) < 0 {
+        data.close()
+        return Err(EnvironmentError { message: "working directory unavailable" })
+    }
+    let mut octets: list[int] = []
+    for index in 0..data.size() {
+        octets.append(data.get(index) else err { 0 })
+    }
+    data.close()
+    let decoded = utf8.decode(octets) else err {
+        return Err(EnvironmentError { message: "working directory is not valid UTF-8" })
+    }
+    return decoded
 }

@@ -1,0 +1,21 @@
+# Benchmark W07-a: Sustained memory allocation, CoW branching, and interprocedural read-only passes
+fn summarize_row(row: list[int]) -> int {
+    return len(row) + row[0] + row[len(row) - 1]
+}
+
+fn main() -> unit {
+    let mut base = [1, 2, 3, 4, 5, 6, 7, 8]
+    let mut acc = 0
+    for round in 0..4000 {
+        let mut branch = base
+        let s = summarize_row(branch)
+        branch[0] = (round + s) % 97
+        acc = acc + summarize_row(branch)
+        if round % 500 == 0 {
+            base.append(round)
+        }
+    }
+    print(acc, len(base))
+}
+
+main()

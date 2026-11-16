@@ -561,11 +561,15 @@ class TypeInterner:
             current, expanded = pending.pop()
             if expanded:
                 active.remove(current)
-                definition = self.enum_defs[self.get_entry(current).data]
-                results[current] = results.get(current, True) and all(
-                    results[payload] for values in definition.variant_payloads.values()
-                    for payload in values
-                )
+                entry = self.get_entry(current)
+                if entry.tag == "tuple":
+                    results[current] = all(results[elem] for elem in entry.data)
+                else:
+                    definition = self.enum_defs[entry.data]
+                    results[current] = results.get(current, True) and all(
+                        results[payload] for values in definition.variant_payloads.values()
+                        for payload in values
+                    )
                 continue
             if current in results:
                 continue
@@ -576,6 +580,11 @@ class TypeInterner:
                 results[current] = False
                 continue
             entry = self.get_entry(current)
+            if entry.tag == "tuple":
+                active.add(current)
+                pending.append((current, True))
+                pending.extend((elem, False) for elem in entry.data)
+                continue
             definition = self.enum_defs.get(entry.data) if entry.tag == "enum" else None
             if definition is None:
                 results[current] = False

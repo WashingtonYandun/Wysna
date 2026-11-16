@@ -38,8 +38,30 @@ fn selfhost_format_body(source: str, in_path: str) -> str {
 
     let mut out_lines: list[str] = []
     let mut depth = 0
+    let mut block_depth = 0
     let mut prev_blank = true
     for raw in raw_lines {
+        if block_depth > 0 {
+            out_lines.append(raw)
+            let rlen = len(raw)
+            let mut idx = 0
+            while idx < rlen {
+                if ord(raw[idx]) == 47 and idx + 1 < rlen and ord(raw[idx + 1]) == 42 {
+                    block_depth = block_depth + 1
+                    idx = idx + 2
+                } elif ord(raw[idx]) == 42 and idx + 1 < rlen and ord(raw[idx + 1]) == 47 {
+                    block_depth = block_depth - 1
+                    idx = idx + 2
+                    if block_depth == 0 {
+                        prev_blank = false
+                        break
+                    }
+                } else {
+                    idx = idx + 1
+                }
+            }
+            continue
+        }
         let trimmed = selfhost_trim_line(raw)
         if len(trimmed) == 0 {
             if not prev_blank {
@@ -50,8 +72,10 @@ fn selfhost_format_body(source: str, in_path: str) -> str {
             prev_blank = false
             let tlen = len(trimmed)
             let mut leading_closes = 0
-            while leading_closes < tlen and ord(trimmed[leading_closes]) == 125 {
-                leading_closes = leading_closes + 1
+            if not (tlen >= 2 and ord(trimmed[0]) == 47 and ord(trimmed[1]) == 42) {
+                while leading_closes < tlen and ord(trimmed[leading_closes]) == 125 {
+                    leading_closes = leading_closes + 1
+                }
             }
             let mut indent_level = depth - leading_closes
             if indent_level < 0 { indent_level = 0 }
@@ -65,9 +89,20 @@ fn selfhost_format_body(source: str, in_path: str) -> str {
             let mut closes = 0
             let mut in_str = false
             let mut escaped = false
-            for idx in 0..tlen {
+            let mut idx = 0
+            while idx < tlen {
                 let c = ord(trimmed[idx])
-                if in_str {
+                if block_depth > 0 {
+                    if c == 47 and idx + 1 < tlen and ord(trimmed[idx + 1]) == 42 {
+                        block_depth = block_depth + 1
+                        idx = idx + 2
+                    } elif c == 42 and idx + 1 < tlen and ord(trimmed[idx + 1]) == 47 {
+                        block_depth = block_depth - 1
+                        idx = idx + 2
+                    } else {
+                        idx = idx + 1
+                    }
+                } elif in_str {
                     if escaped {
                         escaped = false
                     } elif c == 92 {
@@ -75,15 +110,24 @@ fn selfhost_format_body(source: str, in_path: str) -> str {
                     } elif c == 34 {
                         in_str = false
                     }
+                    idx = idx + 1
                 } else {
                     if c == 35 {
                         break
+                    } elif c == 47 and idx + 1 < tlen and ord(trimmed[idx + 1]) == 42 {
+                        block_depth = block_depth + 1
+                        idx = idx + 2
                     } elif c == 34 {
                         in_str = true
+                        idx = idx + 1
                     } elif c == 123 {
                         opens = opens + 1
+                        idx = idx + 1
                     } elif c == 125 {
                         closes = closes + 1
+                        idx = idx + 1
+                    } else {
+                        idx = idx + 1
                     }
                 }
             }

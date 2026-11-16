@@ -121,6 +121,7 @@ def evaluate_await_expr(interpreter: "Interpreter", expr: AwaitExpr, env: Enviro
         fields = val.fields
     if fields is not None:
         if "is_ready" in fields:
+            handle_val_initial = getattr(fields.get("handle"), "value", 0)
             while True:
                 is_ready = getattr(fields.get("is_ready"), "value", False)
                 is_failed = getattr(fields.get("is_failed"), "value", False)
@@ -128,6 +129,7 @@ def evaluate_await_expr(interpreter: "Interpreter", expr: AwaitExpr, env: Enviro
                     break
                 handle_val = getattr(fields.get("handle"), "value", 0)
                 if handle_val > 0:
+                    handle_val_initial = handle_val
                     from runtime.HostAbi import http_multi_poll, http_async_poll
                     http_multi_poll(10)
                     poll_st = http_async_poll(handle_val)
@@ -155,6 +157,9 @@ def evaluate_await_expr(interpreter: "Interpreter", expr: AwaitExpr, env: Enviro
                 elif hasattr(err_val, "value"):
                     err_msg = err_val.value
                 raise WysnaRuntimeError(message=str(err_msg), line=expr.line, col=expr.col, file=interpreter.file)
+            if isinstance(handle_val_initial, int) and handle_val_initial >= 2000000:
+                from runtime.HostAbi import spawn_get_result
+                return spawn_get_result(handle_val_initial)
             val_item = fields.get("value")
             if hasattr(val_item, "variant") and val_item.variant == "Some" and getattr(val_item, "payload", None):
                 return val_item.payload[0]
@@ -461,10 +466,21 @@ def evaluate_call_expr(interpreter: "Interpreter", expr: CallExpr, env: Environm
     if isinstance(callee, WysnaFunction):
         fn_name = callee.decl.name
         base_fn_name = fn_name
-        for candidate in ("parallel_batch", "parallel_map", "parallel_filter", "parallel_reduce", "batch_get"):
+        for candidate in ("parallel_batch", "parallel_map", "parallel_filter", "parallel_reduce", "batch_get", "_spawn_handle", "_take_task_value"):
             if fn_name == candidate or f"__{candidate}__" in fn_name or fn_name.endswith(f"__{candidate}"):
                 base_fn_name = candidate
                 break
+        if base_fn_name == "_spawn_handle" and len(args) == 1 and isinstance(args[0], WysnaFunction):
+            from runtime.HostAbi import spawn_async_task
+            work_fn = args[0]
+            tid = spawn_async_task(lambda: interpreter.call_function(work_fn, []))
+            return WysnaInt(tid)
+        if base_fn_name == "_take_task_value" and len(args) == 2 and isinstance(args[0], WysnaInt):
+            handle_val = args[0].value
+            if handle_val >= 2000000:
+                from runtime.HostAbi import spawn_get_result
+                return WysnaEnumValue("Option", "Some", [spawn_get_result(handle_val)])
+            return args[1]
         if base_fn_name == "parallel_batch" and len(args) == 3 and isinstance(args[0], WysnaList) and isinstance(args[1], WysnaInt):
             values = args[0].storage.data
             transform = args[2]

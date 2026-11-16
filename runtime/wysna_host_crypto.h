@@ -681,4 +681,222 @@ static inline int64_t wysna_host_crypto_constant_time_compare(void* a_handle, vo
     return (diff == 0) ? 1 : 0;
 }
 
+/* ---- ChaCha20-Poly1305 AEAD (RFC 8439) ---------------------------------- */
+
+static inline uint32_t wysna_rotl32(uint32_t value, int count) {
+    return (value << count) | (value >> (32 - count));
+}
+
+static inline uint32_t wysna_load32_le(const uint8_t* p) {
+    return (uint32_t)p[0] | ((uint32_t)p[1] << 8) | ((uint32_t)p[2] << 16) | ((uint32_t)p[3] << 24);
+}
+
+static inline void wysna_store32_le(uint8_t* p, uint32_t value) {
+    p[0] = (uint8_t)value; p[1] = (uint8_t)(value >> 8);
+    p[2] = (uint8_t)(value >> 16); p[3] = (uint8_t)(value >> 24);
+}
+
+static inline void wysna_store64_le(uint8_t* p, uint64_t value) {
+    for (int i = 0; i < 8; i++) p[i] = (uint8_t)(value >> (8 * i));
+}
+
+#define WYSNA_CHACHA_QR(a, b, c, d) \
+    a += b; d ^= a; d = wysna_rotl32(d, 16); \
+    c += d; b ^= c; b = wysna_rotl32(b, 12); \
+    a += b; d ^= a; d = wysna_rotl32(d, 8);  \
+    c += d; b ^= c; b = wysna_rotl32(b, 7);
+
+static void wysna_chacha20_block(const uint8_t key[32], uint32_t counter, const uint8_t nonce[12], uint8_t out[64]) {
+    uint32_t state[16], x[16];
+    state[0] = 0x61707865u; state[1] = 0x3320646eu; state[2] = 0x79622d32u; state[3] = 0x6b206574u;
+    for (int i = 0; i < 8; i++) state[4 + i] = wysna_load32_le(key + 4 * i);
+    state[12] = counter;
+    for (int i = 0; i < 3; i++) state[13 + i] = wysna_load32_le(nonce + 4 * i);
+    memcpy(x, state, sizeof(x));
+    for (int round = 0; round < 10; round++) {
+        WYSNA_CHACHA_QR(x[0], x[4], x[8], x[12]);
+        WYSNA_CHACHA_QR(x[1], x[5], x[9], x[13]);
+        WYSNA_CHACHA_QR(x[2], x[6], x[10], x[14]);
+        WYSNA_CHACHA_QR(x[3], x[7], x[11], x[15]);
+        WYSNA_CHACHA_QR(x[0], x[5], x[10], x[15]);
+        WYSNA_CHACHA_QR(x[1], x[6], x[11], x[12]);
+        WYSNA_CHACHA_QR(x[2], x[7], x[8], x[13]);
+        WYSNA_CHACHA_QR(x[3], x[4], x[9], x[14]);
+    }
+    for (int i = 0; i < 16; i++) wysna_store32_le(out + 4 * i, x[i] + state[i]);
+}
+
+static void wysna_chacha20_xor(const uint8_t key[32], uint32_t counter, const uint8_t nonce[12],
+                               const uint8_t* input, uint8_t* output, size_t length) {
+    uint8_t block[64];
+    size_t offset = 0;
+    while (offset < length) {
+        wysna_chacha20_block(key, counter++, nonce, block);
+        size_t chunk = length - offset < 64 ? length - offset : 64;
+        for (size_t i = 0; i < chunk; i++) output[offset + i] = input[offset + i] ^ block[i];
+        offset += chunk;
+    }
+}
+
+static void wysna_poly1305_blocks(uint32_t h[5], const uint32_t r[5], const uint8_t* m, size_t length, uint32_t hibit) {
+    uint32_t r0 = r[0], r1 = r[1], r2 = r[2], r3 = r[3], r4 = r[4];
+    uint32_t s1 = r1 * 5, s2 = r2 * 5, s3 = r3 * 5, s4 = r4 * 5;
+    uint32_t h0 = h[0], h1 = h[1], h2 = h[2], h3 = h[3], h4 = h[4];
+    while (length >= 16) {
+        uint64_t d0, d1, d2, d3, d4;
+        uint32_t c;
+        h0 += wysna_load32_le(m + 0) & 0x3ffffff;
+        h1 += (wysna_load32_le(m + 3) >> 2) & 0x3ffffff;
+        h2 += (wysna_load32_le(m + 6) >> 4) & 0x3ffffff;
+        h3 += (wysna_load32_le(m + 9) >> 6) & 0x3ffffff;
+        h4 += (wysna_load32_le(m + 12) >> 8) | hibit;
+        d0 = (uint64_t)h0 * r0 + (uint64_t)h1 * s4 + (uint64_t)h2 * s3 + (uint64_t)h3 * s2 + (uint64_t)h4 * s1;
+        d1 = (uint64_t)h0 * r1 + (uint64_t)h1 * r0 + (uint64_t)h2 * s4 + (uint64_t)h3 * s3 + (uint64_t)h4 * s2;
+        d2 = (uint64_t)h0 * r2 + (uint64_t)h1 * r1 + (uint64_t)h2 * r0 + (uint64_t)h3 * s4 + (uint64_t)h4 * s3;
+        d3 = (uint64_t)h0 * r3 + (uint64_t)h1 * r2 + (uint64_t)h2 * r1 + (uint64_t)h3 * r0 + (uint64_t)h4 * s4;
+        d4 = (uint64_t)h0 * r4 + (uint64_t)h1 * r3 + (uint64_t)h2 * r2 + (uint64_t)h3 * r1 + (uint64_t)h4 * r0;
+        c = (uint32_t)(d0 >> 26); h0 = (uint32_t)d0 & 0x3ffffff;
+        d1 += c; c = (uint32_t)(d1 >> 26); h1 = (uint32_t)d1 & 0x3ffffff;
+        d2 += c; c = (uint32_t)(d2 >> 26); h2 = (uint32_t)d2 & 0x3ffffff;
+        d3 += c; c = (uint32_t)(d3 >> 26); h3 = (uint32_t)d3 & 0x3ffffff;
+        d4 += c; c = (uint32_t)(d4 >> 26); h4 = (uint32_t)d4 & 0x3ffffff;
+        h0 += c * 5; c = h0 >> 26; h0 &= 0x3ffffff; h1 += c;
+        m += 16; length -= 16;
+    }
+    h[0] = h0; h[1] = h1; h[2] = h2; h[3] = h3; h[4] = h4;
+}
+
+static void wysna_poly1305_mac(const uint8_t key[32], const uint8_t* message, size_t length, uint8_t tag[16]) {
+    uint32_t r[5], h[5] = {0, 0, 0, 0, 0}, pad[4];
+    r[0] = wysna_load32_le(key + 0) & 0x3ffffff;
+    r[1] = (wysna_load32_le(key + 3) >> 2) & 0x3ffff03;
+    r[2] = (wysna_load32_le(key + 6) >> 4) & 0x3ffc0ff;
+    r[3] = (wysna_load32_le(key + 9) >> 6) & 0x3f03fff;
+    r[4] = (wysna_load32_le(key + 12) >> 8) & 0x00fffff;
+    for (int i = 0; i < 4; i++) pad[i] = wysna_load32_le(key + 16 + 4 * i);
+
+    size_t full = length - (length % 16);
+    wysna_poly1305_blocks(h, r, message, full, (uint32_t)1 << 24);
+    if (length % 16) {
+        uint8_t last[16] = {0};
+        size_t rest = length % 16;
+        memcpy(last, message + full, rest);
+        last[rest] = 1;
+        wysna_poly1305_blocks(h, r, last, 16, 0);
+    }
+
+    uint32_t c, g0, g1, g2, g3, g4, mask;
+    c = h[1] >> 26; h[1] &= 0x3ffffff; h[2] += c;
+    c = h[2] >> 26; h[2] &= 0x3ffffff; h[3] += c;
+    c = h[3] >> 26; h[3] &= 0x3ffffff; h[4] += c;
+    c = h[4] >> 26; h[4] &= 0x3ffffff; h[0] += c * 5;
+    c = h[0] >> 26; h[0] &= 0x3ffffff; h[1] += c;
+    g0 = h[0] + 5; c = g0 >> 26; g0 &= 0x3ffffff;
+    g1 = h[1] + c; c = g1 >> 26; g1 &= 0x3ffffff;
+    g2 = h[2] + c; c = g2 >> 26; g2 &= 0x3ffffff;
+    g3 = h[3] + c; c = g3 >> 26; g3 &= 0x3ffffff;
+    g4 = h[4] + c - ((uint32_t)1 << 26);
+    mask = (g4 >> 31) - 1;
+    g0 &= mask; g1 &= mask; g2 &= mask; g3 &= mask; g4 &= mask;
+    mask = ~mask;
+    h[0] = (h[0] & mask) | g0; h[1] = (h[1] & mask) | g1; h[2] = (h[2] & mask) | g2;
+    h[3] = (h[3] & mask) | g3; h[4] = (h[4] & mask) | g4;
+
+    uint32_t t0 = (h[0] | (h[1] << 26));
+    uint32_t t1 = ((h[1] >> 6) | (h[2] << 20));
+    uint32_t t2 = ((h[2] >> 12) | (h[3] << 14));
+    uint32_t t3 = ((h[3] >> 18) | (h[4] << 8));
+    uint64_t f;
+    f = (uint64_t)t0 + pad[0]; wysna_store32_le(tag + 0, (uint32_t)f);
+    f = (uint64_t)t1 + pad[1] + (f >> 32); wysna_store32_le(tag + 4, (uint32_t)f);
+    f = (uint64_t)t2 + pad[2] + (f >> 32); wysna_store32_le(tag + 8, (uint32_t)f);
+    f = (uint64_t)t3 + pad[3] + (f >> 32); wysna_store32_le(tag + 12, (uint32_t)f);
+}
+
+/* Builds aad || pad16 || ciphertext || pad16 || le64(aad_len) || le64(ct_len) and tags it. */
+static int wysna_aead_tag(const uint8_t otk[32], const uint8_t* aad, size_t aad_len,
+                          const uint8_t* ciphertext, size_t ct_len, uint8_t tag[16]) {
+    size_t aad_padded = (aad_len + 15) & ~(size_t)15;
+    size_t ct_padded = (ct_len + 15) & ~(size_t)15;
+    if (aad_len > ((size_t)1 << 40) || ct_len > ((size_t)1 << 40)) return -1;
+    size_t total = aad_padded + ct_padded + 16;
+    uint8_t* data = (uint8_t*)calloc(total, 1);
+    if (!data) return -1;
+    if (aad_len) memcpy(data, aad, aad_len);
+    if (ct_len) memcpy(data + aad_padded, ciphertext, ct_len);
+    wysna_store64_le(data + aad_padded + ct_padded, (uint64_t)aad_len);
+    wysna_store64_le(data + aad_padded + ct_padded + 8, (uint64_t)ct_len);
+    wysna_poly1305_mac(otk, data, total, tag);
+    free(data);
+    return 0;
+}
+
+static inline int wysna_aead_store(WysnaHostEntry* output, const uint8_t* data, size_t length) {
+    if (output->capacity < length + 1) {
+        free(output->data);
+        output->data = wysna_alloc_safe(length + 1);
+        output->capacity = length + 1;
+    }
+    if (length) memcpy(output->data, data, length);
+    output->length = length;
+    return 0;
+}
+
+/* Returns 0 on success (ciphertext || 16-byte tag in output), -1 on invalid arguments. */
+static inline int64_t wysna_host_crypto_chacha20_poly1305_seal(void* key_handle, void* nonce_handle, void* aad_handle,
+                                                              void* plain_handle, void* output_handle) {
+    WysnaHostEntry* key = wysna_host_find(key_handle, 1);
+    WysnaHostEntry* nonce = wysna_host_find(nonce_handle, 1);
+    WysnaHostEntry* aad = wysna_host_find(aad_handle, 1);
+    WysnaHostEntry* plain = wysna_host_find(plain_handle, 1);
+    WysnaHostEntry* output = wysna_host_find(output_handle, 1);
+    if (!key || !nonce || !aad || !plain || !output || key->length != 32 || nonce->length != 12) return -1;
+    if (plain->length > ((size_t)1 << 32) - 64) return -1;
+    uint8_t block[64], otk[32], tag[16];
+    wysna_chacha20_block((const uint8_t*)key->data, 0, (const uint8_t*)nonce->data, block);
+    memcpy(otk, block, 32);
+    size_t length = plain->length;
+    uint8_t* sealed = (uint8_t*)malloc(length + 16 + 1);
+    if (!sealed) return -1;
+    if (length) wysna_chacha20_xor((const uint8_t*)key->data, 1, (const uint8_t*)nonce->data,
+                                   (const uint8_t*)plain->data, sealed, length);
+    if (wysna_aead_tag(otk, (const uint8_t*)aad->data, aad->length, sealed, length, tag) != 0) {
+        free(sealed);
+        return -1;
+    }
+    memcpy(sealed + length, tag, 16);
+    wysna_aead_store(output, sealed, length + 16);
+    free(sealed);
+    return 0;
+}
+
+/* Returns 0 on success, -1 on invalid arguments, -2 when authentication fails (output untouched). */
+static inline int64_t wysna_host_crypto_chacha20_poly1305_open(void* key_handle, void* nonce_handle, void* aad_handle,
+                                                              void* sealed_handle, void* output_handle) {
+    WysnaHostEntry* key = wysna_host_find(key_handle, 1);
+    WysnaHostEntry* nonce = wysna_host_find(nonce_handle, 1);
+    WysnaHostEntry* aad = wysna_host_find(aad_handle, 1);
+    WysnaHostEntry* sealed = wysna_host_find(sealed_handle, 1);
+    WysnaHostEntry* output = wysna_host_find(output_handle, 1);
+    if (!key || !nonce || !aad || !sealed || !output || key->length != 32 || nonce->length != 12) return -1;
+    if (sealed->length < 16 || sealed->length - 16 > ((size_t)1 << 32) - 64) return -1;
+    size_t length = sealed->length - 16;
+    uint8_t block[64], otk[32], tag[16];
+    wysna_chacha20_block((const uint8_t*)key->data, 0, (const uint8_t*)nonce->data, block);
+    memcpy(otk, block, 32);
+    if (wysna_aead_tag(otk, (const uint8_t*)aad->data, aad->length, (const uint8_t*)sealed->data, length, tag) != 0) {
+        return -1;
+    }
+    volatile uint8_t diff = 0;
+    for (size_t i = 0; i < 16; i++) diff |= (uint8_t)(tag[i] ^ ((const uint8_t*)sealed->data)[length + i]);
+    if (diff != 0) return -2;
+    uint8_t* plain = (uint8_t*)malloc(length + 1);
+    if (!plain) return -1;
+    if (length) wysna_chacha20_xor((const uint8_t*)key->data, 1, (const uint8_t*)nonce->data,
+                                   (const uint8_t*)sealed->data, plain, length);
+    wysna_aead_store(output, plain, length);
+    free(plain);
+    return 0;
+}
+
 #endif /* WYSNA_HOST_CRYPTO_H */

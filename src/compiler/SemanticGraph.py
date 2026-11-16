@@ -821,6 +821,7 @@ def build_semantic_graph(checked, *, effects_report=None) -> dict:
 def _effect_to_capability(effect: str) -> str | None:
     mapping = {
         'stdio.write': 'stdio',
+        'stdio.read': 'stdio',
         'arguments.read': 'arguments',
         'environment.read': 'environment',
         'clock.read': 'clock',

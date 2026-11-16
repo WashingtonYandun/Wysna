@@ -61,8 +61,8 @@ fn sem_error_union(context: SemanticContext, first: int) -> int {
     let mut unique: list[int] = []
     for alternative in alternatives {
         let kind = sem_kind(context, alternative)
-        if kind != "int" and kind != "float" and kind != "bool" and kind != "str" and kind != "struct" and kind != "enum" {
-            sem_error(context, "W2001", "error union alternatives must be scalar, non-generic struct, or non-generic enum types")
+        if kind != "int" and kind != "float" and kind != "bool" and kind != "str" and kind != "struct" and kind != "enum" and kind != "class" {
+            sem_error(context, "W2001", "error union alternatives must be scalar, struct, enum, or class types")
         }
         if len(context.types[alternative].args) > 0 and (kind == "struct" or kind == "enum") {
             sem_error(context, "W2001", "generic nominal types cannot be error union alternatives")
@@ -320,27 +320,34 @@ fn sem_key(context: SemanticContext, type_id: int) -> bool {
             seen.append(-current - 1)
         } elif current != context.integer_type and current != context.string_type and current != context.boolean_type {
             let type_ = context.types[current]
-            if type_.kind != "enum" { return false }
-            let mut visited = false
-            for previous in seen { if previous == current { visited = true } }
-            if not visited {
-                for previous in active { if previous == current { return false } }
-                let mut complete = false
-                for name in context.completed_enums { if name == type_.name { complete = true } }
-                if not complete { return false }
-                active.append(current)
-                pending.append(-current - 1)
-                let mut names: list[str] = []
-                let generic = sem_generic_type(context, type_.name)
-                if generic >= 0 {
-                    names = context.generic_types[generic].params
-                    if len(type_.args) != len(names) { return false }
-                    sem_require_nominal_budget(context, current)
+            if type_.kind == "tuple" {
+                for elem_id in type_.args {
+                    pending.append(elem_id)
                 }
-                for i in 0..len(context.variants) {
-                    if context.types[context.variant_types[i]].name == type_.name {
-                        for payload in context.variant_payloads[i] {
-                            pending.append(sem_substitute_type(context, payload, names, type_.args))
+            } elif type_.kind != "enum" {
+                return false
+            } else {
+                let mut visited = false
+                for previous in seen { if previous == current { visited = true } }
+                if not visited {
+                    for previous in active { if previous == current { return false } }
+                    let mut complete = false
+                    for name in context.completed_enums { if name == type_.name { complete = true } }
+                    if not complete { return false }
+                    active.append(current)
+                    pending.append(-current - 1)
+                    let mut names: list[str] = []
+                    let generic = sem_generic_type(context, type_.name)
+                    if generic >= 0 {
+                        names = context.generic_types[generic].params
+                        if len(type_.args) != len(names) { return false }
+                        sem_require_nominal_budget(context, current)
+                    }
+                    for i in 0..len(context.variants) {
+                        if context.types[context.variant_types[i]].name == type_.name {
+                            for payload in context.variant_payloads[i] {
+                                pending.append(sem_substitute_type(context, payload, names, type_.args))
+                            }
                         }
                     }
                 }

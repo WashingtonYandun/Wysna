@@ -205,6 +205,7 @@ typedef struct WysnaRuntimeContext {
     int64_t collected_cycles;
     bool collecting_cycles;
     volatile int runtime_lock;
+    void (*host_async_cleanup)(void);
     int argc;
     char** argv;
 #ifdef _WIN32
@@ -284,6 +285,9 @@ static inline bool wysna_value_is_error_type(WVal value, const char* kind, const
     if (strcmp(kind, "str") == 0) return value.tag == W_STR;
     if (strcmp(kind, "struct") == 0) {
         return value.tag == W_STRUCT && value.as.st && (value.as.st->name == name || strcmp(value.as.st->name, name) == 0);
+    }
+    if (strcmp(kind, "class") == 0) {
+        return value.tag == W_OBJECT && value.as.st && (value.as.st->name == name || strcmp(value.as.st->name, name) == 0);
     }
     if (strcmp(kind, "enum") == 0) {
         return value.tag == W_ENUM && value.as.en.enum_name && (value.as.en.enum_name == name || strcmp(value.as.en.enum_name, name) == 0);
@@ -505,6 +509,9 @@ static inline void wysna_runtime_cleanup_impl(bool verify_live_objects) {
         free(literal->buffer.codepoint_offsets);
         memset(&literal->buffer, 0, sizeof(literal->buffer));
         literal->next = NULL;
+    }
+    if (wysna_runtime_context.host_async_cleanup) {
+        wysna_runtime_context.host_async_cleanup();
     }
     const char* collect_env = getenv("WYSNA_COLLECT_CYCLES");
     if (verify_live_objects && collect_env && strcmp(collect_env, "1") == 0) {

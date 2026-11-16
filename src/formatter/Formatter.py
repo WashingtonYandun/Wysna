@@ -210,12 +210,13 @@ class Formatter:
                 member_lines.append(f"{self._indent(level + 1)}{vis}{f.name}: {self.format_type(f.type_ann)}")
             for m in stmt.methods:
                 vis = "public " if m.is_public else "private "
+                m_tparams = f"[{', '.join(str(p) for p in m.type_params)}]" if getattr(m, "type_params", None) else ""
                 params_str = ", ".join([f"{p.name}: {self.format_type(p.type_ann)}" for p in m.params])
                 ret_str = self.format_type(m.return_type)
                 contracts_str = "".join(f" requires {self.format_expr(r, level + 1)}" for r in getattr(m, "requires", ()))
                 contracts_str += "".join(f" ensures {self.format_expr(e, level + 1)}" for e in getattr(m, "ensures", ()))
                 blk_str = self.format_block(m.body, level + 1)
-                member_lines.append(f"{self._indent(level + 1)}{vis}fn {m.name}({params_str}) -> {ret_str}{contracts_str} {blk_str}")
+                member_lines.append(f"{self._indent(level + 1)}{vis}fn {m.name}{m_tparams}({params_str}) -> {ret_str}{contracts_str} {blk_str}")
             body = "\n".join(member_lines)
             return f"{header} {{\n{body}\n{ind}}}"
 

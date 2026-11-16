@@ -21,9 +21,9 @@
     "tests/runtime/generic_struct.wysna": "generics",
     "tests/runtime/generic_tree_recursive.wysna": "generics",
     "tests/runtime/recursive_tree_adt.wysna": "generics",
+    "tests/runtime/error_union_class_member.wysna": "error_unions",
     "tests/runtime/error_union_composition.wysna": "error_unions",
     "tests/runtime/error_union_ownership.wysna": "error_unions",
-    "tests/types/invalid/error_union_class_member.wysna": "error_unions",
     "tests/types/invalid/error_union_duplicate_members.wysna": "error_unions",
     "tests/types/invalid/error_union_incompatible_propagation.wysna": "error_unions",
     "tests/types/invalid/error_union_nested_payload_pattern.wysna": "error_unions",
@@ -55,7 +55,10 @@
     "tests/regressions/invalid/super_after_let.wysna": "regressions",
     "tests/regressions/invalid/ctor_read_before_init.wysna": "regressions",
     "tests/regressions/invalid/override_visibility.wysna": "regressions",
-    "tests/regressions/invalid/inherited_field_type.wysna": "regressions"
+    "tests/regressions/invalid/inherited_field_type.wysna": "regressions",
+    "tests/stdlib/time_env_io.wysna": "stdlib",
+    "tests/stdlib/crypto_aead.wysna": "stdlib",
+    "tests/stdlib/text_unicode.wysna": "stdlib"
   },
   "support_files": {
     "examples/http_json_client.wysna": "Configurable HTTP example; its transport contract runs against loopback fixtures in tests/unit/test_http_client.py",

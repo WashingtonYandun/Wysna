@@ -289,8 +289,31 @@ fn mir_c_algorithms_parallel_helper(function: MirFunction) -> str {
     if function.source.line == 174 and len(function.params) == 2 { return "wysna_parallel_filter" }
     return ""
 }
+fn mir_c_async_helper(function: MirFunction) -> str {
+    let file = function.source.file
+    let flen = len(file)
+    if flen < 12 { return "" }
+    let tail = slice(file, flen - 12, flen)
+    if tail != "/async.wysna" and tail != "\\async.wysna" { return "" }
+    if function.source.line == 58 and len(function.params) == 1 { return "wysna_async_spawn_handle" }
+    if function.source.line == 62 and len(function.params) == 2 { return "wysna_spawn_take_option" }
+    return ""
+}
 fn mir_c_function(module: MirModule, function: MirFunction) -> str {
     let mut parts: list[str] = [mir_c_signature(function) + " {\n"]
+    let async_helper = mir_c_async_helper(function)
+    if async_helper == "wysna_async_spawn_handle" and len(function.params) == 1 {
+        let p0 = mir_c_name(function.params[0])
+        if mir_value_storage(function.return_type) {
+            return join_strings(parts, "") + "    return wysna_int(wysna_async_spawn_handle(" + p0 + "));\n}\n"
+        }
+        return join_strings(parts, "") + "    return wysna_async_spawn_handle(" + p0 + ");\n}\n"
+    }
+    if async_helper == "wysna_spawn_take_option" and len(function.params) == 2 and mir_value_storage(function.return_type) {
+        let p0 = mir_c_name(function.params[0])
+        let p0_val = if mir_value_storage(function.slots[function.params[0]].type_id) { p0 } else { "wysna_int(" + p0 + ")" }
+        return join_strings(parts, "") + "    return wysna_spawn_take_option(" + p0_val + ", " + mir_c_name(function.params[1]) + ");\n}\n"
+    }
     let parallel_helper = mir_c_algorithms_parallel_helper(function)
     if parallel_helper != "" and mir_value_storage(function.return_type) {
         let p0 = mir_c_name(function.params[0])

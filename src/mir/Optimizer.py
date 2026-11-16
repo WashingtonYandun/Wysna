@@ -1,7 +1,7 @@
 """MIR optimization passes: CFG simplification, dead block pruning, and ownership optimizations."""
 from collections import deque
 from mir.Nodes import Terminator
-from mir.Ownership import optimize_local_cow_uniqueness, optimize_parameter_reads
+from mir.Ownership import optimize_interprocedural_cow, optimize_local_cow_uniqueness, optimize_parameter_reads
 from mir.Verifier import Verifier
 
 
@@ -142,6 +142,7 @@ def optimize(module, interner):
     # 1. Parameter copy elimination and local CoW uniqueness optimization
     optimize_parameter_reads(module, interner)
     optimize_local_cow_uniqueness(module, interner)
+    optimize_interprocedural_cow(module, interner)
     # 2. CFG simplification and dead block pruning
     optimize_cfg(module, interner)
     # 3. Final verification

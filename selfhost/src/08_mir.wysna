@@ -363,21 +363,27 @@ fn mir_dictionary_key(module: MirModule, root: int) -> bool {
             active.pop()
             seen.append(-id - 1)
         } elif id != 2 and id != 3 and id != 5 {
-            if id < 0 or id >= len(module.types) or module.types[id].kind != "enum" { return false }
-            let mut visited = false
-            for previous in seen { if previous == id { visited = true } }
-            if not visited {
-                for previous in active { if previous == id { return false } }
-                active.append(id)
-                pending.append(-id - 1)
-                let mut found = false
-                for record in module.records {
-                    if record.type_id == id {
-                        found = true
-                        for variant in record.variants { for payload in variant.payloads { pending.append(payload) } }
+            if id < 0 or id >= len(module.types) { return false }
+            if module.types[id].kind == "tuple" {
+                for elem_id in module.types[id].args { pending.append(elem_id) }
+            } elif module.types[id].kind != "enum" {
+                return false
+            } else {
+                let mut visited = false
+                for previous in seen { if previous == id { visited = true } }
+                if not visited {
+                    for previous in active { if previous == id { return false } }
+                    active.append(id)
+                    pending.append(-id - 1)
+                    let mut found = false
+                    for record in module.records {
+                        if record.type_id == id {
+                            found = true
+                            for variant in record.variants { for payload in variant.payloads { pending.append(payload) } }
+                        }
                     }
+                    if not found { return false }
                 }
-                if not found { return false }
             }
         }
     }

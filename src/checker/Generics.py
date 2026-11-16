@@ -2,9 +2,9 @@
 from copy import copy
 
 from checker.OopGenerics import GenericOopTemplate, specialize as specialize_oop
-from checker.WysnaType import FunctionType, TypeParamType
+from checker.WysnaType import FunctionType, TypeParamType, ClassType
 from error.Error import TypeError, WysnaError
-from node.NodeType import clone_ast
+from node.NodeType import clone_ast, ClassDecl
 
 
 class GenericDefinitionChecker:
@@ -31,8 +31,16 @@ class GenericDefinitionChecker:
         for template in self.checker.generic_enum_templates.values():
             self._run_recovering(lambda t=template: self.check_enumeration(t))
         for template in list(self.checker.global_scope.types.values()):
-            if isinstance(template, GenericOopTemplate):
+            if isinstance(template, GenericOopTemplate) and template.checker is self.checker:
                 self._run_recovering(lambda t=template: self.check_oop_type(t))
+        for cls_name, cls_decl in list(self.checker.class_decls.items()):
+            cls_type = self.checker.global_scope.lookup_type(cls_name)
+            if isinstance(cls_type, ClassType):
+                for gtmpl in list(cls_type.generic_methods.values()):
+                    if gtmpl.owner_class == cls_type.name:
+                        self._run_recovering(
+                            lambda cd=cls_decl, ct=cls_type, gm=gtmpl: self.check_generic_method(cd, ct, gm)
+                        )
 
     def _symbolic_substitutions(self, template):
         checker = self.checker
@@ -63,6 +71,23 @@ class GenericDefinitionChecker:
             "monomorphized_fns": dict(checker.monomorphized_fns),
             "monomorphized_enums": dict(checker.monomorphized_enums),
             "oop_decls": list(checker.monomorphized_oop_decls),
+            "class_decls": dict(checker.class_decls),
+            "class_method_lists": [
+                (cdecl, list(cdecl.methods))
+                for cdecl in checker.class_decls.values()
+                if isinstance(cdecl, ClassDecl)
+            ],
+            "class_type_methods": [
+                (ctype, dict(ctype.methods), dict(ctype.generic_methods))
+                for ctype in checker.global_scope.types.values()
+                if isinstance(ctype, ClassType)
+            ],
+            "generic_method_instances": [
+                (gm, dict(gm.instances))
+                for ctype in checker.global_scope.types.values()
+                if isinstance(ctype, ClassType)
+                for gm in ctype.generic_methods.values()
+            ],
             "struct_decls": list(checker.monomorphized_struct_decls),
             "fn_decls": list(checker.monomorphized_fn_decls),
             "enum_decls": list(checker.monomorphized_enum_decls),
@@ -105,6 +130,18 @@ class GenericDefinitionChecker:
             checker.monomorphized_enums.clear()
             checker.monomorphized_enums.update(saved["monomorphized_enums"])
             checker.monomorphized_oop_decls[:] = saved["oop_decls"]
+            checker.class_decls.clear()
+            checker.class_decls.update(saved["class_decls"])
+            for cdecl, methods in saved["class_method_lists"]:
+                cdecl.methods[:] = methods
+            for ctype, methods, gmethods in saved["class_type_methods"]:
+                ctype.methods.clear()
+                ctype.methods.update(methods)
+                ctype.generic_methods.clear()
+                ctype.generic_methods.update(gmethods)
+            for gm, instances in saved["generic_method_instances"]:
+                gm.instances.clear()
+                gm.instances.update(instances)
             checker.monomorphized_struct_decls[:] = saved["struct_decls"]
             checker.monomorphized_fn_decls[:] = saved["fn_decls"]
             checker.monomorphized_enum_decls[:] = saved["enum_decls"]
@@ -170,15 +207,41 @@ class GenericDefinitionChecker:
 
         self._check_isolated(template, check)
 
+    def check_generic_method(self, cls_decl, cls_type, template):
+        checker = self.checker
+
+        def check(substitutions):
+            cloned = clone_ast(template.ast_decl)
+            cloned.type_params = []
+            prev_subst = checker._active_type_subst
+            merged_subst = dict(prev_subst) if prev_subst else {}
+            merged_subst.update(substitutions)
+            checker._active_type_subst = merged_subst
+            try:
+                parameter_types = [checker._resolve_type_node(parameter.type_ann) for parameter in cloned.params]
+                return_type = checker._resolve_type_node(cloned.return_type)
+            finally:
+                checker._active_type_subst = prev_subst
+            fn_type = FunctionType(parameter_types, return_type)
+            checker._check_single_method_decl(cls_decl, cls_type, cloned, fn_type, recovering=False)
+
+        self._check_isolated(template, check)
+
     def check_oop_type(self, template):
         checker = self.checker
 
         def check(substitutions):
             symbolic_args = [substitutions[parameter.name] for parameter in template.type_params]
-            specialize_oop(
+            sym_type = specialize_oop(
                 template, symbolic_args,
                 template.ast_decl.line, template.ast_decl.col,
                 refresh_session=False,
             )
+            if isinstance(sym_type, ClassType):
+                sym_decl = checker.class_decls.get(sym_type.name)
+                if sym_decl is not None:
+                    for gtmpl in list(sym_type.generic_methods.values()):
+                        if gtmpl.owner_class == sym_type.name:
+                            self.check_generic_method(sym_decl, sym_type, gtmpl)
 
         self._check_isolated(template, check)

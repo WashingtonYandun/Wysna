@@ -94,7 +94,38 @@ def check_call_expr(checker: "TypeChecker", expr: CallExpr, is_statement_context
     # Mutating method check on receiver (transitive across value-type paths)
     if callee_t is None:
         if isinstance(expr.callee, MemberExpr):
-            callee_t = checker._check_expr(expr.callee)
+            from checker.AccessRules import resolve_member_with_receiver_type
+            obj_t = checker._check_expr(expr.callee.object, allow_module=True)
+            if isinstance(obj_t, ClassType) and expr.callee.property in obj_t.generic_methods:
+                gm_template = obj_t.generic_methods[expr.callee.property]
+                if (not gm_template.is_public
+                        and (checker.current_class is None or checker.current_class.name != gm_template.owner_class)):
+                    raise TypeError(
+                        message=f"Cannot access private method '{expr.callee.property}' of class '{gm_template.owner_class}'",
+                        line=expr.callee.line,
+                        col=expr.callee.col,
+                        file=checker.file,
+                        code="W3002",
+                    )
+                if expr.type_args:
+                    concrete_args = [checker._resolve_type_node(a) for a in expr.type_args]
+                else:
+                    owner_checker = gm_template.checker or checker
+                    concrete_args = infer_type_arguments(
+                        checker,
+                        gm_template,
+                        gm_template.ast_decl.params,
+                        expr,
+                        "generic method",
+                        unify_checker=owner_checker,
+                    )
+                mangled_method, _ = checker._monomorphize_method(obj_t, gm_template, concrete_args, expr.line, expr.col)
+                expr.callee.property = mangled_method
+                expr.type_args = []
+            callee_t = resolve_member_with_receiver_type(checker, expr.callee, obj_t)
+            expr.callee.inferred_type = callee_t
+            expr.callee.inferred_type_id = checker.interner.from_type(callee_t)
+            expr.callee.session_arena_id = checker.interner.arena_id
             if isinstance(callee_t, FunctionType) and callee_t.is_mutating:
                 sym = checker._find_value_root_symbol(expr.callee.object)
                 if sym and not sym.is_mut:
@@ -586,8 +617,9 @@ def check_builtin_call(checker: "TypeChecker", expr: CallExpr) -> Optional[Wysna
 
 
 def infer_type_arguments(checker: "TypeChecker", template, parameters, expr: CallExpr,
-                         description: str) -> List[WysnaType]:
+                         description: str, *, unify_checker: Optional["TypeChecker"] = None) -> List[WysnaType]:
     """Infer one complete substitution from positional declaration/argument pairs."""
+    resolver = unify_checker or checker
     if len(expr.args) != len(parameters):
         raise TypeError(
             message=f"Expected {len(parameters)} arguments for {description} '{template.name}', found {len(expr.args)}",
@@ -598,7 +630,7 @@ def infer_type_arguments(checker: "TypeChecker", template, parameters, expr: Cal
     bindings: Dict[str, WysnaType] = {}
     for parameter, argument in zip(parameters, expr.args):
         argument_type = checker._check_expr(argument)
-        if not checker._unify_type(parameter.type_ann, argument_type, type_parameters, bindings):
+        if not resolver._unify_type(parameter.type_ann, argument_type, type_parameters, bindings):
             raise TypeError(
                 message=f"Conflicting type inference for {description} '{template.name}': cannot unify '{argument_type}'",
                 line=argument.line, col=argument.col, file=checker.file, code="W2001",

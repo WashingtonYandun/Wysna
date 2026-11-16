@@ -152,3 +152,9 @@ int32_t wysna_llvm_entry_status(const void* input) {
     if (value.tag == W_ERR) { wysna_report_entrypoint_error(value.as.box->val); return 1; }
     return 0;
 }
+int64_t wysna_llvm_async_spawn(const void* fn) {
+    return wysna_async_spawn_handle(*(const WVal*)fn);
+}
+void wysna_llvm_async_take_option(void* out, int64_t handle, const void* fallback) {
+    wysna_assign(out, wysna_spawn_take_option(wysna_int(handle), *(const WVal*)fallback));
+}

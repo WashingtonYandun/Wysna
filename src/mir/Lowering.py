@@ -695,7 +695,7 @@ class Lowering:
         if isinstance(pattern, H.HirErrorTypePattern):
             entry = self.interner.get_entry(pattern.error_type_id)
             kind = entry.data if entry.tag == 'primitive' else entry.tag
-            name = entry.data if entry.tag in ('struct', 'enum') else kind
+            name = entry.data if entry.tag in ('struct', 'enum', 'class') else kind
             condition = self.predicate('error_type', [value], pattern, type_kind=kind, name=name)
             self.pattern_witness[(id(pattern), value)] = condition
             return condition

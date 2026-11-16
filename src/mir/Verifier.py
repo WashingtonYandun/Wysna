@@ -513,7 +513,7 @@ class Verifier:
                     witness = operation.data['witness']
                     proof = tests.get(witness)
                     narrowed = self.interner.get_entry(slots[operation.result].type_id)
-                    name = narrowed.data if narrowed.tag in ('primitive', 'struct', 'enum') else narrowed.tag
+                    name = narrowed.data if narrowed.tag in ('primitive', 'struct', 'enum', 'class') else narrowed.tag
                     type_kind = narrowed.data if narrowed.tag == 'primitive' else narrowed.tag
                     if (witness not in facts or proof is None or proof.args != operation.args or
                             proof.data.get('kind') != 'error_type' or proof.data.get('name') != name or

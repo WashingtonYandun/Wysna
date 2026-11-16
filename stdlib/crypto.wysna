@@ -7,6 +7,8 @@ extern "C" fn wysna_host_crypto_hmac_sha512(key_handle: opaque, msg_handle: opaq
 extern "C" fn wysna_host_crypto_md5(input_handle: opaque, output_handle: opaque) -> int
 extern "C" fn wysna_host_crypto_random_bytes(output_handle: opaque, count: int) -> int
 extern "C" fn wysna_host_crypto_constant_time_compare(a_handle: opaque, b_handle: opaque) -> int
+extern "C" fn wysna_host_crypto_chacha20_poly1305_seal(key: opaque, nonce: opaque, aad: opaque, plain: opaque, output: opaque) -> int
+extern "C" fn wysna_host_crypto_chacha20_poly1305_open(key: opaque, nonce: opaque, aad: opaque, sealed: opaque, output: opaque) -> int
 
 pub struct CryptoError {
     message: str,
@@ -173,4 +175,53 @@ pub fn constant_time_eq(a: str, b: str) -> bool {
     a_buf.close()
     b_buf.close()
     return ok
+}
+
+# ChaCha20-Poly1305 AEAD (RFC 8439). Key is 32 bytes, nonce is 12 bytes and must never repeat for a key.
+# `seal` returns ciphertext followed by a 16-byte authentication tag; `open` verifies before decrypting.
+pub fn aead_seal(key: buffer.Bytes, nonce: buffer.Bytes, aad: buffer.Bytes, plaintext: buffer.Bytes) -> buffer.Bytes ! CryptoError {
+    if key.size() != 32 {
+        return Err(CryptoError { message: "ChaCha20-Poly1305 key must be 32 bytes" })
+    }
+    if nonce.size() != 12 {
+        return Err(CryptoError { message: "ChaCha20-Poly1305 nonce must be 12 bytes" })
+    }
+    let out = new buffer.Bytes()
+    let status = wysna_host_crypto_chacha20_poly1305_seal(key.borrow(), nonce.borrow(), aad.borrow(), plaintext.borrow(), out.borrow())
+    if status != 0 {
+        out.close()
+        return Err(CryptoError { message: "ChaCha20-Poly1305 seal failed" })
+    }
+    return out
+}
+
+pub fn aead_open(key: buffer.Bytes, nonce: buffer.Bytes, aad: buffer.Bytes, sealed: buffer.Bytes) -> buffer.Bytes ! CryptoError {
+    if key.size() != 32 {
+        return Err(CryptoError { message: "ChaCha20-Poly1305 key must be 32 bytes" })
+    }
+    if nonce.size() != 12 {
+        return Err(CryptoError { message: "ChaCha20-Poly1305 nonce must be 12 bytes" })
+    }
+    if sealed.size() < 16 {
+        return Err(CryptoError { message: "sealed message is shorter than the authentication tag" })
+    }
+    let out = new buffer.Bytes()
+    let status = wysna_host_crypto_chacha20_poly1305_open(key.borrow(), nonce.borrow(), aad.borrow(), sealed.borrow(), out.borrow())
+    if status == -2 {
+        out.close()
+        return Err(CryptoError { message: "authentication failed" })
+    }
+    if status != 0 {
+        out.close()
+        return Err(CryptoError { message: "ChaCha20-Poly1305 open failed" })
+    }
+    return out
+}
+
+pub fn generate_key() -> buffer.Bytes ! CryptoError {
+    return random_bytes(32)
+}
+
+pub fn generate_nonce() -> buffer.Bytes ! CryptoError {
+    return random_bytes(12)
 }

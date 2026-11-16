@@ -36,15 +36,29 @@ def specialize(template, arguments, line, col, *, refresh_session=True):
     declaration.type_params = []
     substitution = {parameter.name: argument for parameter, argument in zip(template.type_params, arguments)}
 
-    def replace(node):
+    def replace(node, active_subst=substitution):
         if isinstance(node, A.TypeNode):
-            return checker._substitute_type_node(node, substitution)
+            return checker._substitute_type_node(node, active_subst)
+        if isinstance(node, A.MethodDecl) and getattr(node, 'type_params', None):
+            shadowed = {p.name if hasattr(p, 'name') else str(p) for p in node.type_params}
+            inner_subst = {k: v for k, v in active_subst.items() if k not in shadowed}
+            if hasattr(node, 'params'):
+                node.params = [replace(item, inner_subst) for item in node.params]
+            if hasattr(node, 'return_type'):
+                node.return_type = replace(node.return_type, inner_subst)
+            if hasattr(node, 'requires'):
+                node.requires = [replace(item, inner_subst) for item in node.requires]
+            if hasattr(node, 'ensures'):
+                node.ensures = [replace(item, inner_subst) for item in node.ensures]
+            if hasattr(node, 'body'):
+                node.body = replace(node.body, inner_subst)
+            return node
         if isinstance(node, A.Node):
             for field, child in list(vars(node).items()):
                 if isinstance(child, A.Node):
-                    setattr(node, field, replace(child))
+                    setattr(node, field, replace(child, active_subst))
                 elif isinstance(child, list):
-                    setattr(node, field, [replace(item) for item in child])
+                    setattr(node, field, [replace(item, active_subst) for item in child])
         return node
 
     replace(declaration)
@@ -59,13 +73,17 @@ def specialize(template, arguments, line, col, *, refresh_session=True):
         template.instances[key] = type_
         checker.global_scope.define_type(declaration.name, type_, file=checker.file)
         declaration.specialization_shell = type_
+        if isinstance(declaration, A.ClassDecl):
+            checker.class_decls[declaration.name] = declaration
         checker._pass1_collect_declarations(A.Program([declaration]))
+        if isinstance(declaration, A.ClassDecl):
+            declaration.methods = [m for m in declaration.methods if not getattr(m, 'type_params', None)]
         checker.monomorphized_oop_decls.append(declaration)
         checker.telemetry.specialization_requests += 1
         if isinstance(declaration, A.ClassDecl):
             checker._check_class_decl(declaration)
         unit = checker.session.modules.get(checker.file)
-        if unit and refresh_session:
+        if unit and refresh_session and not checker._checking_generic_definition:
             checker.session.refresh_specializations(unit)
         return type_
     except Exception:

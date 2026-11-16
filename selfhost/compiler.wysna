@@ -200,6 +200,47 @@ fn tokenize(src: str, file: str) -> list[Token] {
                 i = i + 1
                 col = col + 1
             }
+        } elif ch == "/" and i + 1 < n and src[i + 1] == "*" {
+            let comment_line = line
+            let comment_col = col
+            let mut depth = 1
+            let mut saw_newline = false
+            let mut nl_line = line
+            let mut nl_col = col
+            i = i + 2
+            col = col + 2
+            while i < n and depth > 0 {
+                let c = ord(src[i])
+                if c == 47 and i + 1 < n and ord(src[i + 1]) == 42 {
+                    depth = depth + 1
+                    i = i + 2
+                    col = col + 2
+                } elif c == 42 and i + 1 < n and ord(src[i + 1]) == 47 {
+                    depth = depth - 1
+                    i = i + 2
+                    col = col + 2
+                } elif c == 10 or c == 13 {
+                    if not saw_newline {
+                        nl_line = line
+                        nl_col = col
+                        saw_newline = true
+                    }
+                    line = line + 1
+                    col = 1
+                    i = i + 1
+                    if c == 13 and i < n and ord(src[i]) == 10 {
+                        i = i + 1
+                    }
+                } else {
+                    i = i + 1
+                    col = col + 1
+                }
+            }
+            if depth > 0 {
+                report_error(file, "W0002", comment_line, comment_col, "Unterminated block comment")
+            } elif saw_newline and paren_depth == 0 and bracket_depth == 0 and len(tokens) > 0 and line_terminates_statement(tokens[len(tokens) - 1].kind) {
+                tokens.append(Token { kind: "NEWLINE", val: "\n", line: nl_line, col: nl_col, file: file })
+            }
         } elif is_alpha(code) {
             let start = i
             let start_col = col
@@ -1406,8 +1447,8 @@ fn sem_error_union(context: SemanticContext, first: int) -> int {
     let mut unique: list[int] = []
     for alternative in alternatives {
         let kind = sem_kind(context, alternative)
-        if kind != "int" and kind != "float" and kind != "bool" and kind != "str" and kind != "struct" and kind != "enum" {
-            sem_error(context, "W2001", "error union alternatives must be scalar, non-generic struct, or non-generic enum types")
+        if kind != "int" and kind != "float" and kind != "bool" and kind != "str" and kind != "struct" and kind != "enum" and kind != "class" {
+            sem_error(context, "W2001", "error union alternatives must be scalar, struct, enum, or class types")
         }
         if len(context.types[alternative].args) > 0 and (kind == "struct" or kind == "enum") {
             sem_error(context, "W2001", "generic nominal types cannot be error union alternatives")
@@ -1665,27 +1706,34 @@ fn sem_key(context: SemanticContext, type_id: int) -> bool {
             seen.append(-current - 1)
         } elif current != context.integer_type and current != context.string_type and current != context.boolean_type {
             let type_ = context.types[current]
-            if type_.kind != "enum" { return false }
-            let mut visited = false
-            for previous in seen { if previous == current { visited = true } }
-            if not visited {
-                for previous in active { if previous == current { return false } }
-                let mut complete = false
-                for name in context.completed_enums { if name == type_.name { complete = true } }
-                if not complete { return false }
-                active.append(current)
-                pending.append(-current - 1)
-                let mut names: list[str] = []
-                let generic = sem_generic_type(context, type_.name)
-                if generic >= 0 {
-                    names = context.generic_types[generic].params
-                    if len(type_.args) != len(names) { return false }
-                    sem_require_nominal_budget(context, current)
+            if type_.kind == "tuple" {
+                for elem_id in type_.args {
+                    pending.append(elem_id)
                 }
-                for i in 0..len(context.variants) {
-                    if context.types[context.variant_types[i]].name == type_.name {
-                        for payload in context.variant_payloads[i] {
-                            pending.append(sem_substitute_type(context, payload, names, type_.args))
+            } elif type_.kind != "enum" {
+                return false
+            } else {
+                let mut visited = false
+                for previous in seen { if previous == current { visited = true } }
+                if not visited {
+                    for previous in active { if previous == current { return false } }
+                    let mut complete = false
+                    for name in context.completed_enums { if name == type_.name { complete = true } }
+                    if not complete { return false }
+                    active.append(current)
+                    pending.append(-current - 1)
+                    let mut names: list[str] = []
+                    let generic = sem_generic_type(context, type_.name)
+                    if generic >= 0 {
+                        names = context.generic_types[generic].params
+                        if len(type_.args) != len(names) { return false }
+                        sem_require_nominal_budget(context, current)
+                    }
+                    for i in 0..len(context.variants) {
+                        if context.types[context.variant_types[i]].name == type_.name {
+                            for payload in context.variant_payloads[i] {
+                                pending.append(sem_substitute_type(context, payload, names, type_.args))
+                            }
                         }
                     }
                 }
@@ -4401,21 +4449,27 @@ fn mir_dictionary_key(module: MirModule, root: int) -> bool {
             active.pop()
             seen.append(-id - 1)
         } elif id != 2 and id != 3 and id != 5 {
-            if id < 0 or id >= len(module.types) or module.types[id].kind != "enum" { return false }
-            let mut visited = false
-            for previous in seen { if previous == id { visited = true } }
-            if not visited {
-                for previous in active { if previous == id { return false } }
-                active.append(id)
-                pending.append(-id - 1)
-                let mut found = false
-                for record in module.records {
-                    if record.type_id == id {
-                        found = true
-                        for variant in record.variants { for payload in variant.payloads { pending.append(payload) } }
+            if id < 0 or id >= len(module.types) { return false }
+            if module.types[id].kind == "tuple" {
+                for elem_id in module.types[id].args { pending.append(elem_id) }
+            } elif module.types[id].kind != "enum" {
+                return false
+            } else {
+                let mut visited = false
+                for previous in seen { if previous == id { visited = true } }
+                if not visited {
+                    for previous in active { if previous == id { return false } }
+                    active.append(id)
+                    pending.append(-id - 1)
+                    let mut found = false
+                    for record in module.records {
+                        if record.type_id == id {
+                            found = true
+                            for variant in record.variants { for payload in variant.payloads { pending.append(payload) } }
+                        }
                     }
+                    if not found { return false }
                 }
-                if not found { return false }
             }
         }
     }
@@ -6749,8 +6803,31 @@ fn mir_c_algorithms_parallel_helper(function: MirFunction) -> str {
     if function.source.line == 174 and len(function.params) == 2 { return "wysna_parallel_filter" }
     return ""
 }
+fn mir_c_async_helper(function: MirFunction) -> str {
+    let file = function.source.file
+    let flen = len(file)
+    if flen < 12 { return "" }
+    let tail = slice(file, flen - 12, flen)
+    if tail != "/async.wysna" and tail != "\\async.wysna" { return "" }
+    if function.source.line == 58 and len(function.params) == 1 { return "wysna_async_spawn_handle" }
+    if function.source.line == 62 and len(function.params) == 2 { return "wysna_spawn_take_option" }
+    return ""
+}
 fn mir_c_function(module: MirModule, function: MirFunction) -> str {
     let mut parts: list[str] = [mir_c_signature(function) + " {\n"]
+    let async_helper = mir_c_async_helper(function)
+    if async_helper == "wysna_async_spawn_handle" and len(function.params) == 1 {
+        let p0 = mir_c_name(function.params[0])
+        if mir_value_storage(function.return_type) {
+            return join_strings(parts, "") + "    return wysna_int(wysna_async_spawn_handle(" + p0 + "));\n}\n"
+        }
+        return join_strings(parts, "") + "    return wysna_async_spawn_handle(" + p0 + ");\n}\n"
+    }
+    if async_helper == "wysna_spawn_take_option" and len(function.params) == 2 and mir_value_storage(function.return_type) {
+        let p0 = mir_c_name(function.params[0])
+        let p0_val = if mir_value_storage(function.slots[function.params[0]].type_id) { p0 } else { "wysna_int(" + p0 + ")" }
+        return join_strings(parts, "") + "    return wysna_spawn_take_option(" + p0_val + ", " + mir_c_name(function.params[1]) + ");\n}\n"
+    }
     let parallel_helper = mir_c_algorithms_parallel_helper(function)
     if parallel_helper != "" and mir_value_storage(function.return_type) {
         let p0 = mir_c_name(function.params[0])
@@ -6845,8 +6922,30 @@ fn selfhost_format_body(source: str, in_path: str) -> str {
 
     let mut out_lines: list[str] = []
     let mut depth = 0
+    let mut block_depth = 0
     let mut prev_blank = true
     for raw in raw_lines {
+        if block_depth > 0 {
+            out_lines.append(raw)
+            let rlen = len(raw)
+            let mut idx = 0
+            while idx < rlen {
+                if ord(raw[idx]) == 47 and idx + 1 < rlen and ord(raw[idx + 1]) == 42 {
+                    block_depth = block_depth + 1
+                    idx = idx + 2
+                } elif ord(raw[idx]) == 42 and idx + 1 < rlen and ord(raw[idx + 1]) == 47 {
+                    block_depth = block_depth - 1
+                    idx = idx + 2
+                    if block_depth == 0 {
+                        prev_blank = false
+                        break
+                    }
+                } else {
+                    idx = idx + 1
+                }
+            }
+            continue
+        }
         let trimmed = selfhost_trim_line(raw)
         if len(trimmed) == 0 {
             if not prev_blank {
@@ -6857,8 +6956,10 @@ fn selfhost_format_body(source: str, in_path: str) -> str {
             prev_blank = false
             let tlen = len(trimmed)
             let mut leading_closes = 0
-            while leading_closes < tlen and ord(trimmed[leading_closes]) == 125 {
-                leading_closes = leading_closes + 1
+            if not (tlen >= 2 and ord(trimmed[0]) == 47 and ord(trimmed[1]) == 42) {
+                while leading_closes < tlen and ord(trimmed[leading_closes]) == 125 {
+                    leading_closes = leading_closes + 1
+                }
             }
             let mut indent_level = depth - leading_closes
             if indent_level < 0 { indent_level = 0 }
@@ -6872,9 +6973,20 @@ fn selfhost_format_body(source: str, in_path: str) -> str {
             let mut closes = 0
             let mut in_str = false
             let mut escaped = false
-            for idx in 0..tlen {
+            let mut idx = 0
+            while idx < tlen {
                 let c = ord(trimmed[idx])
-                if in_str {
+                if block_depth > 0 {
+                    if c == 47 and idx + 1 < tlen and ord(trimmed[idx + 1]) == 42 {
+                        block_depth = block_depth + 1
+                        idx = idx + 2
+                    } elif c == 42 and idx + 1 < tlen and ord(trimmed[idx + 1]) == 47 {
+                        block_depth = block_depth - 1
+                        idx = idx + 2
+                    } else {
+                        idx = idx + 1
+                    }
+                } elif in_str {
                     if escaped {
                         escaped = false
                     } elif c == 92 {
@@ -6882,15 +6994,24 @@ fn selfhost_format_body(source: str, in_path: str) -> str {
                     } elif c == 34 {
                         in_str = false
                     }
+                    idx = idx + 1
                 } else {
                     if c == 35 {
                         break
+                    } elif c == 47 and idx + 1 < tlen and ord(trimmed[idx + 1]) == 42 {
+                        block_depth = block_depth + 1
+                        idx = idx + 2
                     } elif c == 34 {
                         in_str = true
+                        idx = idx + 1
                     } elif c == 123 {
                         opens = opens + 1
+                        idx = idx + 1
                     } elif c == 125 {
                         closes = closes + 1
+                        idx = idx + 1
+                    } else {
+                        idx = idx + 1
                     }
                 }
             }
