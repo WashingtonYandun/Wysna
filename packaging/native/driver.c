@@ -229,21 +229,9 @@ static int sdk_execute(SdkInvocation* invocation, const SdkOptions* options, int
         const char* engine_arguments[4];
         engine_arguments[0] = "--stdlib-root";
         engine_arguments[1] = invocation->stdlib;
-        engine_arguments[2] = "--check-mir";
+        engine_arguments[2] = "--fmt";
         engine_arguments[3] = invocation->source;
-        int status = sdk_child(invocation->engine, 4, engine_arguments, options->timeout);
-        if (status == 0) {
-            FILE* sf = fopen(invocation->source, "rb");
-            if (sf) {
-                char buf[4096];
-                size_t n;
-                while ((n = fread(buf, 1, sizeof(buf), sf)) > 0) {
-                    fwrite(buf, 1, n, stdout);
-                }
-                fclose(sf);
-            }
-        }
-        return status;
+        return sdk_child(invocation->engine, 4, engine_arguments, options->timeout);
     }
     if (build || options->output) {
         const char* target = options->output;

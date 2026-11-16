@@ -126,11 +126,27 @@ def evaluate_await_expr(interpreter: "Interpreter", expr: AwaitExpr, env: Enviro
                 is_failed = getattr(fields.get("is_failed"), "value", False)
                 if is_ready or is_failed:
                     break
-                from runtime.HostAbi import http_multi_poll, http_async_poll
-                http_multi_poll(10)
                 handle_val = getattr(fields.get("handle"), "value", 0)
                 if handle_val > 0:
-                    http_async_poll(handle_val)
+                    from runtime.HostAbi import http_multi_poll, http_async_poll
+                    http_multi_poll(10)
+                    poll_st = http_async_poll(handle_val)
+                    if poll_st == 1:
+                        break
+                    if poll_st == 2 or poll_st < 0:
+                        raise WysnaRuntimeError(
+                            message="Async transfer failed",
+                            line=expr.line,
+                            col=expr.col,
+                            file=interpreter.file,
+                        )
+                else:
+                    raise WysnaRuntimeError(
+                        message="Deadlock: awaiting pending Task with no active handle",
+                        line=expr.line,
+                        col=expr.col,
+                        file=interpreter.file,
+                    )
             if getattr(fields.get("is_failed"), "value", False):
                 err_val = fields.get("error")
                 err_msg = "Async task failed"
@@ -444,23 +460,28 @@ def evaluate_call_expr(interpreter: "Interpreter", expr: CallExpr, env: Environm
         return callee.call_fn(args)
     if isinstance(callee, WysnaFunction):
         fn_name = callee.decl.name
-        if fn_name == "parallel_batch" and len(args) == 3 and isinstance(args[0], WysnaList) and isinstance(args[1], WysnaInt):
+        base_fn_name = fn_name
+        for candidate in ("parallel_batch", "parallel_map", "parallel_filter", "parallel_reduce", "batch_get"):
+            if fn_name == candidate or f"__{candidate}__" in fn_name or fn_name.endswith(f"__{candidate}"):
+                base_fn_name = candidate
+                break
+        if base_fn_name == "parallel_batch" and len(args) == 3 and isinstance(args[0], WysnaList) and isinstance(args[1], WysnaInt):
             values = args[0].storage.data
             transform = args[2]
             results = interpreter.parallel_worker_dispatch(transform, values)
             return WysnaList(elements=results)
-        if fn_name == "parallel_map" and len(args) == 2 and isinstance(args[0], WysnaList):
+        if base_fn_name == "parallel_map" and len(args) == 2 and isinstance(args[0], WysnaList):
             values = args[0].storage.data
             transform = args[1]
             results = interpreter.parallel_worker_dispatch(transform, values)
             return WysnaList(elements=results)
-        if fn_name == "parallel_filter" and len(args) == 2 and isinstance(args[0], WysnaList):
+        if base_fn_name == "parallel_filter" and len(args) == 2 and isinstance(args[0], WysnaList):
             values = args[0].storage.data
             predicate = args[1]
             bools = interpreter.parallel_worker_dispatch(predicate, values)
             kept = [item for item, b in zip(values, bools) if isinstance(b, WysnaBool) and b.value]
             return WysnaList(elements=kept)
-        if fn_name == "parallel_reduce" and len(args) == 4 and isinstance(args[0], WysnaList):
+        if base_fn_name == "parallel_reduce" and len(args) == 4 and isinstance(args[0], WysnaList):
             values = args[0].storage.data
             initial = args[1]
             mapper = args[2]
@@ -470,7 +491,7 @@ def evaluate_call_expr(interpreter: "Interpreter", expr: CallExpr, env: Environm
             for item in mapped:
                 acc = interpreter.call_function(combiner, [acc, item]) if isinstance(combiner, WysnaFunction) else combiner(acc, item)
             return acc
-        if fn_name == "batch_get" and len(args) == 1 and isinstance(args[0], WysnaList) and len(args[0].storage.data) > 1:
+        if base_fn_name == "batch_get" and len(args) == 1 and isinstance(args[0], WysnaList) and len(args[0].storage.data) > 1:
             urls = args[0].storage.data
             def _get_one(u):
                 single_list = WysnaList(elements=[u])

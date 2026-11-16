@@ -84,11 +84,32 @@ struct WWeakControl {
 };
 
 #if defined(__GNUC__) || defined(__clang__)
+static inline int32_t wysna_atomic_load_i32(const int32_t* ptr) {
+    return __atomic_load_n(ptr, __ATOMIC_ACQUIRE);
+}
+static inline void wysna_atomic_store_i32(int32_t* ptr, int32_t val) {
+    __atomic_store_n(ptr, val, __ATOMIC_RELEASE);
+}
 static inline int32_t wysna_atomic_inc_i32(int32_t* ptr) {
     return __atomic_add_fetch(ptr, 1, __ATOMIC_RELAXED);
 }
 static inline int32_t wysna_atomic_dec_i32(int32_t* ptr) {
     return __atomic_sub_fetch(ptr, 1, __ATOMIC_ACQ_REL);
+}
+static inline bool wysna_atomic_dec_if_gt1_i32(int32_t* ptr) {
+    int32_t cur = __atomic_load_n(ptr, __ATOMIC_RELAXED);
+    while (cur > 1) {
+        if (__atomic_compare_exchange_n(ptr, &cur, cur - 1, true, __ATOMIC_RELEASE, __ATOMIC_RELAXED)) {
+            return true;
+        }
+    }
+    return false;
+}
+static inline uint32_t wysna_atomic_load_u32(const uint32_t* ptr) {
+    return __atomic_load_n(ptr, __ATOMIC_ACQUIRE);
+}
+static inline void wysna_atomic_store_u32(uint32_t* ptr, uint32_t val) {
+    __atomic_store_n(ptr, val, __ATOMIC_RELEASE);
 }
 static inline int64_t wysna_atomic_add_i64(int64_t* ptr, int64_t delta) {
     return __atomic_add_fetch(ptr, delta, __ATOMIC_RELAXED);
@@ -103,8 +124,16 @@ static inline void wysna_spinlock_release(volatile int* lock) {
     __atomic_clear(lock, __ATOMIC_RELEASE);
 }
 #else
+static inline int32_t wysna_atomic_load_i32(const int32_t* ptr) { return *ptr; }
+static inline void wysna_atomic_store_i32(int32_t* ptr, int32_t val) { *ptr = val; }
 static inline int32_t wysna_atomic_inc_i32(int32_t* ptr) { return ++(*ptr); }
 static inline int32_t wysna_atomic_dec_i32(int32_t* ptr) { return --(*ptr); }
+static inline bool wysna_atomic_dec_if_gt1_i32(int32_t* ptr) {
+    if (*ptr > 1) { --(*ptr); return true; }
+    return false;
+}
+static inline uint32_t wysna_atomic_load_u32(const uint32_t* ptr) { return *ptr; }
+static inline void wysna_atomic_store_u32(uint32_t* ptr, uint32_t val) { *ptr = val; }
 static inline int64_t wysna_atomic_add_i64(int64_t* ptr, int64_t delta) { return (*ptr += delta); }
 static inline int64_t wysna_atomic_sub_i64(int64_t* ptr, int64_t delta) { return (*ptr -= delta); }
 static inline void wysna_spinlock_acquire(volatile int* lock) { (void)lock; }
@@ -128,6 +157,7 @@ typedef struct {
 
 typedef struct {
     int32_t refcount;
+    uint32_t hash_cache;
     size_t byte_length;
     size_t* codepoint_offsets;
     size_t codepoint_count;
@@ -201,6 +231,7 @@ static WysnaRuntimeContext wysna_runtime_context = {0};
 #define W_RUNTIME_ABI_VERSION 2
 struct WVal {
     WTag tag;
+    uint32_t aux;
     union {
         int64_t i;
         double f;
@@ -222,6 +253,29 @@ struct WVal {
         struct { void* address; WPointerOwner* owner; } handle;
     } as;
 };
+
+/*
+ * Compact 64-bit NaN-Boxed value representation (WVal64):
+ * Fits 8 values per 64-byte L1 cache line vs 2 values for 32-byte WVal.
+ * Bit layout (negative Quiet NaN prefix in top 13 bits: 0xFFF8_0000_0000_0000):
+ *   bits 50..48 = 3-bit type tag (1..7); all floats avoid this bit space.
+ *   bits 47..0  = 48-bit immediate payload / pointer / inline 0..6-byte string (SSO).
+ */
+typedef uint64_t WVal64;
+#define WVAL64_QNAN_PREFIX   UINT64_C(0xFFF8000000000000)
+#define WVAL64_TAG_MASK      UINT64_C(0x0007000000000000)
+#define WVAL64_PAYLOAD_MASK  UINT64_C(0x0000FFFFFFFFFFFF)
+#define WVAL64_TAG_SHIFT     48
+#define WVAL64_TAG_INT       UINT64_C(1)
+#define WVAL64_TAG_BOOL      UINT64_C(2)
+#define WVAL64_TAG_SENTINEL  UINT64_C(3)
+#define WVAL64_TAG_PTR       UINT64_C(4)
+#define WVAL64_TAG_SSO_SHORT UINT64_C(5)
+#define WVAL64_TAG_SSO_6     UINT64_C(6)
+#define WVAL64_TAG_RESERVED  UINT64_C(7)
+#define WVAL64_UNIT_VAL      (WVAL64_QNAN_PREFIX | (WVAL64_TAG_SENTINEL << WVAL64_TAG_SHIFT) | UINT64_C(0))
+#define WVAL64_NONE_VAL      (WVAL64_QNAN_PREFIX | (WVAL64_TAG_SENTINEL << WVAL64_TAG_SHIFT) | UINT64_C(1))
+#define WVAL64_CANON_NAN     UINT64_C(0x7FF8000000000000)
 
 static inline bool wysna_value_is_error_type(WVal value, const char* kind, const char* name) {
     if (strcmp(kind, "int") == 0) return value.tag == W_INT;
@@ -381,8 +435,8 @@ static inline void wysna_init_quotas(void) {
 static inline void wysna_step_tick(void) {
     if (!wysna_runtime_context.quotas_initialized) wysna_init_quotas();
     if (wysna_runtime_context.max_steps > 0) {
-        wysna_runtime_context.steps_executed++;
-        if (wysna_runtime_context.steps_executed > wysna_runtime_context.max_steps) {
+        int64_t steps = wysna_atomic_add_i64(&wysna_runtime_context.steps_executed, 1);
+        if (steps > wysna_runtime_context.max_steps) {
             wysna_runtime_fail("W4004", "Execution step quota exceeded (limit: %" PRId64 " steps)",
                                wysna_runtime_context.max_steps);
         }

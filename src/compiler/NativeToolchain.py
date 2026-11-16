@@ -251,3 +251,21 @@ class NativeToolchain:
             )
         return result.stdout, check_ms
 
+    def format_compiler(self, compiler_path, file, write=False):
+        """Format a source file natively via the selfhost compiler binary (--fmt / --fmt-write)."""
+        input_path = os.path.abspath(os.fspath(file))
+        input_directory = os.path.dirname(input_path) or os.getcwd()
+        fmt_flag = "--fmt-write" if write else "--fmt"
+        started = time.perf_counter()
+        result = subprocess.run(
+            [os.fspath(compiler_path), "--stdlib-root", str(Path(self.repo_root) / "stdlib"),
+             fmt_flag, input_path],
+            capture_output=True, text=True, cwd=input_directory, timeout=120,
+        )
+        fmt_ms = (time.perf_counter() - started) * 1000.0
+        if result.returncode != 0:
+            raise NativeCompilationError(
+                'selfhost', 'Wysna Compiler Format Error', result.stderr, result.returncode,
+            )
+        return result.stdout, fmt_ms
+

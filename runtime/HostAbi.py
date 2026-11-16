@@ -7,6 +7,7 @@ from pathlib import Path
 import signal
 import subprocess
 import threading
+import time
 from urllib.parse import urlsplit
 
 _entries = {}
@@ -555,6 +556,9 @@ def _execute_http_transfer(url, method, headers, request_body, timeout_ms, max_r
 
 _async_http_transfers = {}
 _async_http_next_id = 1
+_TIMER_HANDLE_BASE = 1000000
+_async_timers = {}
+_async_timer_next_id = _TIMER_HANDLE_BASE
 _async_http_executor = concurrent.futures.ThreadPoolExecutor(max_workers=16)
 
 
@@ -604,6 +608,26 @@ def http_async_start(url_handle, method_handle, request_headers_handle, request_
 
 
 def http_async_poll(transfer_id):
+    global _async_timer_next_id
+    if transfer_id <= -1000:
+        duration_ms = max(0, -(transfer_id + 1000))
+        now = time.monotonic()
+        with _host_lock:
+            tid = _async_timer_next_id
+            _async_timer_next_id += 1
+            _async_timers[tid] = (now + duration_ms / 1000.0, duration_ms == 0)
+        return tid
+    if transfer_id >= _TIMER_HANDLE_BASE:
+        now = time.monotonic()
+        with _host_lock:
+            entry = _async_timers.get(transfer_id)
+            if entry is None:
+                return -1
+            deadline, done = entry
+            if not done and now >= deadline:
+                done = True
+                _async_timers[transfer_id] = (deadline, True)
+            return 1 if done else 0
     with _host_lock:
         future = _async_http_transfers.get(transfer_id)
     if future is None:
@@ -618,13 +642,45 @@ def http_async_poll(transfer_id):
 
 
 def http_multi_poll(timeout_ms):
+    now = time.monotonic()
     with _host_lock:
         pending = [f for f in _async_http_transfers.values() if not f.done()]
-    if not pending:
+        pending_deadlines = []
+        for tid, (deadline, done) in list(_async_timers.items()):
+            if not done:
+                if now >= deadline:
+                    _async_timers[tid] = (deadline, True)
+                else:
+                    pending_deadlines.append(deadline)
+    if not pending and not pending_deadlines:
         return 0
+    if not pending:
+        min_rem = min(max(0.001, d - now) for d in pending_deadlines)
+        time.sleep(min(max(0.001, timeout_ms / 1000.0), min_rem))
+        now2 = time.monotonic()
+        rem_count = 0
+        with _host_lock:
+            for tid, (deadline, done) in list(_async_timers.items()):
+                if not done:
+                    if now2 >= deadline:
+                        _async_timers[tid] = (deadline, True)
+                    else:
+                        rem_count += 1
+        return rem_count
     timeout_sec = max(0.001, timeout_ms / 1000.0)
+    if pending_deadlines:
+        timeout_sec = min(timeout_sec, min(max(0.001, d - now) for d in pending_deadlines))
     done, not_done = concurrent.futures.wait(pending, timeout=timeout_sec, return_when=concurrent.futures.FIRST_COMPLETED)
-    return len(not_done)
+    now2 = time.monotonic()
+    with _host_lock:
+        rem_timers = 0
+        for tid, (deadline, t_done) in list(_async_timers.items()):
+            if not t_done:
+                if now2 >= deadline:
+                    _async_timers[tid] = (deadline, True)
+                else:
+                    rem_timers += 1
+    return len(not_done) + rem_timers
 
 
 def http_async_finish(transfer_id, response_headers_handle, response_body_handle):

@@ -426,6 +426,7 @@ class CompilationSession:
                 if isinstance(child, (A.Node, list)):
                     setattr(node, field, rewrite(child, symbol_mappings))
             return node
+        emitted_decls = set()
         def collect(current):
             if current.module_id in visited:
                 return
@@ -433,8 +434,16 @@ class CompilationSession:
             for dependency in current.dependencies:
                 collect(dependency)
             mappings = getattr(current, 'imported_symbol_names', {})
-            body.extend(rewrite(clone_syntax(node, copies), mappings) for node in current.program.body
-                        if not isinstance(node, A.ImportDecl))
+            for node in current.program.body:
+                if isinstance(node, A.ImportDecl):
+                    continue
+                rewritten = rewrite(clone_syntax(node, copies), mappings)
+                if isinstance(rewritten, DECLARATIONS):
+                    decl_key = (type(rewritten), getattr(rewritten, 'name', None))
+                    if decl_key[1] is not None and decl_key in emitted_decls:
+                        continue
+                    emitted_decls.add(decl_key)
+                body.append(rewritten)
         collect(unit)
         linked = A.Program(body)
         linked.interner = self.interner

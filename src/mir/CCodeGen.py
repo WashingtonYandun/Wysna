@@ -270,11 +270,38 @@ class CCodeGen:
     def array(self, arguments):
         return '(WVal[]){ ' + ', '.join(arguments) + ' }' if arguments else 'NULL'
 
+    @staticmethod
+    def _parallel_runtime_helper(function):
+        name = function.name
+        algo_mod = '616c676f726974686d732e7779736e61__'
+        if algo_mod not in name:
+            return None
+        if f'{algo_mod}parallel_map__' in name or name.endswith(f'{algo_mod}parallel_map'):
+            if len(function.params) == 2:
+                return 'wysna_parallel_map'
+        elif f'{algo_mod}parallel_batch__' in name or name.endswith(f'{algo_mod}parallel_batch'):
+            if len(function.params) == 3:
+                return 'wysna_parallel_batch'
+        elif f'{algo_mod}parallel_filter__' in name or name.endswith(f'{algo_mod}parallel_filter'):
+            if len(function.params) == 2:
+                return 'wysna_parallel_filter'
+        return None
+
     def function(self, function):
         self.slots = {slot.id: slot for slot in self.module.globals}
         self.slots.update({slot.id: slot for slot in function.slots})
         params = ', '.join(self.ctype(function.slots[index].type_id) + ' ' + self.name(index) for index in function.params) or 'void'
         lines = [f'static {self.ctype(function.return_type)} {function.name}({params}) {{']
+        parallel_helper = self._parallel_runtime_helper(function)
+        if parallel_helper is not None and self.ctype(function.return_type) == 'WVal':
+            p_names = [self.name(index) for index in function.params]
+            if parallel_helper == 'wysna_parallel_batch':
+                b_arg = f'{p_names[1]}.as.i' if self.slots[function.params[1]].storage == 'value' else p_names[1]
+                lines.append(f'    return {parallel_helper}({p_names[0]}, {b_arg}, {p_names[2]});')
+            else:
+                lines.append(f'    return {parallel_helper}({p_names[0]}, {p_names[1]});')
+            lines.extend(['}', ''])
+            return lines
         for slot in function.slots:
             if slot.parameter:
                 continue

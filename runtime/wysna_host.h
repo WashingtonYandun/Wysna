@@ -26,12 +26,18 @@
 #include <unistd.h>
 #else
 #include <fcntl.h>
+#include <pthread.h>
 #include <signal.h>
 #include <sys/select.h>
 #include <sys/time.h>
 #include <sys/types.h>
 #include <sys/wait.h>
+#include <time.h>
 #include <unistd.h>
+#if (defined(__GNUC__) || defined(__clang__)) && !defined(__APPLE__)
+#pragma weak pthread_create
+#pragma weak pthread_join
+#endif
 #endif
 
 /* Guard against POSIX unistd.h access() macros colliding with WTag W_OK */
@@ -278,6 +284,115 @@ static int64_t wysna_host_fs(void* first, void* second, int64_t operation) {
 #include "wysna_host_process.h"
 #include "wysna_host_paths.h"
 #include "wysna_host_crypto.h"
+
+#define WYSNA_TIMER_HANDLE_BASE 1000000
+
+typedef struct WysnaAsyncTimer {
+    int64_t id;
+    int64_t deadline_ms;
+    bool done;
+    struct WysnaAsyncTimer* next;
+} WysnaAsyncTimer;
+
+static WysnaAsyncTimer* wysna_async_timers = NULL;
+static int64_t wysna_async_timer_next_id = WYSNA_TIMER_HANDLE_BASE;
+
+static inline int64_t wysna_host_monotonic_ms(void) {
+#ifdef _WIN32
+    LARGE_INTEGER freq, counter;
+    if (!QueryPerformanceFrequency(&freq) || freq.QuadPart == 0) return 0;
+    QueryPerformanceCounter(&counter);
+    return (int64_t)((counter.QuadPart / freq.QuadPart) * 1000LL +
+                     ((counter.QuadPart % freq.QuadPart) * 1000LL) / freq.QuadPart);
+#elif defined(CLOCK_MONOTONIC)
+    struct timespec ts;
+    if (clock_gettime(CLOCK_MONOTONIC, &ts) == 0) {
+        return (int64_t)ts.tv_sec * 1000LL + (int64_t)(ts.tv_nsec / 1000000LL);
+    }
+    return 0;
+#else
+    struct timeval tv;
+    if (gettimeofday(&tv, NULL) == 0) {
+        return (int64_t)tv.tv_sec * 1000LL + (int64_t)(tv.tv_usec / 1000LL);
+    }
+    return 0;
+#endif
+}
+
+static inline void wysna_host_sleep_ms(int64_t ms) {
+    if (ms <= 0) return;
+#ifdef _WIN32
+    Sleep((DWORD)ms);
+#elif defined(__wasi__)
+    (void)ms;
+#else
+    struct timeval tv;
+    tv.tv_sec = (long)(ms / 1000LL);
+    tv.tv_usec = (int)((ms % 1000LL) * 1000LL);
+    select(0, NULL, NULL, NULL, &tv);
+#endif
+}
+
+static inline int64_t wysna_timer_poll_or_create(int64_t transfer_id) {
+    if (transfer_id <= -1000) {
+        int64_t duration_ms = -(transfer_id + 1000);
+        if (duration_ms < 0) duration_ms = 0;
+        WysnaAsyncTimer* t = (WysnaAsyncTimer*)calloc(1, sizeof(WysnaAsyncTimer));
+        if (!t) return -1;
+        t->id = wysna_async_timer_next_id++;
+        int64_t now = wysna_host_monotonic_ms();
+        t->deadline_ms = now + duration_ms;
+        t->done = (duration_ms == 0);
+        t->next = wysna_async_timers;
+        wysna_async_timers = t;
+        return t->id;
+    }
+    int64_t now = wysna_host_monotonic_ms();
+    WysnaAsyncTimer* cur = wysna_async_timers;
+    while (cur) {
+        if (cur->id == transfer_id) {
+            if (!cur->done && now >= cur->deadline_ms) {
+                cur->done = true;
+            }
+            return cur->done ? 1 : 0;
+        }
+        cur = cur->next;
+    }
+    return -1;
+}
+
+static inline int64_t wysna_timer_next_wait_ms(int64_t* out_pending) {
+    int64_t now = wysna_host_monotonic_ms();
+    int64_t pending = 0;
+    int64_t min_rem = INT64_MAX;
+    WysnaAsyncTimer* cur = wysna_async_timers;
+    while (cur) {
+        if (!cur->done) {
+            int64_t rem = cur->deadline_ms - now;
+            if (rem <= 0) {
+                cur->done = true;
+            } else {
+                pending++;
+                if (rem < min_rem) min_rem = rem;
+            }
+        }
+        cur = cur->next;
+    }
+    if (out_pending) *out_pending = pending;
+    return pending > 0 ? min_rem : 0;
+}
+
+static inline int64_t wysna_timer_multi_poll(int64_t timeout_ms, bool allow_sleep) {
+    int64_t pending = 0;
+    int64_t min_rem = wysna_timer_next_wait_ms(&pending);
+    if (allow_sleep && pending > 0 && timeout_ms > 0) {
+        int64_t step = timeout_ms < min_rem ? timeout_ms : min_rem;
+        if (step < 1) step = 1;
+        wysna_host_sleep_ms(step);
+        wysna_timer_next_wait_ms(&pending);
+    }
+    return pending;
+}
 
 #if defined(WYSNA_HAS_HTTP) && !defined(__wasi__)
 #include <curl/curl.h>
@@ -945,6 +1060,9 @@ static int64_t wysna_host_http_async_start(void* url_handle, void* method_handle
 }
 
 static int64_t wysna_host_http_async_poll(int64_t transfer_id) {
+    if (transfer_id <= -1000 || transfer_id >= WYSNA_TIMER_HANDLE_BASE) {
+        return wysna_timer_poll_or_create(transfer_id);
+    }
     WysnaAsyncHttpTransfer* t = wysna_async_http_find(transfer_id);
     if (!t) return -1;
     if (t->done == 0 && wysna_http_multi) {
@@ -956,17 +1074,28 @@ static int64_t wysna_host_http_async_poll(int64_t transfer_id) {
 }
 
 static int64_t wysna_host_http_multi_poll(int64_t timeout_ms) {
-    if (!wysna_http_multi) return 0;
+    int64_t timer_pending = 0;
+    int64_t min_timer_ms = wysna_timer_next_wait_ms(&timer_pending);
+    if (!wysna_http_multi) {
+        return wysna_timer_multi_poll(timeout_ms, true);
+    }
     int still_running = 0;
     curl_multi_perform(wysna_http_multi, &still_running);
     wysna_async_http_process_messages();
     if (still_running > 0) {
+        int poll_ms = (int)timeout_ms;
+        if (timer_pending > 0 && min_timer_ms < poll_ms) {
+            poll_ms = min_timer_ms > 0 ? (int)min_timer_ms : 1;
+        }
         int numfds = 0;
-        curl_multi_poll(wysna_http_multi, NULL, 0, (int)timeout_ms, &numfds);
+        curl_multi_poll(wysna_http_multi, NULL, 0, poll_ms, &numfds);
         curl_multi_perform(wysna_http_multi, &still_running);
         wysna_async_http_process_messages();
+        wysna_timer_next_wait_ms(&timer_pending);
+    } else if (timer_pending > 0) {
+        timer_pending = wysna_timer_multi_poll(timeout_ms, true);
     }
-    return (int64_t)still_running;
+    return (int64_t)still_running + timer_pending;
 }
 
 static int64_t wysna_host_http_async_finish(int64_t transfer_id, void* response_headers_handle, void* response_body_handle) {
@@ -1031,8 +1160,15 @@ static int64_t wysna_host_http_async_start(void* u, void* m, void* h, void* b, i
     wysna_host_error_code = ENOSYS; wysna_host_error_domain = 1;
     return -2;
 }
-static int64_t wysna_host_http_async_poll(int64_t id) { (void)id; return -1; }
-static int64_t wysna_host_http_multi_poll(int64_t t) { (void)t; return 0; }
+static int64_t wysna_host_http_async_poll(int64_t id) {
+    if (id <= -1000 || id >= WYSNA_TIMER_HANDLE_BASE) {
+        return wysna_timer_poll_or_create(id);
+    }
+    return -1;
+}
+static int64_t wysna_host_http_multi_poll(int64_t t) {
+    return wysna_timer_multi_poll(t, true);
+}
 static int64_t wysna_host_http_async_finish(int64_t id, void* h, void* b) {
     (void)id; (void)h; (void)b;
     wysna_host_error_code = ENOSYS; wysna_host_error_domain = 1;
@@ -1073,7 +1209,6 @@ static inline WVal wysna_await(WVal val) {
                             }
                         }
                     }
-                    wysna_release(err);
                     wysna_release(val);
                     if (msg_copy) {
                         wysna_runtime_fail("W4003", "%s", msg_copy);
@@ -1114,12 +1249,208 @@ static inline WVal wysna_await(WVal val) {
             } else {
                 res = wysna_clone(v);
             }
-            wysna_release(v);
             wysna_release(val);
             return res;
         }
     }
     return val;
+}
+
+typedef struct WysnaParallelWork {
+    WVal* inputs;
+    WVal* outputs;
+    WVal fn;
+    int32_t start;
+    int32_t end;
+} WysnaParallelWork;
+
+static int32_t wysna_parallel_active_depth = 0;
+
+static inline void wysna_parallel_run_slice(WysnaParallelWork* work) {
+    for (int32_t i = work->start; i < work->end; i++) {
+        work->outputs[i] = wysna_call(work->fn, 1, &work->inputs[i]);
+        wysna_release(work->inputs[i]);
+        work->inputs[i] = wysna_unit();
+    }
+    wysna_release(work->fn);
+    work->fn = wysna_unit();
+}
+
+#if !defined(_WIN32) && !defined(__wasi__)
+static void* wysna_parallel_posix_entry(void* raw) {
+    wysna_parallel_run_slice((WysnaParallelWork*)raw);
+    return NULL;
+}
+#elif defined(_WIN32)
+static DWORD WINAPI wysna_parallel_win32_entry(LPVOID raw) {
+    wysna_parallel_run_slice((WysnaParallelWork*)raw);
+    return 0;
+}
+#endif
+
+static inline WVal wysna_parallel_map(WVal values, WVal transform) {
+    wysna_step_tick();
+    if (values.tag != W_LIST || !values.as.list) {
+        wysna_runtime_fail("W4003", "parallel_map() expects list");
+    }
+    if (transform.tag != W_FUNCTION || !transform.as.function) {
+        wysna_runtime_fail("W4003", "parallel_map() expects function");
+    }
+    int32_t len = values.as.list->len;
+    if (len <= 0) {
+        return wysna_make_list(0, NULL);
+    }
+
+    int32_t max_workers = 4;
+    const char* threads_env = getenv("WYSNA_PARALLEL_THREADS");
+    if (threads_env && threads_env[0] != '\0') {
+        long parsed = strtol(threads_env, NULL, 10);
+        if (parsed <= 1) max_workers = 1;
+        else if (parsed < (long)max_workers) max_workers = (int32_t)parsed;
+    }
+#if defined(__wasi__)
+    max_workers = 1;
+#elif !defined(_WIN32)
+#if (defined(__GNUC__) || defined(__clang__)) && !defined(__APPLE__)
+    typedef int (*WysnaPthreadCreateFn)(pthread_t*, const pthread_attr_t*, void*(*)(void*), void*);
+    typedef int (*WysnaPthreadJoinFn)(pthread_t, void**);
+    volatile WysnaPthreadCreateFn p_create = pthread_create;
+    volatile WysnaPthreadJoinFn p_join = pthread_join;
+    if (!p_create || !p_join) max_workers = 1;
+#endif
+#endif
+    if (wysna_atomic_load_i32(&wysna_parallel_active_depth) > 0) {
+        max_workers = 1;
+    }
+
+    int32_t workers = len < max_workers ? len : max_workers;
+    if (workers <= 1 || len <= 1) {
+        WVal* outputs = (WVal*)wysna_alloc_safe(sizeof(WVal) * (size_t)len);
+        for (int32_t i = 0; i < len; i++) {
+            WVal item = values.as.list->data[i];
+            outputs[i] = wysna_call(transform, 1, &item);
+        }
+        WVal result = wysna_make_list(len, outputs);
+        for (int32_t i = 0; i < len; i++) wysna_release(outputs[i]);
+        free(outputs);
+        return result;
+    }
+
+    wysna_atomic_inc_i32(&wysna_parallel_active_depth);
+    WVal* inputs = (WVal*)wysna_alloc_safe(sizeof(WVal) * (size_t)len);
+    WVal* outputs = (WVal*)wysna_alloc_safe(sizeof(WVal) * (size_t)len);
+    for (int32_t i = 0; i < len; i++) {
+        inputs[i] = wysna_clone(values.as.list->data[i]);
+        outputs[i] = wysna_unit();
+    }
+
+    WysnaParallelWork tasks[4];
+    int32_t base = len / workers;
+    int32_t rem = len % workers;
+    int32_t cursor = 0;
+    for (int32_t w = 0; w < workers; w++) {
+        int32_t span = base + (w < rem ? 1 : 0);
+        tasks[w].inputs = inputs;
+        tasks[w].outputs = outputs;
+        tasks[w].fn = wysna_clone(transform);
+        tasks[w].start = cursor;
+        tasks[w].end = cursor + span;
+        cursor += span;
+    }
+
+#if !defined(_WIN32) && !defined(__wasi__)
+    pthread_t tids[4];
+    bool launched[4] = {false, false, false, false};
+    for (int32_t w = 0; w < workers - 1; w++) {
+        if (pthread_create(&tids[w], NULL, wysna_parallel_posix_entry, &tasks[w]) == 0) {
+            launched[w] = true;
+        } else {
+            wysna_parallel_run_slice(&tasks[w]);
+        }
+    }
+    wysna_parallel_run_slice(&tasks[workers - 1]);
+    for (int32_t w = 0; w < workers - 1; w++) {
+        if (launched[w]) pthread_join(tids[w], NULL);
+    }
+#elif defined(_WIN32)
+    HANDLE handles[4];
+    bool launched[4] = {false, false, false, false};
+    for (int32_t w = 0; w < workers - 1; w++) {
+        handles[w] = CreateThread(NULL, 0, wysna_parallel_win32_entry, &tasks[w], 0, NULL);
+        if (handles[w] != NULL) {
+            launched[w] = true;
+        } else {
+            wysna_parallel_run_slice(&tasks[w]);
+        }
+    }
+    wysna_parallel_run_slice(&tasks[workers - 1]);
+    for (int32_t w = 0; w < workers - 1; w++) {
+        if (launched[w]) {
+            WaitForSingleObject(handles[w], INFINITE);
+            CloseHandle(handles[w]);
+        }
+    }
+#endif
+
+    wysna_atomic_dec_i32(&wysna_parallel_active_depth);
+    WVal result = wysna_make_list(len, outputs);
+    for (int32_t i = 0; i < len; i++) wysna_release(outputs[i]);
+    free(inputs);
+    free(outputs);
+    return result;
+}
+
+static inline WVal wysna_parallel_batch(WVal values, int64_t batch_size, WVal transform) {
+    wysna_step_tick();
+    if (values.tag != W_LIST || !values.as.list) {
+        wysna_runtime_fail("W4003", "parallel_batch() expects list");
+    }
+    int32_t len = values.as.list->len;
+    if (len <= 0) return wysna_make_list(0, NULL);
+    int64_t step = batch_size > 0 ? batch_size : 1;
+    if (step >= (int64_t)len) {
+        return wysna_parallel_map(values, transform);
+    }
+    WVal* outputs = (WVal*)wysna_alloc_safe(sizeof(WVal) * (size_t)len);
+    int32_t offset = 0;
+    while (offset < len) {
+        int32_t chunk = (step < (int64_t)(len - offset)) ? (int32_t)step : (len - offset);
+        WVal slice_list = wysna_make_list(chunk, values.as.list->data + offset);
+        WVal mapped = wysna_parallel_map(slice_list, transform);
+        for (int32_t i = 0; i < chunk; i++) {
+            outputs[offset + i] = wysna_clone(mapped.as.list->data[i]);
+        }
+        wysna_release(mapped);
+        wysna_release(slice_list);
+        offset += chunk;
+    }
+    WVal result = wysna_make_list(len, outputs);
+    for (int32_t i = 0; i < len; i++) wysna_release(outputs[i]);
+    free(outputs);
+    return result;
+}
+
+static inline WVal wysna_parallel_filter(WVal values, WVal predicate) {
+    wysna_step_tick();
+    if (values.tag != W_LIST || !values.as.list) {
+        wysna_runtime_fail("W4003", "parallel_filter() expects list");
+    }
+    int32_t len = values.as.list->len;
+    if (len <= 0) return wysna_make_list(0, NULL);
+    WVal flags = wysna_parallel_map(values, predicate);
+    WVal* kept = (WVal*)wysna_alloc_safe(sizeof(WVal) * (size_t)len);
+    int32_t kept_count = 0;
+    for (int32_t i = 0; i < len; i++) {
+        WVal flag = flags.as.list->data[i];
+        if (flag.tag == W_BOOL && flag.as.b) {
+            kept[kept_count++] = wysna_clone(values.as.list->data[i]);
+        }
+    }
+    WVal result = wysna_make_list(kept_count, kept);
+    for (int32_t i = 0; i < kept_count; i++) wysna_release(kept[i]);
+    free(kept);
+    wysna_release(flags);
+    return result;
 }
 
 #endif

@@ -21,7 +21,7 @@ static inline WVal wysna_make_list(int32_t count, const WVal* elems) {
         }
         b->data[i] = wysna_clone(elems[i]);
     }
-    WVal v; v.tag = W_LIST; v.as.list = b; return v;
+    WVal v; v.tag = W_LIST; v.aux = 0; v.as.list = b; return v;
 }
 
 static inline int32_t wysna_range_count(WVal start, WVal end, bool inclusive) {
@@ -55,7 +55,7 @@ static inline WVal wysna_make_range(WVal start, WVal end, bool inclusive) {
     for (int32_t i = 0; i < count; i++) {
         b->data[i] = wysna_int(s + (int64_t)i);
     }
-    WVal v; v.tag = W_LIST; v.as.list = b; return v;
+    WVal v; v.tag = W_LIST; v.aux = 0; v.as.list = b; return v;
 }
 
 static inline WVal wysna_make_tuple(int32_t count, const WVal* elems) {
@@ -68,7 +68,7 @@ static inline WVal wysna_make_tuple(int32_t count, const WVal* elems) {
     for (int32_t i = 0; i < count; i++) {
         t->items[i] = wysna_clone(elems[i]);
     }
-    WVal v; v.tag = W_TUPLE; v.as.tuple = t; return v;
+    WVal v; v.tag = W_TUPLE; v.aux = 0; v.as.tuple = t; return v;
 }
 
 static inline WVal wysna_make_dict(int32_t count, const WVal* keys, const WVal* vals) {
@@ -87,7 +87,7 @@ static inline WVal wysna_make_dict(int32_t count, const WVal* keys, const WVal* 
     }
     wysna_dict_reindex(d, buckets);
     wysna_mem_on_alloc();
-    WVal v; v.tag = W_DICT; v.as.dict = d;
+    WVal v; v.tag = W_DICT; v.aux = 0; v.as.dict = d;
     for (int32_t i = 0; i < count; i++) {
         int32_t index = wysna_dict_find(d, keys[i]);
         if (index >= 0) { wysna_release(d->vals[index]); d->vals[index] = wysna_clone(vals[i]); }
@@ -123,7 +123,7 @@ static inline WVal wysna_make_struct(const char* name, int32_t count, const char
         st->keys[i] = keys[i];
         st->vals[i] = wysna_clone(vals[i]);
     }
-    WVal v; v.tag = W_STRUCT; v.as.st = st; return v;
+    WVal v; v.tag = W_STRUCT; v.aux = 0; v.as.st = st; return v;
 }
 
 static inline WVal wysna_make_object(const char* name, int32_t count, const char** keys, const WVal* vals) {
@@ -150,7 +150,7 @@ static inline WVal wysna_make_object(const char* name, int32_t count, const char
         st->keys[i] = keys[i];
         st->vals[i] = wysna_clone(vals[i]);
     }
-    WVal v; v.tag = W_OBJECT; v.as.st = st; return v;
+    WVal v; v.tag = W_OBJECT; v.aux = 0; v.as.st = st; return v;
 }
 
 /* Default non-optional weak fields are independent expired handles. */

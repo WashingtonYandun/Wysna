@@ -294,7 +294,7 @@ static inline WVal wysna_builtin_bytes(WVal s) {
     for (size_t i = 0; i < slen; i++) {
         b->data[i] = wysna_int((int64_t)(unsigned char)s.as.string.data[i]);
     }
-    WVal v; v.tag = W_LIST; v.as.list = b; return v;
+    WVal v; v.tag = W_LIST; v.aux = 0; v.as.list = b; return v;
 }
 
 static inline WVal wysna_builtin_enumerate(WVal list_val) {
@@ -314,7 +314,7 @@ static inline WVal wysna_builtin_enumerate(WVal list_val) {
         WVal pair[2] = { wysna_int(i), src->data[i] };
         b->data[i] = wysna_make_tuple(2, pair);
     }
-    WVal v; v.tag = W_LIST; v.as.list = b; return v;
+    WVal v; v.tag = W_LIST; v.aux = 0; v.as.list = b; return v;
 }
 
 static inline WVal wysna_builtin_dict_items(WVal dict_val) {
@@ -334,7 +334,7 @@ static inline WVal wysna_builtin_dict_items(WVal dict_val) {
         WVal pair[2] = { d->keys[i], d->vals[i] };
         b->data[i] = wysna_make_tuple(2, pair);
     }
-    WVal v; v.tag = W_LIST; v.as.list = b; return v;
+    WVal v; v.tag = W_LIST; v.aux = 0; v.as.list = b; return v;
 }
 
 static inline WVal wysna_io_error(const char* message) {
@@ -513,7 +513,7 @@ static inline WVal wysna_builtin_args(void) {
     for (int i = 0; i < wysna_g_argc; i++) {
         b->data[i] = wysna_copy_str(wysna_g_argv[i]);
     }
-    WVal v; v.tag = W_LIST; v.as.list = b; return v;
+    WVal v; v.tag = W_LIST; v.aux = 0; v.as.list = b; return v;
 }
 
 static inline WVal wysna_builtin_env(WVal name) {

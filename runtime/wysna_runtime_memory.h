@@ -7,82 +7,92 @@
 
 /* Deterministic RC + Copy-on-Write */
 static inline void wysna_cycle_unlink(WWeakControl* ctrl) {
-    if (!ctrl || !ctrl->buffered) return;
-    if (ctrl->cycle_prev) {
-        ctrl->cycle_prev->cycle_next = ctrl->cycle_next;
-    } else if (wysna_runtime_context.purple_head == ctrl) {
-        wysna_runtime_context.purple_head = ctrl->cycle_next;
+    if (!ctrl) return;
+    wysna_spinlock_acquire(&wysna_runtime_context.runtime_lock);
+    if (ctrl->buffered) {
+        if (ctrl->cycle_prev) {
+            ctrl->cycle_prev->cycle_next = ctrl->cycle_next;
+        } else if (wysna_runtime_context.purple_head == ctrl) {
+            wysna_runtime_context.purple_head = ctrl->cycle_next;
+        }
+        if (ctrl->cycle_next) {
+            ctrl->cycle_next->cycle_prev = ctrl->cycle_prev;
+        }
+        ctrl->cycle_next = NULL;
+        ctrl->cycle_prev = NULL;
+        ctrl->buffered = false;
     }
-    if (ctrl->cycle_next) {
-        ctrl->cycle_next->cycle_prev = ctrl->cycle_prev;
-    }
-    ctrl->cycle_next = NULL;
-    ctrl->cycle_prev = NULL;
-    ctrl->buffered = false;
+    wysna_spinlock_release(&wysna_runtime_context.runtime_lock);
 }
 
 static inline void wysna_cycle_buffer_purple(WWeakControl* ctrl) {
-    if (!ctrl || !ctrl->object || ctrl->strong <= 0) return;
-    ctrl->color = W_COLOR_PURPLE;
-    if (!ctrl->buffered) {
-        ctrl->cycle_prev = NULL;
-        ctrl->cycle_next = wysna_runtime_context.purple_head;
-        if (wysna_runtime_context.purple_head) {
-            wysna_runtime_context.purple_head->cycle_prev = ctrl;
+    if (!ctrl || !ctrl->object || wysna_atomic_load_i32(&ctrl->strong) <= 0) return;
+    wysna_spinlock_acquire(&wysna_runtime_context.runtime_lock);
+    if (ctrl->object && wysna_atomic_load_i32(&ctrl->strong) > 0) {
+        ctrl->color = W_COLOR_PURPLE;
+        if (!ctrl->buffered) {
+            ctrl->cycle_prev = NULL;
+            ctrl->cycle_next = wysna_runtime_context.purple_head;
+            if (wysna_runtime_context.purple_head) {
+                wysna_runtime_context.purple_head->cycle_prev = ctrl;
+            }
+            wysna_runtime_context.purple_head = ctrl;
+            ctrl->buffered = true;
         }
-        wysna_runtime_context.purple_head = ctrl;
-        ctrl->buffered = true;
     }
+    wysna_spinlock_release(&wysna_runtime_context.runtime_lock);
 }
 
 static inline WVal wysna_clone(WVal v) {
     if (v.tag <= W_BOOL) return v;
     if (v.tag == W_STR) {
-        if (!v.as.string.owner || v.as.string.owner->refcount == -1) return v;
-        wysna_check_retain_count(v.as.string.owner->refcount, "retain/string");
+        if (!v.as.string.owner) return v;
+        int32_t rc = wysna_atomic_load_i32(&v.as.string.owner->refcount);
+        if (rc == -1) return v;
+        wysna_check_retain_count(rc, "retain/string");
         wysna_atomic_inc_i32(&v.as.string.owner->refcount);
         wysna_atomic_add_i64(&wysna_g_retain_count, 1);
         return v;
     }
     if (v.tag == W_POINTER && v.as.handle.owner) {
-        wysna_check_retain_count(v.as.handle.owner->refcount, "retain/resource");
+        wysna_check_retain_count(wysna_atomic_load_i32(&v.as.handle.owner->refcount), "retain/resource");
         wysna_atomic_inc_i32(&v.as.handle.owner->refcount);
         wysna_atomic_add_i64(&wysna_g_retain_count, 1);
     } else if (v.tag == W_FUNCTION) {
-        wysna_check_retain_count(v.as.function->refcount, "retain/function");
+        wysna_check_retain_count(wysna_atomic_load_i32(&v.as.function->refcount), "retain/function");
         wysna_atomic_inc_i32(&v.as.function->refcount);
         wysna_atomic_add_i64(&wysna_g_retain_count, 1);
     } else if (v.tag == W_LIST && v.as.list) {
-        wysna_check_retain_count(v.as.list->refcount, "retain/list");
+        wysna_check_retain_count(wysna_atomic_load_i32(&v.as.list->refcount), "retain/list");
         wysna_atomic_inc_i32(&v.as.list->refcount);
         wysna_atomic_add_i64(&wysna_g_retain_count, 1);
     } else if (v.tag == W_DICT && v.as.dict) {
-        wysna_check_retain_count(v.as.dict->refcount, "retain/dict");
+        wysna_check_retain_count(wysna_atomic_load_i32(&v.as.dict->refcount), "retain/dict");
         wysna_atomic_inc_i32(&v.as.dict->refcount);
         wysna_atomic_add_i64(&wysna_g_retain_count, 1);
     } else if (v.tag == W_WEAK && v.as.weak) {
-        wysna_check_retain_count(v.as.weak->weak, "retain/weak");
+        wysna_check_retain_count(wysna_atomic_load_i32(&v.as.weak->weak), "retain/weak");
         wysna_atomic_inc_i32(&v.as.weak->weak);
         wysna_atomic_add_i64(&wysna_g_retain_count, 1);
     } else if (v.tag == W_OBJECT && v.as.st) {
-        wysna_check_retain_count(v.as.st->control->strong, "retain/object");
+        wysna_check_retain_count(wysna_atomic_load_i32(&v.as.st->control->strong), "retain/object");
         wysna_atomic_inc_i32(&v.as.st->control->strong);
         v.as.st->control->color = W_COLOR_BLACK;
         wysna_atomic_add_i64(&wysna_g_retain_count, 1);
     } else if (v.tag == W_STRUCT && v.as.st) {
-        wysna_check_retain_count(v.as.st->refcount, "retain/struct_or_object");
+        wysna_check_retain_count(wysna_atomic_load_i32(&v.as.st->refcount), "retain/struct_or_object");
         wysna_atomic_inc_i32(&v.as.st->refcount);
         wysna_atomic_add_i64(&wysna_g_retain_count, 1);
     } else if (v.tag == W_TUPLE && v.as.tuple) {
-        wysna_check_retain_count(v.as.tuple->refcount, "retain/tuple");
+        wysna_check_retain_count(wysna_atomic_load_i32(&v.as.tuple->refcount), "retain/tuple");
         wysna_atomic_inc_i32(&v.as.tuple->refcount);
         wysna_atomic_add_i64(&wysna_g_retain_count, 1);
     } else if ((v.tag == W_OK || v.tag == W_ERR) && v.as.box) {
-        wysna_check_retain_count(v.as.box->refcount, "retain/box");
+        wysna_check_retain_count(wysna_atomic_load_i32(&v.as.box->refcount), "retain/box");
         wysna_atomic_inc_i32(&v.as.box->refcount);
         wysna_atomic_add_i64(&wysna_g_retain_count, 1);
     } else if (v.tag == W_ENUM && v.as.en.box) {
-        wysna_check_retain_count(v.as.en.box->refcount, "retain/enum_box");
+        wysna_check_retain_count(wysna_atomic_load_i32(&v.as.en.box->refcount), "retain/enum_box");
         wysna_atomic_inc_i32(&v.as.en.box->refcount);
         wysna_atomic_add_i64(&wysna_g_retain_count, 1);
     }
@@ -111,10 +121,12 @@ static W_RUNTIME_NOINLINE void wysna_release_graph(WVal v);
 
 /* Leaf values never need the graph work list, including strings owned by a container. */
 static inline void wysna_release_string(WStringBuf* buffer) {
-    if (!buffer || buffer->refcount == -1) return;
-    wysna_check_refcount(buffer->refcount, "release/string");
-    wysna_g_release_count++;
-    if (--buffer->refcount == 0) {
+    if (!buffer) return;
+    int32_t rc = wysna_atomic_load_i32(&buffer->refcount);
+    if (rc == -1) return;
+    wysna_check_refcount(rc, "release/string");
+    wysna_atomic_add_i64(&wysna_g_release_count, 1);
+    if (wysna_atomic_dec_i32(&buffer->refcount) == 0) {
         free(buffer->data);
         free(buffer->codepoint_offsets);
         free(buffer);
@@ -139,66 +151,64 @@ static inline void wysna_release(WVal v) {
             return;
         case W_LIST:
             if (!v.as.list) return;
-            if (v.as.list->refcount > 1) {
-                wysna_check_refcount(v.as.list->refcount, "release/list");
-                wysna_g_release_count++;
-                v.as.list->refcount--;
+            wysna_check_refcount(wysna_atomic_load_i32(&v.as.list->refcount), "release/list");
+            if (wysna_atomic_dec_if_gt1_i32(&v.as.list->refcount)) {
+                wysna_atomic_add_i64(&wysna_g_release_count, 1);
                 return;
             }
             if (v.as.list->scalar_only) {
                 WListBuf* b = v.as.list;
-                wysna_check_refcount(b->refcount, "release/list");
-                wysna_g_release_count++;
-                b->refcount = -1;
-                free(b->data);
-                free(b);
-                wysna_mem_on_free();
+                wysna_atomic_add_i64(&wysna_g_release_count, 1);
+                if (wysna_atomic_dec_i32(&b->refcount) == 0) {
+                    b->refcount = -1;
+                    free(b->data);
+                    free(b);
+                    wysna_mem_on_free();
+                }
                 return;
             }
             break;
         case W_TUPLE:
             if (!v.as.tuple) return;
-            if (v.as.tuple->refcount > 1) {
-                wysna_check_refcount(v.as.tuple->refcount, "release/tuple");
-                wysna_g_release_count++;
-                v.as.tuple->refcount--;
+            wysna_check_refcount(wysna_atomic_load_i32(&v.as.tuple->refcount), "release/tuple");
+            if (wysna_atomic_dec_if_gt1_i32(&v.as.tuple->refcount)) {
+                wysna_atomic_add_i64(&wysna_g_release_count, 1);
                 return;
             }
             break;
         case W_STRUCT:
             if (!v.as.st) return;
-            if (v.as.st->refcount > 1) {
-                wysna_check_refcount(v.as.st->refcount, "release/struct_or_object");
-                wysna_g_release_count++;
-                v.as.st->refcount--;
+            wysna_check_refcount(wysna_atomic_load_i32(&v.as.st->refcount), "release/struct_or_object");
+            if (wysna_atomic_dec_if_gt1_i32(&v.as.st->refcount)) {
+                wysna_atomic_add_i64(&wysna_g_release_count, 1);
                 return;
             }
             break;
         case W_DICT:
             if (!v.as.dict) return;
-            if (v.as.dict->refcount > 1) {
-                wysna_check_refcount(v.as.dict->refcount, "release/dict");
-                wysna_g_release_count++;
-                v.as.dict->refcount--;
+            wysna_check_refcount(wysna_atomic_load_i32(&v.as.dict->refcount), "release/dict");
+            if (wysna_atomic_dec_if_gt1_i32(&v.as.dict->refcount)) {
+                wysna_atomic_add_i64(&wysna_g_release_count, 1);
                 return;
             }
             break;
         case W_OBJECT:
             if (!v.as.st) return;
-            if (v.as.st->control && v.as.st->control->strong > 1) {
-                wysna_check_refcount(v.as.st->control->strong, "release/object");
-                wysna_atomic_add_i64(&wysna_g_release_count, 1);
-                wysna_atomic_dec_i32(&v.as.st->control->strong);
-                wysna_cycle_buffer_purple(v.as.st->control);
-                return;
+            if (v.as.st->control) {
+                wysna_check_refcount(wysna_atomic_load_i32(&v.as.st->control->strong), "release/object");
+                if (wysna_atomic_dec_if_gt1_i32(&v.as.st->control->strong)) {
+                    wysna_atomic_add_i64(&wysna_g_release_count, 1);
+                    wysna_cycle_buffer_purple(v.as.st->control);
+                    return;
+                }
             }
             break;
         case W_POINTER:
             if (v.as.handle.owner) {
                 WPointerOwner* owner = v.as.handle.owner;
-                wysna_check_refcount(owner->refcount, "release/resource");
-                wysna_g_release_count++;
-                if (--owner->refcount == 0) {
+                wysna_check_refcount(wysna_atomic_load_i32(&owner->refcount), "release/resource");
+                wysna_atomic_add_i64(&wysna_g_release_count, 1);
+                if (wysna_atomic_dec_i32(&owner->refcount) == 0) {
                     owner->close(owner->address);
                     free(owner);
                     wysna_mem_on_free();
@@ -207,10 +217,14 @@ static inline void wysna_release(WVal v) {
             return;
         case W_FUNCTION:
             if (!v.as.function) return;
-            if (v.as.function->refcount > 1 || v.as.function->environment.tag == W_UNIT) {
-                wysna_check_refcount(v.as.function->refcount, "release/function");
-                wysna_g_release_count++;
-                if (--v.as.function->refcount == 0) {
+            wysna_check_refcount(wysna_atomic_load_i32(&v.as.function->refcount), "release/function");
+            if (wysna_atomic_dec_if_gt1_i32(&v.as.function->refcount)) {
+                wysna_atomic_add_i64(&wysna_g_release_count, 1);
+                return;
+            }
+            if (v.as.function->environment.tag == W_UNIT) {
+                wysna_atomic_add_i64(&wysna_g_release_count, 1);
+                if (wysna_atomic_dec_i32(&v.as.function->refcount) == 0) {
                     free(v.as.function);
                     wysna_mem_on_free();
                 }
@@ -220,9 +234,9 @@ static inline void wysna_release(WVal v) {
         case W_WEAK:
             if (v.as.weak) {
                 WWeakControl* control = v.as.weak;
-                wysna_check_refcount(control->weak, "release/weak");
-                wysna_g_release_count++;
-                if (--control->weak == 0) {
+                wysna_check_refcount(wysna_atomic_load_i32(&control->weak), "release/weak");
+                wysna_atomic_add_i64(&wysna_g_release_count, 1);
+                if (wysna_atomic_dec_i32(&control->weak) == 0) {
                     free(control);
                     wysna_mem_on_free();
                 }
@@ -231,10 +245,14 @@ static inline void wysna_release(WVal v) {
         case W_OK:
         case W_ERR:
             if (!v.as.box) return;
-            if (v.as.box->refcount != 1 || wysna_is_leaf(v.as.box->val)) {
-                wysna_check_refcount(v.as.box->refcount, "release/box");
-                wysna_g_release_count++;
-                if (--v.as.box->refcount == 0) {
+            wysna_check_refcount(wysna_atomic_load_i32(&v.as.box->refcount), "release/box");
+            if (wysna_atomic_dec_if_gt1_i32(&v.as.box->refcount)) {
+                wysna_atomic_add_i64(&wysna_g_release_count, 1);
+                return;
+            }
+            if (wysna_is_leaf(v.as.box->val)) {
+                wysna_atomic_add_i64(&wysna_g_release_count, 1);
+                if (wysna_atomic_dec_i32(&v.as.box->refcount) == 0) {
                     WVal inner = v.as.box->val;
                     free(v.as.box);
                     wysna_mem_on_free();
@@ -245,10 +263,9 @@ static inline void wysna_release(WVal v) {
             break;
         case W_ENUM:
             if (!v.as.en.box) return;
-            if (v.as.en.box->refcount > 1) {
-                wysna_check_refcount(v.as.en.box->refcount, "release/enum_box");
-                wysna_g_release_count++;
-                v.as.en.box->refcount--;
+            wysna_check_refcount(wysna_atomic_load_i32(&v.as.en.box->refcount), "release/enum_box");
+            if (wysna_atomic_dec_if_gt1_i32(&v.as.en.box->refcount)) {
+                wysna_atomic_add_i64(&wysna_g_release_count, 1);
                 return;
             }
             break;
@@ -310,17 +327,17 @@ static WVal* wysna_release_deferred(WVal* slot, int32_t* produced) {
     if (v.tag <= W_BOOL) return NULL;
     if (v.tag == W_POINTER && v.as.handle.owner) {
         WPointerOwner* owner = v.as.handle.owner;
-        wysna_check_refcount(owner->refcount, "release/resource");
-        wysna_g_release_count++;
-        if (--owner->refcount == 0) {
+        wysna_check_refcount(wysna_atomic_load_i32(&owner->refcount), "release/resource");
+        wysna_atomic_add_i64(&wysna_g_release_count, 1);
+        if (wysna_atomic_dec_i32(&owner->refcount) == 0) {
             owner->close(owner->address);
             free(owner);
             wysna_mem_on_free();
         }
     } else if (v.tag == W_FUNCTION) {
-        wysna_check_refcount(v.as.function->refcount, "release/function");
-        wysna_g_release_count++;
-        if (--v.as.function->refcount == 0) {
+        wysna_check_refcount(wysna_atomic_load_i32(&v.as.function->refcount), "release/function");
+        wysna_atomic_add_i64(&wysna_g_release_count, 1);
+        if (wysna_atomic_dec_i32(&v.as.function->refcount) == 0) {
             WVal environment = v.as.function->environment;
             free(v.as.function);
             wysna_mem_on_free();
@@ -336,10 +353,9 @@ static WVal* wysna_release_deferred(WVal* slot, int32_t* produced) {
         wysna_release_string(v.as.string.owner);
     } else if (v.tag == W_LIST && v.as.list) {
         WListBuf* b = v.as.list;
-        wysna_check_refcount(b->refcount, "release/list");
-        wysna_g_release_count++;
-        b->refcount--;
-        if (b->refcount == 0) {
+        wysna_check_refcount(wysna_atomic_load_i32(&b->refcount), "release/list");
+        wysna_atomic_add_i64(&wysna_g_release_count, 1);
+        if (wysna_atomic_dec_i32(&b->refcount) == 0) {
             b->refcount = -1;
             if (b->scalar_only) {
                 free(b->data);
@@ -360,10 +376,9 @@ static WVal* wysna_release_deferred(WVal* slot, int32_t* produced) {
         }
     } else if (v.tag == W_DICT && v.as.dict) {
         WDictBuf* d = v.as.dict;
-        wysna_check_refcount(d->refcount, "release/dict");
-        wysna_g_release_count++;
-        d->refcount--;
-        if (d->refcount == 0) {
+        wysna_check_refcount(wysna_atomic_load_i32(&d->refcount), "release/dict");
+        wysna_atomic_add_i64(&wysna_g_release_count, 1);
+        if (wysna_atomic_dec_i32(&d->refcount) == 0) {
             d->refcount = -1;
             int32_t total = d->len * 2;
             WVal* out = total > 0 ? (WVal*)malloc(sizeof(WVal) * (size_t)total) : NULL;
@@ -382,16 +397,16 @@ static WVal* wysna_release_deferred(WVal* slot, int32_t* produced) {
         }
     } else if (v.tag == W_WEAK && v.as.weak) {
         WWeakControl* control = v.as.weak;
-        wysna_check_refcount(control->weak, "release/weak");
-        wysna_g_release_count++;
-        if (--control->weak == 0) {
+        wysna_check_refcount(wysna_atomic_load_i32(&control->weak), "release/weak");
+        wysna_atomic_add_i64(&wysna_g_release_count, 1);
+        if (wysna_atomic_dec_i32(&control->weak) == 0) {
             free(control);
             wysna_mem_on_free();
         }
     } else if (v.tag == W_OBJECT && v.as.st) {
         WStructBuf* object = v.as.st;
         WWeakControl* control = object->control;
-        wysna_check_refcount(control->strong, "release/object");
+        wysna_check_refcount(wysna_atomic_load_i32(&control->strong), "release/object");
         wysna_atomic_add_i64(&wysna_g_release_count, 1);
         if (wysna_atomic_dec_i32(&control->strong) == 0) {
             wysna_cycle_unlink(control);
@@ -412,10 +427,9 @@ static WVal* wysna_release_deferred(WVal* slot, int32_t* produced) {
         wysna_cycle_buffer_purple(control);
     } else if (v.tag == W_STRUCT && v.as.st) {
         WStructBuf* st = v.as.st;
-        wysna_check_refcount(st->refcount, "release/struct_or_object");
-        wysna_g_release_count++;
-        st->refcount--;
-        if (st->refcount == 0) {
+        wysna_check_refcount(wysna_atomic_load_i32(&st->refcount), "release/struct_or_object");
+        wysna_atomic_add_i64(&wysna_g_release_count, 1);
+        if (wysna_atomic_dec_i32(&st->refcount) == 0) {
             st->refcount = -1;
             int32_t len = st->len;
             WVal* out = len > 0 ? (WVal*)malloc(sizeof(WVal) * (size_t)len) : NULL;
@@ -428,10 +442,9 @@ static WVal* wysna_release_deferred(WVal* slot, int32_t* produced) {
         }
     } else if (v.tag == W_TUPLE && v.as.tuple) {
         WTupleBuf* t = v.as.tuple;
-        wysna_check_refcount(t->refcount, "release/tuple");
-        wysna_g_release_count++;
-        t->refcount--;
-        if (t->refcount == 0) {
+        wysna_check_refcount(wysna_atomic_load_i32(&t->refcount), "release/tuple");
+        wysna_atomic_add_i64(&wysna_g_release_count, 1);
+        if (wysna_atomic_dec_i32(&t->refcount) == 0) {
             t->refcount = -1;
             int32_t len = t->len;
             WVal* out = len > 0 ? (WVal*)malloc(sizeof(WVal) * (size_t)len) : NULL;
@@ -444,10 +457,9 @@ static WVal* wysna_release_deferred(WVal* slot, int32_t* produced) {
         }
     } else if ((v.tag == W_OK || v.tag == W_ERR) && v.as.box) {
         WBoxBuf* bx = v.as.box;
-        wysna_check_refcount(bx->refcount, "release/box");
-        wysna_g_release_count++;
-        bx->refcount--;
-        if (bx->refcount == 0) {
+        wysna_check_refcount(wysna_atomic_load_i32(&bx->refcount), "release/box");
+        wysna_atomic_add_i64(&wysna_g_release_count, 1);
+        if (wysna_atomic_dec_i32(&bx->refcount) == 0) {
             bx->refcount = -1;
             WVal inner = bx->val;
             free(bx);
@@ -464,10 +476,9 @@ static WVal* wysna_release_deferred(WVal* slot, int32_t* produced) {
         }
     } else if (v.tag == W_ENUM && v.as.en.box) {
         WBoxBuf* bx = v.as.en.box;
-        wysna_check_refcount(bx->refcount, "release/enum_box");
-        wysna_g_release_count++;
-        bx->refcount--;
-        if (bx->refcount == 0) {
+        wysna_check_refcount(wysna_atomic_load_i32(&bx->refcount), "release/enum_box");
+        wysna_atomic_add_i64(&wysna_g_release_count, 1);
+        if (wysna_atomic_dec_i32(&bx->refcount) == 0) {
             bx->refcount = -1;
             WVal inner = bx->val;
             free(bx);
@@ -588,10 +599,9 @@ static inline WVal wysna_peek_enum_payload(WVal value) {
 static inline void wysna_list_detach(WVal* v) {
     if (v->tag != W_LIST || !v->as.list) return;
     WListBuf* old_b = v->as.list;
-    wysna_check_refcount(old_b->refcount, "detach/list");
-    if (old_b->refcount <= 1) return;
-    old_b->refcount--;
-    wysna_g_release_count++;
+    int32_t rc = wysna_atomic_load_i32(&old_b->refcount);
+    wysna_check_refcount(rc, "detach/list");
+    if (rc <= 1) return;
     WListBuf* new_b = (WListBuf*)wysna_alloc_safe(sizeof(WListBuf));
     new_b->refcount = 1;
     new_b->len = old_b->len;
@@ -601,11 +611,11 @@ static inline void wysna_list_detach(WVal* v) {
     wysna_mem_on_alloc();
 
     /* B02: CoW detach telemetry */
-    wysna_g_cow_detach_list++;
-    wysna_g_cow_copied_slots += old_b->len;
-    wysna_g_cow_copied_bytes += (int64_t)(sizeof(WVal) * old_b->len);
-    wysna_g_cow_allocated_bytes += (int64_t)(sizeof(WListBuf) + (sizeof(WVal) * new_b->cap));
-    wysna_g_cow_alloc_count += 2;
+    wysna_atomic_add_i64(&wysna_g_cow_detach_list, 1);
+    wysna_atomic_add_i64(&wysna_g_cow_copied_slots, old_b->len);
+    wysna_atomic_add_i64(&wysna_g_cow_copied_bytes, (int64_t)(sizeof(WVal) * old_b->len));
+    wysna_atomic_add_i64(&wysna_g_cow_allocated_bytes, (int64_t)(sizeof(WListBuf) + (sizeof(WVal) * new_b->cap)));
+    wysna_atomic_add_i64(&wysna_g_cow_alloc_count, 2);
 
     if (old_b->scalar_only) {
         if (old_b->len > 0) {
@@ -617,6 +627,11 @@ static inline void wysna_list_detach(WVal* v) {
         }
     }
     v->as.list = new_b;
+    WVal old_val;
+    old_val.tag = W_LIST;
+    old_val.aux = 0;
+    old_val.as.list = old_b;
+    wysna_release(old_val);
 }
 
 /* Dense insertion-order entries with an open-addressed lookup index. */
@@ -625,9 +640,26 @@ static inline uint64_t wysna_key_hash_bytes(const unsigned char* data, size_t le
     for (size_t i = 0; i < length; i++) { hash ^= data[i]; hash *= UINT64_C(1099511628211); }
     return hash;
 }
+static inline uint32_t wysna_str_hash32(WVal value) {
+    if (value.tag != W_STR) return 0;
+    if (value.aux != 0) return value.aux;
+    WStringBuf* owner = value.as.string.owner;
+    if (owner) {
+        uint32_t cached = wysna_atomic_load_u32(&owner->hash_cache);
+        if (cached != 0) return cached;
+    }
+    uint64_t seed = UINT64_C(14695981039346656037) ^ (uint64_t)W_STR;
+    uint64_t computed = wysna_key_hash_bytes((const unsigned char*)value.as.string.data, value.as.string.length, seed);
+    uint32_t h32 = (uint32_t)(computed ^ (computed >> 32));
+    if (h32 == 0) h32 = 1;
+    if (owner) {
+        wysna_atomic_store_u32(&owner->hash_cache, h32);
+    }
+    return h32;
+}
 static inline uint64_t wysna_key_hash(WVal value) {
     uint64_t hash = UINT64_C(14695981039346656037) ^ (uint64_t)value.tag;
-    if (value.tag == W_STR) return wysna_key_hash_bytes((const unsigned char*)value.as.string.data, value.as.string.length, hash);
+    if (value.tag == W_STR) return (uint64_t)wysna_str_hash32(value);
     if (value.tag == W_INT || value.tag == W_BOOL) {
         uint64_t number = value.tag == W_INT ? (uint64_t)value.as.i : (uint64_t)value.as.b;
         number ^= number >> 30; number *= UINT64_C(0xbf58476d1ce4e5b9);
@@ -649,7 +681,9 @@ static inline uint64_t wysna_key_hash(WVal value) {
 static inline int32_t wysna_dict_find(WDictBuf* dict, WVal key) {
     if (!dict || dict->len == 0 || dict->bucket_count == 0) return -1;
     uint32_t mask = (uint32_t)dict->bucket_count - 1;
-    uint32_t slot = (uint32_t)wysna_key_hash(key) & mask;
+    uint64_t full_hash = wysna_key_hash(key);
+    uint32_t kh = (key.tag == W_STR) ? (uint32_t)full_hash : 0;
+    uint32_t slot = (uint32_t)full_hash & mask;
     while (dict->buckets[slot] >= 0) {
         int32_t index = dict->buckets[slot];
         WVal candidate = dict->keys[index];
@@ -657,7 +691,8 @@ static inline int32_t wysna_dict_find(WDictBuf* dict, WVal key) {
             if (key.tag == W_INT) {
                 if (candidate.as.i == key.as.i) return index;
             } else if (key.tag == W_STR) {
-                if (candidate.as.string.length == key.as.string.length &&
+                if ((candidate.aux == 0 || kh == 0 || candidate.aux == kh) &&
+                    candidate.as.string.length == key.as.string.length &&
                     (candidate.as.string.data == key.as.string.data ||
                      memcmp(candidate.as.string.data, key.as.string.data, key.as.string.length) == 0)) {
                     return index;
@@ -674,6 +709,9 @@ static inline int32_t wysna_dict_find(WDictBuf* dict, WVal key) {
 }
 static inline void wysna_dict_index_entry(WDictBuf* dict, int32_t index) {
     uint32_t mask = (uint32_t)dict->bucket_count - 1;
+    if (dict->keys[index].tag == W_STR && dict->keys[index].aux == 0) {
+        dict->keys[index].aux = wysna_str_hash32(dict->keys[index]);
+    }
     uint32_t slot = (uint32_t)wysna_key_hash(dict->keys[index]) & mask;
     while (dict->buckets[slot] >= 0) slot = (slot + 1) & mask;
     dict->buckets[slot] = index;
@@ -689,10 +727,9 @@ static inline void wysna_dict_reindex(WDictBuf* dict, int32_t capacity) {
 static inline void wysna_dict_detach(WVal* v) {
     if (v->tag != W_DICT || !v->as.dict) return;
     WDictBuf* old_b = v->as.dict;
-    wysna_check_refcount(old_b->refcount, "detach/dict");
-    if (old_b->refcount <= 1) return;
-    old_b->refcount--;
-    wysna_g_release_count++;
+    int32_t rc = wysna_atomic_load_i32(&old_b->refcount);
+    wysna_check_refcount(rc, "detach/dict");
+    if (rc <= 1) return;
     WDictBuf* new_b = (WDictBuf*)wysna_alloc_safe(sizeof(WDictBuf));
     new_b->refcount = 1;
     new_b->len = old_b->len;
@@ -705,26 +742,30 @@ static inline void wysna_dict_detach(WVal* v) {
     wysna_mem_on_alloc();
 
     /* B02: CoW detach telemetry */
-    wysna_g_cow_detach_dict++;
-    wysna_g_cow_copied_slots += ((int64_t)old_b->len * 2);
-    wysna_g_cow_copied_bytes += (int64_t)(sizeof(WVal) * old_b->len * 2 + sizeof(int32_t) * old_b->bucket_count);
-    wysna_g_cow_allocated_bytes += (int64_t)(sizeof(WDictBuf) + (sizeof(WVal) * new_b->cap * 2) + sizeof(int32_t) * new_b->bucket_count);
-    wysna_g_cow_alloc_count += 4;
+    wysna_atomic_add_i64(&wysna_g_cow_detach_dict, 1);
+    wysna_atomic_add_i64(&wysna_g_cow_copied_slots, ((int64_t)old_b->len * 2));
+    wysna_atomic_add_i64(&wysna_g_cow_copied_bytes, (int64_t)(sizeof(WVal) * old_b->len * 2 + sizeof(int32_t) * old_b->bucket_count));
+    wysna_atomic_add_i64(&wysna_g_cow_allocated_bytes, (int64_t)(sizeof(WDictBuf) + (sizeof(WVal) * new_b->cap * 2) + sizeof(int32_t) * new_b->bucket_count));
+    wysna_atomic_add_i64(&wysna_g_cow_alloc_count, 4);
 
     for (int32_t i = 0; i < old_b->len; i++) {
         new_b->keys[i] = wysna_clone(old_b->keys[i]);
         new_b->vals[i] = wysna_clone(old_b->vals[i]);
     }
     v->as.dict = new_b;
+    WVal old_val;
+    old_val.tag = W_DICT;
+    old_val.aux = 0;
+    old_val.as.dict = old_b;
+    wysna_release(old_val);
 }
 
 static inline void wysna_struct_detach(WVal* v) {
     if (v->tag != W_STRUCT || !v->as.st) return;
     WStructBuf* old_b = v->as.st;
-    wysna_check_refcount(old_b->refcount, "detach/struct");
-    if (old_b->refcount <= 1) return;
-    old_b->refcount--;
-    wysna_g_release_count++;
+    int32_t rc = wysna_atomic_load_i32(&old_b->refcount);
+    wysna_check_refcount(rc, "detach/struct");
+    if (rc <= 1) return;
     int32_t cap = old_b->len > 0 ? old_b->len : 1;
     size_t keys_size = sizeof(const char*) * (size_t)cap;
     size_t vals_size = sizeof(WVal) * (size_t)cap;
@@ -740,17 +781,22 @@ static inline void wysna_struct_detach(WVal* v) {
     wysna_mem_on_alloc();
 
     /* B02: CoW detach telemetry */
-    wysna_g_cow_detach_struct++;
-    wysna_g_cow_copied_slots += old_b->len;
-    wysna_g_cow_copied_bytes += (int64_t)((sizeof(const char*) + sizeof(WVal)) * old_b->len);
-    wysna_g_cow_allocated_bytes += (int64_t)(sizeof(WStructBuf) + (sizeof(const char*) * cap) + (sizeof(WVal) * cap));
-    wysna_g_cow_alloc_count += 1;
+    wysna_atomic_add_i64(&wysna_g_cow_detach_struct, 1);
+    wysna_atomic_add_i64(&wysna_g_cow_copied_slots, old_b->len);
+    wysna_atomic_add_i64(&wysna_g_cow_copied_bytes, (int64_t)((sizeof(const char*) + sizeof(WVal)) * old_b->len));
+    wysna_atomic_add_i64(&wysna_g_cow_allocated_bytes, (int64_t)(sizeof(WStructBuf) + (sizeof(const char*) * cap) + (sizeof(WVal) * cap)));
+    wysna_atomic_add_i64(&wysna_g_cow_alloc_count, 1);
 
     for (int32_t i = 0; i < old_b->len; i++) {
         new_b->keys[i] = old_b->keys[i];
         new_b->vals[i] = wysna_clone(old_b->vals[i]);
     }
     v->as.st = new_b;
+    WVal old_val;
+    old_val.tag = W_STRUCT;
+    old_val.aux = 0;
+    old_val.as.st = old_b;
+    wysna_release(old_val);
 }
 
 typedef struct {

@@ -278,8 +278,29 @@ fn mir_c_operation(module: MirModule, function: MirFunction, operation: MirOpera
     report_error_at("W9999", operation.source, "verified MIR operation missing during C99 emission")
     return ""
 }
+fn mir_c_algorithms_parallel_helper(function: MirFunction) -> str {
+    let file = function.source.file
+    let flen = len(file)
+    if flen < 17 { return "" }
+    let tail = slice(file, flen - 17, flen)
+    if tail != "/algorithms.wysna" and tail != "\\algorithms.wysna" { return "" }
+    if function.source.line == 113 and len(function.params) == 2 { return "wysna_parallel_map" }
+    if function.source.line == 158 and len(function.params) == 3 { return "wysna_parallel_batch" }
+    if function.source.line == 174 and len(function.params) == 2 { return "wysna_parallel_filter" }
+    return ""
+}
 fn mir_c_function(module: MirModule, function: MirFunction) -> str {
     let mut parts: list[str] = [mir_c_signature(function) + " {\n"]
+    let parallel_helper = mir_c_algorithms_parallel_helper(function)
+    if parallel_helper != "" and mir_value_storage(function.return_type) {
+        let p0 = mir_c_name(function.params[0])
+        let p1 = mir_c_name(function.params[1])
+        if parallel_helper == "wysna_parallel_batch" {
+            let p1_int = if mir_value_storage(function.slots[function.params[1]].type_id) { "(" + p1 + ").as.i" } else { p1 }
+            return join_strings(parts, "") + "    return wysna_parallel_batch(" + p0 + ", " + p1_int + ", " + mir_c_name(function.params[2]) + ");\n}\n"
+        }
+        return join_strings(parts, "") + "    return " + parallel_helper + "(" + p0 + ", " + p1 + ");\n}\n"
+    }
     for i in 0..len(function.slots) {
         let slot = function.slots[i]
         if not slot.parameter { parts.append("    " + mir_c_type(slot.type_id) + " " + mir_c_name(i) + " = " + (if mir_value_storage(slot.type_id) { "wysna_unit()" } else { "0" }) + ";\n") }

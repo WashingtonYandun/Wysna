@@ -7,15 +7,15 @@
 
 /* Constructors */
 static inline WVal wysna_unit(void) {
-    WVal v; v.tag = W_UNIT; v.as.i = 0; return v;
+    WVal v; v.tag = W_UNIT; v.aux = 0; v.as.i = 0; return v;
 }
 
 static inline WVal wysna_none(void) {
-    WVal v; v.tag = W_NONE; v.as.i = 0; return v;
+    WVal v; v.tag = W_NONE; v.aux = 0; v.as.i = 0; return v;
 }
 
 static inline WVal wysna_int(int64_t x) {
-    WVal v; v.tag = W_INT; v.as.i = x; return v;
+    WVal v; v.tag = W_INT; v.aux = 0; v.as.i = x; return v;
 }
 
 static inline WVal wysna_pointer(void* pointer) {
@@ -31,28 +31,29 @@ static inline int32_t wysna_ffi_int32(WVal value) {
 }
 
 static inline WVal wysna_float(double x) {
-    WVal v; v.tag = W_FLOAT; v.as.f = x; return v;
+    WVal v; v.tag = W_FLOAT; v.aux = 0; v.as.f = x; return v;
 }
 
 static inline WVal wysna_bool(bool x) {
-    WVal v; v.tag = W_BOOL; v.as.b = x; return v;
+    WVal v; v.tag = W_BOOL; v.aux = 0; v.as.b = x; return v;
 }
 
 static inline WVal wysna_str_n(const char* s, size_t length) {
-    WVal v; v.tag = W_STR; v.as.string.owner = NULL;
+    WVal v; v.tag = W_STR; v.aux = 0; v.as.string.owner = NULL;
     v.as.string.data = s ? s : ""; v.as.string.length = s ? length : 0; return v;
 }
 
 static inline WVal wysna_literal_str_n(WStringLiteral* literal, const char* data, size_t length) {
-    if (literal->buffer.refcount == 0) {
+    if (wysna_atomic_load_i32(&literal->buffer.refcount) == 0) {
         wysna_spinlock_acquire(&wysna_runtime_context.runtime_lock);
         if (literal->buffer.refcount == 0) {
-            literal->buffer.refcount = -1; /* Immortal data and descriptor. */
+            literal->buffer.hash_cache = 0;
             literal->buffer.byte_length = length;
             literal->buffer.codepoint_count = SIZE_MAX;
             literal->buffer.data = (char*)data;
             literal->next = wysna_g_string_literals;
             wysna_g_string_literals = literal;
+            wysna_atomic_store_i32(&literal->buffer.refcount, -1); /* Immortal data and descriptor. */
         }
         wysna_spinlock_release(&wysna_runtime_context.runtime_lock);
     }
@@ -84,6 +85,7 @@ static inline WVal wysna_ascii_string(uint8_t codepoint) {
 static inline WVal wysna_owned_str_n(char* data, size_t length) {
     WStringBuf* buffer = (WStringBuf*)wysna_alloc_safe(sizeof(WStringBuf));
     buffer->refcount = 1;
+    buffer->hash_cache = 0;
     buffer->byte_length = length;
     buffer->codepoint_offsets = NULL;
     buffer->codepoint_count = SIZE_MAX;
@@ -130,6 +132,7 @@ static inline WVal wysna_enum(const char* enum_name, const char* variant) {
     if (wysna_builtin_name(enum_name, "Option") && strcmp(variant, "None") == 0) return wysna_none();
     WVal v;
     v.tag = W_ENUM;
+    v.aux = 0;
     v.as.en.enum_name = wysna_builtin_name(enum_name, "Option") ? "Option" : enum_name;
     v.as.en.variant = variant;
     v.as.en.box = NULL;
@@ -147,6 +150,7 @@ static inline WVal wysna_enum_payload(const char* enum_name, const char* variant
     wysna_mem_on_alloc();
     WVal v;
     v.tag = W_ENUM;
+    v.aux = 0;
     v.as.en.enum_name = wysna_builtin_name(enum_name, "Option") ? "Option" : enum_name;
     v.as.en.variant = variant;
     v.as.en.box = b;
@@ -160,6 +164,7 @@ static inline WVal wysna_ok(WVal inner) {
     wysna_mem_on_alloc();
     WVal v;
     v.tag = W_OK;
+    v.aux = 0;
     v.as.box = b;
     return v;
 }
@@ -171,6 +176,7 @@ static inline WVal wysna_err(WVal inner) {
     wysna_mem_on_alloc();
     WVal v;
     v.tag = W_ERR;
+    v.aux = 0;
     v.as.box = b;
     return v;
 }
@@ -192,6 +198,167 @@ static WVal wysna_managed_pointer(void* address, int64_t (*close)(void*)) {
     value.as.handle.owner = owner;
     wysna_mem_on_alloc();
     return value;
+}
+
+/* Compact 64-bit NaN-Boxed Value Operations (WVal64) */
+static inline bool wysna_val64_is_double(WVal64 w) {
+    return (w & WVAL64_QNAN_PREFIX) != WVAL64_QNAN_PREFIX;
+}
+
+static inline uint32_t wysna_val64_tag(WVal64 w) {
+    return wysna_val64_is_double(w) ? 0U : (uint32_t)((w & WVAL64_TAG_MASK) >> WVAL64_TAG_SHIFT);
+}
+
+static inline bool wysna_val64_can_pack(WVal v) {
+    switch (v.tag) {
+        case W_UNIT:
+        case W_NONE:
+        case W_BOOL:
+        case W_FLOAT:
+            return true;
+        case W_INT:
+            return v.as.i >= -(INT64_C(1) << 47) && v.as.i <= ((INT64_C(1) << 47) - 1);
+        case W_STR:
+            return v.as.string.length <= 6 ||
+                   (v.as.string.owner != NULL && ((uint64_t)(uintptr_t)v.as.string.owner >> 48) == 0);
+        default:
+            return false;
+    }
+}
+
+static inline WVal64 wysna_val64_pack(WVal v) {
+    switch (v.tag) {
+        case W_UNIT: return WVAL64_UNIT_VAL;
+        case W_NONE: return WVAL64_NONE_VAL;
+        case W_BOOL: return WVAL64_QNAN_PREFIX | (WVAL64_TAG_BOOL << WVAL64_TAG_SHIFT) | (uint64_t)(v.as.b ? 1 : 0);
+        case W_INT:
+            if (v.as.i >= -(INT64_C(1) << 47) && v.as.i <= ((INT64_C(1) << 47) - 1)) {
+                return WVAL64_QNAN_PREFIX | (WVAL64_TAG_INT << WVAL64_TAG_SHIFT) | ((uint64_t)v.as.i & WVAL64_PAYLOAD_MASK);
+            }
+            return WVAL64_QNAN_PREFIX | (WVAL64_TAG_RESERVED << WVAL64_TAG_SHIFT);
+        case W_FLOAT: {
+            uint64_t bits = 0;
+            memcpy(&bits, &v.as.f, sizeof(bits));
+            if (isnan(v.as.f) || (bits & WVAL64_QNAN_PREFIX) == WVAL64_QNAN_PREFIX) {
+                return WVAL64_CANON_NAN;
+            }
+            return bits;
+        }
+        case W_STR: {
+            size_t len = v.as.string.length;
+            if (len <= 5) {
+                uint64_t payload = ((uint64_t)len) << 40;
+                for (size_t i = 0; i < len; i++) {
+                    payload |= ((uint64_t)(unsigned char)v.as.string.data[i]) << (8U * i);
+                }
+                return WVAL64_QNAN_PREFIX | (WVAL64_TAG_SSO_SHORT << WVAL64_TAG_SHIFT) | payload;
+            }
+            if (len == 6) {
+                uint64_t payload = 0;
+                for (size_t i = 0; i < 6; i++) {
+                    payload |= ((uint64_t)(unsigned char)v.as.string.data[i]) << (8U * i);
+                }
+                return WVAL64_QNAN_PREFIX | (WVAL64_TAG_SSO_6 << WVAL64_TAG_SHIFT) | payload;
+            }
+            if (v.as.string.owner != NULL && ((uint64_t)(uintptr_t)v.as.string.owner >> 48) == 0) {
+                return WVAL64_QNAN_PREFIX | (WVAL64_TAG_PTR << WVAL64_TAG_SHIFT) |
+                       ((uint64_t)(uintptr_t)v.as.string.owner & WVAL64_PAYLOAD_MASK);
+            }
+            return WVAL64_QNAN_PREFIX | (WVAL64_TAG_RESERVED << WVAL64_TAG_SHIFT);
+        }
+        default:
+            return WVAL64_QNAN_PREFIX | (WVAL64_TAG_RESERVED << WVAL64_TAG_SHIFT);
+    }
+}
+
+static inline bool wysna_val64_read_sso(WVal64 w, char out[7], size_t* out_len) {
+    uint32_t tag = wysna_val64_tag(w);
+    if (tag == WVAL64_TAG_SSO_SHORT) {
+        size_t len = (size_t)((w >> 40) & UINT64_C(0xFF));
+        if (len > 5) return false;
+        for (size_t i = 0; i < len; i++) {
+            out[i] = (char)((w >> (8U * i)) & UINT64_C(0xFF));
+        }
+        out[len] = '\0';
+        if (out_len) *out_len = len;
+        return true;
+    }
+    if (tag == WVAL64_TAG_SSO_6) {
+        for (size_t i = 0; i < 6; i++) {
+            out[i] = (char)((w >> (8U * i)) & UINT64_C(0xFF));
+        }
+        out[6] = '\0';
+        if (out_len) *out_len = 6;
+        return true;
+    }
+    return false;
+}
+
+static inline WVal wysna_val64_unpack(WVal64 w) {
+    if (wysna_val64_is_double(w)) {
+        double d = 0.0;
+        memcpy(&d, &w, sizeof(d));
+        return wysna_float(d);
+    }
+    switch (wysna_val64_tag(w)) {
+        case WVAL64_TAG_INT: {
+            uint64_t raw = w & WVAL64_PAYLOAD_MASK;
+            if (raw & UINT64_C(0x0000800000000000)) {
+                raw |= UINT64_C(0xFFFF000000000000);
+            }
+            return wysna_int((int64_t)raw);
+        }
+        case WVAL64_TAG_BOOL:
+            return wysna_bool((w & UINT64_C(1)) != 0);
+        case WVAL64_TAG_SENTINEL:
+            return (w & WVAL64_PAYLOAD_MASK) == UINT64_C(1) ? wysna_none() : wysna_unit();
+        case WVAL64_TAG_PTR: {
+            WStringBuf* owner = (WStringBuf*)(uintptr_t)(w & WVAL64_PAYLOAD_MASK);
+            if (!owner) return wysna_str("");
+            WVal val = wysna_str_n(owner->data, owner->byte_length);
+            val.as.string.owner = owner;
+            val.aux = wysna_atomic_load_u32(&owner->hash_cache);
+            return val;
+        }
+        case WVAL64_TAG_SSO_SHORT:
+        case WVAL64_TAG_SSO_6: {
+            char buf[7];
+            size_t len = 0;
+            if (!wysna_val64_read_sso(w, buf, &len)) return wysna_str("");
+            if (len == 0) return wysna_str("");
+            if (len == 1 && (unsigned char)buf[0] < 128) {
+                return wysna_ascii_string((uint8_t)buf[0]);
+            }
+            char* copy = (char*)wysna_alloc_safe(len + 1);
+            memcpy(copy, buf, len + 1);
+            return wysna_owned_str_n(copy, len);
+        }
+        default:
+            return wysna_unit();
+    }
+}
+
+static inline bool wysna_val64_eq(WVal64 a, WVal64 b) {
+    if (wysna_val64_is_double(a) || wysna_val64_is_double(b)) {
+        if (!wysna_val64_is_double(a) || !wysna_val64_is_double(b)) return false;
+        double da = 0.0, db = 0.0;
+        memcpy(&da, &a, sizeof(da));
+        memcpy(&db, &b, sizeof(db));
+        return da == db;
+    }
+    uint32_t ta = wysna_val64_tag(a);
+    if (ta != wysna_val64_tag(b)) return false;
+    if (ta == WVAL64_TAG_PTR) {
+        WStringBuf* sa = (WStringBuf*)(uintptr_t)(a & WVAL64_PAYLOAD_MASK);
+        WStringBuf* sb = (WStringBuf*)(uintptr_t)(b & WVAL64_PAYLOAD_MASK);
+        if (sa == sb) return true;
+        if (!sa || !sb || sa->byte_length != sb->byte_length) return false;
+        uint32_t ha = wysna_atomic_load_u32(&sa->hash_cache);
+        uint32_t hb = wysna_atomic_load_u32(&sb->hash_cache);
+        if (ha != 0 && hb != 0 && ha != hb) return false;
+        return sa->byte_length == 0 || memcmp(sa->data, sb->data, sa->byte_length) == 0;
+    }
+    return a == b;
 }
 
 #endif /* WYSNA_RUNTIME_VALUES_H */

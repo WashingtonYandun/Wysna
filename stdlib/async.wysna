@@ -42,6 +42,23 @@ pub fn failed[T](err_msg: str) -> Task[T] {
     }
 }
 
+pub fn sleep_ms(duration_ms: int) -> Task[int] {
+    let clamped = if duration_ms > 0 { duration_ms } else { 0 }
+    let h = wysna_host_http_async_poll(-1000 - clamped)
+    return Task[int] {
+        id: h,
+        handle: h,
+        is_ready: clamped == 0 or h < 0,
+        is_failed: false,
+        value: Some(clamped),
+        error: none,
+    }
+}
+
+pub fn spawn[T](work: fn() -> T) -> Task[T] {
+    return ready[T](work())
+}
+
 pub fn poll_events(timeout_ms: int) -> int {
     if timeout_ms < 0 {
         return 0

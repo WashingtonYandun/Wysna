@@ -423,6 +423,17 @@ class CCodeGen:
             return
         c_name = self.c_fn(stmt.name, ns=ns)
         params_sig = ", ".join([f"WVal v_{p.name}" for p in stmt.params]) if stmt.params else "void"
+        algo_mod = "616c676f726974686d732e7779736e61__"
+        if algo_mod in c_name:
+            if (f"{algo_mod}parallel_map__" in c_name or c_name.endswith(f"{algo_mod}parallel_map")) and len(stmt.params) == 2:
+                self.fn_Definitions.append(f"static WVal {c_name}({params_sig}) {{\n    return wysna_parallel_map(v_{stmt.params[0].name}, v_{stmt.params[1].name});\n}}")
+                return
+            if (f"{algo_mod}parallel_batch__" in c_name or c_name.endswith(f"{algo_mod}parallel_batch")) and len(stmt.params) == 3:
+                self.fn_Definitions.append(f"static WVal {c_name}({params_sig}) {{\n    return wysna_parallel_batch(v_{stmt.params[0].name}, (v_{stmt.params[1].name}).as.i, v_{stmt.params[2].name});\n}}")
+                return
+            if (f"{algo_mod}parallel_filter__" in c_name or c_name.endswith(f"{algo_mod}parallel_filter")) and len(stmt.params) == 2:
+                self.fn_Definitions.append(f"static WVal {c_name}({params_sig}) {{\n    return wysna_parallel_filter(v_{stmt.params[0].name}, v_{stmt.params[1].name});\n}}")
+                return
         prev_fallible = self.current_fn_fallible
         prev_err_type = self.current_fn_err_type
         self.current_fn_fallible = isinstance(stmt.return_type, ResultType)

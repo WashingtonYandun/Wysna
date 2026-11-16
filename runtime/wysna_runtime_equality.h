@@ -42,6 +42,7 @@ static inline bool wysna_eq(WVal a, WVal b) {
             case W_FLOAT: return a.as.f == b.as.f;
             case W_BOOL: return a.as.b == b.as.b;
             case W_STR: return a.as.string.length == b.as.string.length &&
+                (a.aux == 0 || b.aux == 0 || a.aux == b.aux) &&
                 (a.as.string.data == b.as.string.data || memcmp(a.as.string.data, b.as.string.data, a.as.string.length) == 0);
             case W_POINTER: return a.as.pointer == b.as.pointer;
             case W_OBJECT: return a.as.st == b.as.st;
