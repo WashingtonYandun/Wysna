@@ -456,6 +456,13 @@ static inline void wysna_runtime_cleanup_impl(bool verify_live_objects) {
     if (verify_live_objects && collect_env && strcmp(collect_env, "1") == 0) {
         wysna_collect_cycles();
     }
+    while (wysna_runtime_context.purple_head) {
+        WWeakControl* next = wysna_runtime_context.purple_head->cycle_next;
+        wysna_runtime_context.purple_head->cycle_next = NULL;
+        wysna_runtime_context.purple_head->cycle_prev = NULL;
+        wysna_runtime_context.purple_head->buffered = false;
+        wysna_runtime_context.purple_head = next;
+    }
     const char* stats_env = getenv("WYSNA_MEM_STATS");
     if (stats_env && strcmp(stats_env, "1") == 0) {
         fprintf(stderr, "[WYSNA_MEM_STATS] alloc=%" PRId64 " free=%" PRId64 " retain=%" PRId64 " release=%" PRId64 " live=%" PRId64 "\n",

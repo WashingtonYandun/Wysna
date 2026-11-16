@@ -8,14 +8,13 @@
 
 #if defined(_WIN32)
 #include <windows.h>
-#include <wincrypt.h>
 static inline int wysna_crypto_fill_random(uint8_t* buf, size_t count) {
-    HCRYPTPROV prov;
-    if (!CryptAcquireContext(&prov, NULL, NULL, PROV_RSA_FULL, CRYPT_VERIFYCONTEXT | CRYPT_SILENT)) {
-        return -1;
-    }
-    BOOL ok = CryptGenRandom(prov, (DWORD)count, buf);
-    CryptReleaseContext(prov, 0);
+    typedef BOOLEAN (WINAPI *WysnaRtlGenRandomFn)(PVOID RandomBuffer, ULONG RandomBufferLength);
+    HMODULE advapi = LoadLibraryA("advapi32.dll");
+    if (!advapi) return -1;
+    WysnaRtlGenRandomFn gen_random = (WysnaRtlGenRandomFn)(void*)GetProcAddress(advapi, "SystemFunction036");
+    BOOLEAN ok = gen_random ? (gen_random(buf, (ULONG)count) != 0) : FALSE;
+    FreeLibrary(advapi);
     return ok ? 0 : -1;
 }
 #else
