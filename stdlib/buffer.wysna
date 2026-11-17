@@ -1,3 +1,5 @@
+import "std/bytes" as utf8
+
 extern "C" fn wysna_host_buffer_new() -> opaque
 extern "C" fn wysna_host_buffer_size(handle: opaque) -> int
 extern "C" fn wysna_host_buffer_get(handle: opaque, index: int) -> int
@@ -45,4 +47,24 @@ pub fn clone(source: Bytes) -> Bytes ! BufferError {
         result.append(value) else error { result.close() return Err(error) }
     }
     return result
+}
+
+pub enum DecodeErrorKind { Unavailable, InvalidUtf8 }
+# InvalidUtf8 carries the failing byte offset. Unavailable has no offset (-1).
+pub struct DecodeError { kind: DecodeErrorKind, offset: int }
+
+# Decoding borrows the buffer. The caller retains ownership on success and failure.
+pub fn decode_utf8(source: Bytes) -> str ! DecodeError {
+    let size = source.size()
+    if size < 0 { return Err(DecodeError { kind: DecodeErrorKind.Unavailable, offset: -1 }) }
+    let mut octets: list[int] = []
+    for index in 0..size {
+        let value = source.get(index) else {
+            return Err(DecodeError { kind: DecodeErrorKind.Unavailable, offset: -1 })
+        }
+        octets.append(value)
+    }
+    return utf8.decode(octets) else error {
+        return Err(DecodeError { kind: DecodeErrorKind.InvalidUtf8, offset: error.offset })
+    }
 }

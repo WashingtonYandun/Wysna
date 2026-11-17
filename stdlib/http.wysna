@@ -105,16 +105,7 @@ fn parse_response_headers(source: str) -> list[Header] ! HttpError {
 }
 
 fn decode_buffer(source: buffer.Bytes) -> str ! HttpError {
-    let mut values: list[int] = []
-    let mut index = 0
-    while index < source.size() {
-        let value = source.get(index) else {
-            return Err(HttpError { kind: HttpErrorKind.InvalidResponse, code: 0 })
-        }
-        values.append(value)
-        index = index + 1
-    }
-    return utf8.decode(values) else {
+    return buffer.decode_utf8(source) else {
         return Err(HttpError { kind: HttpErrorKind.InvalidResponse, code: 0 })
     }
 }

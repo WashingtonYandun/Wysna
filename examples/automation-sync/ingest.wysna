@@ -1,4 +1,5 @@
-import "std/bytes" as utf8
+import "std/buffer"
+from "std/buffer" use { DecodeErrorKind }
 import "std/files"
 import "std/json"
 import "std/parse"
@@ -33,16 +34,12 @@ fn read_input(path: str) -> Input ! InputError {
         data.close()
         return Err(InputError { reason: "input exceeds 65536 bytes or close failed" })
     }
-    let mut values: list[int] = []
-    for index in 0..size {
-        let value = data.get(index) else error {
-            data.close()
-            return Err(InputError { reason: "input buffer unavailable" })
-        }
-        values.append(value)
+    let text = buffer.decode_utf8(data) else error {
+        data.close()
+        if error.kind == DecodeErrorKind.Unavailable { return Err(InputError { reason: "input buffer unavailable" }) }
+        return Err(InputError { reason: "input is not UTF-8" })
     }
     data.close()
-    let text = utf8.decode(values) else error { return Err(InputError { reason: "input is not UTF-8" }) }
     return Input { source: text, bytes: size }
 }
 

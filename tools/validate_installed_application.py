@@ -74,7 +74,7 @@ def validate(installation, report, *, http=False, archive=None):
                 journal = connection.execute('SELECT row_count,input_bytes FROM imports ORDER BY id').fetchall()
                 return rows, journal
 
-        input_path.write_text('[{"id":1,"value":7},{"id":2,"value":42}]', encoding='utf-8')
+        input_path.write_text('[{"id":1,"value":7,"label":"café"},{"id":2,"value":42}]', encoding='utf-8')
         result = run('atomic-json-ingestion', [binary, input_path])
         assert json.loads(result.stdout) == {'imported':2, 'count':2, 'total':49, 'imports':1, 'live_resources':0}
         baseline = snapshot()

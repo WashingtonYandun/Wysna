@@ -7,6 +7,7 @@ Wysna distributes modules under `std/` imported via canonical paths such as `imp
 - `std/buffer`: compact mutable byte arrays (`Bytes`) with boundary validation and lifecycle tracking.
   - `buffer.from_text(str) -> Bytes`: create a byte buffer from UTF-8 string data.
   - `buffer.clone(Bytes) -> Bytes ! BufferError`: clone buffer with isolated storage.
+  - `buffer.decode_utf8(Bytes) -> str ! DecodeError`: borrow a `Bytes` buffer and validate/decode its UTF-8 payload without closing it (`DecodeError` carries `kind: DecodeErrorKind` — `Unavailable` or `InvalidUtf8` — and `offset: int`, `-1` when unavailable).
   - `Bytes.append(int) -> unit ! BufferError`: append a byte (0–255).
   - `Bytes.get(int) -> int ! BufferError`: access byte by index.
   - `Bytes.size() -> int`: get buffer length in bytes.

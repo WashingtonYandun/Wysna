@@ -434,6 +434,7 @@ def run_toolkit_tests():
     test_large_file_processing_keeps_buffer_bounded()
     test_standard_file_cleanup_runs_on_runtime_panic()
     test_resource_duplicate_owner_is_rejected_without_disposal()
+    test_stdin_io_decodes_valid_empty_and_invalid_utf8_across_four_engines()
     return True
 
 
@@ -510,6 +511,79 @@ print(second.close(), audit_live(), first.close(), audit_live(), first.close())
                 command = [str(binary)]
             result = subprocess.run(command, capture_output=True, text=True, timeout=30, env=dict(os.environ, WYSNA_MEM_CHECK='1'))
             assert (result.returncode, result.stdout, result.stderr) == (0, expected, ''), result
+
+
+def test_stdin_io_decodes_valid_empty_and_invalid_utf8_across_four_engines():
+    selfhost_bin = ensure_selfhost_compiler_binary(str(ROOT))
+    source = '''import "std/io"
+fn main() -> unit {
+    let first = io.read_line() else error {
+        print("LINE-ERR", error.message)
+        return
+    }
+    print("LINE", first.eof, len(first.text), first.text)
+    let rest = io.read_all() else error {
+        print("ALL-ERR", error.message)
+        return
+    }
+    print("ALL", len(rest), rest)
+}
+'''
+    cases = (
+        (b'', b'LINE true 0 \nALL 0 \n'),
+        ('café\n🚀'.encode('utf-8'), 'LINE false 4 café\nALL 1 🚀\n'.encode('utf-8')),
+        (b'\xff\n', b'LINE-ERR stdin is not valid UTF-8\n'),
+        (b'ok\n\xff', 'LINE false 2 ok\nALL-ERR stdin is not valid UTF-8\n'.encode('utf-8')),
+    )
+    sanitize = os.environ.get('WYSNA_SANITIZE') == '1'
+    extra_cc = ['-fsanitize=address,undefined', '-fno-omit-frame-pointer'] if (sanitize and os.name != 'nt') else []
+    run_env = dict(
+        os.environ,
+        WYSNA_MEM_CHECK='1',
+        ASAN_OPTIONS='detect_leaks=' + ('1' if sys.platform.startswith('linux') else '0'),
+        UBSAN_OPTIONS='halt_on_error=1',
+    )
+    with tempfile.TemporaryDirectory(prefix='wysna-stdin-io-') as temporary:
+        directory = Path(temporary)
+        source_path = directory / 'stdin_io.wysna'
+        source_path.write_text(source, encoding='utf-8')
+        for engine in ('interpreter', 'ast', 'hir', 'selfhost'):
+            if engine == 'interpreter':
+                command = [sys.executable, str(ROOT / 'main.py'), 'run', str(source_path)]
+            else:
+                binary = directory / executable_name(engine)
+                if engine == 'ast':
+                    c_path = directory / 'ast.c'
+                    emit = subprocess.run([sys.executable, str(ROOT / 'tests/emit_ast_oracle.py'),
+                                           str(source_path), str(c_path)],
+                                          capture_output=True, text=True, timeout=120)
+                    assert emit.returncode == 0, emit.stderr
+                    subprocess.run(compiler_command() + ['-std=c99', '-O2', '-I' + str(ROOT),
+                                   str(c_path), '-o', str(binary)] + extra_cc,
+                                   check=True, capture_output=True, timeout=120)
+                else:
+                    build_cmd = [sys.executable, str(ROOT / 'main.py'), 'build']
+                    if engine == 'selfhost':
+                        build_cmd.append('--engine=compiler')
+                    elif extra_cc:
+                        build_cmd.append('--sanitize')
+                    build_cmd += [str(source_path), '-o', str(binary)]
+                    built = subprocess.run(build_cmd, capture_output=True, text=True, timeout=120)
+                    assert built.returncode == 0, built.stderr
+                    if engine == 'selfhost' and extra_cc:
+                        c_path = directory / 'selfhost.c'
+                        emit = subprocess.run([selfhost_bin, str(source_path), str(c_path)],
+                                              capture_output=True, text=True, timeout=120)
+                        assert emit.returncode == 0, emit.stderr
+                        subprocess.run(compiler_command() + ['-std=c99', '-O2', '-I' + str(ROOT),
+                                       str(c_path), '-o', str(binary)] + extra_cc,
+                                       check=True, capture_output=True, timeout=120)
+                command = [str(binary)]
+            for payload, expected in cases:
+                result = subprocess.run(command, input=payload, capture_output=True, timeout=30, env=run_env)
+                assert (result.returncode, result.stdout.replace(b'\r\n', b'\n'), result.stderr) == (0, expected, b''), (
+                    engine, payload, result.returncode, result.stdout, result.stderr
+                )
 
 
 if __name__ == '__main__':

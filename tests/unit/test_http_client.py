@@ -143,6 +143,13 @@ fn main() -> unit ! http.HttpError | json.JsonError {{
     let body_text = json.stringify(body)?
     print("ECHO", echoed.status, content_type, body_text)
     echoed.body.close()
+    match http.response_text(echoed) {{
+        Ok(text) => print("CLOSED-BODY-ACCEPTED"),
+        Err(error) => match error.kind {{
+            InvalidResponse => print("CLOSED-BODY", error.code),
+            else => print("CLOSED-BODY-WRONG"),
+        }},
+    }}
 
     let redirect = http.get("{http_url}/redirect")?
     print("REDIRECT", redirect.status)
@@ -200,6 +207,7 @@ main()
                     results = _run_source(source, selfhost, directory)
                 expected_lines = [
                     'ECHO 200 application/json {"reply":"ok"}',
+                    "CLOSED-BODY 0",
                     "REDIRECT 302",
                     "STATUS 503",
                     "BODY-LIMIT-OK",

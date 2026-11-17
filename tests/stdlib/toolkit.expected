@@ -20,3 +20,8 @@ true true 2
 closed buffer or invalid index
 closed buffer or byte outside 0..255
 0
+empty 0
+ascii A
+invalid true 2 40
+closed true -1
+é🙂 6
