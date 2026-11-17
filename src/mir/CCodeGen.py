@@ -3,6 +3,7 @@ import math
 from checker.TypeInterner import TYPE_UNIT, TYPE_INT, TYPE_BOOL, TYPE_FLOAT, TYPE_STR
 from codegen.CStrings import quote
 from common.Telemetry import CodegenTelemetry
+from mir.AsyncLowering import build_cps_plan
 from mir.Verifier import Verifier
 
 
@@ -309,6 +310,8 @@ class CCodeGen:
         return None
 
     def function(self, function):
+        if getattr(function, 'is_async', False):
+            return self._async_function(function)
         self.slots = {slot.id: slot for slot in self.module.globals}
         self.slots.update({slot.id: slot for slot in function.slots})
         params = ', '.join(self.ctype(function.slots[index].type_id) + ' ' + self.name(index) for index in function.params) or 'void'
@@ -377,6 +380,153 @@ class CCodeGen:
                 lines.append(f'    return {expression};')
             else:
                 lines.append('    wysna_runtime_fail("W9999", "Unreachable MIR block executed");')
+                default_ret = 'wysna_unit()' if self.ctype(function.return_type) == 'WVal' else '0'
+                lines.append(f'    return {default_ret};')
+        lines.extend(['}', ''])
+        return lines
+
+    def _emit_coro_assign_from_wval(self, lines, dest_slot_id, wval_var, indent='    '):
+        slot = self.slots[dest_slot_id]
+        dname = self.name(dest_slot_id)
+        if slot.storage == 'value':
+            lines.append(f'{indent}wysna_release({dname}); {dname} = {wval_var}; {wval_var} = wysna_unit();')
+        elif slot.type_id == TYPE_INT:
+            cast = '(int32_t)' if slot.storage == 'counter' else ''
+            lines.append(f'{indent}{dname} = {cast}wysna_consume_int({wval_var}); {wval_var} = wysna_unit();')
+        elif slot.type_id == TYPE_FLOAT:
+            lines.append(f'{indent}{dname} = wysna_as_float({wval_var}); wysna_release({wval_var}); {wval_var} = wysna_unit();')
+        elif slot.type_id == TYPE_BOOL:
+            lines.append(f'{indent}{dname} = wysna_as_bool({wval_var}); wysna_release({wval_var}); {wval_var} = wysna_unit();')
+
+    def _emit_coro_flush_slots(self, lines, function, indent='        '):
+        for slot in function.slots:
+            sname = self.name(slot.id)
+            if slot.storage == 'value':
+                lines.append(f'{indent}_frame_slots[{slot.id}] = wysna_move(&{sname});')
+            elif slot.type_id == TYPE_INT:
+                lines.append(f'{indent}_frame_slots[{slot.id}] = wysna_int((int64_t){sname});')
+            elif slot.type_id == TYPE_FLOAT:
+                lines.append(f'{indent}_frame_slots[{slot.id}] = wysna_float({sname});')
+            elif slot.type_id == TYPE_BOOL:
+                lines.append(f'{indent}_frame_slots[{slot.id}] = wysna_bool({sname});')
+
+    def _async_function(self, function):
+        self.slots = {slot.id: slot for slot in self.module.globals}
+        self.slots.update({slot.id: slot for slot in function.slots})
+        plan = build_cps_plan(function)
+        step_name = f'wysna_coro_step_{function.name}'
+        lines = [
+            f'static WVal {step_name}(WVal* _frame_slots, int64_t _slot_count, int64_t* _frame_state, WVal _resume_val, bool _has_resume, WVal* _out_await_box, int64_t* _out_await_handle, int32_t* _out_status) {{',
+            '    (void)_slot_count;',
+            '    (void)_has_resume;',
+            '    (void)_out_await_box;',
+            '    (void)_out_await_handle;',
+        ]
+        if not function.slots:
+            lines.append('    (void)_frame_slots;')
+        for slot in function.slots:
+            sname = self.name(slot.id)
+            if slot.storage == 'value':
+                lines.append(f'    WVal {sname} = _frame_slots[{slot.id}]; _frame_slots[{slot.id}] = wysna_unit();')
+            elif slot.type_id == TYPE_INT:
+                ctype = 'int32_t' if slot.storage == 'counter' else 'int64_t'
+                lines.append(f'    {ctype} {sname} = (wysna_tag(_frame_slots[{slot.id}]) == W_INT) ? ({ctype})wysna_as_int(_frame_slots[{slot.id}]) : 0;')
+                lines.append(f'    _frame_slots[{slot.id}] = wysna_unit();')
+            elif slot.type_id == TYPE_FLOAT:
+                lines.append(f'    double {sname} = (wysna_tag(_frame_slots[{slot.id}]) == W_FLOAT) ? wysna_as_float(_frame_slots[{slot.id}]) : 0.0;')
+                lines.append(f'    _frame_slots[{slot.id}] = wysna_unit();')
+            elif slot.type_id == TYPE_BOOL:
+                lines.append(f'    bool {sname} = (wysna_tag(_frame_slots[{slot.id}]) == W_BOOL) ? wysna_as_bool(_frame_slots[{slot.id}]) : false;')
+                lines.append(f'    _frame_slots[{slot.id}] = wysna_unit();')
+
+        lines.append('    switch (*_frame_state) {')
+        lines.append('        case 0: goto bb0;')
+        for sp in plan.suspend_points:
+            lines.append(f'        case {sp.state_id}: goto {sp.resume_label};')
+        lines.append('        default: *_out_status = WYSNA_CORO_DONE; wysna_release(_resume_val); return wysna_unit();')
+        lines.append('    }')
+
+        for seg in plan.segments:
+            lines.append(f'{seg.label}:;')
+            if seg.loop_head:
+                lines.append('    wysna_step_tick();')
+            for op in seg.operations:
+                lines.extend('    ' + line for line in self.operation(op))
+            if seg.suspend is not None:
+                sp = seg.suspend
+                arg_expr = self.value(sp.await_arg, move=True)
+                lines.append('    {')
+                lines.append(f'        WVal _aw_box_{sp.state_id} = {arg_expr};')
+                lines.append(f'        int64_t _aw_handle_{sp.state_id} = 0;')
+                lines.append(f'        WVal _aw_imm_{sp.state_id} = wysna_unit();')
+                lines.append(f'        if (wysna_coro_try_resolve_await(&_aw_box_{sp.state_id}, &_aw_handle_{sp.state_id}, &_aw_imm_{sp.state_id})) {{')
+                self._emit_coro_assign_from_wval(lines, sp.await_res, f'_aw_imm_{sp.state_id}', indent='            ')
+                lines.append(f'            goto {sp.continue_label};')
+                lines.append('        }')
+                lines.append(f'        *_frame_state = {sp.state_id};')
+                lines.append(f'        *_out_await_box = _aw_box_{sp.state_id};')
+                lines.append(f'        *_out_await_handle = _aw_handle_{sp.state_id};')
+                lines.append('        *_out_status = WYSNA_CORO_SUSPENDED;')
+                self._emit_coro_flush_slots(lines, function, indent='        ')
+                lines.append('        wysna_release(_resume_val);')
+                lines.append('        return wysna_unit();')
+                lines.append('    }')
+                lines.append(f'{sp.resume_label}:;')
+                self._emit_coro_assign_from_wval(lines, sp.await_res, '_resume_val', indent='    ')
+                lines.append(f'    goto {sp.continue_label};')
+            else:
+                term = seg.terminator
+                if term.kind == 'goto':
+                    lines.append(f'    goto bb{term.targets[0]};')
+                elif term.kind == 'branch':
+                    condition = self.scalar(term.value)
+                    lines.append(f'    if ({condition}) goto bb{term.targets[0]}; else goto bb{term.targets[1]};')
+                elif term.kind == 'return':
+                    rslot = self.slots[term.value]
+                    if rslot.storage == 'value':
+                        ret_expr = f'wysna_clone({self.name(term.value)})' if rslot.parameter else f'wysna_move(&{self.name(term.value)})'
+                    else:
+                        ret_expr = self.box_expression(self.name(term.value), rslot.type_id)
+                    lines.append('    {')
+                    lines.append(f'        WVal _coro_ret = {ret_expr};')
+                    for s in function.slots:
+                        if s.storage == 'value':
+                            lines.append(f'        wysna_release({self.name(s.id)}); {self.name(s.id)} = wysna_unit();')
+                    lines.append('        wysna_release(_resume_val);')
+                    lines.append('        *_out_status = WYSNA_CORO_DONE;')
+                    lines.append('        return _coro_ret;')
+                    lines.append('    }')
+                else:
+                    for s in function.slots:
+                        if s.storage == 'value':
+                            lines.append(f'    wysna_release({self.name(s.id)}); {self.name(s.id)} = wysna_unit();')
+                    lines.append('    wysna_release(_resume_val);')
+                    lines.append('    wysna_runtime_fail("W9999", "Unreachable MIR block executed");')
+                    lines.append('    *_out_status = WYSNA_CORO_DONE;')
+                    lines.append('    return wysna_unit();')
+
+        lines.append('    *_out_status = WYSNA_CORO_DONE;')
+        lines.append('    wysna_release(_resume_val);')
+        lines.append('    return wysna_unit();')
+        lines.extend(['}', ''])
+
+        params = ', '.join(self.ctype(function.slots[index].type_id) + ' ' + self.name(index) for index in function.params) or 'void'
+        lines.append(f'static {self.ctype(function.return_type)} {function.name}({params}) {{')
+        slot_count = len(function.slots)
+        if function.params:
+            p_count = len(function.params)
+            lines.append(f'    int64_t _p_idx[{p_count}];')
+            lines.append(f'    WVal _p_vals[{p_count}];')
+            for i, p_id in enumerate(function.params):
+                pslot = self.slots[p_id]
+                lines.append(f'    _p_idx[{i}] = {p_id};')
+                if pslot.storage == 'value':
+                    lines.append(f'    _p_vals[{i}] = {self.name(p_id)};')
+                else:
+                    lines.append(f'    _p_vals[{i}] = {self.box_expression(self.name(p_id), pslot.type_id)};')
+            lines.append(f'    return wysna_coro_spawn({step_name}, {slot_count}, {p_count}, _p_idx, _p_vals);')
+        else:
+            lines.append(f'    return wysna_coro_spawn({step_name}, {slot_count}, 0, NULL, NULL);')
         lines.extend(['}', ''])
         return lines
 
@@ -464,6 +614,18 @@ class CCodeGen:
                         return [self.write(result, f'(int64_t)((uint64_t){left}{op}(uint64_t){right})', boxed=False)]
                     if t0 == TYPE_FLOAT and t1 == TYPE_FLOAT:
                         return [self.write(result, f'{left}{op}{right}', boxed=False)]
+                elif name in ('wysna_div_at', 'wysna_mod_at') and len(operation.args) == 2:
+                    t0 = self.slots[operation.args[0]].type_id
+                    t1 = self.slots[operation.args[1]].type_id
+                    if t0 == TYPE_INT and t1 == TYPE_INT:
+                        left = self.scalar(operation.args[0])
+                        right = self.scalar(operation.args[1])
+                        helper = 'wysna_div_i64_at' if name == 'wysna_div_at' else 'wysna_mod_i64_at'
+                        return [self.write(result, f'{helper}({left}, {right}, {quote(source.file)}, {source.line}, {source.col})', boxed=False)]
+                    if name == 'wysna_div_at' and t0 == TYPE_FLOAT and t1 == TYPE_FLOAT:
+                        left = self.scalar(operation.args[0])
+                        right = self.scalar(operation.args[1])
+                        return [self.write(result, f'wysna_div_f64_at({left}, {right}, {quote(source.file)}, {source.line}, {source.col})', boxed=False)]
                 elif name == 'wysna_neg' and len(operation.args) == 1:
                     t0 = self.slots[operation.args[0]].type_id
                     operand = self.scalar(operation.args[0])
@@ -570,7 +732,7 @@ class CCodeGen:
         if kind == 'increment':
             return [self.write(result, self.name(operation.args[0]) + ' + 1', boxed=False)]
         if kind == 'range_count':
-            return [self.write(result, f'wysna_range_count({args[0]}, {args[1]}, {str(data["inclusive"]).lower()})', boxed=False)]
+            return [self.write(result, f'wysna_range_count_i64({self.scalar(operation.args[0])}, {self.scalar(operation.args[1])}, {str(data["inclusive"]).lower()})', boxed=False)]
         if kind == 'iterate_test':
             bound = self.name(operation.args[1]) if data['range'] else (
                 f'wysna_list_iteration_length_at({args[1]}, {quote(source.file)}, {source.line}, {source.col})')

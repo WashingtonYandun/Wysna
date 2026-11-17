@@ -112,8 +112,9 @@ class Lowering:
         self.module.layouts[declaration.type_id] = layout
         return layout
 
-    def begin(self, name, returned, source):
-        self.function = Function(name, returned, source=source)
+    def begin(self, name, returned, source, *, is_async=False, async_return_type=0):
+        inner_ret = async_return_type if is_async and async_return_type else returned
+        self.function = Function(name, returned, source=source, is_async=is_async, async_return_type=inner_ret)
         self.debug_scopes = [0]
         if self.debug is not None:
             from mir.Debug import FunctionDebug, DebugScope
@@ -242,18 +243,24 @@ class Lowering:
         self.constants.pop(destination, None)
         self.op('store', destination, [source], moves=[0], node=node)
 
+    def _expected_return_type(self):
+        return self.function.async_return_type if self.function.is_async else self.function.return_type
+
     def return_value(self, value, node=None):
+        expected_ret = self._expected_return_type()
         if self.fallible:
-            value = self.runtime('wysna_wrap_result', [value], self.function.return_type, node,
+            value = self.runtime('wysna_wrap_result', [value], expected_ret, node,
                                  moves=[0])
             self.current.operations[-1].data['error_type'] = self.err_type
-        escaped = self.slot(self.function.return_type, 'return', tracked=False)
+        escaped = self.slot(expected_ret, 'return', tracked=False)
         self.store(escaped, value, node)
         self.cleanup()
         self.terminate('return', value=escaped, node=node)
 
     def lower_function(self, declaration, name, owner=None):
-        self.begin(name, declaration.return_type_id, self.source(declaration))
+        is_async = bool(getattr(declaration, 'is_async', False))
+        inner_ret = getattr(declaration, 'async_return_type_id', 0) or declaration.return_type_id
+        self.begin(name, declaration.return_type_id, self.source(declaration), is_async=is_async, async_return_type=inner_ret)
         self.current_class = owner
         self.fallible, self.err_type = declaration.is_fallible, declaration.err_type_name
         source_file = getattr(declaration.span, 'file_path', None)
@@ -275,7 +282,7 @@ class Lowering:
             self.bind(parameter, slot)
         value = self.block(declaration.body)
         if self.current is not None:
-            if declaration.return_type_id == TYPE_UNIT:
+            if inner_ret == TYPE_UNIT:
                 value = self.constant(None, TYPE_UNIT, declaration)
             self.return_value(value, declaration)
         self.finish()
@@ -623,12 +630,13 @@ class Lowering:
         self.current = failed
         self.push()
         if isinstance(node, H.HirTryPropagate):
+            expected_ret = self._expected_return_type()
             if node.kind == 'optional':
-                returned = self.constant(None, self.function.return_type)
+                returned = self.constant(None, expected_ret)
             else:
                 error_type = self.interner.get_entry(operand.type_id).data[1]
                 error = self.runtime('wysna_unwrap_err', [value], error_type, node)
-                returned = self.runtime('wysna_err', [error], self.function.return_type, node, moves=[0])
+                returned = self.runtime('wysna_err', [error], expected_ret, node, moves=[0])
             self.return_value(returned, node)
         else:
             if isinstance(node, H.HirElseHandle) and node.err_var:

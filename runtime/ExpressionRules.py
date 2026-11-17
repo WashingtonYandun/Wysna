@@ -130,8 +130,11 @@ def evaluate_await_expr(interpreter: "Interpreter", expr: AwaitExpr, env: Enviro
                 handle_val = getattr(fields.get("handle"), "value", 0)
                 if handle_val > 0:
                     handle_val_initial = handle_val
-                    from runtime.HostAbi import http_multi_poll, http_async_poll
-                    http_multi_poll(10)
+                    from runtime.HostAbi import http_multi_poll, http_async_poll, coro_current_id, coro_yield_until_ready
+                    if coro_current_id() is not None:
+                        coro_yield_until_ready(handle_val)
+                    else:
+                        http_multi_poll(10)
                     poll_st = http_async_poll(handle_val)
                     if poll_st == 1:
                         break
@@ -157,6 +160,9 @@ def evaluate_await_expr(interpreter: "Interpreter", expr: AwaitExpr, env: Enviro
                 elif hasattr(err_val, "value"):
                     err_msg = err_val.value
                 raise WysnaRuntimeError(message=str(err_msg), line=expr.line, col=expr.col, file=interpreter.file)
+            if isinstance(handle_val_initial, int) and handle_val_initial >= 3000000:
+                from runtime.HostAbi import coro_get_result
+                return coro_get_result(handle_val_initial)
             if isinstance(handle_val_initial, int) and handle_val_initial >= 2000000:
                 from runtime.HostAbi import spawn_get_result
                 return spawn_get_result(handle_val_initial)
@@ -477,6 +483,9 @@ def evaluate_call_expr(interpreter: "Interpreter", expr: CallExpr, env: Environm
             return WysnaInt(tid)
         if base_fn_name == "_take_task_value" and len(args) == 2 and isinstance(args[0], WysnaInt):
             handle_val = args[0].value
+            if handle_val >= 3000000:
+                from runtime.HostAbi import coro_get_result
+                return WysnaEnumValue("Option", "Some", [coro_get_result(handle_val)])
             if handle_val >= 2000000:
                 from runtime.HostAbi import spawn_get_result
                 return WysnaEnumValue("Option", "Some", [spawn_get_result(handle_val)])

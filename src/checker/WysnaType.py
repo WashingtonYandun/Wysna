@@ -169,17 +169,30 @@ def is_error_channel_assignable(source: WysnaType, target: WysnaType) -> bool:
 
 
 class FunctionType(WysnaType):
-    def __init__(self, params: List[WysnaType], ret: WysnaType, is_mutating: bool = False):
+    def __init__(
+        self,
+        params: List[WysnaType],
+        ret: WysnaType,
+        is_mutating: bool = False,
+        is_async: bool = False,
+    ):
         self.params = params
         self.ret = ret
         self.is_mutating = is_mutating
+        self.is_async = is_async
 
     def __eq__(self, other: Any) -> bool:
-        return isinstance(other, FunctionType) and self.params == other.params and self.ret == other.ret
+        return (
+            isinstance(other, FunctionType)
+            and self.params == other.params
+            and self.ret == other.ret
+            and self.is_async == other.is_async
+        )
 
     def __str__(self) -> str:
         params_str = ", ".join(str(p) for p in self.params)
-        return f"fn({params_str}) -> {self.ret}"
+        prefix = "async fn" if self.is_async else "fn"
+        return f"{prefix}({params_str}) -> {self.ret}"
 
 
 class InterfaceType(WysnaType):

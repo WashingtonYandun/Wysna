@@ -665,6 +665,9 @@ class TypeChecker:
 
     def _check_fn_decl(self, stmt: FnDecl) -> None:
         if isinstance(stmt, ExternFnDecl):
+            if getattr(stmt, "is_async", False):
+                raise TypeError("C FFI extern functions cannot be async", file=self.file,
+                                line=stmt.line, col=stmt.col, code="W2001")
             allowed = {"int", "int32", "int64", "float", "double", "bool", "opaque"}
             if (not all(isinstance(p.type_ann, NamedType) and p.type_ann.name in allowed for p in stmt.params)
                     or not isinstance(stmt.return_type, NamedType) or stmt.return_type.name not in allowed | {"unit"}):

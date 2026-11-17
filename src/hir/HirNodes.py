@@ -309,7 +309,9 @@ class HirFnDecl(HirNode):
         err_type_name: str = "",
         is_method: bool = False,
         is_public: bool = True,
-        span: Span = Span()
+        span: Span = Span(),
+        is_async: bool = False,
+        async_return_type_id: int = 0,
     ):
         super().__init__(span)
         self.name = name
@@ -320,6 +322,8 @@ class HirFnDecl(HirNode):
         self.err_type_name = err_type_name
         self.is_method = is_method
         self.is_public = is_public
+        self.is_async = is_async
+        self.async_return_type_id = async_return_type_id if is_async else return_type_id
 
 
 class HirFieldDef:

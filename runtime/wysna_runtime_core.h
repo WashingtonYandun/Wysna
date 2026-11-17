@@ -494,15 +494,15 @@ static inline void wysna_runtime_cleanup_impl(bool verify_live_objects) {
         wysna_g_argv_allocated = false;
     }
 #endif
+    if (wysna_runtime_context.host_async_cleanup) {
+        wysna_runtime_context.host_async_cleanup();
+    }
     while (wysna_g_string_literals) {
         WStringLiteral* literal = wysna_g_string_literals;
         wysna_g_string_literals = literal->next;
         free(literal->buffer.codepoint_offsets);
         memset(&literal->buffer, 0, sizeof(literal->buffer));
         literal->next = NULL;
-    }
-    if (wysna_runtime_context.host_async_cleanup) {
-        wysna_runtime_context.host_async_cleanup();
     }
     const char* collect_env = getenv("WYSNA_COLLECT_CYCLES");
     if (verify_live_objects && collect_env && strcmp(collect_env, "1") == 0) {

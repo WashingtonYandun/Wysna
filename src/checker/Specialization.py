@@ -122,7 +122,7 @@ class Instantiator:
             ret_t = checker._resolve_type_node(cloned_fn.return_type)
         finally:
             checker._active_type_subst = previous_subst
-        fn_type = FunctionType(params=p_types, ret=ret_t)
+        fn_type = FunctionType(params=p_types, ret=ret_t, is_async=getattr(cloned_fn, "is_async", False))
         fn_sym = Symbol(mangled, fn_type, is_mut=False, kind="fn", line=line, col=col)
         entry = SpecializationEntry(key=key, state=SpecializationState.SPECIALIZING, specialized_symbol=fn_sym, ast_decl=cloned_fn)
         checker.specializations[key] = entry
@@ -218,7 +218,7 @@ class Instantiator:
             owner_checker._active_type_subst = previous_subst
             owner_checker.current_scope = previous_scope
 
-        fn_type = FunctionType(params=p_types, ret=ret_t)
+        fn_type = FunctionType(params=p_types, ret=ret_t, is_async=getattr(cloned_fn, "is_async", False))
         info = ClassMethodInfo(fn_type=fn_type, is_public=template.is_public, owner_class=template.owner_class)
         owner_cls_type = owner_checker.global_scope.lookup_type(template.owner_class)
         if not isinstance(owner_cls_type, ClassType):

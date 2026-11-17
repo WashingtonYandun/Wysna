@@ -83,6 +83,8 @@ class Function:
     blocks: list = field(default_factory=list)
     params: list = field(default_factory=list)
     source: Source = field(default_factory=Source)
+    is_async: bool = False
+    async_return_type: int = 0
 
 
 @dataclass

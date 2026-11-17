@@ -463,11 +463,46 @@ class CCodeGen:
         else:
             body_stmts.append(f"return {ret_hold};")
 
-        fn_lines = [f"static WVal {c_name}({params_sig}) {{"]
-        for s in body_stmts:
-            fn_lines.append(f"    {s}")
-        fn_lines.append("}")
-        self.fn_Definitions.append("\n".join(fn_lines))
+        if getattr(stmt, "is_async", False):
+            body_name = f"{c_name}__body"
+            fn_lines = [f"static WVal {body_name}({params_sig}) {{"]
+            for s in body_stmts:
+                fn_lines.append(f"    {s}")
+            fn_lines.append("}")
+            self.fn_Definitions.append("\n".join(fn_lines))
+
+            step_name = f"wysna_ast_coro_step_{c_name}"
+            p_count = len(stmt.params)
+            call_args = ", ".join(f"_frame_slots[{i}]" for i in range(p_count))
+            step_lines = [
+                f"static WVal {step_name}(WVal* _frame_slots, int64_t _slot_count, int64_t* _frame_state, WVal _resume_val, bool _has_resume, WVal* _out_await_box, int64_t* _out_await_handle, int32_t* _out_status) {{",
+                "    (void)_slot_count; (void)_frame_state; (void)_resume_val; (void)_has_resume; (void)_out_await_box; (void)_out_await_handle;",
+            ]
+            if p_count == 0:
+                step_lines.append("    (void)_frame_slots;")
+            step_lines.append("    *_out_status = WYSNA_CORO_DONE;")
+            step_lines.append(f"    return {body_name}({call_args});")
+            step_lines.append("}")
+            self.fn_Definitions.append("\n".join(step_lines))
+
+            wrap_lines = [f"static WVal {c_name}({params_sig}) {{"]
+            if p_count > 0:
+                wrap_lines.append(f"    int64_t _p_idx[{p_count}];")
+                wrap_lines.append(f"    WVal _p_vals[{p_count}];")
+                for i, p in enumerate(stmt.params):
+                    wrap_lines.append(f"    _p_idx[{i}] = {i};")
+                    wrap_lines.append(f"    _p_vals[{i}] = v_{p.name};")
+                wrap_lines.append(f"    return wysna_coro_spawn({step_name}, {p_count}, {p_count}, _p_idx, _p_vals);")
+            else:
+                wrap_lines.append(f"    return wysna_coro_spawn({step_name}, 0, 0, NULL, NULL);")
+            wrap_lines.append("}")
+            self.fn_Definitions.append("\n".join(wrap_lines))
+        else:
+            fn_lines = [f"static WVal {c_name}({params_sig}) {{"]
+            for s in body_stmts:
+                fn_lines.append(f"    {s}")
+            fn_lines.append("}")
+            self.fn_Definitions.append("\n".join(fn_lines))
         self.current_fn_fallible = prev_fallible
         self.current_fn_err_type = prev_err_type
 

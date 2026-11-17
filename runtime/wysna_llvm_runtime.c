@@ -66,7 +66,7 @@ int32_t wysna_llvm_compare(const void* left, const void* right, int32_t kind) {
     }
 }
 int32_t wysna_llvm_range_count(int64_t start, int64_t end, int32_t inclusive) {
-    return wysna_range_count(wysna_borrow_int(start), wysna_borrow_int(end), inclusive != 0);
+    return wysna_range_count_i64(start, end, inclusive != 0);
 }
 void wysna_llvm_position(const char* file, int32_t line, int32_t col) { wysna_runtime_set_position(file, line, col); }
 void wysna_llvm_fail(const char* code, const char* message, const char* file, int32_t line, int32_t col) {
@@ -159,4 +159,28 @@ int64_t wysna_llvm_async_spawn(const void* fn) {
 }
 void wysna_llvm_async_take_option(void* out, int64_t handle, const void* fallback) {
     wysna_assign(out, wysna_spawn_take_option(wysna_borrow_int(handle), *(const WVal*)fallback));
+}
+void wysna_llvm_coro_spawn(void* out, void* step_fn, int64_t slot_count, int64_t param_count, const int64_t* param_indices, const void* param_vals) {
+    wysna_assign(out, wysna_coro_spawn_out((WysnaCoroStepOutFn)step_fn, slot_count, param_count, param_indices, (const WVal*)param_vals));
+}
+int32_t wysna_llvm_coro_try_resolve_await(void* awaited_box, int64_t* out_handle, void* out_immediate) {
+    return wysna_coro_try_resolve_await((WVal*)awaited_box, out_handle, (WVal*)out_immediate) ? 1 : 0;
+}
+int64_t wysna_llvm_coro_restore_int(void* slot_ptr) {
+    WVal* s = (WVal*)slot_ptr;
+    int64_t v = (wysna_tag(*s) == W_INT) ? wysna_as_int(*s) : 0;
+    *s = wysna_unit();
+    return v;
+}
+double wysna_llvm_coro_restore_float(void* slot_ptr) {
+    WVal* s = (WVal*)slot_ptr;
+    double v = (wysna_tag(*s) == W_FLOAT) ? wysna_as_float(*s) : 0.0;
+    *s = wysna_unit();
+    return v;
+}
+int32_t wysna_llvm_coro_restore_bool(void* slot_ptr) {
+    WVal* s = (WVal*)slot_ptr;
+    int32_t v = (wysna_tag(*s) == W_BOOL && wysna_as_bool(*s)) ? 1 : 0;
+    *s = wysna_unit();
+    return v;
 }

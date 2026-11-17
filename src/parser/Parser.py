@@ -1082,7 +1082,7 @@ class Parser:
         while True:
             # 1. Postfix operators (Calls, Member access, Indexing, Postfix '?')
             while True:
-                if self.check(TokenType.NEWLINE) and self.peek(1).type == TokenType.ELSE:
+                if min_prec < 9 and self.check(TokenType.NEWLINE) and self.peek(1).type == TokenType.ELSE:
                     saved = self.pos
                     self.advance()
                     if self.check(TokenType.ELSE) and not self._begins_match_arm():
@@ -1135,12 +1135,12 @@ class Parser:
                     self.expect(TokenType.RBRACKET, code="W0006", msg="Expected ']' after index")
                     left = IndexExpr(object=left, index=index_expr, line=bracket.line, col=bracket.col)
 
-                elif self.check(TokenType.QUESTION):
+                elif min_prec < 10 and self.check(TokenType.QUESTION):
                     # Postfix try / unwrap
                     q_tok = self.advance()
                     left = PostfixTryExpr(operand=left, line=q_tok.line, col=q_tok.col)
 
-                elif self.check(TokenType.ELSE) and not self._begins_match_arm():
+                elif min_prec < 10 and self.check(TokenType.ELSE) and not self._begins_match_arm():
                     # In-place error/optional handling: expr else err { ... } or expr else { ... }
                     else_tok = self.advance()
                     err_name: Optional[str] = None
@@ -1370,7 +1370,7 @@ class Parser:
             return IdentExpr(name=ident_name, line=token.line, col=token.col)
 
         if self.match(TokenType.AWAIT):
-            operand = self.parse_expr(min_prec=9, allow_struct_init=allow_struct_init)
+            operand = self.parse_expr(min_prec=10, allow_struct_init=allow_struct_init)
             return AwaitExpr(operand=operand, line=token.line, col=token.col)
 
         # Unary operations: '-' and 'not'.

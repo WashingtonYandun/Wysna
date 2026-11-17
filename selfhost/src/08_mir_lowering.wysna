@@ -278,7 +278,8 @@ fn mir_statement(context: MirBuilder, id: int) -> int {
 fn mir_lower_function(context: MirBuilder, function: CheckedFunction) {
     let signature = context.program.types[function.type_id].args
     let returned = mir_type(context, signature[len(signature) - 1], function.source)
-    mir_begin(context, function.source, returned)
+    let inner_returned = if function.is_async { mir_type(context, function.async_return_type, function.source) } else { returned }
+    mir_begin_fn(context, function.source, returned, function.is_async, inner_returned)
     if function.closure and len(function.captures) > 0 {
         let mut captured_types: list[int] = []
         for id in function.captures { captured_types.append(mir_type(context, context.program.bindings[id].type_id, function.source)) }
@@ -293,7 +294,7 @@ fn mir_lower_function(context: MirBuilder, function: CheckedFunction) {
         context.bindings.append(MirBinding { symbol: function.params[i], slot: slot })
     }
     let value = mir_block(context, function.body)
-    if context.current >= 0 { mir_return(context, if returned == 1 { mir_constant(context, mir_literal_unit(), 1, function.source) } else { value }, function.source) }
+    if context.current >= 0 { mir_return(context, if inner_returned == 1 { mir_constant(context, mir_literal_unit(), 1, function.source) } else { value }, function.source) }
     mir_finish(context, if function.closure { "wysna_" + function.name } else { mir_abi_name(function.name) }, function.source)
 }
 

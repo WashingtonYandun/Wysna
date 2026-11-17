@@ -589,6 +589,25 @@ class Interpreter:
         for param, arg in zip(func.decl.params, args):
             call_env.declare(param.name, arg, is_mut=False)
 
+        if getattr(func.decl, "is_async", False):
+            from runtime.HostAbi import coro_spawn
+            tid = coro_spawn(lambda: self._execute_fn_body(func, call_env))
+            return WysnaStructInstance(
+                "Task",
+                fields={
+                    "id": WysnaInt(tid),
+                    "handle": WysnaInt(tid),
+                    "is_ready": WysnaBool(False),
+                    "is_failed": WysnaBool(False),
+                    "value": WysnaEnumValue("Option", "None"),
+                    "error": WysnaEnumValue("Option", "None"),
+                },
+            )
+
+        return self._execute_fn_body(func, call_env)
+
+    def _execute_fn_body(self, func: WysnaFunction, call_env: Environment) -> WysnaValue:
+
         for req_expr in getattr(func.decl, "requires", ()):
             req_val = self.eval_expr(req_expr, call_env)
             if not isinstance(req_val, WysnaBool) or not req_val.value:

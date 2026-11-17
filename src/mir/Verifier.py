@@ -542,7 +542,12 @@ class Verifier:
                 if term.kind == 'branch' and slot.type_id != TYPE_BOOL:
                     self.fail('MIR branch requires bool', term.source)
                 if term.kind == 'return':
-                    if slot.ownership != 'owned' or not self.compatible(slot.type_id, function.return_type):
+                    expected_ret = (
+                        function.async_return_type
+                        if getattr(function, 'is_async', False)
+                        else function.return_type
+                    )
+                    if slot.ownership != 'owned' or not self.compatible(slot.type_id, expected_ret):
                         self.fail('MIR return type/ownership mismatch', term.source)
                     live.discard(slot.id)
                     if live:

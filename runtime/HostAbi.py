@@ -78,6 +78,13 @@ def cleanup():
         handles = list(_entries)
     for handle in handles:
         close(handle)
+    with _async_coro_cond:
+        for task in _async_coro_tasks.values():
+            task.done = True
+            task.active = False
+        _async_coro_tasks.clear()
+        _async_coro_active_stack.clear()
+        _async_coro_cond.notify_all()
 
 
 atexit.register(cleanup)
@@ -558,11 +565,201 @@ _async_http_transfers = {}
 _async_http_next_id = 1
 _TIMER_HANDLE_BASE = 1000000
 _SPAWN_HANDLE_BASE = 2000000
+_CORO_HANDLE_BASE = 3000000
 _async_timers = {}
 _async_timer_next_id = _TIMER_HANDLE_BASE
 _async_spawn_tasks = {}
 _async_spawn_next_id = _SPAWN_HANDLE_BASE
+_async_coro_tasks = {}
+_async_coro_next_id = _CORO_HANDLE_BASE
+_async_coro_cond = threading.Condition()
+_async_coro_active_stack = []
+_async_coro_tls = threading.local()
 _async_http_executor = concurrent.futures.ThreadPoolExecutor(max_workers=16)
+
+
+class _CoroTask:
+    def __init__(self, handle_id, thunk):
+        self.handle_id = handle_id
+        self.thunk = thunk
+        self.started = False
+        self.done = False
+        self.active = False
+        self.suspended_on = None
+        self.result = None
+        self.error = None
+        self.thread = None
+
+
+def coro_current_id():
+    return getattr(_async_coro_tls, 'current_coro_id', None)
+
+
+def coro_spawn(thunk):
+    global _async_coro_next_id
+    with _async_coro_cond:
+        tid = _async_coro_next_id
+        _async_coro_next_id += 1
+        _async_coro_tasks[tid] = _CoroTask(tid, thunk)
+        return tid
+
+
+def _poll_child_noblock(handle_id):
+    if handle_id >= _CORO_HANDLE_BASE:
+        return coro_poll(handle_id)
+    if handle_id >= _SPAWN_HANDLE_BASE:
+        with _host_lock:
+            future = _async_spawn_tasks.get(handle_id)
+        if future is None:
+            return -1
+        return 1 if future.done() else 0
+    if handle_id >= _TIMER_HANDLE_BASE:
+        now = time.monotonic()
+        with _host_lock:
+            entry = _async_timers.get(handle_id)
+            if entry is None:
+                return -1
+            deadline, done = entry
+            if not done and now >= deadline:
+                _async_timers[handle_id] = (deadline, True)
+                done = True
+            return 1 if done else 0
+    with _host_lock:
+        future = _async_http_transfers.get(handle_id)
+    if future is None:
+        return -1
+    return 1 if future.done() else 0
+
+
+def _coro_worker(task):
+    with _async_coro_cond:
+        while not _async_coro_active_stack or _async_coro_active_stack[-1] != task.handle_id:
+            if task.done:
+                return
+            _async_coro_cond.wait(timeout=0.05)
+    prev_id = getattr(_async_coro_tls, 'current_coro_id', None)
+    _async_coro_tls.current_coro_id = task.handle_id
+    res = None
+    err = None
+    try:
+        res = task.thunk()
+    except BaseException as exc:
+        err = exc
+    finally:
+        _async_coro_tls.current_coro_id = prev_id
+        with _async_coro_cond:
+            task.result = res
+            task.error = err
+            task.done = True
+            task.suspended_on = None
+            task.active = False
+            if _async_coro_active_stack and _async_coro_active_stack[-1] == task.handle_id:
+                _async_coro_active_stack.pop()
+            _async_coro_cond.notify_all()
+
+
+def coro_yield_until_ready(handle_id):
+    cur_id = coro_current_id()
+    if cur_id is None or handle_id is None or handle_id <= 0:
+        return
+    if handle_id < _CORO_HANDLE_BASE and _poll_child_noblock(handle_id) != 0:
+        return
+    with _async_coro_cond:
+        task = _async_coro_tasks.get(cur_id)
+        if task is None:
+            return
+        task.suspended_on = handle_id
+        task.active = False
+        if _async_coro_active_stack and _async_coro_active_stack[-1] == cur_id:
+            _async_coro_active_stack.pop()
+        _async_coro_cond.notify_all()
+        while not task.done:
+            if _async_coro_active_stack and _async_coro_active_stack[-1] == cur_id:
+                task.active = True
+                break
+            _async_coro_cond.wait(timeout=0.05)
+
+
+def coro_poll(handle_id):
+    with _async_coro_cond:
+        task = _async_coro_tasks.get(handle_id)
+        if task is None:
+            return -1
+        if task.done:
+            return 1
+        if task.active or task.handle_id in _async_coro_active_stack:
+            return 0
+        suspended_on = task.suspended_on if task.started else None
+    if suspended_on is not None:
+        if suspended_on < _CORO_HANDLE_BASE:
+            if _poll_child_noblock(suspended_on) == 0:
+                return 0
+        else:
+            child_st = coro_poll(suspended_on)
+            if child_st == 0:
+                return 0
+    with _async_coro_cond:
+        if task.done:
+            return 1
+        if task.active or task.handle_id in _async_coro_active_stack:
+            return 0
+        if not task.started:
+            task.started = True
+            task.thread = threading.Thread(target=_coro_worker, args=(task,), daemon=True)
+            task.thread.start()
+        task.suspended_on = None
+        task.active = True
+        _async_coro_active_stack.append(task.handle_id)
+        _async_coro_cond.notify_all()
+        while not task.done and task.suspended_on is None and task.handle_id in _async_coro_active_stack:
+            _async_coro_cond.wait(timeout=0.05)
+        return 1 if task.done else 0
+
+
+def coro_tick_all():
+    while True:
+        with _async_coro_cond:
+            pending_ids = [
+                tid for tid, t in _async_coro_tasks.items()
+                if not t.done and not t.active and tid not in _async_coro_active_stack
+            ]
+        if not pending_ids:
+            return 0
+        progressed = False
+        remaining = 0
+        for tid in pending_ids:
+            with _async_coro_cond:
+                t = _async_coro_tasks.get(tid)
+                if t is None or t.done:
+                    continue
+                if t.active or tid in _async_coro_active_stack:
+                    remaining += 1
+                    continue
+                was_started = t.started
+            st = coro_poll(tid)
+            if st == 1 or not was_started:
+                progressed = True
+            if st == 0:
+                remaining += 1
+        if not progressed or remaining == 0:
+            return remaining
+
+
+def coro_get_result(handle_id):
+    while True:
+        st = coro_poll(handle_id)
+        if st < 0:
+            raise RuntimeError(f"Invalid coroutine task handle: {handle_id}")
+        if st == 1:
+            break
+        http_multi_poll(10)
+    with _async_coro_cond:
+        task = _async_coro_tasks.get(handle_id)
+    if task is None:
+        return None
+    if task.error is not None:
+        raise task.error
+    return task.result
 
 
 def spawn_async_task(worker_callable):
@@ -638,6 +835,8 @@ def http_async_poll(transfer_id):
             _async_timer_next_id += 1
             _async_timers[tid] = (now + duration_ms / 1000.0, duration_ms == 0)
         return tid
+    if transfer_id >= _CORO_HANDLE_BASE:
+        return coro_poll(transfer_id)
     if transfer_id >= _SPAWN_HANDLE_BASE:
         with _host_lock:
             future = _async_spawn_tasks.get(transfer_id)
@@ -669,6 +868,7 @@ def http_async_poll(transfer_id):
 
 
 def http_multi_poll(timeout_ms):
+    coro_tick_all()
     now = time.monotonic()
     with _host_lock:
         pending_http = [f for f in _async_http_transfers.values() if not f.done()]
@@ -695,7 +895,8 @@ def http_multi_poll(timeout_ms):
                         _async_timers[tid] = (deadline, True)
                     else:
                         rem_count += 1
-        return rem_count
+        coro_rem = coro_tick_all()
+        return rem_count + coro_rem
     timeout_sec = max(0.001, timeout_ms / 1000.0)
     if pending_deadlines:
         timeout_sec = min(timeout_sec, min(max(0.001, d - now) for d in pending_deadlines))
@@ -709,7 +910,8 @@ def http_multi_poll(timeout_ms):
                     _async_timers[tid] = (deadline, True)
                 else:
                     rem_timers += 1
-    return len(not_done) + rem_timers
+    coro_rem = coro_tick_all()
+    return len(not_done) + rem_timers + coro_rem
 
 
 def http_async_finish(transfer_id, response_headers_handle, response_body_handle):

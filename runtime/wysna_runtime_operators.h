@@ -52,6 +52,32 @@ static inline WVal wysna_mul(WVal a, WVal b) {
     exit(1);
 }
 
+static inline int64_t wysna_div_i64_at(int64_t ai, int64_t bi, const char* file, int32_t line, int32_t col) {
+    if (bi == 0) {
+        wysna_runtime_set_position(file, line, col);
+        wysna_runtime_fail("W4001", "Division by zero");
+    }
+    if (ai == INT64_MIN && bi == -1) return INT64_MIN;
+    return ai / bi;
+}
+
+static inline double wysna_div_f64_at(double af, double bf, const char* file, int32_t line, int32_t col) {
+    if (bf == 0.0) {
+        wysna_runtime_set_position(file, line, col);
+        wysna_runtime_fail("W4001", "Division by zero");
+    }
+    return af / bf;
+}
+
+static inline int64_t wysna_mod_i64_at(int64_t ai, int64_t bi, const char* file, int32_t line, int32_t col) {
+    if (bi == 0) {
+        wysna_runtime_set_position(file, line, col);
+        wysna_runtime_fail("W4001", "Modulo by zero");
+    }
+    if (ai == INT64_MIN && bi == -1) return 0;
+    return ai % bi;
+}
+
 static inline WVal wysna_div(WVal a, WVal b) {
     WTag ta = wysna_tag(a);
     WTag tb = wysna_tag(b);

@@ -375,7 +375,7 @@ def resolve_declaration_signatures(checker: "TypeChecker", program: Program) -> 
                     continue
                 p_types = [checker._resolve_type_node(p.type_ann) for p in m.params]
                 r_type = checker._resolve_type_node(m.return_type)
-                fn_t = FunctionType(params=p_types, ret=r_type)
+                fn_t = FunctionType(params=p_types, ret=r_type, is_async=getattr(m, "is_async", False))
                 if m.name == "init":
                     cls_type.init_type = fn_t
                 else:
@@ -392,7 +392,7 @@ def resolve_declaration_signatures(checker: "TypeChecker", program: Program) -> 
             else:
                 param_types: List[WysnaType] = [checker._resolve_type_node(p.type_ann) for p in stmt.params]
                 ret_type = checker._resolve_type_node(stmt.return_type)
-                fn_type = FunctionType(params=param_types, ret=ret_type)
+                fn_type = FunctionType(params=param_types, ret=ret_type, is_async=getattr(stmt, "is_async", False))
                 checker.global_scope.define_symbol(
                     Symbol(stmt.name, fn_type, is_mut=False, kind="fn", line=stmt.line, col=stmt.col),
                     file=checker.file

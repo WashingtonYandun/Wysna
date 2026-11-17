@@ -20,6 +20,11 @@ declare void @wysna_llvm_set_vtable(ptr nocapture, ptr)
 declare i32 @wysna_llvm_entry_status(ptr nocapture readonly) readonly
 declare i64 @wysna_llvm_async_spawn(ptr nocapture readonly)
 declare void @wysna_llvm_async_take_option(ptr nocapture, i64, ptr nocapture readonly)
+declare void @wysna_llvm_coro_spawn(ptr nocapture, ptr, i64, i64, ptr nocapture readonly, ptr nocapture readonly)
+declare i32 @wysna_llvm_coro_try_resolve_await(ptr nocapture, ptr nocapture, ptr nocapture)
+declare i64 @wysna_llvm_coro_restore_int(ptr nocapture)
+declare double @wysna_llvm_coro_restore_float(ptr nocapture)
+declare i32 @wysna_llvm_coro_restore_bool(ptr nocapture)
 ''' + '\n'.join('declare void @wysna_llvm_rt_' + name + '(ptr nocapture, i32, ptr, ptr nocapture readonly, ptr nocapture readonly, i32, ptr nocapture readonly, i32, i32)' for name in sorted(OPERATION_CODES)) + '\n'
 
 

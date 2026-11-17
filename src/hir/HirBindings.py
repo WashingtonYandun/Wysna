@@ -38,7 +38,8 @@ class HirBindings:
         if hasattr(function, "extern_types"):
             return
         previous = self.return_type
-        self.return_type = function.return_type_id
+        inner_ret = function.async_return_type_id if getattr(function, "is_async", False) else function.return_type_id
+        self.return_type = inner_ret
         scope = dict(globals_)
         for parameter in function.params:
             scope[parameter.name] = parameter.type_id
@@ -49,7 +50,7 @@ class HirBindings:
             from common.ControlFlow import exits, NORMAL
             if NORMAL in exits(function.body, self.match_is_exhaustive):
                 tail_type = function.body.tail_expr.type_id if function.body.tail_expr is not None else TYPE_UNIT
-                if not self.compatible(tail_type, function.return_type_id):
+                if not self.compatible(tail_type, inner_ret):
                     self.verifier._fail(function, 'Function has an invalid normal return path')
         finally:
             self.return_type = previous

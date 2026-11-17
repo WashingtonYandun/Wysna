@@ -23,6 +23,7 @@ from checker.WysnaType import (
     FunctionType,
     ModuleType,
     AnyType,
+    GenericStructTemplate,
     GenericFnTemplate,
 )
 from error.Error import TypeError
@@ -46,6 +47,67 @@ class CheckedCall:
 
 
 CallResolution = Union[CallTarget, CheckedCall]
+
+
+def resolve_async_call_return(
+    checker: "TypeChecker",
+    inner_type: WysnaType,
+    line: int,
+    col: int,
+) -> WysnaType:
+    """Wrap an async function's return type into the canonical Task[T] struct layout."""
+    inner_tid = checker.interner.from_type(inner_type)
+    has_tp = checker.type_relations._contains_type_parameter(inner_tid)
+    if not has_tp:
+        task_tmpl = None
+        owner_unit = None
+        async_sym = checker.current_scope.lookup_symbol("async")
+        if async_sym and isinstance(async_sym.type, ModuleType):
+            candidate = async_sym.type.scope.lookup_type("Task")
+            if isinstance(candidate, GenericStructTemplate):
+                task_tmpl = candidate
+                owner_unit = getattr(async_sym.type, "checked_module", None)
+        if task_tmpl is None:
+            candidate = checker.current_scope.lookup_type("Task")
+            if isinstance(candidate, GenericStructTemplate):
+                task_tmpl = candidate
+        if task_tmpl is None and getattr(checker, "session", None) is not None:
+            for unit in getattr(checker.session, "modules", {}).values():
+                ufile = str(getattr(unit, "file", "")).replace("\\", "/")
+                if ufile.endswith("stdlib/async.wysna") and getattr(unit, "checker", None) is not None:
+                    candidate = unit.checker.global_scope.lookup_type("Task")
+                    if isinstance(candidate, GenericStructTemplate):
+                        task_tmpl = candidate
+                        owner_unit = unit
+                        break
+        if isinstance(task_tmpl, GenericStructTemplate):
+            if owner_unit is not None and getattr(owner_unit, "checker", None) is not None:
+                struct_t = owner_unit.checker._monomorphize_struct(task_tmpl, [inner_type], line, col)
+                checker.session.refresh_specializations(owner_unit)
+                return struct_t
+            return checker._monomorphize_struct(task_tmpl, [inner_type], line, col)
+
+    task_name = f"__WysnaTask__{inner_tid}"
+    existing = checker.global_scope.lookup_type(task_name)
+    if isinstance(existing, StructType):
+        return existing
+    task_struct = StructType(
+        task_name,
+        {
+            "id": IntType,
+            "handle": IntType,
+            "is_ready": BoolType,
+            "is_failed": BoolType,
+            "value": OptionalType(inner_type),
+            "error": OptionalType(StrType),
+        },
+    )
+    task_struct.template_name = "Task"
+    task_struct.type_args = [inner_type]
+    checker.global_scope.define_type(task_name, task_struct, file=checker.file)
+    checker.interner.from_type(task_struct)
+    return task_struct
+
 
 def check_call_expr(checker: "TypeChecker", expr: CallExpr, is_statement_context: bool = False) -> WysnaType:
     expr.callee.is_callee = True
@@ -186,7 +248,11 @@ def check_call_expr(checker: "TypeChecker", expr: CallExpr, is_statement_context
         for a in expr.args:
             checker._check_expr(a)
 
-        return callee_t.ret
+        return (
+            resolve_async_call_return(checker, callee_t.ret, expr.line, expr.col)
+            if getattr(callee_t, "is_async", False)
+            else callee_t.ret
+        )
 
     if len(expr.args) != len(callee_t.params):
         raise TypeError(
@@ -208,7 +274,11 @@ def check_call_expr(checker: "TypeChecker", expr: CallExpr, is_statement_context
                 code="W2001"
             )
         checker._mark_result_lift(a_expr, p_type, force=True)
-    return callee_t.ret
+    return (
+        resolve_async_call_return(checker, callee_t.ret, expr.line, expr.col)
+        if getattr(callee_t, "is_async", False)
+        else callee_t.ret
+    )
 
 
 def resolve_module_call(checker: "TypeChecker", expr: CallExpr, callee_t: Optional[WysnaType]) -> CallResolution:
@@ -236,7 +306,8 @@ def resolve_module_call(checker: "TypeChecker", expr: CallExpr, callee_t: Option
                 bindings = {}
                 parameters = {parameter.name for parameter in template.type_params}
                 for parameter, argument in zip(template.ast_decl.params, expr.args):
-                    checker._unify_type(parameter.type_ann, checker._check_expr(argument), parameters, bindings)
+                    arg_t = _normalize_task_arg_for_inference(checker, checker._check_expr(argument), argument.line, argument.col)
+                    checker._unify_type(parameter.type_ann, arg_t, parameters, bindings)
                 if any(parameter.name not in bindings for parameter in template.type_params):
                     raise TypeError("Cannot infer imported generic function arguments", file=checker.file,
                                     line=expr.line, col=expr.col, code="W2003")
@@ -616,6 +687,25 @@ def check_builtin_call(checker: "TypeChecker", expr: CallExpr) -> Optional[Wysna
     return None
 
 
+def _normalize_task_arg_for_inference(
+    checker: "TypeChecker",
+    arg_t: WysnaType,
+    line: int,
+    col: int,
+) -> WysnaType:
+    if isinstance(arg_t, StructType) and arg_t.name.startswith("__WysnaTask__") and getattr(arg_t, "type_args", None):
+        return resolve_async_call_return(checker, arg_t.type_args[0], line, col)
+    if isinstance(arg_t, ListType):
+        return ListType(_normalize_task_arg_for_inference(checker, arg_t.element, line, col))
+    if isinstance(arg_t, DictType):
+        return DictType(arg_t.key, _normalize_task_arg_for_inference(checker, arg_t.value, line, col))
+    if isinstance(arg_t, OptionalType):
+        return OptionalType(_normalize_task_arg_for_inference(checker, arg_t.inner, line, col))
+    if isinstance(arg_t, TupleType):
+        return TupleType([_normalize_task_arg_for_inference(checker, e, line, col) for e in arg_t.elements])
+    return arg_t
+
+
 def infer_type_arguments(checker: "TypeChecker", template, parameters, expr: CallExpr,
                          description: str, *, unify_checker: Optional["TypeChecker"] = None) -> List[WysnaType]:
     """Infer one complete substitution from positional declaration/argument pairs."""
@@ -629,7 +719,7 @@ def infer_type_arguments(checker: "TypeChecker", template, parameters, expr: Cal
                        for parameter in template.type_params}
     bindings: Dict[str, WysnaType] = {}
     for parameter, argument in zip(parameters, expr.args):
-        argument_type = checker._check_expr(argument)
+        argument_type = _normalize_task_arg_for_inference(checker, checker._check_expr(argument), argument.line, argument.col)
         if not resolver._unify_type(parameter.type_ann, argument_type, type_parameters, bindings):
             raise TypeError(
                 message=f"Conflicting type inference for {description} '{template.name}': cannot unify '{argument_type}'",

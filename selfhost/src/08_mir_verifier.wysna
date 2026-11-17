@@ -288,7 +288,8 @@ fn mir_verify_shape(module: MirModule, function: MirFunction) {
             if term.value < 0 or term.value >= len(function.slots) { report_error_at("W9999", term.source, "invalid MIR terminator value") }
             let slot = function.slots[term.value]
             if term.kind == "branch" and slot.type_id != 2 { report_error_at("W9999", term.source, "MIR branch requires bool") }
-            if term.kind == "return" and (slot.type_id != function.return_type or slot.parameter) { report_error_at("W9999", term.source, "invalid MIR return type or ownership") }
+            let expected_ret = if function.is_async { function.async_return_type } else { function.return_type }
+            if term.kind == "return" and (slot.type_id != expected_ret or slot.parameter) { report_error_at("W9999", term.source, "invalid MIR return type or ownership") }
         } elif term.value != -1 { report_error_at("W9999", term.source, "unexpected MIR terminator value") }
     }
 }

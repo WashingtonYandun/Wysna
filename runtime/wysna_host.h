@@ -325,6 +325,51 @@ static int64_t wysna_host_fs(void* first, void* second, int64_t operation) {
 
 #define WYSNA_TIMER_HANDLE_BASE 1000000
 #define WYSNA_SPAWN_HANDLE_BASE 2000000LL
+#define WYSNA_CORO_HANDLE_BASE 3000000LL
+
+enum {
+    WYSNA_CORO_DONE = 0,
+    WYSNA_CORO_SUSPENDED = 1
+};
+
+typedef WVal (*WysnaCoroStepFn)(
+    WVal* frame_slots,
+    int64_t slot_count,
+    int64_t* state,
+    WVal resume_val,
+    bool has_resume,
+    WVal* out_await_box,
+    int64_t* out_await_handle,
+    int32_t* out_status
+);
+
+typedef void (*WysnaCoroStepOutFn)(
+    WVal* out_ret,
+    WVal* frame_slots,
+    int64_t slot_count,
+    int64_t* state,
+    const WVal* resume_val,
+    bool has_resume,
+    WVal* out_await_box,
+    int64_t* out_await_handle,
+    int32_t* out_status
+);
+
+typedef struct WysnaCoroTask {
+    int64_t id;
+    WysnaCoroStepFn step_fn;
+    WysnaCoroStepOutFn out_step_fn;
+    WVal* slots;
+    int64_t slot_count;
+    int64_t state;
+    bool started;
+    bool done;
+    bool active;
+    int64_t await_handle;
+    WVal awaiting_val;
+    WVal result;
+    struct WysnaCoroTask* next;
+} WysnaCoroTask;
 
 typedef struct WysnaAsyncTimer {
     int64_t id;
@@ -354,6 +399,16 @@ static volatile int wysna_async_timer_lock = 0;
 static WysnaSpawnTask* wysna_spawn_tasks = NULL;
 static int64_t wysna_spawn_next_id = WYSNA_SPAWN_HANDLE_BASE;
 static volatile int wysna_spawn_lock = 0;
+static WysnaCoroTask* wysna_coro_tasks = NULL;
+static int64_t wysna_coro_next_id = WYSNA_CORO_HANDLE_BASE;
+static volatile int wysna_coro_lock = 0;
+
+static int64_t wysna_host_http_async_poll(int64_t transfer_id);
+static int64_t wysna_host_http_multi_poll(int64_t timeout_ms);
+static inline WVal wysna_await(WVal val);
+static inline int64_t wysna_coro_poll(int64_t handle_id);
+static inline int64_t wysna_coro_tick_all(void);
+static inline WVal wysna_coro_clone_result(int64_t handle_id);
 
 static inline int64_t wysna_host_monotonic_ms_internal(void) {
 #ifdef _WIN32
@@ -412,6 +467,27 @@ static inline void wysna_host_sleep_ms(int64_t ms) {
 #include "wysna_host_unicode.h"
 
 static void wysna_async_shutdown(void) {
+    for (;;) {
+        wysna_spinlock_acquire(&wysna_coro_lock);
+        WysnaCoroTask* coro_head = wysna_coro_tasks;
+        wysna_coro_tasks = NULL;
+        wysna_spinlock_release(&wysna_coro_lock);
+        if (!coro_head) break;
+        while (coro_head) {
+            WysnaCoroTask* c = coro_head;
+            coro_head = c->next;
+            if (c->slots) {
+                for (int64_t i = 0; i < c->slot_count; i++) {
+                    wysna_release(c->slots[i]);
+                }
+                free(c->slots);
+                c->slots = NULL;
+            }
+            wysna_release(c->awaiting_val);
+            wysna_release(c->result);
+            free(c);
+        }
+    }
     for (;;) {
         wysna_spinlock_acquire(&wysna_spawn_lock);
         WysnaSpawnTask* head = wysna_spawn_tasks;
@@ -589,10 +665,285 @@ static inline WVal wysna_spawn_clone_result(int64_t handle_id) {
 
 static inline WVal wysna_spawn_take_option(WVal handle_val, WVal fallback) {
     int64_t handle_id = (wysna_tag(handle_val) == W_INT) ? wysna_as_int(handle_val) : 0;
+    if (handle_id >= WYSNA_CORO_HANDLE_BASE) {
+        return wysna_enum_payload("Option", "Some", wysna_coro_clone_result(handle_id));
+    }
     if (handle_id >= WYSNA_SPAWN_HANDLE_BASE) {
         return wysna_enum_payload("Option", "Some", wysna_spawn_clone_result(handle_id));
     }
     return wysna_clone(fallback);
+}
+
+static inline WVal wysna_coro_make_task(int64_t handle_id) {
+    static const char* task_keys[6] = {"id", "handle", "is_ready", "is_failed", "value", "error"};
+    WVal vals[6];
+    vals[0] = wysna_int(handle_id);
+    vals[1] = wysna_int(handle_id);
+    vals[2] = wysna_bool(false);
+    vals[3] = wysna_bool(false);
+    vals[4] = wysna_none();
+    vals[5] = wysna_none();
+    return wysna_make_struct("Task", 6, task_keys, vals);
+}
+
+static inline WVal wysna_coro_spawn_impl(
+    WysnaCoroStepFn step_fn,
+    WysnaCoroStepOutFn out_step_fn,
+    int64_t slot_count,
+    int64_t param_count,
+    const int64_t* param_indices,
+    const WVal* param_vals
+) {
+    WysnaCoroTask* task = (WysnaCoroTask*)calloc(1, sizeof(WysnaCoroTask));
+    if (!task) {
+        wysna_runtime_fail("W4003", "%s", "Out of memory allocating coroutine frame");
+        return wysna_unit();
+    }
+    int64_t alloc_slots = slot_count > 0 ? slot_count : 1;
+    task->slots = (WVal*)calloc((size_t)alloc_slots, sizeof(WVal));
+    if (!task->slots) {
+        free(task);
+        wysna_runtime_fail("W4003", "%s", "Out of memory allocating coroutine slots");
+        return wysna_unit();
+    }
+    for (int64_t i = 0; i < alloc_slots; i++) {
+        task->slots[i] = wysna_unit();
+    }
+    for (int64_t i = 0; i < param_count; i++) {
+        int64_t idx = param_indices[i];
+        if (idx >= 0 && idx < slot_count) {
+            task->slots[idx] = wysna_clone(param_vals[i]);
+        }
+    }
+    task->step_fn = step_fn;
+    task->out_step_fn = out_step_fn;
+    task->slot_count = slot_count;
+    task->state = 0;
+    task->started = false;
+    task->done = false;
+    task->active = false;
+    task->await_handle = 0;
+    task->awaiting_val = wysna_unit();
+    task->result = wysna_unit();
+    wysna_runtime_context.host_async_cleanup = wysna_async_shutdown;
+
+    wysna_spinlock_acquire(&wysna_coro_lock);
+    task->id = wysna_coro_next_id++;
+    task->next = wysna_coro_tasks;
+    wysna_coro_tasks = task;
+    int64_t tid = task->id;
+    wysna_spinlock_release(&wysna_coro_lock);
+    return wysna_coro_make_task(tid);
+}
+
+static inline WVal wysna_coro_spawn(
+    WysnaCoroStepFn step_fn,
+    int64_t slot_count,
+    int64_t param_count,
+    const int64_t* param_indices,
+    const WVal* param_vals
+) {
+    return wysna_coro_spawn_impl(step_fn, NULL, slot_count, param_count, param_indices, param_vals);
+}
+
+static inline WVal wysna_coro_spawn_out(
+    WysnaCoroStepOutFn out_step_fn,
+    int64_t slot_count,
+    int64_t param_count,
+    const int64_t* param_indices,
+    const WVal* param_vals
+) {
+    return wysna_coro_spawn_impl(NULL, out_step_fn, slot_count, param_count, param_indices, param_vals);
+}
+
+static inline bool wysna_coro_try_resolve_await(
+    WVal* awaited_box,
+    int64_t* out_handle,
+    WVal* out_immediate
+) {
+    WVal val = *awaited_box;
+    WStructBuf* st = wysna_as_struct(val);
+    if (st) {
+        WVal r = wysna_member_get(val, "is_ready");
+        WVal f = wysna_member_get(val, "is_failed");
+        if (wysna_tag(r) == W_BOOL && wysna_tag(f) == W_BOOL) {
+            bool is_r = wysna_as_bool(r);
+            bool is_f = wysna_as_bool(f);
+            if (!is_r && !is_f) {
+                WVal h = wysna_member_get(val, "handle");
+                int64_t hv = (wysna_tag(h) == W_INT) ? wysna_as_int(h) : 0;
+                if (hv > 0) {
+                    if (hv < WYSNA_CORO_HANDLE_BASE) {
+                        int64_t poll_st = wysna_host_http_async_poll(hv);
+                        if (poll_st != 0) {
+                            *out_immediate = wysna_await(val);
+                            *awaited_box = wysna_unit();
+                            return true;
+                        }
+                    }
+                    *out_handle = hv;
+                    return false;
+                }
+            }
+        }
+    }
+    *out_immediate = wysna_await(val);
+    *awaited_box = wysna_unit();
+    return true;
+}
+
+static inline int64_t wysna_coro_advance_task(WysnaCoroTask* task, bool* out_progressed) {
+    if (!task) return -1;
+    if (task->done) return 1;
+    if (task->active) return 0;
+
+    bool has_resume = false;
+    WVal resume_val = wysna_unit();
+    if (task->started && task->await_handle > 0) {
+        int64_t child_st = wysna_host_http_async_poll(task->await_handle);
+        if (child_st == 0) {
+            return 0;
+        }
+        WVal box = task->awaiting_val;
+        task->awaiting_val = wysna_unit();
+        task->await_handle = 0;
+        resume_val = wysna_await(box);
+        has_resume = true;
+    }
+
+    if (!task->started) {
+        task->started = true;
+        if (out_progressed) *out_progressed = true;
+    } else if (has_resume) {
+        if (out_progressed) *out_progressed = true;
+    }
+
+    task->active = true;
+    WVal next_box = wysna_unit();
+    int64_t next_handle = 0;
+    int32_t status = WYSNA_CORO_DONE;
+    WVal ret = wysna_unit();
+    if (task->out_step_fn) {
+        task->out_step_fn(
+            &ret,
+            task->slots,
+            task->slot_count,
+            &task->state,
+            &resume_val,
+            has_resume,
+            &next_box,
+            &next_handle,
+            &status
+        );
+        wysna_release(resume_val);
+    } else {
+        ret = task->step_fn(
+            task->slots,
+            task->slot_count,
+            &task->state,
+            resume_val,
+            has_resume,
+            &next_box,
+            &next_handle,
+            &status
+        );
+    }
+    task->active = false;
+
+    if (status == WYSNA_CORO_SUSPENDED) {
+        task->awaiting_val = next_box;
+        task->await_handle = next_handle;
+        wysna_release(ret);
+        if (out_progressed) *out_progressed = true;
+        return 0;
+    }
+
+    wysna_release(next_box);
+    task->result = ret;
+    if (task->slots) {
+        for (int64_t i = 0; i < task->slot_count; i++) {
+            wysna_release(task->slots[i]);
+            task->slots[i] = wysna_unit();
+        }
+        free(task->slots);
+        task->slots = NULL;
+    }
+    task->done = true;
+    if (out_progressed) *out_progressed = true;
+    return 1;
+}
+
+static inline WysnaCoroTask* wysna_coro_find(int64_t handle_id) {
+    wysna_spinlock_acquire(&wysna_coro_lock);
+    WysnaCoroTask* cur = wysna_coro_tasks;
+    while (cur && cur->id != handle_id) cur = cur->next;
+    wysna_spinlock_release(&wysna_coro_lock);
+    return cur;
+}
+
+static inline int64_t wysna_coro_poll(int64_t handle_id) {
+    WysnaCoroTask* task = wysna_coro_find(handle_id);
+    if (!task) return -1;
+    return wysna_coro_advance_task(task, NULL);
+}
+
+static inline int64_t wysna_coro_tick_all(void) {
+    int64_t remaining = 0;
+    for (;;) {
+        bool progressed = false;
+        size_t count = 0;
+        wysna_spinlock_acquire(&wysna_coro_lock);
+        WysnaCoroTask* cur = wysna_coro_tasks;
+        while (cur) {
+            if (!cur->done) count++;
+            cur = cur->next;
+        }
+        if (count == 0) {
+            wysna_spinlock_release(&wysna_coro_lock);
+            return 0;
+        }
+        int64_t* ids = (int64_t*)malloc(count * sizeof(int64_t));
+        if (!ids) {
+            wysna_spinlock_release(&wysna_coro_lock);
+            return (int64_t)count;
+        }
+        size_t idx = 0;
+        cur = wysna_coro_tasks;
+        while (cur && idx < count) {
+            if (!cur->done) ids[idx++] = cur->id;
+            cur = cur->next;
+        }
+        wysna_spinlock_release(&wysna_coro_lock);
+
+        remaining = 0;
+        for (size_t i = idx; i > 0; i--) {
+            WysnaCoroTask* t = wysna_coro_find(ids[i - 1]);
+            if (t && !t->done) {
+                int64_t st = wysna_coro_advance_task(t, &progressed);
+                if (st == 0) remaining++;
+            }
+        }
+        free(ids);
+        if (!progressed || remaining == 0) {
+            break;
+        }
+    }
+    return remaining;
+}
+
+static inline WVal wysna_coro_clone_result(int64_t handle_id) {
+    for (;;) {
+        int64_t st = wysna_coro_poll(handle_id);
+        if (st < 0) {
+            wysna_runtime_fail("W4003", "%s", "Invalid coroutine task handle");
+            return wysna_unit();
+        }
+        if (st == 1) break;
+        wysna_host_http_multi_poll(10);
+    }
+    WysnaCoroTask* task = wysna_coro_find(handle_id);
+    if (!task) return wysna_unit();
+    return wysna_clone(task->result);
 }
 
 static inline int64_t wysna_timer_poll_or_create(int64_t transfer_id) {
@@ -660,26 +1011,31 @@ static inline int64_t wysna_timer_next_wait_ms(int64_t* out_pending) {
 }
 
 static inline int64_t wysna_timer_multi_poll(int64_t timeout_ms, bool allow_sleep) {
+    int64_t coro_pending = wysna_coro_tick_all();
     int64_t timer_pending = 0;
     int64_t min_rem = wysna_timer_next_wait_ms(&timer_pending);
     int64_t spawn_pending = wysna_spawn_pending_count();
-    if (allow_sleep && (timer_pending > 0 || spawn_pending > 0) && timeout_ms > 0) {
+    if (allow_sleep && (timer_pending > 0 || spawn_pending > 0 || coro_pending > 0) && timeout_ms > 0) {
         int64_t deadline = wysna_host_monotonic_ms_internal() + timeout_ms;
         if (timer_pending > 0 && min_rem < timeout_ms) {
             deadline = wysna_host_monotonic_ms_internal() + (min_rem > 0 ? min_rem : 1);
         }
         int64_t initial_spawns = spawn_pending;
+        int64_t initial_coros = coro_pending;
         for (;;) {
             int64_t now = wysna_host_monotonic_ms_internal();
             spawn_pending = wysna_spawn_pending_count();
             wysna_timer_next_wait_ms(&timer_pending);
-            if (spawn_pending < initial_spawns || (timer_pending == 0 && spawn_pending == 0) || now >= deadline) {
+            coro_pending = wysna_coro_tick_all();
+            wysna_timer_next_wait_ms(&timer_pending);
+            if (spawn_pending < initial_spawns || coro_pending < initial_coros ||
+                (timer_pending == 0 && spawn_pending == 0 && coro_pending == 0) || now >= deadline) {
                 break;
             }
             wysna_host_sleep_ms_internal(1);
         }
     }
-    return timer_pending + spawn_pending;
+    return timer_pending + spawn_pending + coro_pending;
 }
 
 #if defined(WYSNA_HAS_HTTP) && !defined(__wasi__)
@@ -1360,6 +1716,9 @@ static int64_t wysna_host_http_async_start(void* url_handle, void* method_handle
 }
 
 static int64_t wysna_host_http_async_poll(int64_t transfer_id) {
+    if (transfer_id >= WYSNA_CORO_HANDLE_BASE) {
+        return wysna_coro_poll(transfer_id);
+    }
     if (transfer_id >= WYSNA_SPAWN_HANDLE_BASE) {
         return wysna_spawn_poll(transfer_id);
     }
@@ -1381,6 +1740,7 @@ static int64_t wysna_host_http_async_poll(int64_t transfer_id) {
 }
 
 static int64_t wysna_host_http_multi_poll(int64_t timeout_ms) {
+    int64_t coro_pending = wysna_coro_tick_all();
     int64_t timer_pending = 0;
     int64_t min_timer_ms = wysna_timer_next_wait_ms(&timer_pending);
     int64_t spawn_pending = wysna_spawn_pending_count();
@@ -1402,11 +1762,12 @@ static int64_t wysna_host_http_multi_poll(int64_t timeout_ms) {
         curl_multi_poll(wysna_http_multi, NULL, 0, poll_ms, &numfds);
         curl_multi_perform(wysna_http_multi, &still_running);
         wysna_async_http_process_messages();
+        coro_pending = wysna_coro_tick_all();
         wysna_timer_next_wait_ms(&timer_pending);
-    } else if (timer_pending > 0 || spawn_pending > 0) {
+    } else if (timer_pending > 0 || spawn_pending > 0 || coro_pending > 0) {
         return (int64_t)still_running + wysna_timer_multi_poll(timeout_ms, true);
     }
-    return (int64_t)still_running + timer_pending + wysna_spawn_pending_count();
+    return (int64_t)still_running + timer_pending + wysna_spawn_pending_count() + coro_pending;
 }
 
 static int64_t wysna_host_http_async_finish(int64_t transfer_id, void* response_headers_handle, void* response_body_handle) {
@@ -1482,6 +1843,9 @@ static int64_t wysna_host_http_async_start(void* u, void* m, void* h, void* b, i
     return -2;
 }
 static int64_t wysna_host_http_async_poll(int64_t id) {
+    if (id >= WYSNA_CORO_HANDLE_BASE) {
+        return wysna_coro_poll(id);
+    }
     if (id >= WYSNA_SPAWN_HANDLE_BASE) {
         return wysna_spawn_poll(id);
     }
@@ -1562,7 +1926,6 @@ static inline WVal wysna_await(WVal val) {
                 int64_t handle_val = (wysna_tag(h) == W_INT) ? wysna_as_int(h) : 0;
                 if (handle_val > 0) {
                     spawn_handle = handle_val;
-                    wysna_host_http_multi_poll(10);
                     int64_t poll_st = wysna_host_http_async_poll(handle_val);
                     if (poll_st == 1) {
                         break;
@@ -1577,11 +1940,17 @@ static inline WVal wysna_await(WVal val) {
                         wysna_runtime_fail("W4003", "%s", "Invalid async transfer handle");
                         return wysna_unit();
                     }
+                    wysna_host_http_multi_poll(10);
                 } else {
                     wysna_release(val);
                     wysna_runtime_fail("W4003", "%s", "Deadlock: awaiting pending Task with no active handle");
                     return wysna_unit();
                 }
+            }
+            if (spawn_handle >= WYSNA_CORO_HANDLE_BASE) {
+                WVal res = wysna_coro_clone_result(spawn_handle);
+                wysna_release(val);
+                return res;
             }
             if (spawn_handle >= WYSNA_SPAWN_HANDLE_BASE) {
                 WVal res = wysna_spawn_clone_result(spawn_handle);

@@ -26,9 +26,7 @@ static inline WVal wysna_make_list(int32_t count, const WVal* elems) {
     return wysna_make_hi_ptr(WVAL_HI_LIST, b);
 }
 
-static inline int32_t wysna_range_count(WVal start, WVal end, bool inclusive) {
-    int64_t s = wysna_as_int(start);
-    int64_t e = wysna_as_int(end);
+static inline int32_t wysna_range_count_i64(int64_t s, int64_t e, bool inclusive) {
     if (inclusive) {
         if (e == INT64_MAX) {
             fprintf(stderr, "[W4003] RuntimeError: Range bound overflow at INT64_MAX\n");
@@ -42,6 +40,10 @@ static inline int32_t wysna_range_count(WVal start, WVal end, bool inclusive) {
         exit(1);
     }
     return (int32_t)diff;
+}
+
+static inline int32_t wysna_range_count(WVal start, WVal end, bool inclusive) {
+    return wysna_range_count_i64(wysna_as_int(start), wysna_as_int(end), inclusive);
 }
 
 static inline WVal wysna_make_range(WVal start, WVal end, bool inclusive) {
