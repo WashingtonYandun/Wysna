@@ -15,7 +15,7 @@ RUNTIME = {
     'wysna_builtin_float', 'wysna_builtin_ord', 'wysna_builtin_chr', 'wysna_builtin_slice', 'wysna_builtin_bytes',
     'wysna_builtin_args', 'wysna_builtin_env', 'wysna_builtin_unix_time', 'wysna_builtin_exit', 'wysna_builtin_enumerate', 'wysna_builtin_dict_items',
     'wysna_builtin_read_file', 'wysna_builtin_write_file', 'wysna_builtin_join_strings', 'wysna_builtin_weak_owned',
-    'wysna_builtin_upgrade', 'wysna_builtin_contract_assert_at',
+    'wysna_builtin_upgrade', 'wysna_builtin_contract_assert_at', 'wysna_await',
 }
 RUNTIME_ARITIES = {
     **dict.fromkeys(('wysna_neg', 'wysna_not', 'wysna_ok', 'wysna_err', 'wysna_enum_payload', 'wysna_wrap_result',
@@ -24,7 +24,7 @@ RUNTIME_ARITIES = {
                      'wysna_builtin_str', 'wysna_builtin_int', 'wysna_builtin_float', 'wysna_builtin_ord',
                      'wysna_builtin_chr', 'wysna_builtin_bytes', 'wysna_builtin_exit', 'wysna_builtin_enumerate',
                      'wysna_builtin_dict_items', 'wysna_builtin_read_file', 'wysna_builtin_weak_owned',
-                     'wysna_builtin_upgrade', 'wysna_builtin_env'), 1),
+                     'wysna_builtin_upgrade', 'wysna_builtin_env', 'wysna_await'), 1),
     **dict.fromkeys(('wysna_add', 'wysna_sub', 'wysna_mul', 'wysna_div_at', 'wysna_mod_at', 'wysna_lt', 'wysna_le',
                      'wysna_gt', 'wysna_ge', 'wysna_equal', 'wysna_not_equal', 'wysna_make_range',
                      'wysna_index_get_owned_at', 'wysna_dict_get', 'wysna_builtin_write_file',
@@ -35,7 +35,7 @@ RUNTIME_ARITIES = {
 assert set(RUNTIME_ARITIES) == RUNTIME, 'Every MIR runtime helper requires a signature'
 
 CONSUMING = {'wysna_ok': (0,), 'wysna_err': (0,), 'wysna_enum_payload': (0,),
-             'wysna_wrap_result': (0,), 'wysna_builtin_weak_owned': (0,)}
+             'wysna_wrap_result': (0,), 'wysna_builtin_weak_owned': (0,), 'wysna_await': (0,)}
 
 
 class Verifier:
@@ -207,6 +207,11 @@ class Verifier:
             require(returned.tag == 'weak' and self.interner.get_entry(returned.data).tag == 'class')
         elif name == 'wysna_builtin_upgrade':
             require(entry(0).tag == 'weak' and returned.tag == 'optional' and returned.data == entry(0).data)
+        elif name == 'wysna_await':
+            require(len(types) == 1 and (
+                self.compatible(types[0], result.type_id)
+                or entry(0).tag in ('struct', 'class', 'enum')
+            ))
         elif name in ('wysna_ok', 'wysna_err'):
             require(returned.tag == 'result' and self.compatible(types[0], returned.data[0 if name == 'wysna_ok' else 1]))
         elif name == 'wysna_wrap_result':
@@ -508,7 +513,7 @@ class Verifier:
                     witness = operation.data['witness']
                     proof = tests.get(witness)
                     narrowed = self.interner.get_entry(slots[operation.result].type_id)
-                    name = narrowed.data if narrowed.tag in ('primitive', 'struct', 'enum') else narrowed.tag
+                    name = narrowed.data if narrowed.tag in ('primitive', 'struct', 'enum', 'class') else narrowed.tag
                     type_kind = narrowed.data if narrowed.tag == 'primitive' else narrowed.tag
                     if (witness not in facts or proof is None or proof.args != operation.args or
                             proof.data.get('kind') != 'error_type' or proof.data.get('name') != name or
@@ -537,7 +542,12 @@ class Verifier:
                 if term.kind == 'branch' and slot.type_id != TYPE_BOOL:
                     self.fail('MIR branch requires bool', term.source)
                 if term.kind == 'return':
-                    if slot.ownership != 'owned' or not self.compatible(slot.type_id, function.return_type):
+                    expected_ret = (
+                        function.async_return_type
+                        if getattr(function, 'is_async', False)
+                        else function.return_type
+                    )
+                    if slot.ownership != 'owned' or not self.compatible(slot.type_id, expected_ret):
                         self.fail('MIR return type/ownership mismatch', term.source)
                     live.discard(slot.id)
                     if live:

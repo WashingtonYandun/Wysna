@@ -8,6 +8,8 @@ from node.NodeType import (
     GenericType,
     FnDecl,
     Param,
+    MethodDecl,
+    ClassDecl,
     StructDecl,
     StructField,
     EnumDecl,
@@ -21,9 +23,12 @@ from checker.WysnaType import (
     WysnaType,
     StructType,
     EnumType,
+    ClassType,
+    ClassMethodInfo,
     FunctionType,
     GenericStructTemplate,
     GenericFnTemplate,
+    GenericMethodTemplate,
     GenericEnumTemplate,
 )
 from checker.SymbolTable import Symbol
@@ -117,7 +122,7 @@ class Instantiator:
             ret_t = checker._resolve_type_node(cloned_fn.return_type)
         finally:
             checker._active_type_subst = previous_subst
-        fn_type = FunctionType(params=p_types, ret=ret_t)
+        fn_type = FunctionType(params=p_types, ret=ret_t, is_async=getattr(cloned_fn, "is_async", False))
         fn_sym = Symbol(mangled, fn_type, is_mut=False, kind="fn", line=line, col=col)
         entry = SpecializationEntry(key=key, state=SpecializationState.SPECIALIZING, specialized_symbol=fn_sym, ast_decl=cloned_fn)
         checker.specializations[key] = entry
@@ -147,6 +152,123 @@ class Instantiator:
         finally:
             checker._monomorphize_depth -= 1
             checker._instantiation_stack.pop()
+
+    def method(
+        self,
+        receiver_cls_type: ClassType,
+        template: GenericMethodTemplate,
+        concrete_args: List[WysnaType],
+        line: int,
+        col: int,
+    ):
+        owner_checker = template.checker or self.checker
+        if len(concrete_args) != len(template.type_params):
+            raise TypeError(
+                message=f"Generic method '{template.owner_class}.{template.name}' expects {len(template.type_params)} type arguments, found {len(concrete_args)}",
+                line=line,
+                col=col,
+                file=self.checker.file,
+                code="W2001",
+            )
+
+        type_ids = tuple(owner_checker.interner.intern(arg) for arg in concrete_args)
+        if type_ids in template.instances:
+            owner_checker.telemetry.deduplicated_hits += 1
+            mangled_cached, info_cached = template.instances[type_ids]
+            if mangled_cached not in receiver_cls_type.methods:
+                receiver_cls_type.methods[mangled_cached] = info_cached
+            return mangled_cached, info_cached
+
+        template_key = f"{template.owner_class}.{template.name}"
+        owner_checker._check_specialization_cycle(template_key, concrete_args, line, col)
+        owner_checker._check_specialization_size(template_key, concrete_args, line, col)
+
+        subst: Dict[str, WysnaType] = {}
+        for param, arg in zip(template.type_params, concrete_args):
+            p_name = param.name if hasattr(param, "name") else str(param)
+            p_constraint = getattr(param, "constraint", None)
+            if p_constraint:
+                owner_checker._check_type_constraint(arg, p_constraint, line, col)
+            subst[p_name] = arg
+
+        mangled_name = mangle_generic_name(template.name, concrete_args)
+        cloned = clone_ast(template.ast_decl)
+        cloned.name = mangled_name
+        cloned.type_params = []
+
+        previous_subst = owner_checker._active_type_subst
+        previous_scope = owner_checker.current_scope
+        owner_checker._active_type_subst = subst
+        owner_checker.current_scope = owner_checker.global_scope
+        try:
+            cloned.return_type = owner_checker._substitute_type_node(cloned.return_type, subst)
+            cloned.params = [
+                Param(p.name, owner_checker._substitute_type_node(p.type_ann, subst), line=p.line, col=p.col)
+                for p in cloned.params
+            ]
+            for req in getattr(cloned, "requires", []):
+                owner_checker._substitute_ast_types(req, subst)
+            for ens in getattr(cloned, "ensures", []):
+                owner_checker._substitute_ast_types(ens, subst)
+            owner_checker._substitute_ast_types(cloned.body, subst)
+
+            p_types = [owner_checker._resolve_type_node(p.type_ann) for p in cloned.params]
+            ret_t = owner_checker._resolve_type_node(cloned.return_type)
+        finally:
+            owner_checker._active_type_subst = previous_subst
+            owner_checker.current_scope = previous_scope
+
+        fn_type = FunctionType(params=p_types, ret=ret_t, is_async=getattr(cloned, "is_async", False))
+        info = ClassMethodInfo(fn_type=fn_type, is_public=template.is_public, owner_class=template.owner_class)
+        owner_cls_type = owner_checker.global_scope.lookup_type(template.owner_class)
+        if not isinstance(owner_cls_type, ClassType):
+            owner_cls_type = receiver_cls_type
+        owner_cls_decl = owner_checker.class_decls.get(template.owner_class)
+
+        template.instances[type_ids] = (mangled_name, info)
+        owner_cls_type.methods[mangled_name] = info
+        if receiver_cls_type is not owner_cls_type:
+            receiver_cls_type.methods[mangled_name] = info
+        for candidate_type in list(owner_checker.global_scope.types.values()) + list(self.checker.global_scope.types.values()):
+            if isinstance(candidate_type, ClassType) and candidate_type.is_subclass_of(owner_cls_type.name):
+                if mangled_name not in candidate_type.methods:
+                    candidate_type.methods[mangled_name] = info
+        if owner_cls_decl is not None:
+            owner_cls_decl.methods.append(cloned)
+        owner_checker.telemetry.specialized_functions += 1
+
+        frame = InstantiationFrame(template_key, tuple(concrete_args))
+        owner_checker._instantiation_stack.append(frame)
+        owner_checker._monomorphize_depth += 1
+        pending_keys_start = len(owner_checker._pending_dictionary_keys)
+        check_scope_prev = owner_checker.current_scope
+        owner_checker.current_scope = owner_checker.global_scope
+        try:
+            check_decl = owner_cls_decl if owner_cls_decl is not None else ClassDecl(
+                name=owner_cls_type.name, fields=[], methods=[cloned], line=line, col=col
+            )
+            owner_checker._check_single_method_decl(check_decl, owner_cls_type, cloned, fn_type, recovering=False)
+            if owner_checker._monomorphize_depth == 1 and not owner_checker._collecting_declarations:
+                owner_checker._validate_pending_dictionary_keys()
+            unit = owner_checker.session.modules.get(owner_checker.file)
+            if unit is not None:
+                owner_checker.session.refresh_specializations(unit)
+                owner_checker.session.decorate(cloned, unit.path, unit.module_id)
+                owner_checker.session._linked_programs.clear()
+            return mangled_name, info
+        except Exception:
+            del owner_checker._pending_dictionary_keys[pending_keys_start:]
+            template.instances.pop(type_ids, None)
+            owner_cls_type.methods.pop(mangled_name, None)
+            if receiver_cls_type is not owner_cls_type:
+                receiver_cls_type.methods.pop(mangled_name, None)
+            if owner_cls_decl is not None and cloned in owner_cls_decl.methods:
+                owner_cls_decl.methods.remove(cloned)
+            raise
+        finally:
+            owner_checker.current_scope = check_scope_prev
+            owner_checker._monomorphize_depth -= 1
+            owner_checker._instantiation_stack.pop()
 
     def structure(
         self,
@@ -283,6 +405,7 @@ class Instantiator:
         finally:
             checker._monomorphize_depth -= 1
             checker._instantiation_stack.pop()
+
             checker._active_type_subst = previous_subst
 
     def enumeration(

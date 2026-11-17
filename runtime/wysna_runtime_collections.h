@@ -15,35 +15,39 @@ static inline WVal wysna_make_list(int32_t count, const WVal* elems) {
     b->data = (WVal*)wysna_alloc_safe(sizeof(WVal) * b->cap);
     wysna_mem_on_alloc();
     for (int32_t i = 0; i < count; i++) {
-        WTag t = elems[i].tag;
+        WTag t = wysna_tag(elems[i]);
         if (t != W_INT && t != W_FLOAT && t != W_BOOL) {
+            b->scalar_only = false;
+        } else if (t == W_INT && wysna_hi(elems[i]) == WVAL_HI_EXT) {
             b->scalar_only = false;
         }
         b->data[i] = wysna_clone(elems[i]);
     }
-    WVal v; v.tag = W_LIST; v.as.list = b; return v;
+    return wysna_make_hi_ptr(WVAL_HI_LIST, b);
 }
 
-static inline int32_t wysna_range_count(WVal start, WVal end, bool inclusive) {
-    int64_t s = start.as.i;
-    int64_t e = end.as.i;
+static inline int32_t wysna_range_count_i64(int64_t s, int64_t e, bool inclusive) {
     if (inclusive) {
         if (e == INT64_MAX) {
             fprintf(stderr, "[W4003] RuntimeError: Range bound overflow at INT64_MAX\n");
-            exit(1);
+            wysna_panic_exit(1);
         }
         e++;
     }
     uint64_t diff = e > s ? (uint64_t)e - (uint64_t)s : 0;
     if (diff > 100000000ULL) {
         fprintf(stderr, "[W4003] RuntimeError: Range length %" PRIu64 " exceeds maximum list capacity\n", diff);
-        exit(1);
+        wysna_panic_exit(1);
     }
     return (int32_t)diff;
 }
 
+static inline int32_t wysna_range_count(WVal start, WVal end, bool inclusive) {
+    return wysna_range_count_i64(wysna_as_int(start), wysna_as_int(end), inclusive);
+}
+
 static inline WVal wysna_make_range(WVal start, WVal end, bool inclusive) {
-    int64_t s = start.as.i;
+    int64_t s = wysna_as_int(start);
     int32_t count = wysna_range_count(start, end, inclusive);
     WListBuf* b = (WListBuf*)wysna_alloc_safe(sizeof(WListBuf));
     b->refcount = 1;
@@ -53,9 +57,11 @@ static inline WVal wysna_make_range(WVal start, WVal end, bool inclusive) {
     b->data = (WVal*)wysna_alloc_safe(sizeof(WVal) * b->cap);
     wysna_mem_on_alloc();
     for (int32_t i = 0; i < count; i++) {
-        b->data[i] = wysna_int(s + (int64_t)i);
+        int64_t elem = s + (int64_t)i;
+        if (!wysna_int_fits_48(elem)) b->scalar_only = false;
+        b->data[i] = wysna_int(elem);
     }
-    WVal v; v.tag = W_LIST; v.as.list = b; return v;
+    return wysna_make_hi_ptr(WVAL_HI_LIST, b);
 }
 
 static inline WVal wysna_make_tuple(int32_t count, const WVal* elems) {
@@ -68,11 +74,11 @@ static inline WVal wysna_make_tuple(int32_t count, const WVal* elems) {
     for (int32_t i = 0; i < count; i++) {
         t->items[i] = wysna_clone(elems[i]);
     }
-    WVal v; v.tag = W_TUPLE; v.as.tuple = t; return v;
+    return wysna_make_hi_ptr(WVAL_HI_TUPLE, t);
 }
 
 static inline WVal wysna_make_dict(int32_t count, const WVal* keys, const WVal* vals) {
-    if (count < 0 || count > INT32_MAX / 4) { fprintf(stderr, "[W4003] RuntimeError: Dictionary too large\n"); exit(1); }
+    if (count < 0 || count > INT32_MAX / 4) { fprintf(stderr, "[W4003] RuntimeError: Dictionary too large\n"); wysna_panic_exit(1); }
     WDictBuf* d = (WDictBuf*)wysna_alloc_safe(sizeof(WDictBuf));
     d->refcount = 1;
     d->len = 0;
@@ -82,18 +88,18 @@ static inline WVal wysna_make_dict(int32_t count, const WVal* keys, const WVal* 
     d->buckets = NULL;
     int32_t buckets = 8;
     while (buckets < d->cap) {
-        if (buckets > INT32_MAX / 2) { fprintf(stderr, "[W4003] RuntimeError: Dictionary too large\n"); exit(1); }
+        if (buckets > INT32_MAX / 2) { fprintf(stderr, "[W4003] RuntimeError: Dictionary too large\n"); wysna_panic_exit(1); }
         buckets *= 2;
     }
     wysna_dict_reindex(d, buckets);
     wysna_mem_on_alloc();
-    WVal v; v.tag = W_DICT; v.as.dict = d;
+    WVal v = wysna_make_hi_ptr(WVAL_HI_DICT, d);
     for (int32_t i = 0; i < count; i++) {
         int32_t index = wysna_dict_find(d, keys[i]);
         if (index >= 0) { wysna_release(d->vals[index]); d->vals[index] = wysna_clone(vals[i]); }
         else {
             if ((int64_t)(d->len + 1) * 2 >= d->bucket_count) {
-                if (d->bucket_count > INT32_MAX / 2) { fprintf(stderr, "[W4003] RuntimeError: Dictionary too large\n"); exit(1); }
+                if (d->bucket_count > INT32_MAX / 2) { fprintf(stderr, "[W4003] RuntimeError: Dictionary too large\n"); wysna_panic_exit(1); }
                 wysna_dict_reindex(d, d->bucket_count * 2);
             }
             index = d->len++;
@@ -123,7 +129,7 @@ static inline WVal wysna_make_struct(const char* name, int32_t count, const char
         st->keys[i] = keys[i];
         st->vals[i] = wysna_clone(vals[i]);
     }
-    WVal v; v.tag = W_STRUCT; v.as.st = st; return v;
+    return wysna_make_hi_ptr(WVAL_HI_STRUCT, st);
 }
 
 static inline WVal wysna_make_object(const char* name, int32_t count, const char** keys, const WVal* vals) {
@@ -134,8 +140,11 @@ static inline WVal wysna_make_object(const char* name, int32_t count, const char
     WStructBuf* st = (WStructBuf*)wysna_alloc_safe(total);
     st->refcount = 1;
     st->control = (WWeakControl*)wysna_alloc_safe(sizeof(WWeakControl));
+    memset(st->control, 0, sizeof(WWeakControl));
+    st->control->kind = W_WEAK;
     st->control->strong = 1;
     st->control->weak = 1;
+    st->control->color = W_COLOR_BLACK;
     st->control->object = st;
     wysna_mem_on_alloc();
     st->vtable = NULL;
@@ -148,35 +157,34 @@ static inline WVal wysna_make_object(const char* name, int32_t count, const char
         st->keys[i] = keys[i];
         st->vals[i] = wysna_clone(vals[i]);
     }
-    WVal v; v.tag = W_OBJECT; v.as.st = st; return v;
+    return wysna_make_hi_ptr(WVAL_HI_OBJECT, st);
 }
 
 /* Default non-optional weak fields are independent expired handles. */
 static inline WVal wysna_empty_weak(void) {
     WWeakControl* control = (WWeakControl*)wysna_alloc_safe(sizeof(WWeakControl));
+    memset(control, 0, sizeof(WWeakControl));
+    control->kind = W_WEAK;
     control->strong = 0;
     control->weak = 1;
+    control->color = W_COLOR_BLACK;
     control->object = NULL;
     wysna_mem_on_alloc();
-    WVal value = wysna_unit();
-    value.tag = W_WEAK;
-    value.as.weak = control;
-    return value;
+    return wysna_make_hi_ptr(WVAL_HI_EXT, control);
 }
 
 /* Both helpers borrow their input and return one owned reference. */
 static inline WVal wysna_builtin_weak(WVal object) {
-    if (object.tag != W_OBJECT) {
+    WStructBuf* st = wysna_hi(object) == WVAL_HI_OBJECT ? wysna_as_struct(object) : NULL;
+    if (!st || !st->control) {
         fprintf(stderr, "[W4003] RuntimeError: weak expects a class object\n");
-        exit(1);
+        wysna_panic_exit(1);
     }
-    WVal value = wysna_unit();
-    value.tag = W_WEAK;
-    value.as.weak = object.as.st->control;
-    wysna_check_retain_count(value.as.weak->weak, "retain/weak");
-    value.as.weak->weak++;
-    wysna_g_retain_count++;
-    return value;
+    WWeakControl* control = st->control;
+    wysna_check_retain_count(control->weak, "retain/weak");
+    wysna_atomic_inc_i32(&control->weak);
+    wysna_atomic_add_i64(&wysna_g_retain_count, 1);
+    return wysna_make_hi_ptr(WVAL_HI_EXT, control);
 }
 
 /* Language weak calls consume their evaluated argument snapshot immediately. */
@@ -187,16 +195,13 @@ static inline WVal wysna_builtin_weak_owned(WVal object) {
 }
 
 static inline WVal wysna_builtin_upgrade(WVal weak) {
-    if (weak.tag != W_WEAK) {
+    WWeakControl* control = wysna_as_weak(weak);
+    if (!control) {
         fprintf(stderr, "[W4003] RuntimeError: upgrade expects a weak reference\n");
-        exit(1);
+        wysna_panic_exit(1);
     }
-    WWeakControl* control = weak.as.weak;
     if (control->strong == 0 || control->object == NULL) return wysna_none();
-    WVal object = wysna_unit();
-    object.tag = W_OBJECT;
-    object.as.st = control->object;
-    return wysna_clone(object);
+    return wysna_clone(wysna_make_hi_ptr(WVAL_HI_OBJECT, control->object));
 }
 
 #endif /* WYSNA_RUNTIME_COLLECTIONS_H */

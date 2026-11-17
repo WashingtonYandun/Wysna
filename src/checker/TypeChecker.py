@@ -19,7 +19,7 @@ from node.NodeType import (
     WhileStmt, ForStmt, ReturnStmt, BreakStmt, ContinueStmt, ExprStmt,
     IntLiteral, FloatLiteral, StringLiteral, BoolLiteral, NoneLiteral,
     IdentExpr, ThisExpr, SuperExpr, NewExpr,
-    UnaryExpr, BinaryExpr, CoalesceExpr, RangeExpr, PostfixTryExpr, ElseErrExpr,
+    UnaryExpr, BinaryExpr, CoalesceExpr, RangeExpr, PostfixTryExpr, ElseErrExpr, AwaitExpr,
     CallExpr, MemberExpr, IndexExpr, AssignmentExpr,
     StructInitExpr, FieldInit, ListExpr, DictExpr, TupleExpr,
     IfExpr, ElifBranch, MatchExpr, MatchArm, VariantDecl
@@ -29,7 +29,7 @@ from checker.WysnaType import (
     OptionalType, WeakType, ListType, DictType, TupleType, StructType, EnumType,
     InterfaceType, ClassFieldInfo, ClassMethodInfo, ClassType,
     ResultType, ErrorUnionType, FunctionType, ModuleType, AnyType,
-    TypeParamType, GenericStructTemplate, GenericFnTemplate, GenericEnumTemplate,
+    TypeParamType, GenericStructTemplate, GenericFnTemplate, GenericMethodTemplate, GenericEnumTemplate,
 )
 from checker.SymbolTable import Scope, Symbol, create_global_scope
 from checker.Suggestions import enrich_from_message, suggest, visible_names
@@ -72,6 +72,7 @@ class TypeChecker:
         self.interner: TypeInterner = self.session.interner
         self._type_relations = TypeRelations(self.interner)
         self.monomorphized_oop_decls = []
+        self.class_decls: Dict[str, ClassDecl] = {}
         self.generic_struct_templates: Dict[str, GenericStructTemplate] = {}
         self.generic_fn_templates: Dict[str, GenericFnTemplate] = {}
         self.generic_enum_templates: Dict[str, GenericEnumTemplate] = {}
@@ -250,7 +251,12 @@ class TypeChecker:
         for stmt in program.body:
             if isinstance(stmt, (StructDecl, FnDecl, EnumDecl, ClassDecl, InterfaceDecl)) and stmt.type_params:
                 continue
+            if isinstance(stmt, ClassDecl):
+                stmt.methods = [m for m in stmt.methods if not getattr(m, "type_params", None)]
             filtered_body.append(stmt)
+        for oop_decl in self.monomorphized_oop_decls:
+            if isinstance(oop_decl, ClassDecl):
+                oop_decl.methods = [m for m in oop_decl.methods if not getattr(m, "type_params", None)]
 
         sorted_structs, sorted_enums, sorted_fns = self._sort_monomorphized_decls()
         final_body: List[Stmt] = []
@@ -576,6 +582,72 @@ class TypeChecker:
         from checker.ConstructorFlow import check_constructor
         check_constructor(stmt, cls_type, m, self.file, self._match_is_exhaustive)
 
+    def _check_single_method_decl(
+        self,
+        stmt: ClassDecl,
+        cls_type: ClassType,
+        m: MethodDecl,
+        fn_type: FunctionType,
+        *,
+        recovering: bool = True,
+    ) -> None:
+        known = len(self._collected_errors)
+        fn_scope = Scope(parent=self.current_scope, is_function_scope=True)
+        old_scope = self.current_scope
+        old_class = self.current_class
+        old_ret_type = self.current_fn_ret_type
+        old_loop_depth = self.loop_depth
+        old_expected = self.expected_type
+        self.current_scope = fn_scope
+        self.current_class = cls_type
+        self.current_fn_ret_type = fn_type.ret
+        self.expected_type = fn_type.ret
+        self.loop_depth = 0
+        try:
+            # Also bind 'self' as an alias to 'this' inside methods
+            fn_scope.define_symbol(
+                Symbol("self", cls_type, is_mut=False, kind="param", line=m.line, col=m.col),
+                file=self.file
+            )
+            for p, p_type in zip(m.params, fn_type.params):
+                fn_scope.define_symbol(
+                    Symbol(p.name, p_type, is_mut=False, kind="param", line=p.line, col=p.col),
+                    file=self.file
+                )
+            self._check_contracts(
+                f"{stmt.name}.{m.name}",
+                getattr(m, "requires", []),
+                getattr(m, "ensures", []),
+                fn_type.ret,
+            )
+            is_unit_ret = (fn_type.ret == UnitType) or (isinstance(fn_type.ret, ResultType) and fn_type.ret.ok == UnitType)
+            body_ret = self._check_block(m.body, is_statement_context=is_unit_ret)
+            if m.name == "init":
+                self._check_constructor_rules(stmt, cls_type, m)
+            self._mark_tail_result_lift(m.body.tail_expr, fn_type.ret)
+            if not is_unit_ret and not self._block_has_return(m.body):
+                if body_ret is not None and self.type_relations.is_assignable(body_ret, fn_type.ret):
+                    pass
+                else:
+                    raise TypeError(
+                        message=f"Method '{stmt.name}.{m.name}' missing return statement for type '{fn_type.ret}'",
+                        line=m.line,
+                        col=m.col,
+                        file=self.file,
+                        code="W2004"
+                    )
+        except WysnaError as error:
+            if recovering:
+                self._record_error(error, known)
+            else:
+                raise
+        finally:
+            self.current_scope = old_scope
+            self.current_class = old_class
+            self.current_fn_ret_type = old_ret_type
+            self.loop_depth = old_loop_depth
+            self.expected_type = old_expected
+
     def _check_class_decl(self, stmt: ClassDecl) -> None:
         cls_type = self.global_scope.lookup_type(stmt.name)
         assert isinstance(cls_type, ClassType)
@@ -583,63 +655,19 @@ class TypeChecker:
         self.current_class = cls_type
         try:
             for m in stmt.methods:
-                known = len(self._collected_errors)
+                if getattr(m, "type_params", None):
+                    continue
                 fn_type = cls_type.init_type if m.name == "init" else cls_type.methods[m.name].fn_type
                 assert fn_type is not None
-                fn_scope = Scope(parent=self.current_scope, is_function_scope=True)
-                old_scope = self.current_scope
-                old_ret_type = self.current_fn_ret_type
-                old_loop_depth = self.loop_depth
-                old_expected = self.expected_type
-                self.current_scope = fn_scope
-                self.current_fn_ret_type = fn_type.ret
-                self.expected_type = fn_type.ret
-                self.loop_depth = 0
-                try:
-                    # Also bind 'self' as an alias to 'this' inside methods
-                    fn_scope.define_symbol(
-                        Symbol("self", cls_type, is_mut=False, kind="param", line=m.line, col=m.col),
-                        file=self.file
-                    )
-                    for p, p_type in zip(m.params, fn_type.params):
-                        fn_scope.define_symbol(
-                            Symbol(p.name, p_type, is_mut=False, kind="param", line=p.line, col=p.col),
-                            file=self.file
-                        )
-                    self._check_contracts(
-                        f"{stmt.name}.{m.name}",
-                        getattr(m, "requires", []),
-                        getattr(m, "ensures", []),
-                        fn_type.ret,
-                    )
-                    is_unit_ret = (fn_type.ret == UnitType) or (isinstance(fn_type.ret, ResultType) and fn_type.ret.ok == UnitType)
-                    body_ret = self._check_block(m.body, is_statement_context=is_unit_ret)
-                    if m.name == "init":
-                        self._check_constructor_rules(stmt, cls_type, m)
-                    self._mark_tail_result_lift(m.body.tail_expr, fn_type.ret)
-                    if not is_unit_ret and not self._block_has_return(m.body):
-                        if body_ret is not None and self.type_relations.is_assignable(body_ret, fn_type.ret):
-                            pass
-                        else:
-                            raise TypeError(
-                                message=f"Method '{stmt.name}.{m.name}' missing return statement for type '{fn_type.ret}'",
-                                line=m.line,
-                                col=m.col,
-                                file=self.file,
-                                code="W2004"
-                            )
-                except WysnaError as error:
-                    self._record_error(error, known)
-                finally:
-                    self.current_scope = old_scope
-                    self.current_fn_ret_type = old_ret_type
-                    self.loop_depth = old_loop_depth
-                    self.expected_type = old_expected
+                self._check_single_method_decl(stmt, cls_type, m, fn_type, recovering=True)
         finally:
             self.current_class = old_class
 
     def _check_fn_decl(self, stmt: FnDecl) -> None:
         if isinstance(stmt, ExternFnDecl):
+            if getattr(stmt, "is_async", False):
+                raise TypeError("C FFI extern functions cannot be async", file=self.file,
+                                line=stmt.line, col=stmt.col, code="W2001")
             allowed = {"int", "int32", "int64", "float", "double", "bool", "opaque"}
             if (not all(isinstance(p.type_ann, NamedType) and p.type_ann.name in allowed for p in stmt.params)
                     or not isinstance(stmt.return_type, NamedType) or stmt.return_type.name not in allowed | {"unit"}):
@@ -1038,15 +1066,38 @@ class TypeChecker:
             type_name, bindings = pattern.type_name, [pattern.binding]
             matched = next((member for member in subject.alternatives if member == pattern.matched_type), None)
         else:
-            type_name = f"{pattern.enum_name}.{pattern.variant}" if pattern.enum_name else pattern.variant
+            pat_type_args = getattr(pattern, 'type_args', None)
             bindings = pattern.args
-            if "." in type_name:
-                resolved = self._lookup_type_name(type_name)
+            if pat_type_args:
+                lookup_name = f"{pattern.enum_name}.{pattern.variant}" if pattern.enum_name else pattern.variant
+                resolved = self._resolve_type_node(GenericType(name=lookup_name, type_args=pat_type_args, line=pattern.line, col=pattern.col))
                 matched = next((member for member in subject.alternatives if member == resolved), None)
+                base_display = (
+                    f"{pattern.enum_name}.{getattr(pattern, 'source_name', pattern.variant)}"
+                    if pattern.enum_name else getattr(pattern, 'source_name', pattern.variant)
+                )
+                args_display = ", ".join(str(a) for a in getattr(resolved, "type_args", ()))
+                type_name = f"{base_display}[{args_display}]" if args_display else base_display
             else:
-                matched = next((member for member in subject.alternatives
-                                if self._error_pattern_name(member) == type_name), None)
-            type_name = getattr(pattern, 'source_name', type_name)
+                type_name = f"{pattern.enum_name}.{pattern.variant}" if pattern.enum_name else pattern.variant
+                if "." in type_name:
+                    resolved = self._lookup_type_name(type_name)
+                    matched = next((member for member in subject.alternatives if member == resolved), None)
+                else:
+                    matched = next((member for member in subject.alternatives
+                                    if self._error_pattern_name(member) == type_name), None)
+                    if matched is None:
+                        raw = getattr(pattern, 'source_name', type_name)
+                        matches = [member for member in subject.alternatives
+                                   if getattr(member, "template_name", None) in (type_name, raw)]
+                        if len(matches) == 1:
+                            matched = matches[0]
+                        elif len(matches) > 1:
+                            raise TypeError(
+                                message=f"Ambiguous generic error pattern '{raw}'; specify explicit type arguments",
+                                line=pattern.line, col=pattern.col, file=self.file, code="W2001",
+                            )
+                type_name = getattr(pattern, 'source_name', type_name)
         if matched is None:
             raise TypeError(message=f"Pattern '{type_name}(...)' is not an alternative of error union '{subject}'",
                             line=pattern.line, col=pattern.col, file=self.file, code="W2001")
@@ -1062,7 +1113,7 @@ class TypeChecker:
     def _error_pattern_name(error_type: WysnaType) -> str:
         if error_type in (IntType, FloatType, BoolType, StrType):
             return str(error_type)
-        if isinstance(error_type, (StructType, EnumType)):
+        if isinstance(error_type, (StructType, EnumType, ClassType)):
             return error_type.name
         return str(error_type)
 
@@ -1220,7 +1271,14 @@ class TypeChecker:
         if isinstance(node, NamedType):
             if node.name in subst:
                 return self._type_to_type_node(subst[node.name])
-            return NamedType(node.name, line=node.line, col=node.col)
+            copied = NamedType(node.name, line=node.line, col=node.col)
+            if hasattr(node, "session_resolved_type"):
+                copied.session_resolved_type = node.session_resolved_type
+                copied.resolved_type_id = node.resolved_type_id
+                copied.session_arena_id = node.session_arena_id
+            if getattr(node, "is_internal_any", False):
+                copied.is_internal_any = True
+            return copied
         if isinstance(node, GenericType):
             new_args = [self._substitute_type_node(a, subst) for a in node.type_args]
             return GenericType(node.name, new_args, line=node.line, col=node.col)
@@ -1318,6 +1376,8 @@ class TypeChecker:
             self._substitute_ast_types(node.left, subst)
             self._substitute_ast_types(node.right, subst)
         elif isinstance(node, UnaryExpr):
+            self._substitute_ast_types(node.operand, subst)
+        elif isinstance(node, AwaitExpr):
             self._substitute_ast_types(node.operand, subst)
         elif isinstance(node, MemberExpr):
             self._substitute_ast_types(node.object, subst)
@@ -1425,6 +1485,22 @@ class TypeChecker:
             raise TypeError("Generic constraints must name an interface", line=line,
                             col=col, file=self.file, code="W2012")
         resolved = self.global_scope.lookup_type(constraint.name)
+        if resolved is None and constraint.name.startswith("__wysna_module_"):
+            resolved = next(
+                (t for t in self.global_scope.types.values() if getattr(t, "name", None) == constraint.name),
+                None,
+            )
+            if resolved is None and getattr(self, "session", None) is not None:
+                for unit in self.session.modules.values():
+                    unit_checker = getattr(unit, "checker", None)
+                    if unit_checker is not None:
+                        resolved = next(
+                            (t for t in unit_checker.global_scope.types.values()
+                             if getattr(t, "name", None) == constraint.name),
+                            None,
+                        )
+                        if resolved is not None:
+                            break
         if not isinstance(resolved, InterfaceType):
             raise TypeError(f"Generic constraint '{constraint.name}' is not a declared interface",
                             line=line, col=col, file=self.file, code="W2012")
@@ -1442,7 +1518,7 @@ class TypeChecker:
             return
         if isinstance(c_type, InterfaceType):
             if isinstance(type_arg, ClassType):
-                if not type_arg.implements_interface(c_name):
+                if not type_arg.implements_interface(c_type.name):
                     raise TypeError(
                         message=f"Type '{type_arg}' does not implement interface constraint '{c_name}'",
                         line=line,
@@ -1549,6 +1625,9 @@ class TypeChecker:
 
     def _monomorphize_fn(self, template, concrete_args, line, col):
         return self.instantiator.function(template, concrete_args, line, col)
+
+    def _monomorphize_method(self, receiver_cls_type, template, concrete_args, line, col):
+        return self.instantiator.method(receiver_cls_type, template, concrete_args, line, col)
 
 
     def _monomorphize_enum(self, template, concrete_args, line, col):
@@ -1736,11 +1815,13 @@ class TypeChecker:
         alternatives = [self._resolve_type_node(member) for member in node.error_types]
         for alternative, source_node in zip(alternatives, node.error_types):
             is_scalar = alternative in (IntType, FloatType, BoolType, StrType)
-            is_nominal = isinstance(alternative, (StructType, EnumType))
-            is_generic_nominal = is_nominal and bool(getattr(alternative, "type_args", ()))
-            if not (is_scalar or (is_nominal and not is_generic_nominal)):
+            is_builtin_enum = (isinstance(alternative, EnumType)
+                               and getattr(alternative, "template_name", None) in ("Option", "Result"))
+            is_nominal = isinstance(alternative, (StructType, EnumType, ClassType)) and not is_builtin_enum
+            has_type_param = self.type_relations._contains_type_parameter(self.interner.from_type(alternative))
+            if (has_type_param and not self._checking_generic_definition) or not (is_scalar or is_nominal):
                 raise TypeError(
-                    message=f"Error union alternative '{alternative}' has no distinct runtime type identity; use int, float, bool, str, a non-generic struct, or a non-generic enum",
+                    message=f"Error union alternative '{alternative}' has no distinct runtime type identity; use int, float, bool, str, struct, enum, or class",
                     line=source_node.line,
                     col=source_node.col,
                     file=self.file,

@@ -13,7 +13,7 @@ def emit_range_loop(generator, start, end, inclusive, body, bind, out):
     outer.append(f'int32_t {count} = wysna_range_count({first}, {last}, {str(inclusive).lower()});')
     outer.append(f'for (int32_t {index} = 0; {index} < {count}; {index}++) {{')
     generator._push_scope('loop')
-    inner = [f'WVal {item} = wysna_int(({first}).as.i + (int64_t){index});']
+    inner = [f'WVal {item} = wysna_borrow_int(wysna_as_int({first}) + (int64_t){index});']
     bind(item, inner)
     value = generator.emit_block_value(body, inner)
     inner.append(f'(void){value};')

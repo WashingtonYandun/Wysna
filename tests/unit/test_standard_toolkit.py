@@ -361,7 +361,7 @@ int main(void) {
     assert(fresh != buffer && wysna_host_buffer_append(buffer, 1) == -1);
     assert(wysna_host_buffer_size(fresh) == 0);
     assert(wysna_host_close(fresh) == 0 && wysna_host_entries == NULL);
-    assert(sizeof(WVal) == 32);
+    assert(sizeof(WVal) == 8);
     return 0;
 }
 '''

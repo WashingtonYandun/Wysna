@@ -1,0 +1,25 @@
+# Benchmark W07-b: Cached string hashing (WStringBuf.hash_cache) under dense dict lookups
+fn main() -> unit {
+    let keys = [
+        "alpha_long_identifier_key_00",
+        "beta_long_identifier_key_001",
+        "gamma_long_identifier_key_02",
+        "delta_long_identifier_key_03",
+        "epsilon_long_identifier_0004",
+        "zeta_long_identifier_key_005",
+        "eta_long_identifier_key_0006",
+        "theta_long_identifier_key_07"
+    ]
+    let mut map: dict[str, int] = {}
+    for i in 0..len(keys) {
+        map[keys[i]] = (i + 1) * 17
+    }
+    let mut hits = 0
+    for step in 0..5000 {
+        let k = keys[step % len(keys)]
+        hits = hits + map[k]
+    }
+    print(len(map), hits)
+}
+
+main()

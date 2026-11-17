@@ -26,8 +26,10 @@ from checker.WysnaType import (
     FunctionType,
     GenericStructTemplate,
     GenericFnTemplate,
+    GenericMethodTemplate,
     GenericEnumTemplate,
 )
+from node.NodeType import clone_ast
 from checker.SymbolTable import Symbol
 from error.Error import TypeError
 
@@ -157,8 +159,6 @@ def _bind_symbol_from_unit(checker: "TypeChecker", unit, name: str, bound_name: 
             checker.generic_fn_templates[bound_name] = t
         elif isinstance(t, GenericEnumTemplate):
             checker.generic_enum_templates[bound_name] = t
-        elif isinstance(t, GenericOopTemplate):
-            checker.generic_oop_templates[bound_name] = t
         found = True
 
     if not found:
@@ -289,11 +289,12 @@ def resolve_declaration_signatures(checker: "TypeChecker", program: Program) -> 
             stmt.interfaces = [checker._resolve_type_node(interface).name if isinstance(interface, TypeNode) else interface
                                for interface in stmt.interfaces]
             class_decls.append(stmt)
+            checker.class_decls[stmt.name] = stmt
             cls_type = checker.global_scope.lookup_type(stmt.name)
             assert isinstance(cls_type, ClassType)
 
             if stmt.superclass is not None:
-                sup_t = checker.global_scope.lookup_type(stmt.superclass)
+                sup_t = checker._lookup_type_name(stmt.superclass) if isinstance(stmt.superclass, str) else None
                 if sup_t is None or not isinstance(sup_t, ClassType):
                     raise TypeError(
                         message=f"Unknown superclass '{stmt.superclass}' for class '{stmt.name}'",
@@ -302,6 +303,7 @@ def resolve_declaration_signatures(checker: "TypeChecker", program: Program) -> 
                         file=checker.file,
                         code="W1001"
                     )
+                stmt.superclass = sup_t.name
                 if sup_t.name == stmt.name or sup_t.is_subclass_of(stmt.name):
                     raise TypeError(
                         message=f"Cyclic class inheritance detected involving '{stmt.name}'",
@@ -312,8 +314,9 @@ def resolve_declaration_signatures(checker: "TypeChecker", program: Program) -> 
                     )
                 cls_type.superclass = sup_t
 
+            resolved_interfaces = []
             for intf_name in stmt.interfaces:
-                intf_t = checker.global_scope.lookup_type(intf_name)
+                intf_t = checker._lookup_type_name(intf_name) if isinstance(intf_name, str) else None
                 if intf_t is None or not isinstance(intf_t, InterfaceType):
                     raise TypeError(
                         message=f"Unknown interface '{intf_name}' implemented by class '{stmt.name}'",
@@ -322,7 +325,9 @@ def resolve_declaration_signatures(checker: "TypeChecker", program: Program) -> 
                         file=checker.file,
                         code="W1001"
                     )
+                resolved_interfaces.append(intf_t.name)
                 cls_type.interfaces.append(intf_t)
+            stmt.interfaces = resolved_interfaces
 
             # Own fields & methods
             seen_own_fields: Set[str] = set()
@@ -350,9 +355,27 @@ def resolve_declaration_signatures(checker: "TypeChecker", program: Program) -> 
                         code="W1002"
                     )
                 seen_own_methods.add(m.name)
+                if getattr(m, "type_params", None):
+                    if m.name == "init":
+                        raise TypeError(
+                            message=f"Constructor 'init' of class '{stmt.name}' cannot declare generic type parameters",
+                            line=m.line,
+                            col=m.col,
+                            file=checker.file,
+                            code="W2001",
+                        )
+                    cls_type.generic_methods[m.name] = GenericMethodTemplate(
+                        name=m.name,
+                        type_params=list(m.type_params),
+                        ast_decl=clone_ast(m),
+                        is_public=m.is_public,
+                        owner_class=stmt.name,
+                        checker=checker,
+                    )
+                    continue
                 p_types = [checker._resolve_type_node(p.type_ann) for p in m.params]
                 r_type = checker._resolve_type_node(m.return_type)
-                fn_t = FunctionType(params=p_types, ret=r_type)
+                fn_t = FunctionType(params=p_types, ret=r_type, is_async=getattr(m, "is_async", False))
                 if m.name == "init":
                     cls_type.init_type = fn_t
                 else:
@@ -369,7 +392,7 @@ def resolve_declaration_signatures(checker: "TypeChecker", program: Program) -> 
             else:
                 param_types: List[WysnaType] = [checker._resolve_type_node(p.type_ann) for p in stmt.params]
                 ret_type = checker._resolve_type_node(stmt.return_type)
-                fn_type = FunctionType(params=param_types, ret=ret_type)
+                fn_type = FunctionType(params=param_types, ret=ret_type, is_async=getattr(stmt, "is_async", False))
                 checker.global_scope.define_symbol(
                     Symbol(stmt.name, fn_type, is_mut=False, kind="fn", line=stmt.line, col=stmt.col),
                     file=checker.file
@@ -392,11 +415,15 @@ def validate_class_contracts(checker: "TypeChecker", class_decls: List[ClassDecl
 
         merged_fields: Dict[str, ClassFieldInfo] = {}
         merged_methods: Dict[str, ClassMethodInfo] = {}
+        merged_generic: Dict[str, GenericMethodTemplate] = {}
         for anc in ancestors:
             for fname, finfo in anc.fields.items():
                 merged_fields[fname] = finfo
             for mname, minfo in anc.methods.items():
                 merged_methods[mname] = minfo
+            for gname, gtmpl in anc.generic_methods.items():
+                if gtmpl.is_public or gtmpl.owner_class == cls_type.name:
+                    merged_generic[gname] = gtmpl
 
         # Apply subclass own fields and methods (checking override compatibility)
         for fname, finfo in cls_type.fields.items():
@@ -405,6 +432,14 @@ def validate_class_contracts(checker: "TypeChecker", class_decls: List[ClassDecl
                                 line=stmt.line, col=stmt.col, code="W3003")
             merged_fields[fname] = finfo
         for mname, minfo in cls_type.methods.items():
+            if mname in merged_generic:
+                raise TypeError(
+                    message=f"Method '{mname}' in class '{stmt.name}' cannot override generic method of superclass '{merged_generic[mname].owner_class}'",
+                    line=stmt.line,
+                    col=stmt.col,
+                    file=checker.file,
+                    code="W3003",
+                )
             if mname in merged_methods:
                 base_m = merged_methods[mname]
                 if not base_m.is_public:
@@ -427,9 +462,44 @@ def validate_class_contracts(checker: "TypeChecker", class_decls: List[ClassDecl
                         code="W3003"
                     )
             merged_methods[mname] = minfo
+        for gname, gtmpl in cls_type.generic_methods.items():
+            for param in gtmpl.type_params:
+                constraint = getattr(param, "constraint", None)
+                if constraint is not None:
+                    checker._resolve_constraint_interface(constraint, param.line, param.col)
+            if gname in merged_methods:
+                raise TypeError(
+                    message=f"Generic method '{gname}' in class '{stmt.name}' cannot override non-generic method of superclass '{merged_methods[gname].owner_class}'",
+                    line=stmt.line,
+                    col=stmt.col,
+                    file=checker.file,
+                    code="W3003",
+                )
+            if gname in merged_generic:
+                base_g = merged_generic[gname]
+                if not base_g.is_public:
+                    raise TypeError(
+                        message=f"Cannot override private method '{gname}' of superclass '{base_g.owner_class}'",
+                        line=stmt.line,
+                        col=stmt.col,
+                        file=checker.file,
+                        code="W3002",
+                    )
+                if base_g.is_public and not gtmpl.is_public:
+                    raise TypeError(
+                        f"Public method '{gname}' cannot become private",
+                        file=checker.file, line=stmt.line, col=stmt.col, code="W3002",
+                    )
+                if len(base_g.type_params) != len(gtmpl.type_params):
+                    raise TypeError(
+                        message=f"Generic method '{gname}' in class '{stmt.name}' has incompatible type parameter count with superclass '{base_g.owner_class}'",
+                        line=stmt.line, col=stmt.col, file=checker.file, code="W3003",
+                    )
+            merged_generic[gname] = gtmpl
 
         cls_type.fields = merged_fields
         cls_type.methods = merged_methods
+        cls_type.generic_methods = merged_generic
 
         # Verify all implemented interfaces
         for intf in cls_type.interfaces:

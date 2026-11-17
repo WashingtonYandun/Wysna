@@ -1,0 +1,265 @@
+# Deterministic diagnostics, UTF-8 byte-span calculation, and SHA-256 helpers shared by all compiler stages.
+extern "C" fn wysna_host_buffer_new() -> opaque
+extern "C" fn wysna_host_buffer_append(handle: opaque, value: int) -> int
+extern "C" fn wysna_host_buffer_get(handle: opaque, index: int) -> int
+extern "C" fn wysna_host_crypto_sha256(input_handle: opaque, output_handle: opaque) -> int
+extern "C" fn wysna_host_close(handle: opaque) -> int
+
+fn diag_hex_digit(n: int) -> str {
+    let digits = "0123456789abcdef"
+    if n < 0 or n >= 16 { return "0" }
+    return digits[n]
+}
+
+fn diag_sha256_hex(text: str) -> str {
+    let input = wysna_host_buffer_new()
+    let output = wysna_host_buffer_new()
+    for b in bytes(text) {
+        wysna_host_buffer_append(input, b)
+    }
+    let status = wysna_host_crypto_sha256(input, output)
+    let mut parts: list[str] = []
+    if status == 0 {
+        for i in 0..32 {
+            let v = wysna_host_buffer_get(output, i)
+            let hi = (v / 16) % 16
+            let lo = v % 16
+            parts.append(diag_hex_digit(hi) + diag_hex_digit(lo))
+        }
+    }
+    wysna_host_close(input)
+    wysna_host_close(output)
+    return join_strings(parts, "")
+}
+
+fn diag_json_quote(s: str) -> str {
+    let mut parts: list[str] = ["\""]
+    let n = len(s)
+    for i in 0..n {
+        let ch = s[i]
+        let code = ord(ch)
+        if code == 34 {
+            parts.append("\\\"")
+        } elif code == 92 {
+            parts.append("\\\\")
+        } elif code == 8 {
+            parts.append("\\b")
+        } elif code == 12 {
+            parts.append("\\f")
+        } elif code == 10 {
+            parts.append("\\n")
+        } elif code == 13 {
+            parts.append("\\r")
+        } elif code == 9 {
+            parts.append("\\t")
+        } elif code >= 0 and code < 32 {
+            parts.append("\\u00" + diag_hex_digit(code / 16) + diag_hex_digit(code % 16))
+        } else {
+            parts.append(ch)
+        }
+    }
+    parts.append("\"")
+    return join_strings(parts, "")
+}
+
+fn diag_stage_for_code(code: str) -> str {
+    if code == "W0001" or code == "W0002" or code == "W0003" or code == "W0004" or code == "W0005" {
+        return "lexer"
+    }
+    if code == "W0006" { return "syntax" }
+    if len(code) >= 2 and code[0] == "W" and code[1] == "1" { return "semantic" }
+    if len(code) >= 2 and code[0] == "W" and (code[1] == "2" or code[1] == "3") { return "type" }
+    if len(code) >= 2 and code[0] == "W" and code[1] == "4" { return "runtime" }
+    if code == "W5005" { return "patch" }
+    if len(code) >= 2 and code[0] == "W" and code[1] == "5" { return "toolchain" }
+    if len(code) >= 2 and code[0] == "W" and code[1] == "6" { return "lint" }
+    return "internal"
+}
+
+fn diag_char_offset_at(src: str, target_line: int, target_col: int) -> int {
+    if target_line < 1 or target_col < 1 { return -1 }
+    let n = len(src)
+    let mut line = 1
+    let mut i = 0
+    while line < target_line and i < n {
+        let code = ord(src[i])
+        if code == 13 {
+            if i + 1 < n and ord(src[i + 1]) == 10 { i = i + 2 } else { i = i + 1 }
+            line = line + 1
+        } elif code == 10 {
+            i = i + 1
+            line = line + 1
+        } else {
+            i = i + 1
+        }
+    }
+    if line < target_line { return -1 }
+    let mut line_end = i
+    while line_end < n {
+        let c = ord(src[line_end])
+        if c == 10 or c == 13 { break }
+        line_end = line_end + 1
+    }
+    let col_pos = i + target_col - 1
+    return if col_pos <= line_end { col_pos } else { line_end }
+}
+
+fn diag_utf8_byte_at(src: str, char_pos: int) -> int {
+    if char_pos <= 0 { return 0 }
+    let clamped = if char_pos > len(src) { len(src) } else { char_pos }
+    return len(bytes(slice(src, 0, clamped)))
+}
+
+fn diag_char_span_width(src: str, start_char: int) -> int {
+    let n = len(src)
+    if start_char < 0 or start_char >= n { return start_char }
+    let c = ord(src[start_char])
+    if c == 10 or c == 13 { return start_char }
+    let mut end_c = start_char + 1
+    let is_word = (c >= 65 and c <= 90) or (c >= 97 and c <= 122) or (c >= 48 and c <= 57) or c == 95
+    if is_word {
+        while end_c < n {
+            let ch = ord(src[end_c])
+            if (ch >= 65 and ch <= 90) or (ch >= 97 and ch <= 122) or (ch >= 48 and ch <= 57) or ch == 95 {
+                end_c = end_c + 1
+            } else {
+                break
+            }
+        }
+    }
+    return end_c
+}
+
+fn diag_primary_span_json(file: str, line: int, col: int, src: str) -> str {
+    if file == "" or src == "" or line < 1 or col < 1 { return "null" }
+    let start_char = diag_char_offset_at(src, line, col)
+    if start_char < 0 { return "null" }
+    let end_char = diag_char_span_width(src, start_char)
+    let start_byte = diag_utf8_byte_at(src, start_char)
+    let end_byte = diag_utf8_byte_at(src, end_char)
+    let sha = diag_sha256_hex(src)
+    return "{\"source_id\":" + diag_json_quote(file) + ",\"source_sha256\":" + diag_json_quote(sha) + ",\"start_byte\":" + str(start_byte) + ",\"end_byte\":" + str(end_byte) + "}"
+}
+
+fn diag_record_json(code: str, stage: str, severity: str, msg: str, file: str, line: int, col: int, src: str) -> str {
+    let span_json = diag_primary_span_json(file, line, col, src)
+    return "{\"code\":" + diag_json_quote(code) + ",\"severity\":" + diag_json_quote(severity) + ",\"stage\":" + diag_json_quote(stage) + ",\"message\":" + diag_json_quote(msg) + ",\"primary_span\":" + span_json + ",\"related\":[],\"data\":{},\"fixes\":[]}"
+}
+
+fn diag_tool_envelope_json(command: str, status: str, exit_code: int, diagnostics_json: str, result_key: str, result_json: str, artifacts_json: str) -> str {
+    let mut parts: list[str] = ["{\"schema_version\":\"wysna.tool-result/1\""]
+    parts.append(",\"command\":" + diag_json_quote(command))
+    parts.append(",\"status\":" + diag_json_quote(status))
+    parts.append(",\"invocation_id\":\"native\"")
+    parts.append(",\"tool_exit_code\":" + str(exit_code))
+    parts.append(",\"process_exit_code\":" + str(exit_code))
+    parts.append(",\"execution\":null")
+    parts.append(",\"toolchain\":{\"compiler\":\"0.6.0\"}")
+    parts.append(",\"target\":{\"profile\":\"native-cli\",\"triple\":null}")
+    parts.append(",\"diagnostics\":" + diagnostics_json)
+    parts.append(",\"artifacts\":" + artifacts_json)
+    parts.append(",\"telemetry\":null")
+    if result_key != "" {
+        parts.append("," + diag_json_quote(result_key) + ":" + result_json)
+    }
+    parts.append("}")
+    return join_strings(parts, "")
+}
+
+fn diag_clean_cli_args() -> list[str] {
+    let raw = args()
+    let mut clean: list[str] = []
+    let mut i = 1
+    while i < len(raw) {
+        if (raw[i] == "--stdlib-root" or raw[i] == "--diag-out") and i + 1 < len(raw) {
+            i = i + 2
+        } elif raw[i] == "--overlay" and i + 2 < len(raw) {
+            i = i + 3
+        } else {
+            clean.append(raw[i])
+            i = i + 1
+        }
+    }
+    return clean
+}
+
+fn diag_out_path() -> str {
+    let raw = args()
+    let mut i = 1
+    while i < len(raw) {
+        if raw[i] == "--diag-out" and i + 1 < len(raw) { return raw[i + 1] }
+        i = i + 1
+    }
+    return ""
+}
+
+fn diag_write_output(payload: str) -> unit {
+    let out = diag_out_path()
+    if out != "" {
+        write_file(out, payload) else err {
+            print(payload)
+            return
+        }
+        return
+    }
+    print(payload)
+}
+
+fn diag_read_snippet_source(file: str) -> str {
+    let raw = args()
+    let mut i = 1
+    while i < len(raw) {
+        if raw[i] == "--overlay" and i + 2 < len(raw) {
+            if raw[i + 1] == file {
+                return read_file(raw[i + 2]) else error { "" }
+            }
+            i = i + 3
+        } else {
+            i = i + 1
+        }
+    }
+    return read_file(file) else error { "" }
+}
+
+fn diag_cli_json_mode() -> str {
+    let clean = diag_clean_cli_args()
+    for i in 0..len(clean) {
+        if clean[i] == "--check-json" { return "check-json" }
+        if clean[i] == "--output-format=json-v1" { return "json-v1" }
+        if clean[i] == "--output-format" and i + 1 < len(clean) and clean[i + 1] == "json-v1" { return "json-v1" }
+    }
+    return ""
+}
+
+fn diag_cli_command() -> str {
+    let clean = diag_clean_cli_args()
+    if len(clean) == 0 { return "check" }
+    let first = clean[0]
+    if first == "check" or first == "--check" or first == "--check-json" { return "check" }
+    if first == "fmt" or first == "--fmt" or first == "--fmt-write" { return "fmt" }
+    if first == "graph" or first == "inspect" or first == "patch" or first == "explain" or first == "lsp" { return first }
+    if first == "--emit-c-mir" or first == "--emit-mir" or first == "--check-mir" { return "build" }
+    return "check"
+}
+
+fn diag_emit_and_exit(file: str, code: str, line: int, col: int, msg: str) -> unit {
+    let mode = diag_cli_json_mode()
+    if mode == "" {
+        eprint("[" + code + "] " + file + ":" + str(line) + ":" + str(col) + " - " + msg)
+        exit(1)
+    }
+    let mut src = ""
+    if file != "" and file != "<stdin>" and file != "<unknown>" and file != "<cli>" {
+        src = diag_read_snippet_source(file)
+    }
+    let stage = diag_stage_for_code(code)
+    let diag_json = diag_record_json(code, stage, "error", msg, file, line, col, src)
+    if mode == "check-json" {
+        diag_write_output("{\"schema_version\":\"wysna.cli.result/1\",\"compiler_version\":\"0.6.0\",\"command\":\"check\",\"ok\":false,\"exit_code\":1,\"diagnostics\":[" + diag_json + "],\"data\":null}")
+        exit(1)
+    }
+    let cmd = diag_cli_command()
+    let status = if code == "W5002" or code == "W5003" or code == "W5004" or code == "W5005" { "usage_error" } else { "diagnostic_error" }
+    diag_write_output(diag_tool_envelope_json(cmd, status, 1, "[" + diag_json + "]", "", "", "[]"))
+    exit(1)
+}

@@ -63,27 +63,24 @@ This is a language change, not a patch.
 
 ---
 
-## 2. Error unions have restricted alternatives
+## 2. Error unions cover scalar, ADT, class, and generic value channels
 
 **Behavior.** `T ! E1 | E2` allows `?` to propagate multiple error types and `match` to
 exhaustively inspect the value bound by `else err`. A source error set can propagate when
 it is a subset of the destination function's declared error set. Payloads are not
 converted.
 
-Supported alternatives are `int`, `float`, `bool`, `str`, non-generic `struct`, and
-non-generic `enum`. Patterns use `Type(error)` or `Type(_)` and bind the full payload.
-Duplicate alternatives are canonicalized; a union must contain at least two distinct
-alternatives.
+Supported alternatives across Seed and LLVM are `int`, `float`, `bool`, `str`, `struct`
+(including concrete generic `Struct[T]`), `enum` (including concrete generic `Enum[T]`),
+and `class` types (`Selfhost` supports scalars, non-generic `struct`/`enum`, and
+non-generic `class`). Patterns use `Type(error)` (including generic `Type[T]` payloads) and bind the
+full payload. Duplicate alternatives are canonicalized; a union must contain at least
+two distinct alternatives.
 
-**Limit.** Classes, generic types, collections, tuples, functions, and other composite
-types are not supported. Class hierarchies may overlap, and collections and functions do
-not preserve their concrete parameter identity in `WVal`. Without additional runtime
-type descriptors, patterns could not distinguish these alternatives safely. F03 keeps
-the original payload and compares its runtime identity; it adds no boxing or implicit
-conversion.
-
-**Future work.** Expanding the set requires a runtime identity contract for each new
-category, especially inherited classes and monomorphized generic types.
+**Limit.** Collections (`list`, `dict`), tuples, function values, built-in `Option`/`Result`
+channels, and unresolved generic type parameters remain unsupported as error union
+alternatives because `WVal` does not box arbitrary generic collection type arguments for
+runtime tag discrimination.
 
 ---
 
@@ -95,7 +92,15 @@ the listed fixtures does not guarantee equivalent behaviour for every Wysna prog
 
 Wysna Compiler has modular source files under `selfhost/src/`, bundled into
 `selfhost/compiler.wysna`. It parses and checks source using its own implementation and
-uses one checked-node → verified MIR → C99 pipeline under `native-core-v1`. Constrained parameterized classes, parameterized classes with independently generic methods, inheritance or interfaces, parameterized interfaces, unresolved generic nominal values, library-mode exports and WASM targets remain explicit profile limits; see [MIR design](MIR_DESIGN.md). Compiler does not share Seed's compilation session or type arena. Deterministic bootstrap and corpus tests are evidence for their measured inputs, not universal semantic equivalence.
+uses one checked-node → verified MIR → C99 pipeline under `native-core-v1`. Parameterized
+classes with constrained generics, independently generic methods (`Box[T].transform[R]`), and
+parameterized class inheritance
+are supported in both Seed and Selfhost (`native-core-v1`); parameterized interface declarations (`interface Container[T]`) remain Seed-only (`W2013` in Selfhost). The native SDK driver
+(`packaging/native/driver.c`) supports `check` (including `--output-format=json-v1`),
+`fmt` (`--write`, `--output-format=json-v1`), `test`, `graph`, `inspect`, `patch` (`W5005`),
+`explain`, and Stage-3 native LSP (`wysna lsp`, backed by `selfhost/src/09_lsp.wysna`)
+without Python. Unresolved generic nominal values, library-mode exports, `wysna.toml`
+project manifests/lockfiles, and WASM targets remain outside `native-core-v1`; see [MIR design](MIR_DESIGN.md). Compiler does not share Seed's compilation session or type arena, though Seed compiles use an interface-digest incremental module cache. Deterministic bootstrap and corpus tests are evidence for their measured inputs, not universal semantic equivalence.
 
 The [native SDK](NATIVE_SDK.md) packages the native engine, runtime, stdlib and pinned C toolchain. Its commands run without Python. The SDK is a portable development artifact; platform acceptance, signing and release publication are distinct gates. HTTP and other external C dependencies are not included in the offline core.
 
@@ -192,16 +197,13 @@ threads with shared mutable state into the core language model.
 | Chained assignment | HIR uses `HirAssignment`; the value is preserved and each index is evaluated once. The artificial depth limit was removed. |
 | Parser error recovery | Check and LSP recover up to 100 syntax diagnostics. JSON preserves the first error and adds `diagnostics`; recovered programs never execute. |
 | `wysna fmt` coverage | The gate checks idempotence and AST preservation across fixtures, runtime programs, recursive examples, the standard library, and self-hosted sources. It also runs generated trees before and after formatting. |
-| LSP | `initialize`, `didOpen/didChange/didClose` with ordered ranged edits, `definition`, `hover`, `completion`, `references`, `rename`, `codeAction` (quickfixes), `signatureHelp`, document formatting and `publishDiagnostics` (errors and `W6001`/`W6002` warnings). No semantic tokens. |
+| LSP | Both Seed (`src/tooling/LanguageServer.py`) and native Stage-3 Selfhost (`selfhost/src/09_lsp.wysna`, invoked via `wysna lsp`) support `initialize`, `didOpen/didChange/didClose` with UTF-16 ordered incremental edits and in-memory dependency overlays, `definition`, `implementation`, graph-enriched `hover`, `completion`, `references`, `textDocument/semanticTokens/full`, document formatting, and non-fatal `publishDiagnostics`. Seed additionally supports workspace-wide cross-file `rename`, `codeAction` (quickfixes), `signatureHelp`, and `W6001`/`W6002` warnings. |
 
-| Capability policy | `wysna run --allow` and `--deny` reject modeled capability violations and incomplete effect analyses before interpretation (`W5006`). This is a static gate, not an OS sandbox; native builds, `project run` and trusted runtime/FFI behavior are outside it. |
-| Dictionary keys | `int`, `str`, `bool`, `enum` only; `float` and composites containing it are rejected with `W2010`. |
-| Standard library scope | Includes text, paths, filesystem, file/buffer I/O, resources, algorithms, UTF-8, JSON, process execution and an HTTP client with explicit host dependencies. Cryptography and Unicode normalization are not provided; see [standard library](STDLIB.md) for contracts and platform limits. |
+| Capability policy | Capability policies are enforced across BOTH interpreted Seed (`wysna run --allow=...` / `--deny=...`, `W5006` static pre-execution gate) AND Seed-compiled C99 binaries (`wysna build --sandbox` / `wysna emit-c --sandbox` with optional `--allow=...` or `--deny=...`, compiling `#define WYSNA_DENY_CAP_*` compile-time guards directly into the C99 runtime ABI and tripping `[W5006]` on disallowed host operations). This provides in-process capability enforcement; it is not an OS kernel/container sandbox (seccomp/pledge/chroot) for external C libraries or raw FFI (`--link-lib` cannot be combined with `--sandbox`). |
+| Dictionary keys | `int`, `str`, `bool`, `enum`, and hashable `tuple` composites; `float`, collections, functions, classes, and composites containing non-hashable elements are rejected with `W2010`. |
+| Standard library scope | Includes text (with Unicode 16.0.0 UAX #15 `NFC`/`NFD`), paths, filesystem, file/buffer I/O, stdin/stdout streams, resources, algorithms (incl. parallel pools), UTF-8, JSON, `std/crypto` (SHA-256/HMAC + ChaCha20-Poly1305 AEAD + CSPRNG), `std/time` (calendar/ISO-8601), `std/environment`, `std/async` (timers + OS-thread `spawn`), process execution, and HTTP client; see [standard library](STDLIB.md) for contracts and platform limits. |
 
-LSP references cover checked open documents only. Rename is limited to non-exported
-variables, parameters and top-level functions in the current document; it refuses
-potential name collisions and unresolved occurrences. Cross-module and exported
-rename require a complete workspace index and are not available.
+LSP cross-file `rename` resolves all workspace `.wysna` files when `rootUri`/`workspaceFolders` are configured and refuses collisions or broken dependent modules; when no workspace root is configured, rename refuses exported symbols safely.
 
 The CLI has POSIX and Windows adapters for cache locks, compiler processes, executable
 names and RSS telemetry. The Windows smoke job must pass on that host before support
@@ -221,20 +223,19 @@ networking require the acceptance contracts in [Service foundations](SERVICE_FOU
 
 ---
 
-## 8. Audit Findings Still Open in 0.6.0
+## 8. Audit Status and Open Scope in 0.7.0
 
-Identity cleanup and newline separators do not close every architectural finding. These
-limits remain part of the published scope:
+Closed items on `feat/close-language-gaps-v0.7` vs remaining open architectural work:
 
-| Finding | Status in 0.6.0 | Remaining work |
+| Finding | Current State | Remaining work |
 | :--- | :--- | :--- |
-| W01 · Compiler architecture | Seed uses AST/HIR/MIR; Compiler uses one checked-node → verified MIR → C99 pipeline under `native-core-v1` and ships a native SDK with CLI parity (`--version`, `--check`, `--check-json`) and contract assertions. Constrained parameterized classes, parameterized classes with independently generic methods, inheritance or interfaces, parameterized interfaces, unresolved generic nominal values, library-mode exports and WASM targets remain explicit profile limits. | Extend the Compiler MIR/profile to those constructs and keep independent parity and installed-acceptance gates. |
-| W03 · Value size | Scalar list buffers (`list[int]`, `list[bool]`, `list[float]`) feature $O(1)$ release and `memcpy` CoW fast paths with unboxed MIR access. On a 64-bit ABI, general heterogeneous `WVal` occupies 32 bytes. | Measure a compact 16B/8B representation for general heterogeneous values with explicit runtime and FFI compatibility. |
-| W04 · CoW cost | Mutating a shared buffer can copy all of its elements. Local unreferenced CoW uniqueness optimization elides detach copies when provable statically. | Measure memory pressure and extend interprocedural uniqueness analysis before changing ownership or ABI. |
-| W05 · Generics | Generic templates are verified at definition time for structural validity and typing rules, preventing uninstantiated generic drift. | Extend verification to parameterized interfaces and complex trait-like constraints. |
-| W06 · Concurrency | Bounded deterministic concurrency is supported for parallel collections (`parallel_map`, `parallel_batch`, `parallel_filter`, `parallel_reduce`) and batch HTTP dispatch. | Maintain deterministic index ordering and worker isolation without opening arbitrary preemptive shared mutable state. |
-| W07 · Benchmarks | The current suite uses small workloads and does not represent sustained memory pressure; process startup can dominate short measurements. | Add long-running and memory-intensive workloads before making performance decisions. |
-| W08 · Syntax recovery | Recovery gathers diagnostics for `check` and LSP using heuristic synchronization and does not produce an executable recovered tree. | Document and test recovery limits if it becomes a public contract. |
+| W01 · Compiler architecture | Seed supports nested `/* ... */` comments, independent generic class methods (`Box[T].transform[R]`), parameterized interfaces, class/generic error unions, tuple dict keys, and incremental module/interface-digest caching; Selfhost (`native-core-v1`) closes constrained generic classes, generic class methods, parameterized class inheritance, `from ... use` imports, Agent-First CLI (`graph`, `inspect`, `patch`, `explain`, `check/fmt --output-format=json-v1`), and Stage-3 native LSP (`wysna lsp`) via `driver.c` without Python (`interface Foo[T]` stays Seed-only `W2013`). | Extend Selfhost (`selfhost/`) to `interface Foo[T]`, `wysna.toml` manifests/lockfiles, library-mode exports, and WASM targets if full Seed replacement is targeted. |
+| W03 · Value size | **Resolved in ABI v3 (`v0.7.0`):** `WVal` is natively unified with 8-byte NaN-boxed `WVal64` (`W_RUNTIME_ABI_VERSION = 3`, `ABI_VERSION = 3`, `RUNTIME_ABI_VERSION = 3`, `sizeof(WVal) == 8`) across runtime, AST/MIR C99 Seed, Selfhost, and `llvm-native-v1` (4× density, 8 slots/cache line, 0..6B inline SSO, inline 48-bit ints + `WIntBox` full-64-bit fallback, direct `WEnumBuf` payload). Scalar list buffers also use unboxed MIR access. | Expand cross-OS CI matrix verification (`x86_64-pc-windows-msvc` & `x86_64-unknown-linux-gnu`) for native LLVM ABI v3 `i64` callback adapters. |
+| W04 · CoW cost | `optimize_local_cow_uniqueness`, interprocedural `optimize_interprocedural_cow`, `fold_scalar_constants`, `coalesce_temporary_stores`, `eliminate_dead_pure_ops`, and unboxed `range_count_i64`/`div_i64_at`/`mod_i64_at` elide redundant clones, temporaries, and boxing across loops. | Cross-translation-unit link-time CoW summaries for separately compiled libraries. |
+| W05 · Generics | Generic templates, constrained parameterized classes, independent generic methods in classes, and cross-module generic inheritance are monomorphized uniformly across Seed, Selfhost, and LLVM (parameterized interfaces are monomorphized in Seed/LLVM; Selfhost gates `interface Foo[T]` with `W2013`). | Explicit opt-in trait/typeclass system for built-in types only if language scope changes (currently nominal class interfaces by design). |
+| W06 · Concurrency | Full stackless CPS state-machine MIR transformation (`src/mir/AsyncLowering.py` + `08_mir_c99.wysna:mir_c_async_function` + `LlvmCodeGen.py`) with cooperative `WysnaCoroTask` scheduling in C99/LLVM/Interpreter (`async fn`, lazy coroutine start, loop `await`, nested/fallible `await ... ?`/`else`), plus bounded worker pools (`std/algorithms.parallel_*`), `std/async.spawn`, timers, and `curl_multi` HTTP across engines. | Extend native LLVM coroutine callback qualification on Windows/Linux CI matrices. |
+| W07 · Benchmarks | `bench/run_bench.py` adds `--extended` coverage (`bench/memory_pressure.wysna`, `bench/dict_hash_cache.wysna`, and `bench/wval64_density.c`) alongside the 10 core suite workloads (`BENCHMARK_ORDER`). | Run multi-hour stress telemetry campaigns on Linux/macOS/Windows CI runners before tuning default allocator pools. |
+| W08 · Syntax recovery | Recovery gathers up to 100 diagnostics for `check` and LSP using heuristic synchronization and does not produce an executable recovered tree. | Document and test recovery limits if it becomes a public contract. |
 
 The engine matrix records verified behavior differences. Benchmark figures describe only
 the workloads that were run; they are not a general performance guarantee.

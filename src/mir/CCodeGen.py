@@ -3,6 +3,7 @@ import math
 from checker.TypeInterner import TYPE_UNIT, TYPE_INT, TYPE_BOOL, TYPE_FLOAT, TYPE_STR
 from codegen.CStrings import quote
 from common.Telemetry import CodegenTelemetry
+from mir.AsyncLowering import build_cps_plan
 from mir.Verifier import Verifier
 
 
@@ -85,7 +86,7 @@ class CCodeGen:
                           '    if (wysna_web_initialized) return 1;',
                           '    wysna_init_args(0, NULL);',
                           '    WVal _t_init = ' + entry_call + ';',
-                          '    if (_t_init.tag == W_ERR) {',
+                          '    if (wysna_is_err(_t_init)) {',
                           '        wysna_release(_t_init);',
                           '        wysna_runtime_cleanup();',
                           '        wysna_web_destroyed = true;',
@@ -105,7 +106,7 @@ class CCodeGen:
         else:
             lines.extend(['int main(int argc, char** argv) {', '    wysna_init_args(argc, argv);',
                           '    WVal _t_main = ' + entry_call + ';', '    int status = 0;',
-                          '    if (_t_main.tag == W_ERR) { wysna_report_entrypoint_error(_t_main.as.box->val); status = 1; }',
+                          '    if (wysna_is_err(_t_main)) { wysna_report_entrypoint_error(wysna_as_box(_t_main)->val); status = 1; }',
                           '    wysna_release(_t_main);'])
             lines.extend(f'    wysna_release({slot.name});' for slot in reversed(module.globals))
             lines.extend(['    wysna_runtime_cleanup();', '    return status;', '}'])
@@ -195,12 +196,15 @@ class CCodeGen:
             elif output_type == 'str':
                 lines.extend([
                     f'    WVal returned = {call};',
-                    '    if (returned.tag != W_STR) { wysna_release(returned); ' + ' '.join(cleanup) + ' wysna_web_leave(); return 4; }',
-                    '    if (returned.as.string.length > UINT32_MAX) { wysna_release(returned); ' + ' '.join(cleanup) + ' wysna_web_leave(); return 5; }',
-                    '    uint32_t length = (uint32_t)returned.as.string.length;',
+                    '    if (wysna_tag(returned) != W_STR) { wysna_release(returned); ' + ' '.join(cleanup) + ' wysna_web_leave(); return 4; }',
+                    '    char ret_scratch[7];',
+                    '    size_t ret_len = 0;',
+                    '    const char* ret_data = wysna_str_bytes(returned, ret_scratch, &ret_len);',
+                    '    if (ret_len > UINT32_MAX) { wysna_release(returned); ' + ' '.join(cleanup) + ' wysna_web_leave(); return 5; }',
+                    '    uint32_t length = (uint32_t)ret_len;',
                     '    uint32_t pointer = length ? wysna_web_alloc(length) : 0;',
                     '    if (length && pointer == 0) { wysna_release(returned); ' + ' '.join(cleanup) + ' wysna_web_leave(); return 2; }',
-                    '    if (length) memcpy((void*)(uintptr_t)pointer, returned.as.string.data, length);',
+                    '    if (length) memcpy((void*)(uintptr_t)pointer, ret_data, length);',
                     '    ((uint32_t*)(uintptr_t)output_pointer)[0] = pointer;',
                     '    ((uint32_t*)(uintptr_t)output_pointer)[1] = length;',
                     '    wysna_release(returned);',
@@ -232,14 +236,18 @@ class CCodeGen:
         return constructor + '(' + expression + ')' if constructor else expression
 
     @staticmethod
-    def unbox_expression(expression, type_id):
-        member = {TYPE_INT: 'i', TYPE_FLOAT: 'f', TYPE_BOOL: 'b'}.get(type_id)
-        return '(' + expression + ').as.' + member if member else expression
+    def unbox_expression(expression, type_id, consume=False):
+        if consume and type_id == TYPE_INT:
+            return 'wysna_consume_int(' + expression + ')'
+        extractor = {TYPE_INT: 'wysna_as_int', TYPE_FLOAT: 'wysna_as_float', TYPE_BOOL: 'wysna_as_bool'}.get(type_id)
+        return extractor + '(' + expression + ')' if extractor else expression
 
     def value(self, index, move=False):
         slot = self.slots[index]
         if slot.storage == 'value':
             return f'wysna_move(&{self.name(index)})' if move else self.name(index)
+        if slot.type_id == TYPE_INT and not move:
+            return f'wysna_borrow_int({self.name(index)})'
         return self.box_expression(self.name(index), slot.type_id)
 
     def scalar(self, index):
@@ -270,11 +278,73 @@ class CCodeGen:
     def array(self, arguments):
         return '(WVal[]){ ' + ', '.join(arguments) + ' }' if arguments else 'NULL'
 
+    @staticmethod
+    def _parallel_runtime_helper(function):
+        name = function.name
+        algo_mod = '616c676f726974686d732e7779736e61__'
+        if algo_mod not in name:
+            return None
+        if f'{algo_mod}parallel_map__' in name or name.endswith(f'{algo_mod}parallel_map'):
+            if len(function.params) == 2:
+                return 'wysna_parallel_map'
+        elif f'{algo_mod}parallel_batch__' in name or name.endswith(f'{algo_mod}parallel_batch'):
+            if len(function.params) == 3:
+                return 'wysna_parallel_batch'
+        elif f'{algo_mod}parallel_filter__' in name or name.endswith(f'{algo_mod}parallel_filter'):
+            if len(function.params) == 2:
+                return 'wysna_parallel_filter'
+        return None
+
+    @staticmethod
+    def _async_runtime_helper(function):
+        name = function.name
+        async_mod = '6173796e632e7779736e61__'
+        if async_mod not in name:
+            return None
+        if f'{async_mod}_spawn_handle__' in name or name.endswith(f'{async_mod}_spawn_handle'):
+            if len(function.params) == 1:
+                return 'wysna_async_spawn_handle'
+        elif f'{async_mod}_take_task_value__' in name or name.endswith(f'{async_mod}_take_task_value'):
+            if len(function.params) == 2:
+                return 'wysna_spawn_take_option'
+        return None
+
     def function(self, function):
+        if getattr(function, 'is_async', False):
+            return self._async_function(function)
         self.slots = {slot.id: slot for slot in self.module.globals}
         self.slots.update({slot.id: slot for slot in function.slots})
         params = ', '.join(self.ctype(function.slots[index].type_id) + ' ' + self.name(index) for index in function.params) or 'void'
         lines = [f'static {self.ctype(function.return_type)} {function.name}({params}) {{']
+        async_helper = self._async_runtime_helper(function)
+        if async_helper is not None:
+            p_names = [self.name(index) for index in function.params]
+            if async_helper == 'wysna_async_spawn_handle' and len(p_names) == 1:
+                if self.ctype(function.return_type) == 'WVal':
+                    lines.append(f'    return wysna_int(wysna_async_spawn_handle({p_names[0]}));')
+                else:
+                    lines.append(f'    return wysna_async_spawn_handle({p_names[0]});')
+                lines.extend(['}', ''])
+                return lines
+            if async_helper == 'wysna_spawn_take_option' and len(p_names) == 2 and self.ctype(function.return_type) == 'WVal':
+                p0_slot = self.slots[function.params[0]]
+                p0_boxed = p_names[0] if p0_slot.storage == 'value' else (
+                    f'wysna_borrow_int({p_names[0]})' if p0_slot.type_id == TYPE_INT
+                    else self.box_expression(p_names[0], p0_slot.type_id)
+                )
+                lines.append(f'    return wysna_spawn_take_option({p0_boxed}, {p_names[1]});')
+                lines.extend(['}', ''])
+                return lines
+        parallel_helper = self._parallel_runtime_helper(function)
+        if parallel_helper is not None and self.ctype(function.return_type) == 'WVal':
+            p_names = [self.name(index) for index in function.params]
+            if parallel_helper == 'wysna_parallel_batch':
+                b_arg = f'wysna_as_int({p_names[1]})' if self.slots[function.params[1]].storage == 'value' else p_names[1]
+                lines.append(f'    return {parallel_helper}({p_names[0]}, {b_arg}, {p_names[2]});')
+            else:
+                lines.append(f'    return {parallel_helper}({p_names[0]}, {p_names[1]});')
+            lines.extend(['}', ''])
+            return lines
         for slot in function.slots:
             if slot.parameter:
                 continue
@@ -310,15 +380,162 @@ class CCodeGen:
                 lines.append(f'    return {expression};')
             else:
                 lines.append('    wysna_runtime_fail("W9999", "Unreachable MIR block executed");')
+                default_ret = 'wysna_unit()' if self.ctype(function.return_type) == 'WVal' else '0'
+                lines.append(f'    return {default_ret};')
         lines.extend(['}', ''])
         return lines
 
-    def write(self, destination, value, boxed=True):
+    def _emit_coro_assign_from_wval(self, lines, dest_slot_id, wval_var, indent='    '):
+        slot = self.slots[dest_slot_id]
+        dname = self.name(dest_slot_id)
+        if slot.storage == 'value':
+            lines.append(f'{indent}wysna_release({dname}); {dname} = {wval_var}; {wval_var} = wysna_unit();')
+        elif slot.type_id == TYPE_INT:
+            cast = '(int32_t)' if slot.storage == 'counter' else ''
+            lines.append(f'{indent}{dname} = {cast}wysna_consume_int({wval_var}); {wval_var} = wysna_unit();')
+        elif slot.type_id == TYPE_FLOAT:
+            lines.append(f'{indent}{dname} = wysna_as_float({wval_var}); wysna_release({wval_var}); {wval_var} = wysna_unit();')
+        elif slot.type_id == TYPE_BOOL:
+            lines.append(f'{indent}{dname} = wysna_as_bool({wval_var}); wysna_release({wval_var}); {wval_var} = wysna_unit();')
+
+    def _emit_coro_flush_slots(self, lines, function, indent='        '):
+        for slot in function.slots:
+            sname = self.name(slot.id)
+            if slot.storage == 'value':
+                lines.append(f'{indent}_frame_slots[{slot.id}] = wysna_move(&{sname});')
+            elif slot.type_id == TYPE_INT:
+                lines.append(f'{indent}_frame_slots[{slot.id}] = wysna_int((int64_t){sname});')
+            elif slot.type_id == TYPE_FLOAT:
+                lines.append(f'{indent}_frame_slots[{slot.id}] = wysna_float({sname});')
+            elif slot.type_id == TYPE_BOOL:
+                lines.append(f'{indent}_frame_slots[{slot.id}] = wysna_bool({sname});')
+
+    def _async_function(self, function):
+        self.slots = {slot.id: slot for slot in self.module.globals}
+        self.slots.update({slot.id: slot for slot in function.slots})
+        plan = build_cps_plan(function)
+        step_name = f'wysna_coro_step_{function.name}'
+        lines = [
+            f'static WVal {step_name}(WVal* _frame_slots, int64_t _slot_count, int64_t* _frame_state, WVal _resume_val, bool _has_resume, WVal* _out_await_box, int64_t* _out_await_handle, int32_t* _out_status) {{',
+            '    (void)_slot_count;',
+            '    (void)_has_resume;',
+            '    (void)_out_await_box;',
+            '    (void)_out_await_handle;',
+        ]
+        if not function.slots:
+            lines.append('    (void)_frame_slots;')
+        for slot in function.slots:
+            sname = self.name(slot.id)
+            if slot.storage == 'value':
+                lines.append(f'    WVal {sname} = _frame_slots[{slot.id}]; _frame_slots[{slot.id}] = wysna_unit();')
+            elif slot.type_id == TYPE_INT:
+                ctype = 'int32_t' if slot.storage == 'counter' else 'int64_t'
+                lines.append(f'    {ctype} {sname} = (wysna_tag(_frame_slots[{slot.id}]) == W_INT) ? ({ctype})wysna_as_int(_frame_slots[{slot.id}]) : 0;')
+                lines.append(f'    _frame_slots[{slot.id}] = wysna_unit();')
+            elif slot.type_id == TYPE_FLOAT:
+                lines.append(f'    double {sname} = (wysna_tag(_frame_slots[{slot.id}]) == W_FLOAT) ? wysna_as_float(_frame_slots[{slot.id}]) : 0.0;')
+                lines.append(f'    _frame_slots[{slot.id}] = wysna_unit();')
+            elif slot.type_id == TYPE_BOOL:
+                lines.append(f'    bool {sname} = (wysna_tag(_frame_slots[{slot.id}]) == W_BOOL) ? wysna_as_bool(_frame_slots[{slot.id}]) : false;')
+                lines.append(f'    _frame_slots[{slot.id}] = wysna_unit();')
+
+        lines.append('    switch (*_frame_state) {')
+        lines.append('        case 0: goto bb0;')
+        for sp in plan.suspend_points:
+            lines.append(f'        case {sp.state_id}: goto {sp.resume_label};')
+        lines.append('        default: *_out_status = WYSNA_CORO_DONE; wysna_release(_resume_val); return wysna_unit();')
+        lines.append('    }')
+
+        for seg in plan.segments:
+            lines.append(f'{seg.label}:;')
+            if seg.loop_head:
+                lines.append('    wysna_step_tick();')
+            for op in seg.operations:
+                lines.extend('    ' + line for line in self.operation(op))
+            if seg.suspend is not None:
+                sp = seg.suspend
+                arg_expr = self.value(sp.await_arg, move=True)
+                lines.append('    {')
+                lines.append(f'        WVal _aw_box_{sp.state_id} = {arg_expr};')
+                lines.append(f'        int64_t _aw_handle_{sp.state_id} = 0;')
+                lines.append(f'        WVal _aw_imm_{sp.state_id} = wysna_unit();')
+                lines.append(f'        if (wysna_coro_try_resolve_await(&_aw_box_{sp.state_id}, &_aw_handle_{sp.state_id}, &_aw_imm_{sp.state_id})) {{')
+                self._emit_coro_assign_from_wval(lines, sp.await_res, f'_aw_imm_{sp.state_id}', indent='            ')
+                lines.append(f'            goto {sp.continue_label};')
+                lines.append('        }')
+                lines.append(f'        *_frame_state = {sp.state_id};')
+                lines.append(f'        *_out_await_box = _aw_box_{sp.state_id};')
+                lines.append(f'        *_out_await_handle = _aw_handle_{sp.state_id};')
+                lines.append('        *_out_status = WYSNA_CORO_SUSPENDED;')
+                self._emit_coro_flush_slots(lines, function, indent='        ')
+                lines.append('        wysna_release(_resume_val);')
+                lines.append('        return wysna_unit();')
+                lines.append('    }')
+                lines.append(f'{sp.resume_label}:;')
+                self._emit_coro_assign_from_wval(lines, sp.await_res, '_resume_val', indent='    ')
+                lines.append(f'    goto {sp.continue_label};')
+            else:
+                term = seg.terminator
+                if term.kind == 'goto':
+                    lines.append(f'    goto bb{term.targets[0]};')
+                elif term.kind == 'branch':
+                    condition = self.scalar(term.value)
+                    lines.append(f'    if ({condition}) goto bb{term.targets[0]}; else goto bb{term.targets[1]};')
+                elif term.kind == 'return':
+                    rslot = self.slots[term.value]
+                    if rslot.storage == 'value':
+                        ret_expr = f'wysna_clone({self.name(term.value)})' if rslot.parameter else f'wysna_move(&{self.name(term.value)})'
+                    else:
+                        ret_expr = self.box_expression(self.name(term.value), rslot.type_id)
+                    lines.append('    {')
+                    lines.append(f'        WVal _coro_ret = {ret_expr};')
+                    for s in function.slots:
+                        if s.storage == 'value':
+                            lines.append(f'        wysna_release({self.name(s.id)}); {self.name(s.id)} = wysna_unit();')
+                    lines.append('        wysna_release(_resume_val);')
+                    lines.append('        *_out_status = WYSNA_CORO_DONE;')
+                    lines.append('        return _coro_ret;')
+                    lines.append('    }')
+                else:
+                    for s in function.slots:
+                        if s.storage == 'value':
+                            lines.append(f'    wysna_release({self.name(s.id)}); {self.name(s.id)} = wysna_unit();')
+                    lines.append('    wysna_release(_resume_val);')
+                    lines.append('    wysna_runtime_fail("W9999", "Unreachable MIR block executed");')
+                    lines.append('    *_out_status = WYSNA_CORO_DONE;')
+                    lines.append('    return wysna_unit();')
+
+        lines.append('    *_out_status = WYSNA_CORO_DONE;')
+        lines.append('    wysna_release(_resume_val);')
+        lines.append('    return wysna_unit();')
+        lines.extend(['}', ''])
+
+        params = ', '.join(self.ctype(function.slots[index].type_id) + ' ' + self.name(index) for index in function.params) or 'void'
+        lines.append(f'static {self.ctype(function.return_type)} {function.name}({params}) {{')
+        slot_count = len(function.slots)
+        if function.params:
+            p_count = len(function.params)
+            lines.append(f'    int64_t _p_idx[{p_count}];')
+            lines.append(f'    WVal _p_vals[{p_count}];')
+            for i, p_id in enumerate(function.params):
+                pslot = self.slots[p_id]
+                lines.append(f'    _p_idx[{i}] = {p_id};')
+                if pslot.storage == 'value':
+                    lines.append(f'    _p_vals[{i}] = {self.name(p_id)};')
+                else:
+                    lines.append(f'    _p_vals[{i}] = {self.box_expression(self.name(p_id), pslot.type_id)};')
+            lines.append(f'    return wysna_coro_spawn({step_name}, {slot_count}, {p_count}, _p_idx, _p_vals);')
+        else:
+            lines.append(f'    return wysna_coro_spawn({step_name}, {slot_count}, 0, NULL, NULL);')
+        lines.extend(['}', ''])
+        return lines
+
+    def write(self, destination, value, boxed=True, consume=False):
         name = self.name(destination)
         if self.slots[destination].storage == 'value':
             return f'wysna_assign(&{name}, {value});'
         if boxed:
-            value = self.unbox_expression(value, self.slots[destination].type_id)
+            value = self.unbox_expression(value, self.slots[destination].type_id, consume=consume)
         return f'{name} = {value};'
 
     def place(self, place, source):
@@ -358,12 +575,13 @@ class CCodeGen:
                     return [self.write(result, literal, boxed=False)]
                 expression = 'wysna_float(' + literal + ')'
             else:
-                if len(value) > 1:
+                utf8_len = len(value.encode('utf-8'))
+                if utf8_len > 6:
                     literal = f'_literal_{self.literal_counter}'
                     self.literal_counter += 1
-                    expression = f'wysna_literal_str_n(&{literal}, {quote(value)}, {len(value.encode("utf-8"))})'
+                    expression = f'wysna_literal_str_n(&{literal}, {quote(value)}, {utf8_len})'
                     return [f'static WStringLiteral {literal} = {{0}};', self.write(result, expression)]
-                expression = f'wysna_str_n({quote(value)}, {len(value.encode("utf-8"))})'
+                expression = f'wysna_str_n({quote(value)}, {utf8_len})'
             return [self.write(result, expression, boxed=self.slots[result].storage != 'predicate')]
         if kind in ('clone', 'narrow'):
             if self.slots[result].storage != 'value' and self.slots[operation.args[0]].storage != 'value':
@@ -375,7 +593,8 @@ class CCodeGen:
                 return [self.write(result, self.name(operation.args[0]), boxed=False)]
             if data.get('scalar'):
                 return [self.write(result, self.scalar(operation.args[0]), boxed=False)]
-            return [self.write(result, args[0])]
+            moved_box = 0 in operation.moves and self.slots[operation.args[0]].storage == 'value'
+            return [self.write(result, args[0], consume=moved_box)]
         if kind == 'release':
             name = self.name(operation.args[0])
             return [f'wysna_release({name}); {name} = wysna_unit();']
@@ -383,7 +602,7 @@ class CCodeGen:
             name = data['name']
             if kind == 'call':
                 arguments, returned, boxed = self.abi_call(name, args, arg_ids=operation.args)
-                return [self.write(result, name + '(' + ', '.join(arguments) + ')', boxed=boxed)]
+                return [self.write(result, name + '(' + ', '.join(arguments) + ')', boxed=boxed, consume=boxed)]
             if kind == 'runtime':
                 if name in ('wysna_add', 'wysna_sub', 'wysna_mul') and len(operation.args) == 2:
                     t0 = self.slots[operation.args[0]].type_id
@@ -395,6 +614,18 @@ class CCodeGen:
                         return [self.write(result, f'(int64_t)((uint64_t){left}{op}(uint64_t){right})', boxed=False)]
                     if t0 == TYPE_FLOAT and t1 == TYPE_FLOAT:
                         return [self.write(result, f'{left}{op}{right}', boxed=False)]
+                elif name in ('wysna_div_at', 'wysna_mod_at') and len(operation.args) == 2:
+                    t0 = self.slots[operation.args[0]].type_id
+                    t1 = self.slots[operation.args[1]].type_id
+                    if t0 == TYPE_INT and t1 == TYPE_INT:
+                        left = self.scalar(operation.args[0])
+                        right = self.scalar(operation.args[1])
+                        helper = 'wysna_div_i64_at' if name == 'wysna_div_at' else 'wysna_mod_i64_at'
+                        return [self.write(result, f'{helper}({left}, {right}, {quote(source.file)}, {source.line}, {source.col})', boxed=False)]
+                    if name == 'wysna_div_at' and t0 == TYPE_FLOAT and t1 == TYPE_FLOAT:
+                        left = self.scalar(operation.args[0])
+                        right = self.scalar(operation.args[1])
+                        return [self.write(result, f'wysna_div_f64_at({left}, {right}, {quote(source.file)}, {source.line}, {source.col})', boxed=False)]
                 elif name == 'wysna_neg' and len(operation.args) == 1:
                     t0 = self.slots[operation.args[0]].type_id
                     operand = self.scalar(operation.args[0])
@@ -447,12 +678,14 @@ class CCodeGen:
                 args += [str(data['inclusive']).lower()]
             if data.get('source'):
                 args += [quote(source.file), str(source.line), str(source.col)]
-            return [self.write(result, name + '(' + ', '.join(args) + ')')]
+            if name == 'wysna_enum':
+                return ['{ static WEnumBuf _enum_lit = {0}; ' + self.write(result, 'wysna_enum_literal(&_enum_lit, ' + ', '.join(args) + ')', consume=True) + ' }']
+            return [self.write(result, name + '(' + ', '.join(args) + ')', consume=True)]
         if kind in ('virtual', 'indirect'):
             rest = args[1:]
             prefix = [args[0]] + ([str(data['slot'])] if kind == 'virtual' else [])
             name = 'wysna_virtual_call' if kind == 'virtual' else 'wysna_call'
-            return [self.write(result, name + '(' + ', '.join(prefix + [str(len(rest)), self.array(rest)]) + ')')]
+            return [self.write(result, name + '(' + ', '.join(prefix + [str(len(rest)), self.array(rest)]) + ')', consume=True)]
         if kind == 'construct':
             category = data['kind']
             if category in ('struct', 'object'):
@@ -465,7 +698,7 @@ class CCodeGen:
                 call = f'wysna_make_{category}({len(args)}, {self.array(args)})'
             return [self.write(result, call)]
         if kind == 'set_vtable':
-            return [f'{args[0]}.as.st->vtable = &wysna_vtable_{data["class"]};']
+            return [f'wysna_set_vtable({args[0]}, &wysna_vtable_{data["class"]});']
         if kind == 'load_field':
             value = f'wysna_field_get_at({args[0]}, {data["index"]})'
             if self.slots[result].storage == 'value':
@@ -474,11 +707,14 @@ class CCodeGen:
         if kind == 'tuple_get':
             value = (f'wysna_tuple_get_owned_at({args[0]}, {data["index"]}, '
                      f'{quote(source.file)}, {source.line}, {source.col})')
-            return [self.write(result, value)]
+            return [self.write(result, value, consume=True)]
         if kind == 'store_place':
             place = data['place']
             if not place.projections and self.slots[place.root].storage != 'value':
-                return [self.write(place.root, args[0])]
+                if self.slots[operation.args[0]].storage != 'value':
+                    return [self.write(place.root, self.name(operation.args[0]), boxed=False)]
+                moved_box = 0 in operation.moves
+                return [self.write(place.root, args[0], consume=moved_box)]
             return [f'wysna_assign({self.place(place, source)}, {args[0]});']
         if kind == 'mutate':
             reference = self.place(data['place'], source)
@@ -487,7 +723,7 @@ class CCodeGen:
                 call = f'wysna_list_pop_at({reference}, {quote(source.file)}, {source.line}, {source.col})'
             else:
                 call = f'wysna_list_{method}(' + ', '.join([reference] + args) + ')'
-            return [self.write(result, call)]
+            return [self.write(result, call, consume=True)]
         if kind == 'function':
             environment = args[0] if args else 'wysna_unit()'
             return [self.write(result, f'wysna_function_new(wysna_adapter_{data["name"]}, {environment})')]
@@ -496,7 +732,7 @@ class CCodeGen:
         if kind == 'increment':
             return [self.write(result, self.name(operation.args[0]) + ' + 1', boxed=False)]
         if kind == 'range_count':
-            return [self.write(result, f'wysna_range_count({args[0]}, {args[1]}, {str(data["inclusive"]).lower()})', boxed=False)]
+            return [self.write(result, f'wysna_range_count_i64({self.scalar(operation.args[0])}, {self.scalar(operation.args[1])}, {str(data["inclusive"]).lower()})', boxed=False)]
         if kind == 'iterate_test':
             bound = self.name(operation.args[1]) if data['range'] else (
                 f'wysna_list_iteration_length_at({args[1]}, {quote(source.file)}, {source.line}, {source.col})')
@@ -506,7 +742,7 @@ class CCodeGen:
             if data['range']:
                 start_slot = self.slots[operation.args[0]]
                 start_name = self.name(operation.args[0])
-                start_val = start_name if start_slot.storage != 'value' else f'({start_name}).as.i'
+                start_val = start_name if start_slot.storage != 'value' else f'wysna_as_int({start_name})'
                 if self.slots[result].storage != 'value':
                     return [self.write(result, f'{start_val} + (int64_t){index}', boxed=False)]
                 return [self.write(result, f'wysna_int({start_val} + (int64_t){index})', boxed=False)]
@@ -519,7 +755,7 @@ class CCodeGen:
                 }[res_storage]
                 return [self.write(result, f'{iter_helper}({args[0]}, {index}, {quote(source.file)}, {source.line}, {source.col})', boxed=False)]
             value = f'wysna_list_iteration_get_owned_at({args[0]}, {index}, {quote(source.file)}, {source.line}, {source.col})'
-            return [self.write(result, value)]
+            return [self.write(result, value, consume=True)]
         if kind == 'test':
             test = data['kind']
             value = '(' + args[0] + ')'
@@ -530,11 +766,11 @@ class CCodeGen:
             elif test == 'none':
                 condition = f'wysna_is_none({value})'
             elif test == 'err':
-                condition = f'{value}.tag == W_ERR'
+                condition = f'wysna_is_err({value})'
             elif test == 'failed':
-                condition = f'({value}.tag == W_ERR || wysna_is_none({value}))'
+                condition = f'(wysna_is_err({value}) || wysna_is_none({value}))'
             elif test == 'tuple':
-                condition = f'({value}.tag == W_TUPLE && {value}.as.tuple->len == {data["length"]})'
+                condition = f'wysna_is_tuple_len({value}, {data["length"]})'
             elif test == 'error_type':
                 condition = f'wysna_value_is_error_type({value}, {quote(data["type_kind"])}, {quote(data["name"])})'
             elif test == 'variant':
@@ -543,7 +779,7 @@ class CCodeGen:
                 if builtin == 'Option':
                     condition = ('' if variant in ('None', 'none') else '!') + f'wysna_is_none({value})'
                 elif builtin == 'Result':
-                    condition = f'{value}.tag == ' + ('W_OK' if variant == 'Ok' else 'W_ERR')
+                    condition = ('wysna_is_ok' if variant == 'Ok' else 'wysna_is_err') + f'({value})'
                 else:
                     condition = f'wysna_is_enum_variant({value}, {quote(name)}, {quote(variant)})'
             return [self.write(result, condition, boxed=False)]

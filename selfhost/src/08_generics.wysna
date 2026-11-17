@@ -85,7 +85,7 @@ fn sem_specialize_arguments(context: SemanticContext, template_id: int, argument
         name = sem_nominal_specialization_name(owner, arguments) + "." + slice(template.name, len(template.owner), len(template.name))
     }
     if sem_function(context, name) >= 0 { report_error_at("W1002", source, "reserved specialization identity collision") }
-    context.functions.append(SemFunction { abi_params: template.abi_params, abi_return: template.abi_return, name: name, params: template.params, type_params: empty, constraints: empty, type_id: sem_intern(context, "function", "", parts), body: template.body, end: template.end, owner: template.owner, visible: false, contract_start: template.contract_start })
+    context.functions.append(SemFunction { abi_params: template.abi_params, abi_return: template.abi_return, name: name, params: template.params, type_params: empty, constraints: empty, type_id: sem_intern(context, "function", "", parts), body: template.body, end: template.end, owner: template.owner, visible: false, contract_start: template.contract_start, is_async: template.is_async })
     let mut ancestry = context.specialization_ancestry
     ancestry.append(len(context.specializations))
     context.specializations.append(SemSpecialization { template: template_id, arguments: arguments, function: id, ancestry: ancestry })
@@ -102,6 +102,8 @@ fn sem_complete_specializations(context: SemanticContext) {
             let type_ = context.types[type_id]
             let generic = sem_generic_type(context, type_.name)
             if type_.kind == "class" and generic >= 0 and len(type_.args) == len(context.generic_types[generic].params) and not sem_symbolic(context, type_id) {
+                let parent_type = sem_class_parent_type(context, type_id)
+                if parent_type >= 0 { let _ = parent_type }
                 for id in 0..function_count {
                     let function = context.functions[id]
                     if function.owner == type_.name + "." and len(function.type_params) == len(type_.args) and len(function.name) > len(function.owner) and slice(function.name, 0, len(function.owner)) == function.owner {

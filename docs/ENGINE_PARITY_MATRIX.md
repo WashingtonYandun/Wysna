@@ -13,7 +13,7 @@ Wysna Compiler's `native-core-v1` profile uses verified MIR for its normal C99 r
 The table comes from an actual `tools/ci_conformance.py --profile=release` run. Its
 `summary.json` records the Git revision and hashes of the source, fixture and harness
 inputs; the measured input digest is
-`d9306a58b0a5b6e0039834f54d8e4a6ecf9ec671f91d9c9c248c2bd92ec9347c`.
+`7a3d494dc85ea545b5308c4bf04f3ab0d00063dcd5c8a2a52226360ad8cc3cef`.
 Release CI uploads that evidence with the run. The matrix covers the public runtime
 examples and negative fixtures, with no unsupported exclusions. The separate sanitizer
 gate checks memory safety; neither gate establishes universal language parity or measures
@@ -23,15 +23,15 @@ code coverage.
 
 | Feature Category | Fixtures | Wysna Seed (Interpreter) | Wysna Seed (AST C99) | Wysna Seed (HIR C99) | Wysna Compiler (Self-Hosted) | Status / Milestone |
 | :--- | :---: | :---: | :---: | :---: | :---: | :--- |
-| **`core`** | 159 | ✅ 159/159 | ✅ 159/159 | ✅ 159/159 | ✅ 159/159 | Declared supported |
+| **`core`** | 160 | ✅ 160/160 | ✅ 160/160 | ✅ 160/160 | ✅ 160/160 | Declared supported |
 | **`generics`** | 15 | ✅ 15/15 | ✅ 15/15 | ✅ 15/15 | ✅ 15/15 | Declared supported |
 | **`generic_class_methods`** | 1 | ✅ 1/1 | ✅ 1/1 | ✅ 1/1 | ✅ 1/1 | Declared supported |
 | **`checked_modules`** | 1 | ✅ 1/1 | ✅ 1/1 | ✅ 1/1 | ✅ 1/1 | Declared supported |
 | **`error_unions`** | 8 | ✅ 8/8 | ✅ 8/8 | ✅ 8/8 | ✅ 8/8 | Declared supported |
 | **`functions`** | 5 | ✅ 5/5 | ✅ 5/5 | ✅ 5/5 | ✅ 5/5 | Declared supported |
-| **`stdlib`** | 3 | ✅ 3/3 | ✅ 3/3 | ✅ 3/3 | ✅ 3/3 | Declared supported |
+| **`stdlib`** | 6 | ✅ 6/6 | ✅ 6/6 | ✅ 6/6 | ✅ 6/6 | Declared supported |
 | **`regressions`** | 13 | ✅ 13/13 | ✅ 13/13 | ✅ 13/13 | ✅ 13/13 | Declared supported |
-| **Total Verified** | **205** | **205/205 (100.0%)** | **205/205 (100.0%)** | **205/205 (100.0%)** | **205/205 (100.0%)** | _measured_ |
+| **Total Verified** | **209** | **209/209 (100.0%)** | **209/209 (100.0%)** | **209/209 (100.0%)** | **209/209 (100.0%)** | _measured_ |
 
 <!-- GENERATED TABLE END -->
 
@@ -51,11 +51,10 @@ nominal error identity, exhaustive handlers and managed payload cleanup.
 ## Expansion boundaries
 
 Function values, captures, FFI, the standard library and LSP have separate
-contracts in `tests/unit/test_expansion_contracts.py`. A green core corpus does not
-imply Wysna Compiler support for every expansion combination. The measured
-`generic_class_methods` category covers concrete type arguments and methods that use
-those arguments; constrained classes, methods that introduce their own type parameters,
-inheritance and interfaces on parameterized classes remain outside that profile. Scoped
+contracts in `tests/unit/test_expansion_contracts.py` (with Stage-3 native LSP covered in `tests/unit/test_phase4_native_lsp.py`). A green core corpus does not
+imply Wysna Compiler support for every expansion combination. Constrained parameterized classes,
+independent generic class methods, parameterized inheritance, `from ... use` imports, and stackless CPS `async fn`
+coroutines are now implemented in both Seed and Selfhost (`native-core-v1`); parameterized interfaces (`interface Container[T]`), unresolved generic nominal values, `wysna.toml` manifests, library-mode exports, and WASM remain outside `native-core-v1`. Scoped
 resources have a separate
 four-engine gate in `tests/unit/test_audit_readiness.py`. The SQLite adapter/application
 also has dedicated checks; see [C interoperability](FFI_VALIDATION.md).

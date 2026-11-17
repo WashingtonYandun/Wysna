@@ -1,0 +1,106 @@
+import "std/buffer" as buffer
+import "std/crypto" as crypto
+
+fn from_values(values: list[int]) -> buffer.Bytes {
+    let data = new buffer.Bytes()
+    for value in values {
+        data.append(value) else err { exit(1) }
+    }
+    return data
+}
+
+fn main() -> unit {
+    let mut key_values: list[int] = []
+    for index in 0..32 {
+        key_values.append(128 + index)
+    }
+    let key = from_values(key_values)
+    let nonce = from_values([7, 0, 0, 0, 64, 65, 66, 67, 68, 69, 70, 71])
+    let aad = from_values([80, 81, 82, 83, 192, 193, 194, 195, 196, 197, 198, 199])
+    let message = buffer.from_text("Ladies and Gentlemen of the class of '99: If I could offer you only one tip for the future, sunscreen would be it.")
+
+    let short_nonce = from_values([1, 2, 3])
+    let rejected = crypto.aead_seal(key, short_nonce, aad, message) else err {
+        print(err.message)
+        return
+    }
+    print(rejected.size())
+}
+
+fn roundtrip() -> unit {
+    let mut key_values: list[int] = []
+    for index in 0..32 {
+        key_values.append(128 + index)
+    }
+    let key = from_values(key_values)
+    let nonce = from_values([7, 0, 0, 0, 64, 65, 66, 67, 68, 69, 70, 71])
+    let aad = from_values([80, 81, 82, 83, 192, 193, 194, 195, 196, 197, 198, 199])
+    let message = buffer.from_text("Ladies and Gentlemen of the class of '99: If I could offer you only one tip for the future, sunscreen would be it.")
+    let sealed = crypto.aead_seal(key, nonce, aad, message) else err {
+        print("seal failed")
+        return
+    }
+    print(sealed.size())
+    print(crypto.bytes_to_hex(sealed))
+    let opened = crypto.aead_open(key, nonce, aad, sealed) else err {
+        print("open failed")
+        return
+    }
+    print(opened.size(), crypto.constant_time_eq_bytes(opened, message))
+
+    let tampered = buffer.clone(sealed) else err {
+        print("clone failed")
+        return
+    }
+    let first = tampered.get(0) else err { 0 }
+    let reference = buffer.from_text("")
+    let corrupted = new buffer.Bytes()
+    for index in 0..sealed.size() {
+        let value = sealed.get(index) else err { 0 }
+        if index == 3 {
+            corrupted.append((value + 1) % 256) else err { exit(1) }
+        } else {
+            corrupted.append(value) else err { exit(1) }
+        }
+    }
+    let rejected = crypto.aead_open(key, nonce, aad, corrupted) else err {
+        print(err.message)
+        return
+    }
+    print(rejected.size() + first + reference.size())
+}
+
+fn wrong_aad() -> unit {
+    let mut key_values: list[int] = []
+    for index in 0..32 {
+        key_values.append(index)
+    }
+    let key = from_values(key_values)
+    let nonce = from_values([0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1])
+    let sealed = crypto.aead_seal(key, nonce, buffer.from_text("header"), buffer.from_text("")) else err {
+        print("seal failed")
+        return
+    }
+    print(sealed.size())
+    let opened = crypto.aead_open(key, nonce, buffer.from_text("other"), sealed) else err {
+        print(err.message)
+        return
+    }
+    print(opened.size())
+}
+
+fn random_material() -> unit {
+    let key = crypto.generate_key() else err {
+        print("key failed")
+        return
+    }
+    let nonce = crypto.generate_nonce() else err {
+        print("nonce failed")
+        return
+    }
+    print(key.size(), nonce.size())
+}
+
+roundtrip()
+wrong_aad()
+random_material()

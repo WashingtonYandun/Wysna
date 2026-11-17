@@ -18,7 +18,7 @@ class ModuleNames:
     def __init__(self, program, module_id):
         prefix = PREFIX + str(module_id).encode('utf-8').hex() + '__'
         self.names = {node.name: prefix + node.name for node in program.body if isinstance(node, DECLARATIONS)}
-        self.nominal_types = {node.name for node in program.body if isinstance(node, (A.StructDecl, A.EnumDecl))}
+        self.nominal_types = {node.name for node in program.body if isinstance(node, (A.StructDecl, A.EnumDecl, A.ClassDecl))}
         self.variants = {variant.name: declaration.name for declaration in program.body
                          if isinstance(declaration, A.EnumDecl) for variant in declaration.variants}
 
@@ -64,6 +64,8 @@ class ModuleNames:
         if isinstance(node, A.NewExpr):
             node.class_name = self.names.get(node.class_name, node.class_name)
         if isinstance(node, A.EnumPattern):
+            for arg in getattr(node, 'type_args', ()):
+                self.visit(arg, values, types)
             name = node.enum_name or self.variants.get(node.variant)
             if name is None and node.variant in self.nominal_types:
                 node.source_name = node.variant

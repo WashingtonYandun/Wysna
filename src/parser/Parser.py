@@ -15,7 +15,7 @@ from node.NodeType import (
     IntLiteral, FloatLiteral, StringLiteral, BoolLiteral, NoneLiteral,
     IdentExpr, ThisExpr, SuperExpr, NewExpr,
     UnaryExpr, BinaryExpr, CoalesceExpr, RangeExpr, PostfixTryExpr, ElseErrExpr,
-    CallExpr, MemberExpr, IndexExpr, AssignmentExpr,
+    CallExpr, MemberExpr, IndexExpr, AssignmentExpr, AwaitExpr,
     StructInitExpr, FieldInit, ListExpr, DictExpr, DictEntry, TupleExpr,
     IfExpr, ElifBranch, MatchExpr, MatchArm
 )
@@ -46,8 +46,8 @@ PRECEDENCE = {
 # value and to detect missing statement separators.
 _EXPRESSION_STARTERS = frozenset({
     TokenType.INT, TokenType.FLOAT, TokenType.STR, TokenType.TRUE, TokenType.FALSE,
-    TokenType.NONE, TokenType.IDENTIFIER, TokenType.THIS, TokenType.SUPER, TokenType.NEW,
-    TokenType.MINUS, TokenType.NOT, TokenType.LPAREN, TokenType.LBRACKET, TokenType.LBRACE,
+    TokenType.NONE, TokenType.IDENTIFIER, TokenType.ASYNC, TokenType.THIS, TokenType.SUPER, TokenType.NEW,
+    TokenType.MINUS, TokenType.NOT, TokenType.AWAIT, TokenType.LPAREN, TokenType.LBRACKET, TokenType.LBRACE,
     TokenType.PIPE, TokenType.IF, TokenType.MATCH,
 })
 
@@ -152,7 +152,7 @@ class Parser:
             return None
 
     def _synchronize(self, start, top_level):
-        starters = {TokenType.LET, TokenType.FN, TokenType.STRUCT, TokenType.ENUM,
+        starters = {TokenType.LET, TokenType.FN, TokenType.ASYNC, TokenType.STRUCT, TokenType.ENUM,
                     TokenType.CLASS, TokenType.INTERFACE, TokenType.IMPORT,
                     TokenType.WHILE, TokenType.FOR, TokenType.RETURN,
                     TokenType.BREAK, TokenType.CONTINUE}
@@ -217,6 +217,8 @@ class Parser:
     def expect(self, type_: TokenType, code: str = "W0001", msg: str = None) -> Token:
         if self.check(type_):
             return self.advance()
+        if type_ == TokenType.IDENTIFIER and self.check(TokenType.ASYNC) and self.peek(1).type != TokenType.FN:
+            return self.advance()
         token = self.at()
         err_msg = msg if msg else f"Expected token '{type_.name}', found '{token.type.name}'"
         raise ParserError(message=err_msg, line=token.line, col=token.col, file=self.file,
@@ -243,7 +245,7 @@ class Parser:
             inner_type = self.parse_type()
             self.expect(TokenType.RPAREN, code="W0006", msg="Expected ')' after grouped type")
             return self._parse_type_suffix(inner_type, token.line, token.col)
-        if not self.check(TokenType.IDENTIFIER):
+        if not (self.check(TokenType.IDENTIFIER) or (self.check(TokenType.ASYNC) and self.peek(1).type != TokenType.FN)):
             raise ParserError(
                 message=f"Expected type name, found '{token.type.name}'",
                 line=token.line,
@@ -342,6 +344,14 @@ class Parser:
             # alternatives become ErrorTypePattern once the subject type is known.
             if self.match(TokenType.DOT):
                 variant_tok = self.expect(TokenType.IDENTIFIER, code="W0001", msg="Expected enum variant name after '.'")
+                pat_type_args = None
+                if self.check(TokenType.LBRACKET):
+                    saved_pat = self.pos
+                    maybe_args = self._try_parse_generic_type_args(allow_struct_init=False)
+                    if maybe_args and self.check(TokenType.LPAREN):
+                        pat_type_args = maybe_args
+                    else:
+                        self.pos = saved_pat
                 payload_args: List[Pattern] = []
                 if self.match(TokenType.LPAREN):
                     if not self.check(TokenType.RPAREN):
@@ -351,9 +361,19 @@ class Parser:
                                 break
                             payload_args.append(self.parse_pattern(allow_tuple=False))
                     self.expect(TokenType.RPAREN, code="W0006", msg="Expected ')' after pattern arguments")
-                return EnumPattern(enum_name=first_name, variant=variant_tok.value, args=payload_args, line=token.line, col=token.col)
+                return EnumPattern(enum_name=first_name, variant=variant_tok.value, args=payload_args, line=token.line, col=token.col, type_args=pat_type_args)
 
-            # Check for unqualified Enum variant with payload: Some(x), Ok(v), Err(e)
+            # Check for generic error/enum pattern: Name[T](x)
+            pat_type_args = None
+            if self.check(TokenType.LBRACKET):
+                saved_pat = self.pos
+                maybe_args = self._try_parse_generic_type_args(allow_struct_init=False)
+                if maybe_args and self.check(TokenType.LPAREN):
+                    pat_type_args = maybe_args
+                else:
+                    self.pos = saved_pat
+
+            # Check for unqualified Enum variant / error type pattern: Some(x), BoxErr[int](e)
             if self.match(TokenType.LPAREN):
                 payload_args = []
                 if not self.check(TokenType.RPAREN):
@@ -363,7 +383,7 @@ class Parser:
                             break
                         payload_args.append(self.parse_pattern(allow_tuple=False))
                 self.expect(TokenType.RPAREN, code="W0006", msg="Expected ')' after pattern arguments")
-                return EnumPattern(enum_name=None, variant=first_name, args=payload_args, line=token.line, col=token.col)
+                return EnumPattern(enum_name=None, variant=first_name, args=payload_args, line=token.line, col=token.col, type_args=pat_type_args)
 
             if first_name in ("None", "none"):
                 return EnumPattern(enum_name=None, variant="None", args=[], line=token.line, col=token.col)
@@ -442,7 +462,7 @@ class Parser:
             self.expect(TokenType.ARROW)
             returned = self.parse_type()
             return ExternFnDecl(name.value, params, returned, token.line, token.col)
-        if (self.check(TokenType.FN) or self.check(TokenType.STRUCT) or self.check(TokenType.ENUM)
+        if (self.check(TokenType.FN) or (self.check(TokenType.ASYNC) and self.peek(1).type == TokenType.FN) or self.check(TokenType.STRUCT) or self.check(TokenType.ENUM)
                 or self.check(TokenType.INTERFACE) or self.check(TokenType.CLASS)
                 or self.check(TokenType.IMPORT) or self.check(TokenType.FROM)):
             if not allow_top_level:
@@ -454,6 +474,9 @@ class Parser:
                     file=self.file,
                     code="W0006",
                 )
+        if self.check(TokenType.ASYNC) and self.peek(1).type == TokenType.FN:
+            self.advance()
+            return self.parse_fn_decl(is_async=True)
         if self.check(TokenType.FN):
             return self.parse_fn_decl()
         if self.check(TokenType.LET):
@@ -591,7 +614,9 @@ class Parser:
             break
         return requires, ensures
 
-    def parse_fn_decl(self) -> FnDecl:
+    def parse_fn_decl(self, is_async: bool = False) -> FnDecl:
+        if not is_async and self.match(TokenType.ASYNC):
+            is_async = True
         start_tok = self.expect(TokenType.FN, code="W0006", msg="Expected 'fn'")
         name_tok = self.expect(TokenType.IDENTIFIER, code="W0006", msg="Expected function name after 'fn'")
         type_params = self._parse_type_params()
@@ -620,6 +645,7 @@ class Parser:
             col=start_tok.col,
             requires=requires,
             ensures=ensures,
+            is_async=is_async,
         )
 
     def parse_interface_decl(self) -> InterfaceDecl:
@@ -636,6 +662,15 @@ class Parser:
             self.match(TokenType.PUBLIC)
             fn_tok = self.expect(TokenType.FN, code="W0006", msg="Expected 'fn' in interface method declaration")
             m_name = self.expect(TokenType.IDENTIFIER, code="W0006", msg="Expected method name after 'fn'")
+            if self.check(TokenType.LBRACKET):
+                tok = self.peek()
+                raise ParserError(
+                    message="Interface methods cannot declare independent generic type parameters",
+                    line=tok.line,
+                    col=tok.col,
+                    file=self.file,
+                    code="W2001",
+                )
             self.expect(TokenType.LPAREN, code="W0006", msg="Expected '(' after interface method name")
             params = self._parse_param_list(allow_receiver=True)
             self.expect(TokenType.RPAREN, code="W0006", msg="Expected ')' after interface method parameters")
@@ -665,24 +700,35 @@ class Parser:
 
         superclass: Optional[str] = None
         if self.match(TokenType.EXTENDS):
+            saved_sup = self.pos
             sup_tok = self.expect(TokenType.IDENTIFIER, code="W0006", msg="Expected superclass name after 'extends'")
             superclass = sup_tok.value
+            while self.match(TokenType.DOT):
+                superclass += "." + self.expect(TokenType.IDENTIFIER, code="W0006", msg="Expected superclass name after '.'").value
             if self.check(TokenType.LBRACKET):
-                self.pos -= 1
+                self.pos = saved_sup
                 superclass = self.parse_type()
 
         interfaces: List[str] = []
         if self.match(TokenType.IMPLEMENTS):
+            saved_intf = self.pos
             first_intf = self.expect(TokenType.IDENTIFIER, code="W0006", msg="Expected interface name after 'implements'")
-            interfaces.append(first_intf.value)
+            intf_name = first_intf.value
+            while self.match(TokenType.DOT):
+                intf_name += "." + self.expect(TokenType.IDENTIFIER, code="W0006", msg="Expected interface name after '.'").value
+            interfaces.append(intf_name)
             if self.check(TokenType.LBRACKET):
-                self.pos -= 1
+                self.pos = saved_intf
                 interfaces[-1] = self.parse_type()
             while self.match(TokenType.COMMA):
+                saved_next = self.pos
                 next_intf = self.expect(TokenType.IDENTIFIER, code="W0006", msg="Expected interface name after ','")
-                interfaces.append(next_intf.value)
+                next_name = next_intf.value
+                while self.match(TokenType.DOT):
+                    next_name += "." + self.expect(TokenType.IDENTIFIER, code="W0006", msg="Expected interface name after '.'").value
+                interfaces.append(next_name)
                 if self.check(TokenType.LBRACKET):
-                    self.pos -= 1
+                    self.pos = saved_next
                     interfaces[-1] = self.parse_type()
 
         self.expect(TokenType.LBRACE, code="W0006", msg="Expected '{' to start class body")
@@ -703,6 +749,15 @@ class Parser:
             if self.check(TokenType.FN):
                 fn_tok = self.advance()
                 m_name = self.expect(TokenType.IDENTIFIER, code="W0006", msg="Expected method name after 'fn'")
+                m_type_params = self._parse_type_params()
+                if m_name.value == "init" and m_type_params:
+                    raise ParserError(
+                        message="Constructor 'init' cannot declare generic type parameters",
+                        line=m_name.line,
+                        col=m_name.col,
+                        file=self.file,
+                        code="W2001",
+                    )
                 self.expect(TokenType.LPAREN, code="W0006", msg="Expected '(' after method name")
                 params = self._parse_param_list(allow_receiver=True)
                 self.expect(TokenType.RPAREN, code="W0006", msg="Expected ')' after method parameters")
@@ -725,6 +780,7 @@ class Parser:
                         col=fn_tok.col,
                         requires=requires,
                         ensures=ensures,
+                        type_params=m_type_params,
                     )
                 )
             else:
@@ -849,7 +905,7 @@ class Parser:
                     self.advance()
                     leading_dots += "."
 
-            if not self.check(TokenType.IDENTIFIER):
+            if not (self.check(TokenType.IDENTIFIER) or (self.check(TokenType.ASYNC) and self.peek(1).type != TokenType.FN)):
                 tok = self.at()
                 raise ParserError(
                     message=f"Expected module path after 'from', found '{tok.type.name}'",
@@ -1026,7 +1082,7 @@ class Parser:
         while True:
             # 1. Postfix operators (Calls, Member access, Indexing, Postfix '?')
             while True:
-                if self.check(TokenType.NEWLINE) and self.peek(1).type == TokenType.ELSE:
+                if min_prec < 9 and self.check(TokenType.NEWLINE) and self.peek(1).type == TokenType.ELSE:
                     saved = self.pos
                     self.advance()
                     if self.check(TokenType.ELSE) and not self._begins_match_arm():
@@ -1070,7 +1126,7 @@ class Parser:
                                     args.append(self.parse_expr())
                             self.expect(TokenType.RPAREN, code="W0006", msg="Expected ')' after generic module call")
                             left = CallExpr(left, args, type_args, line=left.line, col=left.col)
-                            left.index_alternative = self._parse_index_alternative(saved)
+                            left.index_alternative = self._parse_index_alternative(saved, type_args)
                             continue
                         self.pos = saved
                     # Indexing
@@ -1079,12 +1135,12 @@ class Parser:
                     self.expect(TokenType.RBRACKET, code="W0006", msg="Expected ']' after index")
                     left = IndexExpr(object=left, index=index_expr, line=bracket.line, col=bracket.col)
 
-                elif self.check(TokenType.QUESTION):
+                elif min_prec < 10 and self.check(TokenType.QUESTION):
                     # Postfix try / unwrap
                     q_tok = self.advance()
                     left = PostfixTryExpr(operand=left, line=q_tok.line, col=q_tok.col)
 
-                elif self.check(TokenType.ELSE) and not self._begins_match_arm():
+                elif min_prec < 10 and self.check(TokenType.ELSE) and not self._begins_match_arm():
                     # In-place error/optional handling: expr else err { ... } or expr else { ... }
                     else_tok = self.advance()
                     err_name: Optional[str] = None
@@ -1135,7 +1191,12 @@ class Parser:
 
         return left
 
-    def _parse_index_alternative(self, start):
+    def _parse_index_alternative(self, start, type_args=None):
+        if type_args is not None:
+            if len(type_args) != 1 or not isinstance(type_args[0], NamedType):
+                return None
+            if type_args[0].name in ("int", "float", "bool", "str", "unit", "none"):
+                return None
         previous = self.pos
         self.pos = start + 1
         try:
@@ -1260,7 +1321,7 @@ class Parser:
             return expression
 
         # Identifiers & Named Struct Initializations
-        if self.match(TokenType.IDENTIFIER):
+        if self.match(TokenType.IDENTIFIER) or (self.check(TokenType.ASYNC) and self.peek(1).type != TokenType.FN and self.advance()):
             ident_name = token.value
 
             type_args: Optional[List[TypeNode]] = None
@@ -1285,7 +1346,7 @@ class Parser:
                     line=token.line,
                     col=token.col
                 )
-                call.index_alternative = self._parse_index_alternative(bracket_start)
+                call.index_alternative = self._parse_index_alternative(bracket_start, type_args)
                 return call
 
             # Check if this is a Struct Initialization: Identifier { field: val, ... } or Identifier[T] { field: val, ... }
@@ -1307,6 +1368,10 @@ class Parser:
                     return StructInitExpr(struct_name=ident_name, fields=fields, type_args=type_args, line=token.line, col=token.col)
 
             return IdentExpr(name=ident_name, line=token.line, col=token.col)
+
+        if self.match(TokenType.AWAIT):
+            operand = self.parse_expr(min_prec=10, allow_struct_init=allow_struct_init)
+            return AwaitExpr(operand=operand, line=token.line, col=token.col)
 
         # Unary operations: '-' and 'not'.
         # SPEC §5 puts unary at Level 3, tighter than multiplicative (Level 4, prec=9).

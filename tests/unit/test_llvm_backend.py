@@ -196,14 +196,14 @@ class LlvmBackendTests(unittest.TestCase):
         runtime = ROOT / 'runtime/wysna_llvm_runtime.c'
         compiler = compiler_command()
         common = self.toolchain.host_flags + ['-std=c99', '-O1', '-g', '-I' + str(ROOT),
-                                              '-DWYSNA_LLVM_EXPECTED_ABI=2', '-DWYSNA_LLVM_LITERAL_BYTES=48', '-DWYSNA_LLVM_ALIGNMENT=8']
-        invalid = subprocess.run(compiler + common + ['-DWYSNA_LLVM_VALUE_BYTES=8', '-c', str(runtime),
+                                              '-DWYSNA_LLVM_EXPECTED_ABI=3', '-DWYSNA_LLVM_LITERAL_BYTES=48', '-DWYSNA_LLVM_ALIGNMENT=8']
+        invalid = subprocess.run(compiler + common + ['-DWYSNA_LLVM_VALUE_BYTES=32', '-c', str(runtime),
                                                        '-o', str(self.directory / 'bad.o')],
                                  capture_output=True, text=True, timeout=60)
         self.assertNotEqual(invalid.returncode, 0)
         self.assertIn('WysnaLlvmValueSize', invalid.stderr)
         output = self.directory / 'sanitized'
-        result = subprocess.run(compiler + common + ['-DWYSNA_LLVM_VALUE_BYTES=32',
+        result = subprocess.run(compiler + common + ['-DWYSNA_LLVM_VALUE_BYTES=8',
                                 '-fsanitize=address,undefined', '-fno-sanitize-recover=all',
                                 str(runtime), str(program), '-lm', '-o', str(output)],
                                 capture_output=True, text=True, timeout=60)

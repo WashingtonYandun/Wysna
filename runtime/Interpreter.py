@@ -6,7 +6,7 @@ from typing import Any, Dict, List, Optional, TextIO, Tuple
 from common.ExpressionDispatch import reject_unknown_node
 from runtime.ExpressionRules import EXPRESSION_RULES
 from error.Error import WysnaRuntimeError
-from checker.WysnaType import IntType, FloatType, BoolType, StrType, StructType, EnumType
+from checker.WysnaType import IntType, FloatType, BoolType, StrType, StructType, EnumType, ClassType
 from node.NodeType import (
     LambdaExpr, Program, Stmt, Expr, ExprStmt, LetDecl, FnDecl, StructDecl, EnumDecl, ImportDecl,
     InterfaceDecl, ClassDecl, MethodDecl,
@@ -589,6 +589,25 @@ class Interpreter:
         for param, arg in zip(func.decl.params, args):
             call_env.declare(param.name, arg, is_mut=False)
 
+        if getattr(func.decl, "is_async", False):
+            from runtime.HostAbi import coro_spawn
+            tid = coro_spawn(lambda: self._execute_fn_body(func, call_env))
+            return WysnaStructInstance(
+                "Task",
+                fields={
+                    "id": WysnaInt(tid),
+                    "handle": WysnaInt(tid),
+                    "is_ready": WysnaBool(False),
+                    "is_failed": WysnaBool(False),
+                    "value": WysnaEnumValue("Option", "None"),
+                    "error": WysnaEnumValue("Option", "None"),
+                },
+            )
+
+        return self._execute_fn_body(func, call_env)
+
+    def _execute_fn_body(self, func: WysnaFunction, call_env: Environment) -> WysnaValue:
+
         for req_expr in getattr(func.decl, "requires", ()):
             req_val = self.eval_expr(req_expr, call_env)
             if not isinstance(req_val, WysnaBool) or not req_val.value:
@@ -792,6 +811,8 @@ class Interpreter:
             return isinstance(value, WysnaStr)
         if isinstance(error_type, StructType):
             return isinstance(value, WysnaStructInstance) and value.struct_name == error_type.name
+        if isinstance(error_type, ClassType):
+            return isinstance(value, WysnaObjectInstance) and value.class_name == error_type.name
         if isinstance(error_type, EnumType):
             return isinstance(value, WysnaEnumValue) and value.enum_name == error_type.name
         return False

@@ -12,7 +12,7 @@ from mir.Nodes import (
 FORMAT = "wysna.mir"
 SCHEMA_VERSION = 1
 SEMANTIC_REVISION = "0.5.0"
-RUNTIME_ABI_VERSION = 2
+RUNTIME_ABI_VERSION = 3
 
 _NODE_TYPES = {
     item.__name__: item
@@ -57,9 +57,15 @@ def _decode(value):
             if constructor is None:
                 _fail(f"Unknown MIR exchange node type: {type_name!r}")
             expected = {field.name for field in fields(constructor)}
-            if set(value) != expected | {"$type"}:
+            optional_defaults = {"is_async": False, "async_return_type": 0} if constructor is Function else {}
+            keys = set(value)
+            missing = (expected | {"$type"}) - keys
+            extra = keys - (expected | {"$type"})
+            if extra or not missing.issubset(optional_defaults.keys()):
                 _fail(f"Malformed MIR exchange node: {type_name}")
             decoded = {key: _decode(item) for key, item in value.items() if key != "$type"}
+            for opt_key in missing:
+                decoded[opt_key] = optional_defaults[opt_key]
             try:
                 return constructor(**decoded)
             except (TypeError, ValueError) as error:
@@ -76,6 +82,8 @@ def _module_type_ids(module):
         yield slot.type_id
     for function in module.functions:
         yield function.return_type
+        if getattr(function, "async_return_type", 0):
+            yield function.async_return_type
         for slot in function.slots:
             yield slot.type_id
         for block in function.blocks:

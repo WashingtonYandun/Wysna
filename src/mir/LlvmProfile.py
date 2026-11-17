@@ -3,8 +3,8 @@ from error.Error import WysnaError
 from mir.Verifier import Verifier
 
 PROFILE = 'llvm-native-v1'
-ABI_VERSION = 2
-VALUE_BYTES = 32
+ABI_VERSION = 3
+VALUE_BYTES = 8
 LITERAL_BYTES = 48
 ALIGNMENT = 8
 CONVERSIONS = {'wysna_builtin_str': 0, 'wysna_builtin_int': 1, 'wysna_builtin_float': 2,

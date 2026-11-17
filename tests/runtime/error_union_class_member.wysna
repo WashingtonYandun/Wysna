@@ -1,0 +1,29 @@
+class ClassError {
+    code: int
+    fn init(code: int) { this.code = code }
+}
+
+struct DomainError {
+    message: str
+}
+
+fn check_step(mode: int) -> int ! ClassError | DomainError {
+    if mode == 0 { return Ok(42) }
+    if mode == 1 { return Err(new ClassError(503)) }
+    return Err(DomainError { message: "domain failure" })
+}
+
+fn main() -> unit {
+    for mode in 0..3 {
+        let out = check_step(mode) else err {
+            match err {
+                ClassError(c) => { print("CLASS", c.code) },
+                DomainError(d) => { print("DOMAIN", d.message) },
+            }
+            continue
+        }
+        print("OK", out)
+    }
+}
+
+main()

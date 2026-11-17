@@ -11,9 +11,9 @@ wysna emit-mir --implementation=seed program.wysna -o seed.mir.json
 wysna emit-mir --implementation=compiler program.wysna -o compiler.mir.json
 ```
 
-Both producers emit `wysna.mir` schema 1, semantic revision `0.5.0`, runtime ABI 2 and a self-contained type arena. Both materialize every declared enum, including unused ones, so dictionary-key capabilities can be inspected without a value of that type. `mir/Exchange.py` reconstructs an independent arena and verifies it before the Python MIR consumer can emit C99. Producer IDs and operation sequences are local implementation details; behavior, ownership and diagnostics are the compatibility contract.
+Both producers emit `wysna.mir` schema 1, semantic revision `0.5.0`, runtime ABI 3 and a self-contained type arena. Both materialize every declared enum, including unused ones, so dictionary-key capabilities can be inspected without a value of that type. `mir/Exchange.py` reconstructs an independent arena and verifies it before the Python MIR consumer can emit C99. Producer IDs and operation sequences are local implementation details; behavior, ownership and diagnostics are the compatibility contract.
 
-The standalone [native SDK](NATIVE_SDK.md) supplies `check`, `emit-mir`, `emit-c`, `build` and `run` without Python. Its native engine checks MIR before serialization or C emission. The Python wrapper remains available for Seed and independent interchange validation; it is not required by the SDK.
+The standalone [native SDK](NATIVE_SDK.md) supplies `check`, `fmt`, `test`, `graph`, `inspect`, `patch`, `explain`, `lsp`, `emit-mir`, `emit-c`, `build` and `run` without Python. Its native engine checks MIR before serialization or C emission. The Python wrapper remains available for Seed and independent interchange validation; it is not required by the SDK.
 
 The `native-core-v1` source profile contains:
 
@@ -25,7 +25,7 @@ The `native-core-v1` source profile contains:
 - Function values, snapshot closures, indirect calls, concrete generic functions and concrete generic structs/enums/classes. Generic class methods substitute the concrete class arguments into their signatures and bodies. Generic definitions retain symbolic obligations and bounded specialization.
 - Relative/standard-library imports through one module loader, physical module identity, and the declared scalar/opaque C ABI.
 
-Parameterized classes with concrete type arguments, fields and non-generic methods are supported in this native profile and included in the four-engine measured corpus. `std/environment.get` reads the process environment inherited by the program; this API does not filter or sandbox environment access. Constrained parameterized classes, methods that introduce their own type parameters inside a parameterized class, inheritance or interfaces on parameterized classes, parameterized interfaces, generic nominal values with unresolved type arguments, library-mode exports and WebAssembly targets remain outside it. An unresolved nominal value requires an explicit concrete type context. Seed's formatter, package/project and LSP commands remain outside the SDK. Unsupported source features report `W2013`; there is no Python fallback. This is a declared, tested profile, not universal Seed parity.
+Parameterized classes with concrete type arguments, constrained type parameters, independent generic class methods (`Box[T].transform[R]`), parameterized class inheritance, `from ... use` imports, and stackless CPS `async fn` coroutines are supported in this native profile alongside the standalone Agent-First CLI (`graph`, `inspect`, `patch`, `explain`, `fmt`, `check --output-format=json-v1`) and Stage-3 native LSP (`wysna lsp`). Parameterized interface declarations (`interface Container[T]`) remain Seed-only (`W2013` in Selfhost). Generic nominal values with unresolved type arguments require an explicit concrete type context. Project manifests (`wysna.toml`), library-mode exports, `wysna fix`/`schema`/`mcp`, and WebAssembly targets remain outside this SDK profile (reporting `W2013` for excluded target modes). This is a declared, tested profile rather than universal Seed parity.
 
 Value equality rejects function payloads in structs, enums and collections during checking (`W2001`); classes retain identity equality. Generic function arguments and materialized nominal types share a structural complexity limit of 256, with expanding nominal recursion rejected as `W2011`. Ordinary recursive enums remain supported.
 
@@ -39,7 +39,8 @@ The implementation under `selfhost/src/` separates:
 - `08_generics.wysna`: symbolic obligations, concrete specialization queue and budgets.
 - `08_mir.wysna`, `08_mir_lowering.wysna` and `08_mir_verifier.wysna`: MIR model/interchange, lowering and independent structure/dataflow verification.
 - `08_mir_channels`, `08_mir_patterns`, `08_mir_functions`, `08_mir_places`, `08_mir_collections`, `08_mir_nominals`, `08_mir_classes` and `08_mir_foreign`: focused lowering and emission policies.
-- `08_mir_c99.wysna`: the single native C99 consumer, with chunked output assembly.
+- `08_mir_c99.wysna`: the single native C99 consumer, including CPS coroutine state-machine emission and unboxed `i64`/`f64`/`range_count_i64` arithmetic paths.
+- `09_agent_tools.wysna`, `09_lsp.wysna` and `09_main.wysna`: Python-free Agent-First semantic graph tooling (`graph`, `inspect`, `patch`, `explain`), checked formatting/JSON-v1 diagnostics, and Stage-3 native LSP over stdio JSON-RPC.
 
 Checked verification rejects invalid type, record, signature, binding, pattern, capture and indirect-call references before lowering indexes them. Native and Python MIR verifiers check arity, types, ownership, CFG initialization and dominating channel/pattern witnesses. Reassigning the tested value invalidates its proof. Verification does not prove runtime helpers correct or manage external opaque resources automatically.
 
@@ -75,7 +76,7 @@ Before emission, an ownership pass removes copies of immutable `str` parameters 
 
 Local variables, parameters, and returns of type `int`, `float`, and `bool` use `int64_t`, `double`, and `bool`. Internal counters and predicates are scalars as well. Globals, strings, lists, tuples, structs, objects, optionals, and results still use `WVal`. Adapters convert at function-value, closure, and virtual-dispatch boundaries; runtime helpers use `WVal`; the external scalar/opaque C ABI uses its declared C widths.
 
-There are no specialized lists or unboxed payload layouts. Runtime ABI v2 stores string metadata inside its variant. The tagged value occupies 32 bytes in the measured arm64 ABI; converting a scalar to a collection element boxes it again. This is a known memory-density cost retained by the current runtime ABI. MIR operation classification is conservative and does not prove purity. A separate read-only pass, exposed as [`wysna explain`](EFFECTS.md), computes a versioned interprocedural overapproximation over direct calls; it remains conditional on explicit runtime and bundled-host contracts, and reports indirect calls, uncontrolled FFI and missing contracts as `unknown`.
+There are no specialized lists or unboxed payload layouts. Runtime ABI v3 unifies every general `WVal` into an 8-byte NaN-boxed 64-bit word across all C99 engines and `llvm-native-v1` (with inline `0..6B` SSO strings, `WStringBuf` / `WStringLiteral` metadata for `>6B` strings, inline `int48` with `WIntBox` full-64-bit fallback, and inline `double`/`bool`/sentinels). MIR operation classification is conservative and does not prove purity. A separate read-only pass, exposed as [`wysna explain`](EFFECTS.md), computes a versioned interprocedural overapproximation over direct calls; it remains conditional on explicit runtime and bundled-host contracts, and reports indirect calls, uncontrolled FFI and missing contracts as `unknown`.
 
 ## Ranges
 

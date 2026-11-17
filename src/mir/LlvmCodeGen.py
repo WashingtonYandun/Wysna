@@ -5,6 +5,7 @@ from mir.LlvmDebug import DebugInfo
 from mir.LlvmText import quote_bytes
 from mir.LlvmManaged import ManagedEmission, DECLARATIONS as MANAGED_DECLARATIONS
 from mir.LlvmAbi import SCALAR_TYPES, is_managed
+from mir.AsyncLowering import build_cps_plan
 from mir.LlvmProfile import (verify_profile, CONVERSIONS, ABI_VERSION, VALUE_BYTES,
                              LITERAL_BYTES, ALIGNMENT, PROFILE)
 
@@ -176,7 +177,30 @@ class LlvmCodeGen:
             self.emit('call void @wysna_llvm_box_' + name + '(ptr ' + pointer + ', ' + type_ + ' ' + value + ')')
         return pointer
 
+    def release_boxed(self, index, offset=0, moved=False):
+        if moved:
+            return
+        slot = self.slots[index]
+        if slot.storage != 'value' and slot.type_id == TYPE_INT:
+            self.emit('call void @wysna_llvm_release(ptr ' + self.cell(offset) + ')')
+
+    @staticmethod
+    def _async_runtime_helper(function):
+        name = function.name
+        async_mod = '6173796e632e7779736e61__'
+        if async_mod not in name:
+            return None
+        if f'{async_mod}_spawn_handle__' in name or name.endswith(f'{async_mod}_spawn_handle'):
+            if len(function.params) == 1:
+                return '_spawn_handle'
+        elif f'{async_mod}_take_task_value__' in name or name.endswith(f'{async_mod}_take_task_value'):
+            if len(function.params) == 2:
+                return '_take_task_value'
+        return None
+
     def function(self, function):
+        if getattr(function, 'is_async', False):
+            return self._async_function(function)
         self.slots = {slot.id: slot for slot in self.module.globals}
         self.slots.update({slot.id: slot for slot in function.slots})
         self.scope = self.debug.function(function)
@@ -195,6 +219,17 @@ class LlvmCodeGen:
         attrs = ' nounwind mustprogress'
         self.lines = ['define internal ' + cc + returned + ' @' + function.name + '(' + ', '.join(parameters) +
                       ')' + attrs + ' !dbg !' + str(self.scope) + ' {', 'entry:']
+        async_helper = self._async_runtime_helper(function)
+        if async_helper is not None:
+            loc = self.debug.location(function.source, self.scope, self.scope_file)
+            if async_helper == '_spawn_handle' and returned == 'i64' and self.slots[function.params[0]].storage == 'value':
+                self.lines.append('  %r0 = call i64 @wysna_llvm_async_spawn(ptr %arg' + str(function.params[0]) + ')' + loc)
+                self.lines.append('  ret i64 %r0' + loc)
+                return self.lines + ['}', '']
+            if async_helper == '_take_task_value' and is_managed(function.return_type) and self.slots[function.params[0]].type_id == TYPE_INT and self.slots[function.params[1]].storage == 'value':
+                self.lines.append('  call void @wysna_llvm_async_take_option(ptr %out, i64 %arg' + str(function.params[0]) + ', ptr %arg' + str(function.params[1]) + ')' + loc)
+                self.lines.append('  ret void' + loc)
+                return self.lines + ['}', '']
         for slot in function.slots:
             if slot.parameter and slot.storage == 'value':
                 self.lines.append('  ' + self.pointer(slot.id) + ' = getelementptr i8, ptr %arg' + str(slot.id) + ', i64 0')
@@ -240,6 +275,195 @@ class LlvmCodeGen:
                 self.fail('W9999', 'Unreachable MIR block executed', term.source)
         return self.lines + ['}', '']
 
+    def _emit_llvm_coro_assign_from_ptr(self, dest_slot_id, src_ptr, move_src):
+        slot = self.slots[dest_slot_id]
+        if slot.storage == 'value':
+            op = 'move' if move_src else 'clone'
+            self.emit(f'call void @wysna_llvm_{op}(ptr {self.pointer(dest_slot_id)}, ptr {src_ptr})')
+            return
+        if slot.type_id == TYPE_INT:
+            val = self.result(f'call i64 @wysna_llvm_int(ptr {src_ptr})')
+            if move_src:
+                self.emit(f'call void @wysna_llvm_release(ptr {src_ptr})')
+            self.write(dest_slot_id, val, 'i64')
+        elif slot.type_id == TYPE_FLOAT:
+            val = self.result(f'call double @wysna_llvm_float(ptr {src_ptr})')
+            if move_src:
+                self.emit(f'call void @wysna_llvm_release(ptr {src_ptr})')
+            self.write(dest_slot_id, val, 'double')
+        elif slot.type_id == TYPE_BOOL:
+            val32 = self.result(f'call i32 @wysna_llvm_bool(ptr {src_ptr})')
+            if move_src:
+                self.emit(f'call void @wysna_llvm_release(ptr {src_ptr})')
+            val = self.result(f'icmp ne i32 {val32}, 0')
+            self.write(dest_slot_id, val, 'i1')
+
+    def _emit_llvm_coro_flush_slots(self, function):
+        for slot in function.slots:
+            fs = self.result(f'getelementptr %WysnaValue, ptr %_frame_slots, i64 {slot.id}')
+            if slot.storage == 'value':
+                self.emit(f'call void @wysna_llvm_move(ptr {fs}, ptr {self.pointer(slot.id)})')
+            elif slot.type_id == TYPE_INT:
+                val = self.load(slot.id)
+                if slot.storage == 'counter':
+                    val = self.result(f'sext i32 {val} to i64')
+                self.emit(f'call void @wysna_llvm_box_int(ptr {fs}, i64 {val})')
+            elif slot.type_id == TYPE_FLOAT:
+                self.emit(f'call void @wysna_llvm_box_float(ptr {fs}, double {self.load(slot.id)})')
+            elif slot.type_id == TYPE_BOOL:
+                b32 = self.result(f'zext i1 {self.load(slot.id)} to i32')
+                self.emit(f'call void @wysna_llvm_box_bool(ptr {fs}, i32 {b32})')
+
+    def _async_function(self, function):
+        self.slots = {slot.id: slot for slot in self.module.globals}
+        self.slots.update({slot.id: slot for slot in function.slots})
+        self.scope = self.debug.function(function)
+        self.scope_file = function.source.file
+        self.location = ''
+        plan = build_cps_plan(function)
+        step_fn = f'{function.name}__coro_step'
+
+        self.lines = [
+            f'define internal void @{step_fn}(ptr %_out_ret, ptr %_frame_slots, i64 %_slot_count, ptr %_frame_state, ptr %_resume_val, i32 %_has_resume, ptr %_out_await_box, ptr %_out_await_handle, ptr %_out_status) nounwind {{',
+            'entry:',
+        ]
+        for slot in function.slots:
+            type_ = self.physical(slot.id)
+            align = str(self.alignment_for(slot))
+            self.lines.append(f'  {self.pointer(slot.id)} = alloca {type_}, align {align}')
+            self.lines.append(f'  store {type_} zeroinitializer, ptr {self.pointer(slot.id)}, align {align}')
+        self.scratch = max([4] + [len(op.args) + 2 for seg in plan.segments for op in seg.operations])
+        self.lines.append(f'  %scratch = alloca [{self.scratch} x %WysnaValue], align {ALIGNMENT}')
+        for slot in function.slots:
+            fs = self.result(f'getelementptr %WysnaValue, ptr %_frame_slots, i64 {slot.id}')
+            if slot.storage == 'value':
+                self.emit(f'call void @wysna_llvm_move(ptr {self.pointer(slot.id)}, ptr {fs})')
+            elif slot.type_id == TYPE_INT:
+                iv = self.result(f'call i64 @wysna_llvm_coro_restore_int(ptr {fs})')
+                if slot.storage == 'counter':
+                    iv = self.result(f'trunc i64 {iv} to i32')
+                self.emit(f'store {self.physical(slot.id)} {iv}, ptr {self.pointer(slot.id)}, align {self.alignment_for(slot)}')
+            elif slot.type_id == TYPE_FLOAT:
+                fv = self.result(f'call double @wysna_llvm_coro_restore_float(ptr {fs})')
+                self.emit(f'store double {fv}, ptr {self.pointer(slot.id)}, align {ALIGNMENT}')
+            elif slot.type_id == TYPE_BOOL:
+                bv32 = self.result(f'call i32 @wysna_llvm_coro_restore_bool(ptr {fs})')
+                bv = self.result(f'icmp ne i32 {bv32}, 0')
+                self.emit(f'store i1 {bv}, ptr {self.pointer(slot.id)}, align 1')
+
+        st_val = self.result('load i64, ptr %_frame_state, align 8')
+        cases = ' '.join(['i64 0, label %bb0'] + [f'i64 {sp.state_id}, label %{sp.resume_label}' for sp in plan.suspend_points])
+        self.emit(f'switch i64 {st_val}, label %cps_default [ {cases} ]')
+
+        for seg in plan.segments:
+            self.lines.append(f'{seg.label}:')
+            if seg.loop_head:
+                self.emit('call void @wysna_llvm_step_tick()')
+            for op in seg.operations:
+                self.operation(op)
+            if seg.suspend is not None:
+                sp = seg.suspend
+                arg_slot = self.slots[sp.await_arg]
+                if arg_slot.storage == 'value':
+                    aw_box = self.cell(0)
+                    self.emit(f'store %WysnaValue zeroinitializer, ptr {aw_box}')
+                    self.emit(f'call void @wysna_llvm_move(ptr {aw_box}, ptr {self.pointer(sp.await_arg)})')
+                else:
+                    aw_box = self.boxed(sp.await_arg, 0, copy=True)
+                aw_imm = self.cell(1)
+                self.emit(f'store %WysnaValue zeroinitializer, ptr {aw_imm}')
+                resolved = self.result(f'call i32 @wysna_llvm_coro_try_resolve_await(ptr {aw_box}, ptr %_out_await_handle, ptr {aw_imm})')
+                is_ready = self.result(f'icmp ne i32 {resolved}, 0')
+                imm_lbl = f'cps_imm_{sp.state_id}'
+                susp_lbl = f'cps_susp_{sp.state_id}'
+                self.emit(f'br i1 {is_ready}, label %{imm_lbl}, label %{susp_lbl}')
+
+                self.lines.append(f'{imm_lbl}:')
+                self._emit_llvm_coro_assign_from_ptr(sp.await_res, aw_imm, move_src=True)
+                self.emit(f'br label %{sp.continue_label}')
+
+                self.lines.append(f'{susp_lbl}:')
+                self.emit(f'store i64 {sp.state_id}, ptr %_frame_state, align 8')
+                self.emit(f'call void @wysna_llvm_move(ptr %_out_await_box, ptr {aw_box})')
+                self.emit('store i32 1, ptr %_out_status, align 4')
+                self._emit_llvm_coro_flush_slots(function)
+                self.emit('ret void')
+
+                self.lines.append(f'{sp.resume_label}:')
+                self._emit_llvm_coro_assign_from_ptr(sp.await_res, '%_resume_val', move_src=False)
+                self.emit(f'br label %{sp.continue_label}')
+            else:
+                term = seg.terminator
+                if term.kind == 'goto':
+                    self.emit('br label %bb' + str(term.targets[0]))
+                elif term.kind == 'branch':
+                    value = self.load(term.value)
+                    self.emit('br i1 ' + value + ', label %bb' + str(term.targets[0]) + ', label %bb' + str(term.targets[1]))
+                elif term.kind == 'return':
+                    rslot = self.slots[term.value]
+                    if rslot.storage == 'value':
+                        op = 'clone' if rslot.parameter else 'move'
+                        self.emit(f'call void @wysna_llvm_{op}(ptr %_out_ret, ptr {self.pointer(term.value)})')
+                    elif rslot.type_id == TYPE_INT:
+                        val = self.load(term.value)
+                        if rslot.storage == 'counter':
+                            val = self.result(f'sext i32 {val} to i64')
+                        self.emit(f'call void @wysna_llvm_box_int(ptr %_out_ret, i64 {val})')
+                    elif rslot.type_id == TYPE_FLOAT:
+                        self.emit(f'call void @wysna_llvm_box_float(ptr %_out_ret, double {self.load(term.value)})')
+                    elif rslot.type_id == TYPE_BOOL:
+                        b32 = self.result(f'zext i1 {self.load(term.value)} to i32')
+                        self.emit(f'call void @wysna_llvm_box_bool(ptr %_out_ret, i32 {b32})')
+                    for slot in function.slots:
+                        if slot.storage == 'value':
+                            self.emit(f'call void @wysna_llvm_release(ptr {self.pointer(slot.id)})')
+                    self.emit('store i32 0, ptr %_out_status, align 4')
+                    self.emit('ret void')
+                else:
+                    for slot in function.slots:
+                        if slot.storage == 'value':
+                            self.emit(f'call void @wysna_llvm_release(ptr {self.pointer(slot.id)})')
+                    self.fail('W9999', 'Unreachable MIR block executed', term.source)
+
+        self.lines.extend(['cps_default:', '  store i32 0, ptr %_out_status, align 4', '  ret void', '}', ''])
+        step_lines = self.lines
+
+        parameters = ['ptr %out'] + [SCALAR_TYPES.get(function.slots[i].type_id, 'ptr') + f' %arg{i}' for i in function.params]
+        cc = 'fastcc ' if function.name != 'wysna_program' else ''
+        loc = self.debug.location(function.source, self.scope, self.scope_file)
+        self.lines = [
+            f'define internal {cc}void @{function.name}(' + ', '.join(parameters) + f') nounwind mustprogress !dbg !{self.scope} {{',
+            'entry:',
+        ]
+        if function.params:
+            p_count = len(function.params)
+            self.emit(f'%_p_idx = alloca [{p_count} x i64], align 8')
+            self.emit(f'%_p_vals = alloca [{p_count} x %WysnaValue], align {ALIGNMENT}')
+            for idx, p_id in enumerate(function.params):
+                pslot = self.slots[p_id]
+                i_ptr = self.result(f'getelementptr [{p_count} x i64], ptr %_p_idx, i32 0, i32 {idx}')
+                self.emit(f'store i64 {p_id}, ptr {i_ptr}, align 8')
+                v_ptr = self.result(f'getelementptr [{p_count} x %WysnaValue], ptr %_p_vals, i32 0, i32 {idx}')
+                if pslot.storage == 'value':
+                    val = self.result(f'load %WysnaValue, ptr %arg{p_id}')
+                    self.emit(f'store %WysnaValue {val}, ptr {v_ptr}, align {ALIGNMENT}')
+                elif pslot.type_id == TYPE_INT:
+                    self.emit(f'store %WysnaValue zeroinitializer, ptr {v_ptr}')
+                    self.emit(f'call void @wysna_llvm_box_int(ptr {v_ptr}, i64 %arg{p_id})')
+                elif pslot.type_id == TYPE_FLOAT:
+                    self.emit(f'store %WysnaValue zeroinitializer, ptr {v_ptr}')
+                    self.emit(f'call void @wysna_llvm_box_float(ptr {v_ptr}, double %arg{p_id})')
+                elif pslot.type_id == TYPE_BOOL:
+                    self.emit(f'store %WysnaValue zeroinitializer, ptr {v_ptr}')
+                    b32 = self.result(f'zext i1 %arg{p_id} to i32')
+                    self.emit(f'call void @wysna_llvm_box_bool(ptr {v_ptr}, i32 {b32})')
+            self.emit(f'call void @wysna_llvm_coro_spawn(ptr %out, ptr @{step_fn}, i64 {len(function.slots)}, i64 {p_count}, ptr %_p_idx, ptr %_p_vals)')
+        else:
+            self.emit(f'call void @wysna_llvm_coro_spawn(ptr %out, ptr @{step_fn}, i64 {len(function.slots)}, i64 0, ptr null, ptr null)')
+        self.lines.append('  ret void' + loc)
+        self.lines.extend(['}', ''])
+        return step_lines + self.lines
+
     def fail(self, code, message, source):
         self.emit('call void @wysna_llvm_fail(ptr ' + self.string(code) + ', ptr ' + self.string(message) +
                   ', ptr ' + self.string(source.file) + ', i32 ' + str(source.line) + ', i32 ' + str(source.col) + ')')
@@ -253,11 +477,12 @@ class LlvmCodeGen:
             value = data['value']
             if type_ == TYPE_STR and value is not None:
                 cache = 'null'
-                if len(value) > 1:
+                utf8_len = len(value.encode('utf-8'))
+                if utf8_len > 6:
                     cache = '@literal' + str(len(self.pool))
                     self.pool.append(cache + ' = internal global [' + str(LITERAL_BYTES) + ' x i8] zeroinitializer, align ' + str(ALIGNMENT))
                 self.emit('call void @wysna_llvm_literal(ptr ' + self.pointer(result) + ', ptr ' + cache +
-                          ', ptr ' + self.string(value) + ', i64 ' + str(len(value.encode('utf-8'))) + ')')
+                          ', ptr ' + self.string(value) + ', i64 ' + str(utf8_len) + ')')
             elif value is None and type_ != TYPE_UNIT and not data.get('placeholder'):
                 self.emit('call void @wysna_llvm_none(ptr ' + self.pointer(result) + ')')
             elif type_ == TYPE_UNIT or value is None:
@@ -274,6 +499,7 @@ class LlvmCodeGen:
             if self.slots[result].storage == 'value':
                 method = 'move' if operation.moves else 'clone'
                 self.emit('call void @wysna_llvm_' + method + '(ptr ' + self.pointer(result) + ', ptr ' + self.boxed(args[0]) + ')')
+                self.release_boxed(args[0], moved=bool(operation.moves))
             else:
                 if self.slots[args[0]].storage == 'value' and self.slots[args[0]].type_id != self.slots[result].type_id:
                     self.managed.complete(result, self.pointer(args[0]))
@@ -294,10 +520,12 @@ class LlvmCodeGen:
                 values = self.managed.arguments(args)
                 output = self.managed.output(result)
                 self.emit('call void @wysna_llvm_ffi_' + data['name'] + '(ptr ' + output + ', ptr ' + values + ')')
+                self.managed.release_arguments(args)
                 self.managed.complete(result, output)
                 return
             function = self.functions[data['name']]
             parameters = []
+            boxed_args = []
             if is_managed(function.return_type):
                 parameters.append('ptr ' + self.pointer(result))
             for position, (index, parameter) in enumerate(zip(args, function.params)):
@@ -309,10 +537,12 @@ class LlvmCodeGen:
                         method = {TYPE_INT: 'int', TYPE_FLOAT: 'float', TYPE_BOOL: 'bool'}[type_]
                         loaded_type = 'i32' if type_ == TYPE_BOOL else SCALAR_TYPES[type_]
                         value = self.result('call ' + loaded_type + ' @wysna_llvm_' + method + '(ptr ' + self.boxed(index, position) + ')')
+                        boxed_args.append((index, position))
                         if type_ == TYPE_BOOL:
                             value = self.result('icmp ne i32 ' + value + ', 0')
                 else:
                     value = self.boxed(index, position)
+                    boxed_args.append((index, position))
                 parameters.append(SCALAR_TYPES.get(type_, 'ptr') + ' ' + value)
             returned = SCALAR_TYPES.get(function.return_type, 'void')
             cc = 'fastcc ' if function.name != 'wysna_program' else ''
@@ -321,6 +551,8 @@ class LlvmCodeGen:
                 self.emit(call)
             else:
                 self.write(result, self.result(call))
+            for index, position in boxed_args:
+                self.release_boxed(index, position)
         elif kind == 'runtime':
             self.runtime(operation)
         elif kind == 'test':
@@ -358,6 +590,8 @@ class LlvmCodeGen:
         if type_ not in SCALAR_TYPES or type_ != self.slots[args[1]].type_id:
             left, right = self.boxed(args[0], 0), self.boxed(args[1], 1)
             value = self.result('call i32 @wysna_llvm_compare(ptr ' + left + ', ptr ' + right + ', i32 ' + str(codes[name]) + ')')
+            self.release_boxed(args[0], 0)
+            self.release_boxed(args[1], 1)
             compared = self.result('icmp ne i32 ' + value + ', 0')
         else:
             left, right = self.load(args[0]), self.load(args[1])
@@ -375,6 +609,8 @@ class LlvmCodeGen:
             pointer = self.cell(0) if args else 'null'
             self.emit('call void @wysna_llvm_print(i32 ' + str(len(args)) + ', ptr ' + pointer +
                       ', i32 ' + str(int(name == 'wysna_builtin_eprint')) + ')')
+            for offset, index in enumerate(args):
+                self.release_boxed(index, offset)
         elif name == 'wysna_builtin_exit':
             self.emit('call void @wysna_llvm_exit(i64 ' + self.load(args[0]) + ')')
         elif name in CONVERSIONS:
@@ -396,9 +632,12 @@ class LlvmCodeGen:
                     out = self.cell(1)
                     self.emit('store %WysnaValue zeroinitializer, ptr ' + out)
                 self.emit('call void @wysna_llvm_convert(ptr ' + out + ', ptr ' + source + ', i32 ' + str(CONVERSIONS[name]) + ')')
+                self.release_boxed(args[0], 0)
                 if self.slots[result].storage != 'value':
                     method = 'int' if self.slots[result].type_id == TYPE_INT else 'float'
                     value = self.result('call ' + TYPES[self.slots[result].type_id] + ' @wysna_llvm_' + method + '(ptr ' + out + ')')
+                    if self.slots[result].type_id == TYPE_INT:
+                        self.emit('call void @wysna_llvm_release(ptr ' + out + ')')
                     self.write(result, value)
         elif name in ('wysna_equal', 'wysna_not_equal', 'wysna_lt', 'wysna_le', 'wysna_gt', 'wysna_ge'):
             self.compare(operation, name)

@@ -10,6 +10,7 @@ from node.NodeType import (
     NoneLiteral,
     IdentExpr,
     UnaryExpr,
+    AwaitExpr,
     BinaryExpr,
     RangeExpr,
 )
@@ -72,6 +73,10 @@ def check_ident_expr(checker: "TypeChecker", expr: IdentExpr, is_statement_conte
         expr.resolved_symbol = sym
         if sym.kind == "fn" and isinstance(sym.type, FunctionType):
             expr.function_reference = sym.name
+            if getattr(sym.type, "is_async", False) and not getattr(expr, "is_callee", False):
+                from checker.CallRules import resolve_async_call_return
+                wrapped_ret = resolve_async_call_return(checker, sym.type.ret, expr.line, expr.col)
+                return FunctionType(sym.type.params, wrapped_ret, is_mutating=sym.type.is_mutating, is_async=False)
         return sym.type
     # Check if referencing an Enum type
     enum_type = checker.current_scope.lookup_type(expr.name)
@@ -137,6 +142,18 @@ def check_unary_expr(checker: "TypeChecker", expr: UnaryExpr, is_statement_conte
             file=checker.file,
             code="W2001"
         )
+
+
+def check_await_expr(checker: "TypeChecker", expr: AwaitExpr, is_statement_context: bool = False) -> WysnaType:
+    operand_t = checker._check_expr(expr.operand)
+    if hasattr(operand_t, "type_args") and operand_t.type_args:
+        return operand_t.type_args[0]
+    if hasattr(operand_t, "fields") and "value" in operand_t.fields:
+        val_t = operand_t.fields["value"]
+        if hasattr(val_t, "inner"):
+            return val_t.inner
+        return val_t
+    return operand_t
 
 
 def check_binary_expr(checker: "TypeChecker", expr: BinaryExpr, is_statement_context: bool = False) -> WysnaType:

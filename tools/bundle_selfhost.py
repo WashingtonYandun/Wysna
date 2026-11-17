@@ -11,6 +11,7 @@ import sys
 
 MODULE_ORDER = [
     "01_ast.wysna",
+    "01_diagnostics.wysna",
     "02_lexer.wysna",
     "03_syntax.wysna",
     "03_modules.wysna",
@@ -34,6 +35,8 @@ MODULE_ORDER = [
     "08_mir_verifier.wysna",
     "08_c99_literals.wysna",
     "08_mir_c99.wysna",
+    "09_agent_tools.wysna",
+    "09_lsp.wysna",
     "09_main.wysna",
 ]
 

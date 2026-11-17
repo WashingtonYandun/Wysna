@@ -1,0 +1,14 @@
+import "std/text" as text
+
+let composed = "caf\u{e9}"
+let decomposed = "cafe\u{301}"
+print(len(composed), len(decomposed))
+print(text.normalize_nfd(composed) == decomposed)
+print(text.normalize_nfc(decomposed) == composed)
+print(text.canonical_equal(composed, decomposed))
+print(composed == decomposed)
+print(len(text.normalize_nfd("\u{ac01}")), len(text.normalize_nfc("\u{1100}\u{1161}\u{11a8}")))
+print(len(text.normalize_nfd("\u{1e69}")), len(text.normalize_nfc("s\u{323}\u{307}")))
+print(text.normalize_nfc("a\u{323}\u{301}") == text.normalize_nfc("a\u{301}\u{323}"))
+print(text.normalize_nfc("plain ascii") == "plain ascii")
+print(len(text.normalize_nfc("")))

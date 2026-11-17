@@ -21,6 +21,42 @@ static int sdk_join(char* output, const char* directory, const char* name) {
     int count = snprintf(output, SDK_PATH_CAP, "%s/%s", directory, name);
     return count >= 0 && count < SDK_PATH_CAP;
 }
+static int sdk_has_wysna_suffix(const char* name) {
+    size_t len = strlen(name);
+    return len > 6 && strcmp(name + len - 6, ".wysna") == 0;
+}
+static int sdk_string_cmp(const void* a, const void* b) {
+    const char* sa = *(const char* const*)a;
+    const char* sb = *(const char* const*)b;
+    return strcmp(sa, sb);
+}
+static int sdk_read_file(const char* path, char** out_buf, size_t* out_len) {
+    *out_buf = NULL;
+    if (out_len) *out_len = 0;
+    FILE* file = NULL;
+#ifdef _WIN32
+    wchar_t* wide = wysna_host_process_wide(path);
+    if (!wide) return 0;
+    file = _wfopen(wide, L"rb");
+    free(wide);
+#else
+    file = fopen(path, "rb");
+#endif
+    if (!file) return 0;
+    if (fseek(file, 0, SEEK_END) != 0) { fclose(file); return 0; }
+    long size = ftell(file);
+    if (size < 0) { fclose(file); return 0; }
+    rewind(file);
+    char* buffer = (char*)malloc((size_t)size + 1);
+    if (!buffer) { fclose(file); return 0; }
+    size_t got = size > 0 ? fread(buffer, 1, (size_t)size, file) : 0;
+    fclose(file);
+    if (got != (size_t)size) { free(buffer); return 0; }
+    buffer[got] = 0;
+    *out_buf = buffer;
+    if (out_len) *out_len = got;
+    return 1;
+}
 static int sdk_parent(char* output, const char* path) {
     if (!sdk_copy(output, path)) return 0;
     char* boundary = NULL;
@@ -166,6 +202,54 @@ static int sdk_remove_tree(const char* path) {
     }
     int result = RemoveDirectoryW(wide); free(wide); return result;
 }
+static int sdk_collect_wysna_tests_win32(const char* path, char*** list_ptr, size_t* count_ptr, size_t* cap_ptr) {
+    char* pattern = (char*)malloc(SDK_PATH_CAP);
+    char* child = (char*)malloc(SDK_PATH_CAP);
+    if (!pattern || !child || !sdk_join(pattern, path, "*")) { free(pattern); free(child); return 0; }
+    wchar_t* search = wysna_host_process_wide(pattern);
+    WIN32_FIND_DATAW entry;
+    HANDLE found = search ? FindFirstFileW(search, &entry) : INVALID_HANDLE_VALUE;
+    free(search); free(pattern);
+    int ok = 1;
+    if (found != INVALID_HANDLE_VALUE) {
+        do {
+            if (wcscmp(entry.cFileName, L".") == 0 || wcscmp(entry.cFileName, L"..") == 0) continue;
+            char* name = (char*)malloc(SDK_PATH_CAP);
+            if (!name || !sdk_utf8(name, entry.cFileName) || !sdk_join(child, path, name)) {
+                free(name); ok = 0; break;
+            }
+            free(name);
+            if (entry.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY) {
+                if (!(entry.dwFileAttributes & FILE_ATTRIBUTE_REPARSE_POINT)) {
+                    if (!sdk_collect_wysna_tests_win32(child, list_ptr, count_ptr, cap_ptr)) { ok = 0; break; }
+                }
+            } else if (sdk_has_wysna_suffix(child)) {
+                if (*count_ptr == *cap_ptr) {
+                    size_t next_cap = *cap_ptr ? (*cap_ptr * 2) : 16;
+                    char** grown = (char**)realloc(*list_ptr, next_cap * sizeof(char*));
+                    if (!grown) { ok = 0; break; }
+                    *list_ptr = grown; *cap_ptr = next_cap;
+                }
+                size_t len = strlen(child) + 1;
+                char* copy = (char*)malloc(len);
+                if (!copy) { ok = 0; break; }
+                memcpy(copy, child, len);
+                (*list_ptr)[(*count_ptr)++] = copy;
+            }
+        } while (FindNextFileW(found, &entry));
+        FindClose(found);
+    }
+    free(child);
+    return ok;
+}
+static int sdk_list_wysna_tests(const char* root_dir, char*** files_out, size_t* count_out) {
+    char** list = NULL; size_t count = 0, cap = 0;
+    int ok = sdk_collect_wysna_tests_win32(root_dir, &list, &count, &cap);
+    if (!ok) { for (size_t i = 0; i < count; i++) free(list[i]); free(list); return 0; }
+    if (count > 1) qsort(list, count, sizeof(char*), sdk_string_cmp);
+    *files_out = list; *count_out = count;
+    return 1;
+}
 #else
 static int sdk_absolute(char* output, const char* input, int existing) {
     if (existing) {
@@ -224,6 +308,45 @@ static int sdk_remove_tree(const char* path) {
     }
     free(child); closedir(directory);
     return result && rmdir(path) == 0;
+}
+static int sdk_collect_wysna_tests_posix(const char* path, char*** list_ptr, size_t* count_ptr, size_t* cap_ptr) {
+    DIR* directory = opendir(path);
+    if (!directory) return 0;
+    int ok = 1;
+    char* child = (char*)malloc(SDK_PATH_CAP);
+    if (!child) { closedir(directory); return 0; }
+    struct dirent* entry;
+    while (ok && (entry = readdir(directory)) != NULL) {
+        if (strcmp(entry->d_name, ".") == 0 || strcmp(entry->d_name, "..") == 0) continue;
+        if (!sdk_join(child, path, entry->d_name)) { ok = 0; break; }
+        struct stat info;
+        if (stat(child, &info) != 0) continue;
+        if (S_ISDIR(info.st_mode)) {
+            if (!sdk_collect_wysna_tests_posix(child, list_ptr, count_ptr, cap_ptr)) { ok = 0; break; }
+        } else if (S_ISREG(info.st_mode) && sdk_has_wysna_suffix(child)) {
+            if (*count_ptr == *cap_ptr) {
+                size_t next_cap = *cap_ptr ? (*cap_ptr * 2) : 16;
+                char** grown = (char**)realloc(*list_ptr, next_cap * sizeof(char*));
+                if (!grown) { ok = 0; break; }
+                *list_ptr = grown; *cap_ptr = next_cap;
+            }
+            size_t len = strlen(child) + 1;
+            char* copy = (char*)malloc(len);
+            if (!copy) { ok = 0; break; }
+            memcpy(copy, child, len);
+            (*list_ptr)[(*count_ptr)++] = copy;
+        }
+    }
+    free(child); closedir(directory);
+    return ok;
+}
+static int sdk_list_wysna_tests(const char* root_dir, char*** files_out, size_t* count_out) {
+    char** list = NULL; size_t count = 0, cap = 0;
+    int ok = sdk_collect_wysna_tests_posix(root_dir, &list, &count, &cap);
+    if (!ok) { for (size_t i = 0; i < count; i++) free(list[i]); free(list); return 0; }
+    if (count > 1) qsort(list, count, sizeof(char*), sdk_string_cmp);
+    *files_out = list; *count_out = count;
+    return 1;
 }
 #endif
 #endif /* WYSNA_SDK_PLATFORM_H */

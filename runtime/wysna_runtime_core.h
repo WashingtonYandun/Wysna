@@ -65,13 +65,84 @@ typedef struct {
     WVal* vals;
 } WStructBuf;
 
+typedef enum {
+    W_COLOR_BLACK = 0,
+    W_COLOR_PURPLE = 1,
+    W_COLOR_GRAY = 2,
+    W_COLOR_WHITE = 3
+} WCycleColor;
+
 struct WWeakControl {
+    uint32_t kind;
     int32_t strong;
     int32_t weak; /* Includes one implicit reference while the object is alive. */
+    int32_t trial_rc;
+    uint8_t color;
+    bool buffered;
     WStructBuf* object;
+    WWeakControl* cycle_next;
+    WWeakControl* cycle_prev;
 };
 
+#if defined(__GNUC__) || defined(__clang__)
+static inline int32_t wysna_atomic_load_i32(const int32_t* ptr) {
+    return __atomic_load_n(ptr, __ATOMIC_ACQUIRE);
+}
+static inline void wysna_atomic_store_i32(int32_t* ptr, int32_t val) {
+    __atomic_store_n(ptr, val, __ATOMIC_RELEASE);
+}
+static inline int32_t wysna_atomic_inc_i32(int32_t* ptr) {
+    return __atomic_add_fetch(ptr, 1, __ATOMIC_RELAXED);
+}
+static inline int32_t wysna_atomic_dec_i32(int32_t* ptr) {
+    return __atomic_sub_fetch(ptr, 1, __ATOMIC_ACQ_REL);
+}
+static inline bool wysna_atomic_dec_if_gt1_i32(int32_t* ptr) {
+    int32_t cur = __atomic_load_n(ptr, __ATOMIC_RELAXED);
+    while (cur > 1) {
+        if (__atomic_compare_exchange_n(ptr, &cur, cur - 1, true, __ATOMIC_RELEASE, __ATOMIC_RELAXED)) {
+            return true;
+        }
+    }
+    return false;
+}
+static inline uint32_t wysna_atomic_load_u32(const uint32_t* ptr) {
+    return __atomic_load_n(ptr, __ATOMIC_ACQUIRE);
+}
+static inline void wysna_atomic_store_u32(uint32_t* ptr, uint32_t val) {
+    __atomic_store_n(ptr, val, __ATOMIC_RELEASE);
+}
+static inline int64_t wysna_atomic_add_i64(int64_t* ptr, int64_t delta) {
+    return __atomic_add_fetch(ptr, delta, __ATOMIC_RELAXED);
+}
+static inline int64_t wysna_atomic_sub_i64(int64_t* ptr, int64_t delta) {
+    return __atomic_sub_fetch(ptr, delta, __ATOMIC_RELAXED);
+}
+static inline void wysna_spinlock_acquire(volatile int* lock) {
+    while (__atomic_test_and_set(lock, __ATOMIC_ACQUIRE)) {}
+}
+static inline void wysna_spinlock_release(volatile int* lock) {
+    __atomic_clear(lock, __ATOMIC_RELEASE);
+}
+#else
+static inline int32_t wysna_atomic_load_i32(const int32_t* ptr) { return *ptr; }
+static inline void wysna_atomic_store_i32(int32_t* ptr, int32_t val) { *ptr = val; }
+static inline int32_t wysna_atomic_inc_i32(int32_t* ptr) { return ++(*ptr); }
+static inline int32_t wysna_atomic_dec_i32(int32_t* ptr) { return --(*ptr); }
+static inline bool wysna_atomic_dec_if_gt1_i32(int32_t* ptr) {
+    if (*ptr > 1) { --(*ptr); return true; }
+    return false;
+}
+static inline uint32_t wysna_atomic_load_u32(const uint32_t* ptr) { return *ptr; }
+static inline void wysna_atomic_store_u32(uint32_t* ptr, uint32_t val) { *ptr = val; }
+static inline int64_t wysna_atomic_add_i64(int64_t* ptr, int64_t delta) { return (*ptr += delta); }
+static inline int64_t wysna_atomic_sub_i64(int64_t* ptr, int64_t delta) { return (*ptr -= delta); }
+static inline void wysna_spinlock_acquire(volatile int* lock) { (void)lock; }
+static inline void wysna_spinlock_release(volatile int* lock) { (void)lock; }
+#endif
+
 typedef struct WPointerOwner {
+    uint32_t kind;
     int32_t refcount;
     int64_t (*close)(void*);
     void* address;
@@ -79,15 +150,12 @@ typedef struct WPointerOwner {
 
 typedef struct WBoxBuf WBoxBuf;
 typedef struct WFunctionBuf WFunctionBuf;
-
-typedef struct {
-    const char* enum_name;
-    const char* variant;
-    WBoxBuf* box;
-} WEnumVal;
+typedef struct WIntBox WIntBox;
+typedef struct WEnumBuf WEnumBuf;
 
 typedef struct {
     int32_t refcount;
+    uint32_t hash_cache;
     size_t byte_length;
     size_t* codepoint_offsets;
     size_t codepoint_count;
@@ -131,12 +199,19 @@ typedef struct WysnaRuntimeContext {
     int64_t heap_bytes_allocated;
     int64_t max_heap_bytes;
     bool quotas_initialized;
+    WWeakControl* purple_head;
+    int64_t collected_cycles;
+    bool collecting_cycles;
+    volatile int runtime_lock;
+    void (*host_async_cleanup)(void);
     int argc;
     char** argv;
 #ifdef _WIN32
     bool argv_allocated;
 #endif
 } WysnaRuntimeContext;
+
+static inline int64_t wysna_collect_cycles(void);
 
 #ifdef WYSNA_SHARED_RUNTIME
 extern WysnaRuntimeContext wysna_runtime_context;
@@ -151,45 +226,53 @@ static WysnaRuntimeContext wysna_runtime_context = {0};
 #define W_STRING_SCAN_STEP() ((void)0)
 #endif
 
-/* ABI v2 keeps string metadata in its variant rather than in every value. */
-#define W_RUNTIME_ABI_VERSION 2
+/*
+ * ABI v3 unifies every runtime value into an 8-byte NaN-boxed word (WVal == WVal64):
+ * - 0x0000_0000_0000_0000: W_UNIT (zero-initialized globals/locals equal unit)
+ * - 0x0000_0000_0000_0001..3: W_NONE, false, true
+ * - 0x0000_8000_xxxx_xxxx_xxxx: raw 47-bit opaque W_POINTER (address with bit 47 set)
+ * - 0x0001_0000_0000_0000..0xFFF1_0000_0000_0000: IEEE-754 double + WVAL_DOUBLE_OFFSET
+ * - 0xFFF2..0xFFFF: 14 distinct 48-bit tag bands (inline int48, SSO 0..6B, strings, heap containers, boxes, ext)
+ */
+#define W_RUNTIME_ABI_VERSION 3
 struct WVal {
-    WTag tag;
-    union {
-        int64_t i;
-        double f;
-        bool b;
-        struct {
-            const char* data;
-            WStringBuf* owner;
-            size_t length;
-        } string;
-        WListBuf* list;
-        WDictBuf* dict;
-        WTupleBuf* tuple;
-        WStructBuf* st;
-        WEnumVal en;
-        WBoxBuf* box;
-        WWeakControl* weak;
-        WFunctionBuf* function;
-        void* pointer;
-        struct { void* address; WPointerOwner* owner; } handle;
-    } as;
+    uint64_t bits;
 };
+typedef WVal WVal64;
 
-static inline bool wysna_value_is_error_type(WVal value, const char* kind, const char* name) {
-    if (strcmp(kind, "int") == 0) return value.tag == W_INT;
-    if (strcmp(kind, "float") == 0) return value.tag == W_FLOAT;
-    if (strcmp(kind, "bool") == 0) return value.tag == W_BOOL;
-    if (strcmp(kind, "str") == 0) return value.tag == W_STR;
-    if (strcmp(kind, "struct") == 0) {
-        return value.tag == W_STRUCT && value.as.st && (value.as.st->name == name || strcmp(value.as.st->name, name) == 0);
-    }
-    if (strcmp(kind, "enum") == 0) {
-        return value.tag == W_ENUM && value.as.en.enum_name && (value.as.en.enum_name == name || strcmp(value.as.en.enum_name, name) == 0);
-    }
-    return false;
-}
+#define WVAL_DOUBLE_OFFSET    UINT64_C(0x0001000000000000)
+#define WVAL_DOUBLE_MAX_ENC   UINT64_C(0xFFF0000000000000)
+#define WVAL_HI_SHIFT         48
+#define WVAL_PAYLOAD_MASK     UINT64_C(0x0000FFFFFFFFFFFF)
+#define WVAL_RAW_PTR_FLAG     UINT64_C(0x0000800000000000)
+#define WVAL_RAW_PTR_MASK     UINT64_C(0x00007FFFFFFFFFFF)
+
+#define WVAL_UNIT_BITS        UINT64_C(0x0000000000000000)
+#define WVAL_NONE_BITS        UINT64_C(0x0000000000000001)
+#define WVAL_FALSE_BITS       UINT64_C(0x0000000000000002)
+#define WVAL_TRUE_BITS        UINT64_C(0x0000000000000003)
+#define WVAL_NULL_PTR_BITS    WVAL_RAW_PTR_FLAG
+#define WVAL_CANON_NAN_ENC    (UINT64_C(0x7FF8000000000000) + WVAL_DOUBLE_OFFSET)
+
+#define WVAL_HI_INT           UINT64_C(0xFFF2)
+#define WVAL_HI_SSO_SHORT     UINT64_C(0xFFF3)
+#define WVAL_HI_SSO_6         UINT64_C(0xFFF4)
+#define WVAL_HI_CSTR          UINT64_C(0xFFF5)
+#define WVAL_HI_STR_PTR       UINT64_C(0xFFF6)
+#define WVAL_HI_LIST          UINT64_C(0xFFF7)
+#define WVAL_HI_DICT          UINT64_C(0xFFF8)
+#define WVAL_HI_TUPLE         UINT64_C(0xFFF9)
+#define WVAL_HI_STRUCT        UINT64_C(0xFFFA)
+#define WVAL_HI_OBJECT        UINT64_C(0xFFFB)
+#define WVAL_HI_ENUM          UINT64_C(0xFFFC)
+#define WVAL_HI_OK            UINT64_C(0xFFFD)
+#define WVAL_HI_ERR           UINT64_C(0xFFFE)
+#define WVAL_HI_EXT           UINT64_C(0xFFFF)
+
+/* Backward-compatible constants for callers referencing WVal64 masks directly. */
+#define WVAL64_UNIT_VAL       ((WVal){WVAL_UNIT_BITS})
+#define WVAL64_NONE_VAL       ((WVal){WVAL_NONE_BITS})
+#define WVAL64_CANON_NAN      ((WVal){WVAL_CANON_NAN_ENC})
 
 typedef WVal (*WInvoke)(WVal environment, int32_t argc, const WVal* argv);
 
@@ -204,6 +287,37 @@ static inline void wysna_runtime_set_position(const char* file, int32_t line, in
     wysna_g_source_col = col;
 }
 
+#if defined(__SANITIZE_ADDRESS__)
+#define WYSNA_HAS_ASAN 1
+#elif defined(__has_feature)
+#if __has_feature(address_sanitizer)
+#define WYSNA_HAS_ASAN 1
+#endif
+#endif
+
+#if defined(_MSC_VER)
+#define WYSNA_NORETURN __declspec(noreturn)
+#elif defined(__GNUC__) || defined(__clang__)
+#define WYSNA_NORETURN __attribute__((noreturn))
+#elif defined(__STDC_VERSION__) && __STDC_VERSION__ >= 201112L
+#define WYSNA_NORETURN _Noreturn
+#else
+#define WYSNA_NORETURN
+#endif
+
+/* Abnormal termination exits before active C frames unwind, leaving NaN-boxed
+ * WVal roots in stack/BSS that LSan cannot trace as heap pointers. Skip the
+ * atexit leak scan only on those non-unwound exit paths under ASan while keeping
+ * full LSan and WYSNA_MEM_CHECK verification on normal main() completion. */
+static inline WYSNA_NORETURN void wysna_panic_exit(int status) {
+    fflush(NULL);
+#if defined(WYSNA_HAS_ASAN) && !defined(__EMSCRIPTEN__) && !defined(__wasi__)
+    _Exit(status);
+#else
+    exit(status);
+#endif
+}
+
 static inline void wysna_runtime_fail(const char* code, const char* format, ...) {
     if (wysna_g_source_file && wysna_g_source_file[0] != '\0' && wysna_g_source_line > 0) {
         fprintf(stderr, "[%s] %s:%" PRId32 ":%" PRId32 " - ",
@@ -216,22 +330,34 @@ static inline void wysna_runtime_fail(const char* code, const char* format, ...)
     vfprintf(stderr, format, args);
     va_end(args);
     fputc('\n', stderr);
-    exit(1);
+    wysna_panic_exit(1);
+}
+
+static inline void wysna_sandbox_deny(const char* capability) {
+    wysna_runtime_fail("W5006", "Sandbox capability '%s' is denied", capability ? capability : "unknown");
 }
 
 struct WClassVTable {
     int32_t count;
     const WInvoke* methods;
 };
-static inline WVal wysna_virtual_call(WVal receiver, int32_t slot, int32_t argc, const WVal* argv) {
-    const WClassVTable* table = receiver.tag == W_OBJECT ? receiver.as.st->vtable : NULL;
-    if (!table || slot < 0 || slot >= table->count || !table->methods[slot]) {
-        fprintf(stderr, "[W4003] RuntimeError: Invalid virtual method dispatch\n"); exit(1);
-    }
-    return table->methods[slot](receiver, argc, argv);
-}
+
+struct WIntBox {
+    uint32_t kind;
+    int32_t refcount; /* -1 = immortal literal, -2 = stack-scoped borrow, >=1 = heap ARC */
+    int64_t value;
+};
+
+struct WEnumBuf {
+    int32_t refcount; /* -1 = immortal unit literal, >=1 = heap ARC */
+    bool has_payload;
+    const char* enum_name;
+    const char* variant;
+    WVal payload;
+};
 
 struct WFunctionBuf {
+    uint32_t kind;
     int32_t refcount;
     WInvoke invoke;
     WVal environment;
@@ -277,30 +403,30 @@ static inline void wysna_cow_reset_stats(void) {
  * Clang/GCC AddressSanitizer and LeakSanitizer (ASan/LSan) in CI and test suites.
  */
 static inline void wysna_mem_on_alloc(void) {
-    wysna_g_alloc_count++;
-    wysna_g_live_objects++;
+    wysna_atomic_add_i64(&wysna_g_alloc_count, 1);
+    wysna_atomic_add_i64(&wysna_g_live_objects, 1);
 }
 
 static inline void wysna_mem_on_free(void) {
-    wysna_g_free_count++;
-    wysna_g_live_objects--;
-    if (wysna_g_live_objects < 0) {
-        fprintf(stderr, "[W4003] RuntimeError: Memory safety violation (live_object_count underflow: %" PRId64 ")\n", wysna_g_live_objects);
-        exit(1);
+    wysna_atomic_add_i64(&wysna_g_free_count, 1);
+    int64_t live = wysna_atomic_sub_i64(&wysna_g_live_objects, 1);
+    if (live < 0) {
+        fprintf(stderr, "[W4003] RuntimeError: Memory safety violation (live_object_count underflow: %" PRId64 ")\n", live);
+        wysna_panic_exit(1);
     }
 }
 
 static inline void wysna_check_refcount(int32_t rc, const char* op) {
     if (rc <= 0) {
         fprintf(stderr, "[W4003] RuntimeError: Memory safety violation (%s on object with refcount %" PRId32 ")\n", op, rc);
-        exit(1);
+        wysna_panic_exit(1);
     }
 }
 
 static inline void wysna_check_retain_count(int32_t rc, const char* op) {
     if (rc == INT32_MAX) {
         fprintf(stderr, "[W4003] RuntimeError: Memory safety violation (reference count overflow during %s)\n", op);
-        exit(1);
+        wysna_panic_exit(1);
     }
     wysna_check_refcount(rc, op);
 }
@@ -335,8 +461,8 @@ static inline void wysna_init_quotas(void) {
 static inline void wysna_step_tick(void) {
     if (!wysna_runtime_context.quotas_initialized) wysna_init_quotas();
     if (wysna_runtime_context.max_steps > 0) {
-        wysna_runtime_context.steps_executed++;
-        if (wysna_runtime_context.steps_executed > wysna_runtime_context.max_steps) {
+        int64_t steps = wysna_atomic_add_i64(&wysna_runtime_context.steps_executed, 1);
+        if (steps > wysna_runtime_context.max_steps) {
             wysna_runtime_fail("W4004", "Execution step quota exceeded (limit: %" PRId64 " steps)",
                                wysna_runtime_context.max_steps);
         }
@@ -346,7 +472,10 @@ static inline void wysna_step_tick(void) {
 static inline void wysna_charge_heap_bytes(size_t size) {
     if (!wysna_runtime_context.quotas_initialized) wysna_init_quotas();
     if (wysna_runtime_context.max_heap_bytes > 0 && size > 0) {
-        wysna_runtime_context.heap_bytes_allocated += (int64_t)size;
+        int64_t allocated = wysna_atomic_add_i64(&wysna_runtime_context.heap_bytes_allocated, (int64_t)size);
+        if (allocated > wysna_runtime_context.max_heap_bytes && !wysna_runtime_context.collecting_cycles) {
+            wysna_collect_cycles();
+        }
         if (wysna_runtime_context.heap_bytes_allocated > wysna_runtime_context.max_heap_bytes) {
             wysna_runtime_fail("W4004", "Execution heap memory quota exceeded (limit: %" PRId64 " bytes)",
                                wysna_runtime_context.max_heap_bytes);
@@ -360,7 +489,7 @@ static inline void* wysna_alloc_safe(size_t size) {
     void* ptr = malloc(size);
     if (!ptr) {
         fprintf(stderr, "[W4003] RuntimeError: Out of memory (failed to allocate %zu bytes)\n", size);
-        exit(1);
+        wysna_panic_exit(1);
     }
     return ptr;
 }
@@ -374,7 +503,7 @@ static inline void* wysna_realloc_safe(void* old_ptr, size_t new_size) {
     void* ptr = realloc(old_ptr, new_size);
     if (!ptr) {
         fprintf(stderr, "[W4003] RuntimeError: Out of memory (failed to reallocate %zu bytes)\n", new_size);
-        exit(1);
+        wysna_panic_exit(1);
     }
     return ptr;
 }
@@ -396,12 +525,26 @@ static inline void wysna_runtime_cleanup_impl(bool verify_live_objects) {
         wysna_g_argv_allocated = false;
     }
 #endif
+    if (wysna_runtime_context.host_async_cleanup) {
+        wysna_runtime_context.host_async_cleanup();
+    }
     while (wysna_g_string_literals) {
         WStringLiteral* literal = wysna_g_string_literals;
         wysna_g_string_literals = literal->next;
         free(literal->buffer.codepoint_offsets);
         memset(&literal->buffer, 0, sizeof(literal->buffer));
         literal->next = NULL;
+    }
+    const char* collect_env = getenv("WYSNA_COLLECT_CYCLES");
+    if (verify_live_objects && collect_env && strcmp(collect_env, "1") == 0) {
+        wysna_collect_cycles();
+    }
+    while (wysna_runtime_context.purple_head) {
+        WWeakControl* next = wysna_runtime_context.purple_head->cycle_next;
+        wysna_runtime_context.purple_head->cycle_next = NULL;
+        wysna_runtime_context.purple_head->cycle_prev = NULL;
+        wysna_runtime_context.purple_head->buffered = false;
+        wysna_runtime_context.purple_head = next;
     }
     const char* stats_env = getenv("WYSNA_MEM_STATS");
     if (stats_env && strcmp(stats_env, "1") == 0) {

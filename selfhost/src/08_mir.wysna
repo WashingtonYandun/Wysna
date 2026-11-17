@@ -6,7 +6,7 @@ struct MirPlace { root: int, projections: list[MirProjection] }
 struct MirOperation { owner_type: int, labels: list[str], place: MirPlace, opcode: str, result: int, args: list[int], name: str, value: MirLiteral, source: Token }
 struct MirTerminator { kind: str, targets: list[int], value: int, source: Token }
 struct MirBlock { operations: list[MirOperation], terminator: MirTerminator }
-struct MirFunction { name: str, return_type: int, slots: list[MirSlot], blocks: list[MirBlock], params: list[int], source: Token }
+struct MirFunction { name: str, return_type: int, slots: list[MirSlot], blocks: list[MirBlock], params: list[int], source: Token, is_async: bool, async_return_type: int }
 struct MirExtern { name: str, native: str, params: list[int], return_type: int, abi_params: list[str], abi_return: str }
 struct MirVirtualSlot { name: str, arity: int }
 struct MirGlobal { symbol: int, type_id: int, name: str }
@@ -93,7 +93,7 @@ fn mir_is_result(types: list[MirType], type_id: int) -> bool { return mir_valid_
 fn mir_is_optional(types: list[MirType], type_id: int) -> bool { return mir_valid_type(types, type_id) and types[type_id].kind == "optional" }
 
 fn mir_consumes(operation: MirOperation) -> bool {
-    return operation.opcode == "function" and len(operation.args) > 0 or operation.opcode == "store" or operation.opcode == "store_place" or operation.opcode == "global_store" or operation.opcode == "runtime" and (operation.name == "wysna_ok" or operation.name == "wysna_err" or operation.name == "wysna_enum_payload" or operation.name == "wysna_builtin_weak_owned")
+    return operation.opcode == "function" and len(operation.args) > 0 or operation.opcode == "store" or operation.opcode == "store_place" or operation.opcode == "global_store" or operation.opcode == "runtime" and (operation.name == "wysna_ok" or operation.name == "wysna_err" or operation.name == "wysna_enum_payload" or operation.name == "wysna_builtin_weak_owned" or operation.name == "wysna_await")
 }
 
 fn mir_new_block(context: MirBuilder, source: Token) -> int {
@@ -110,7 +110,7 @@ fn mir_push_scope(context: MirBuilder) {
     context.scopes.append(MirScope { slots: slots })
 }
 
-fn mir_begin(context: MirBuilder, source: Token, returned: int) {
+fn mir_begin_fn(context: MirBuilder, source: Token, returned: int, is_async: bool, async_returned: int) {
     let slots: list[MirSlot] = []
     let blocks: list[MirBlock] = []
     let params: list[int] = []
@@ -124,8 +124,14 @@ fn mir_begin(context: MirBuilder, source: Token, returned: int) {
     context.scopes = scopes
     context.loops = loops
     context.return_type = returned
+    context.is_async = is_async
+    context.async_return_type = if is_async { async_returned } else { returned }
     mir_push_scope(context)
     context.current = mir_new_block(context, source)
+}
+
+fn mir_begin(context: MirBuilder, source: Token, returned: int) {
+    mir_begin_fn(context, source, returned, false, returned)
 }
 
 fn mir_raw_slot(context: MirBuilder, type_id: int, name: str, parameter: bool) -> int {
@@ -193,8 +199,9 @@ fn mir_jump(context: MirBuilder, target: int, source: Token) { mir_terminate(con
 
 fn mir_return(context: MirBuilder, value: int, source: Token) {
     if context.current < 0 { return }
-    let checked = mir_coerce(context, value, context.return_type, true, source)
-    let escaped = mir_raw_slot(context, context.return_type, "", false)
+    let target_ret = if context.is_async { context.async_return_type } else { context.return_type }
+    let checked = mir_coerce(context, value, target_ret, true, source)
+    let escaped = mir_raw_slot(context, target_ret, "", false)
     mir_store(context, escaped, checked, source)
     mir_cleanup(context, 0, source)
     let targets: list[int] = []
@@ -208,7 +215,7 @@ fn mir_finish(context: MirBuilder, name: str, source: Token) {
             context.blocks[i].terminator = MirTerminator { kind: "unreachable", targets: targets, value: -1, source: source }
         }
     }
-    context.functions.append(MirFunction { name: name, return_type: context.return_type, slots: context.slots, blocks: context.blocks, params: context.params, source: source })
+    context.functions.append(MirFunction { name: name, return_type: context.return_type, slots: context.slots, blocks: context.blocks, params: context.params, source: source, is_async: context.is_async, async_return_type: if context.is_async { context.async_return_type } else { 0 } })
 }
 
 fn mir_integer(context: MirBuilder, text: str, negative: bool, source: Token) -> int {
@@ -350,7 +357,8 @@ fn mir_function_json(function: MirFunction) -> str {
         let term = "{\"$type\":\"Terminator\",\"kind\":" + mir_quote(terminator.kind) + ",\"targets\":" + mir_ids(terminator.targets, true) + ",\"value\":" + value + ",\"source\":" + mir_source_json(terminator.source) + "}"
         blocks = blocks + "{\"$type\":\"BasicBlock\",\"id\":" + str(i) + ",\"operations\":" + operations + ",\"terminator\":" + term + "}"
     }
-    return "{\"$type\":\"Function\",\"name\":" + mir_quote(function.name) + ",\"return_type\":" + str(function.return_type) + ",\"slots\":" + slots + ",\"blocks\":" + blocks + "],\"params\":" + mir_ids(function.params, false) + ",\"source\":" + mir_source_json(function.source) + "}"
+    let async_flag = if function.is_async { "true" } else { "false" }
+    return "{\"$type\":\"Function\",\"name\":" + mir_quote(function.name) + ",\"return_type\":" + str(function.return_type) + ",\"slots\":" + slots + ",\"blocks\":" + blocks + "],\"params\":" + mir_ids(function.params, false) + ",\"source\":" + mir_source_json(function.source) + ",\"is_async\":" + async_flag + ",\"async_return_type\":" + str(function.async_return_type) + "}"
 }
 
 fn mir_dictionary_key(module: MirModule, root: int) -> bool {
@@ -363,21 +371,27 @@ fn mir_dictionary_key(module: MirModule, root: int) -> bool {
             active.pop()
             seen.append(-id - 1)
         } elif id != 2 and id != 3 and id != 5 {
-            if id < 0 or id >= len(module.types) or module.types[id].kind != "enum" { return false }
-            let mut visited = false
-            for previous in seen { if previous == id { visited = true } }
-            if not visited {
-                for previous in active { if previous == id { return false } }
-                active.append(id)
-                pending.append(-id - 1)
-                let mut found = false
-                for record in module.records {
-                    if record.type_id == id {
-                        found = true
-                        for variant in record.variants { for payload in variant.payloads { pending.append(payload) } }
+            if id < 0 or id >= len(module.types) { return false }
+            if module.types[id].kind == "tuple" {
+                for elem_id in module.types[id].args { pending.append(elem_id) }
+            } elif module.types[id].kind != "enum" {
+                return false
+            } else {
+                let mut visited = false
+                for previous in seen { if previous == id { visited = true } }
+                if not visited {
+                    for previous in active { if previous == id { return false } }
+                    active.append(id)
+                    pending.append(-id - 1)
+                    let mut found = false
+                    for record in module.records {
+                        if record.type_id == id {
+                            found = true
+                            for variant in record.variants { for payload in variant.payloads { pending.append(payload) } }
+                        }
                     }
+                    if not found { return false }
                 }
-                if not found { return false }
             }
         }
     }
@@ -431,6 +445,8 @@ class MirBuilder {
     loops: list[MirLoop]
     current: int
     return_type: int
+    is_async: bool
+    async_return_type: int
     fn init(program: CheckedProgram) {
         this.program = program
         let empty_type_args: list[int] = []
@@ -462,6 +478,8 @@ class MirBuilder {
         this.loops = initial_loops
         this.current = -1
         this.return_type = 1
+        this.is_async = false
+        this.async_return_type = 1
     }
 }
 

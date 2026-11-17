@@ -169,17 +169,30 @@ def is_error_channel_assignable(source: WysnaType, target: WysnaType) -> bool:
 
 
 class FunctionType(WysnaType):
-    def __init__(self, params: List[WysnaType], ret: WysnaType, is_mutating: bool = False):
+    def __init__(
+        self,
+        params: List[WysnaType],
+        ret: WysnaType,
+        is_mutating: bool = False,
+        is_async: bool = False,
+    ):
         self.params = params
         self.ret = ret
         self.is_mutating = is_mutating
+        self.is_async = is_async
 
     def __eq__(self, other: Any) -> bool:
-        return isinstance(other, FunctionType) and self.params == other.params and self.ret == other.ret
+        return (
+            isinstance(other, FunctionType)
+            and self.params == other.params
+            and self.ret == other.ret
+            and self.is_async == other.is_async
+        )
 
     def __str__(self) -> str:
         params_str = ", ".join(str(p) for p in self.params)
-        return f"fn({params_str}) -> {self.ret}"
+        prefix = "async fn" if self.is_async else "fn"
+        return f"{prefix}({params_str}) -> {self.ret}"
 
 
 class InterfaceType(WysnaType):
@@ -217,6 +230,7 @@ class ClassType(WysnaType):
         fields: Optional[Dict[str, ClassFieldInfo]] = None,
         methods: Optional[Dict[str, ClassMethodInfo]] = None,
         init_type: Optional[FunctionType] = None,
+        generic_methods: Optional[Dict[str, 'GenericMethodTemplate']] = None,
     ):
         self.name = name
         self.superclass = superclass
@@ -224,6 +238,7 @@ class ClassType(WysnaType):
         self.fields: Dict[str, ClassFieldInfo] = fields if fields is not None else {}
         self.methods: Dict[str, ClassMethodInfo] = methods if methods is not None else {}
         self.init_type = init_type
+        self.generic_methods: Dict[str, 'GenericMethodTemplate'] = generic_methods if generic_methods is not None else {}
 
     def is_subclass_of(self, target_class_name: str) -> bool:
         curr: Optional[ClassType] = self
@@ -315,6 +330,38 @@ class GenericFnTemplate(WysnaType):
     def __str__(self) -> str:
         params_str = ", ".join(p.name if hasattr(p, "name") else str(p) for p in self.type_params)
         return f"{self.name}[{params_str}]"
+
+
+class GenericMethodTemplate(WysnaType):
+    """Represents an uninstantiated generic method template inside a class: fn map[R](...) -> R"""
+    def __init__(
+        self,
+        name: str,
+        type_params: List[Any],
+        ast_decl: Any,
+        is_public: bool,
+        owner_class: str,
+        checker: Any = None,
+    ):
+        self.name = name
+        self.type_params = type_params
+        self.ast_decl = ast_decl
+        self.is_public = is_public
+        self.owner_class = owner_class
+        self.checker = checker
+        self.instances: Dict[Any, Any] = {}
+        self.active: int = 0
+
+    def __eq__(self, other: Any) -> bool:
+        return (
+            isinstance(other, GenericMethodTemplate)
+            and self.owner_class == other.owner_class
+            and self.name == other.name
+        )
+
+    def __str__(self) -> str:
+        params_str = ", ".join(p.name if hasattr(p, "name") else str(p) for p in self.type_params)
+        return f"{self.owner_class}.{self.name}[{params_str}]"
 
 
 class GenericEnumTemplate(WysnaType):

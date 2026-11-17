@@ -107,13 +107,13 @@ int main(void) {
         WVal result = index % 2 ? wysna_err(leaves[index]) : wysna_ok(leaves[index]);
         WVal shared = wysna_clone(result);
         release_without_allocation(result);
-        assert(shared.as.box->refcount == 1);
+        assert(wysna_as_box(shared)->refcount == 1);
         release_without_allocation(shared);
     }
     WVal compound = wysna_ok(wysna_make_list(1, (WVal[]){wysna_int(9)}));
     WVal alias = wysna_clone(compound);
     release_without_allocation(compound);
-    assert(alias.as.box->val.as.list->data[0].as.i == 9);
+    assert(wysna_as_int(wysna_as_list(wysna_as_box(alias)->val)->data[0]) == 9);
     wysna_release(alias);
     WVal boxed_string = wysna_ok(wysna_copy_str("child"));
     WVal container = wysna_make_list(1, &boxed_string);

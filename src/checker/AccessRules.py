@@ -331,6 +331,10 @@ def check_member_expr(checker: "TypeChecker", expr: MemberExpr, is_statement_con
             return enum_t
 
     obj_t = checker._check_expr(expr.object, allow_module=True)
+    return resolve_member_with_receiver_type(checker, expr, obj_t)
+
+
+def resolve_member_with_receiver_type(checker: "TypeChecker", expr: MemberExpr, obj_t: WysnaType) -> WysnaType:
     if isinstance(obj_t, ClassType):
         if expr.property == "init" and isinstance(expr.object, SuperExpr):
             curr_s: Optional[ClassType] = obj_t
@@ -365,13 +369,22 @@ def check_member_expr(checker: "TypeChecker", expr: MemberExpr, is_statement_con
                 )
             return m_info.fn_type
 
+        if expr.property in obj_t.generic_methods:
+            raise TypeError(
+                message=f"Generic method '{obj_t.name}.{expr.property}' requires type arguments or a call",
+                line=expr.line,
+                col=expr.col,
+                file=checker.file,
+                code="W2001"
+            )
+
         raise suggest(TypeError(
             message=f"Class '{obj_t.name}' has no member '{expr.property}'",
             line=expr.line,
             col=expr.col,
             file=checker.file,
             code="W3002"
-        ), expr.property, [*obj_t.fields, *obj_t.methods])
+        ), expr.property, [*obj_t.fields, *obj_t.methods, *obj_t.generic_methods])
 
     if isinstance(obj_t, InterfaceType):
         if expr.property in obj_t.methods:

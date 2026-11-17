@@ -51,10 +51,15 @@ def test_cfg_and_ownership_rejections():
     broken = deepcopy(original)
     broken.functions[0].blocks[0].terminator = Terminator('goto', (999,))
     rejects(broken, interner)
-    broken = deepcopy(original)
-    block = next(block for block in broken.functions[0].blocks if block.terminator.kind == 'return')
+    leak_source, leak_interner = lower(
+        'fn keep(flag: bool) -> str { let msg = "a" + "b"\n if flag { return msg } else { return "no" } }\nprint(keep(true))'
+    )
+    block = next(
+        b for b in leak_source.functions[0].blocks
+        if b.terminator.kind == 'return' and any(op.opcode == 'release' for op in b.operations)
+    )
     block.operations = [operation for operation in block.operations if operation.opcode != 'release']
-    rejects(broken, interner)
+    rejects(leak_source, leak_interner)
     broken = deepcopy(original)
     function = broken.functions[0]
     block = function.blocks[0]
