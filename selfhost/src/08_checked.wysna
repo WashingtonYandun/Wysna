@@ -63,6 +63,9 @@ class SemanticContext {
     arms: list[CheckedArm]
     last_pattern: int
     expected_type: int
+    last_method_template: int
+    last_method_owner: int
+    last_method_args: list[int]
     nodes: list[CheckedNode]
     symbols: list[CheckedBinding]
     checked_functions: list[CheckedFunction]
@@ -121,6 +124,10 @@ class SemanticContext {
         this.arms = initial_arms
         this.last_pattern = -1
         this.expected_type = -1
+        this.last_method_template = -1
+        this.last_method_owner = -1
+        let empty_method_args: list[int] = []
+        this.last_method_args = empty_method_args
         this.checking_definition = false
         this.collecting_declarations = false
         let pending_key_types: list[int] = []

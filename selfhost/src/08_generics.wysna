@@ -102,6 +102,8 @@ fn sem_complete_specializations(context: SemanticContext) {
             let type_ = context.types[type_id]
             let generic = sem_generic_type(context, type_.name)
             if type_.kind == "class" and generic >= 0 and len(type_.args) == len(context.generic_types[generic].params) and not sem_symbolic(context, type_id) {
+                let parent_type = sem_class_parent_type(context, type_id)
+                if parent_type >= 0 { let _ = parent_type }
                 for id in 0..function_count {
                     let function = context.functions[id]
                     if function.owner == type_.name + "." and len(function.type_params) == len(type_.args) and len(function.name) > len(function.owner) and slice(function.name, 0, len(function.owner)) == function.owner {

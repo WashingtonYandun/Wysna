@@ -162,7 +162,7 @@ fn main() -> unit {{
 main()
 '''
             main_path.write_text(main_source, encoding="utf-8")
-            for engine in ("interpreter", "ast", "hir"):
+            for engine in ENGINES:
                 res = run_engine(engine, main_source, str(main_path), selfhost_bin=self.selfhost_bin,
                                  directory=dir_path / engine)
                 self.assertEqual(res.exit_code, 0, f"{engine}: {res.stderr}")

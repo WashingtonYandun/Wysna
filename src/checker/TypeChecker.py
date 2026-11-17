@@ -1268,7 +1268,14 @@ class TypeChecker:
         if isinstance(node, NamedType):
             if node.name in subst:
                 return self._type_to_type_node(subst[node.name])
-            return NamedType(node.name, line=node.line, col=node.col)
+            copied = NamedType(node.name, line=node.line, col=node.col)
+            if hasattr(node, "session_resolved_type"):
+                copied.session_resolved_type = node.session_resolved_type
+                copied.resolved_type_id = node.resolved_type_id
+                copied.session_arena_id = node.session_arena_id
+            if getattr(node, "is_internal_any", False):
+                copied.is_internal_any = True
+            return copied
         if isinstance(node, GenericType):
             new_args = [self._substitute_type_node(a, subst) for a in node.type_args]
             return GenericType(node.name, new_args, line=node.line, col=node.col)
@@ -1475,6 +1482,22 @@ class TypeChecker:
             raise TypeError("Generic constraints must name an interface", line=line,
                             col=col, file=self.file, code="W2012")
         resolved = self.global_scope.lookup_type(constraint.name)
+        if resolved is None and constraint.name.startswith("__wysna_module_"):
+            resolved = next(
+                (t for t in self.global_scope.types.values() if getattr(t, "name", None) == constraint.name),
+                None,
+            )
+            if resolved is None and getattr(self, "session", None) is not None:
+                for unit in self.session.modules.values():
+                    unit_checker = getattr(unit, "checker", None)
+                    if unit_checker is not None:
+                        resolved = next(
+                            (t for t in unit_checker.global_scope.types.values()
+                             if getattr(t, "name", None) == constraint.name),
+                            None,
+                        )
+                        if resolved is not None:
+                            break
         if not isinstance(resolved, InterfaceType):
             raise TypeError(f"Generic constraint '{constraint.name}' is not a declared interface",
                             line=line, col=col, file=self.file, code="W2012")

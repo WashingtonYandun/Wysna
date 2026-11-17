@@ -8,11 +8,11 @@ struct Token {
 
 # Standalone semantic parsing. Types are interned structures, never fixture names.
 struct SemType { kind: str, name: str, args: list[int] }
-struct SemGenericType { name: str, kind: str, params: list[str] }
+struct SemGenericType { name: str, kind: str, params: list[str], constraints: list[str] }
 struct SemVar { name: str, type_id: int, mutable: bool, depth: int, binding: int }
 struct SemFunction { abi_params: list[str], abi_return: str, name: str, params: list[str], type_params: list[str], constraints: list[str], type_id: int, body: int, end: int, owner: str, visible: bool, contract_start: int }
 struct SemField { owner: str, name: str, type_id: int, visible: bool }
-struct SemClass { name: str, parent: str, interfaces: list[str] }
+struct SemClass { name: str, parent: str, parent_args: list[int], interfaces: list[str] }
 struct SemValue { type_id: int, root: str, writable: int, terminates: bool, node: int }
 struct SemFlow { type_id: int, terminates: bool, node: int }
 
@@ -683,6 +683,36 @@ fn module_stdlib_path(requested: str) -> str {
     }
     return relative
 }
+fn module_load_source(context: ModuleLoader, canonical: str, requested: str, token: Token) -> int {
+    let mut resolved = module_normalize(module_directory(canonical) + requested)
+    let standard = len(requested) >= 4 and slice(requested, 0, 4) == "std/"
+    if standard {
+        if not module_stdlib_name_safe(requested) { report_error_at("W1003", token, "invalid standard module: " + requested) }
+        resolved = module_stdlib_path(requested)
+        if not module_file_readable(resolved) { report_error_at("W1003", token, "module not found: " + requested) }
+        if not module_stdlib_confined(requested, resolved) { report_error_at("W1003", token, "cannot resolve standard module within its root: " + requested) }
+    } else {
+        let base_dir = module_directory(canonical)
+        let need_ext = len(requested) < 6 or slice(requested, len(requested) - 6, len(requested)) != ".wysna"
+        let rel_ext = if need_ext { module_normalize(base_dir + requested + ".wysna") } else { "" }
+        let cwd_ext = if need_ext { module_normalize(requested + ".wysna") } else { "" }
+        if module_file_readable(resolved) {
+            resolved = resolved
+        } elif rel_ext != "" and module_file_readable(rel_ext) {
+            resolved = rel_ext
+        } elif module_file_readable(module_normalize(requested)) {
+            resolved = module_normalize(requested)
+        } elif cwd_ext != "" and module_file_readable(cwd_ext) {
+            resolved = cwd_ext
+        }
+    }
+    let content = read_file(resolved) else err {
+        report_error_at("W1003", token, "module not found: " + requested)
+        ""
+    }
+    return module_expand(context, content, resolved, false)
+}
+
 fn module_expand(context: ModuleLoader, src: str, path: str, entry: bool) -> int {
     let canonical = module_canonical(path)
 
@@ -725,6 +755,8 @@ fn module_expand(context: ModuleLoader, src: str, path: str, entry: bool) -> int
     context.public_names.append(exports)
     let mut aliases: list[str] = []
     let mut dependencies: list[int] = []
+    let mut use_locals: list[str] = []
+    let mut use_targets: list[str] = []
     let mut body: list[Token] = []
     let mut position = 0
     while position < len(tokens) - 1 {
@@ -734,24 +766,11 @@ fn module_expand(context: ModuleLoader, src: str, path: str, entry: bool) -> int
             let public_import = position > 0 and tokens[position - 1].kind == "PUB"
             if public_import and len(body) > 0 and body[len(body) - 1].kind == "PUB" { body.pop() }
             let requested = tokens[position + 1].val
-            let mut resolved = module_normalize(module_directory(canonical) + requested)
-            let standard = len(requested) >= 4 and slice(requested, 0, 4) == "std/"
-            if standard {
-                if not module_stdlib_name_safe(requested) { report_error_at("W1003", token, "invalid standard module: " + requested) }
-                resolved = module_stdlib_path(requested)
-                if not module_file_readable(resolved) { report_error_at("W1003", token, "module not found: " + requested) }
-                if not module_stdlib_confined(requested, resolved) { report_error_at("W1003", token, "cannot resolve standard module within its root: " + requested) }
-            }
-            let content = read_file(resolved) else err {
-                if standard { report_error_at("W1003", token, "module not found: " + requested) }
-                resolved = module_normalize(requested)
-                read_file(resolved) else err { report_error_at("W1003", token, "module not found: " + requested) "" }
-            }
-            let dependency = module_expand(context, content, resolved, false)
+            let dependency = module_load_source(context, canonical, requested, token)
             let mut alias = extract_module_ns(requested)
             position = position + 2
             if tokens[position].kind == "AS" { alias = tokens[position + 1].val position = position + 2 }
-            if module_contains(aliases, alias) or module_contains(names, alias) { report_error_at("W1002", token, "duplicate module alias") }
+            if module_contains(aliases, alias) or module_contains(names, alias) or module_contains(use_locals, alias) { report_error_at("W1002", token, "duplicate module alias") }
             aliases.append(alias)
             dependencies.append(dependency)
             context.import_owners.append(index)
@@ -759,6 +778,31 @@ fn module_expand(context: ModuleLoader, src: str, path: str, entry: bool) -> int
             context.import_targets.append(dependency)
             context.import_public.append(public_import)
             if public_import { context.public_names[index].append(alias) }
+        } elif token.kind == "IDENT" and token.val == "from" and position + 4 < len(tokens) and tokens[position + 1].kind == "STR" and tokens[position + 2].kind == "IDENT" and tokens[position + 2].val == "use" and tokens[position + 3].kind == "LBRACE" {
+            let public_use = position > 0 and tokens[position - 1].kind == "PUB"
+            if public_use and len(body) > 0 and body[len(body) - 1].kind == "PUB" { body.pop() }
+            let requested = tokens[position + 1].val
+            let dependency = module_load_source(context, canonical, requested, token)
+            position = position + 4
+            while position < len(tokens) - 1 and tokens[position].kind != "RBRACE" {
+                while position < len(tokens) - 1 and (tokens[position].kind == "NEWLINE" or tokens[position].kind == "COMMA") { position = position + 1 }
+                if position >= len(tokens) - 1 or tokens[position].kind == "RBRACE" { break }
+                if tokens[position].kind != "IDENT" { report_error_at("W0006", tokens[position], "expected imported symbol identifier") }
+                let sym_tok = tokens[position]
+                position = position + 1
+                let mut bound = sym_tok.val
+                if position + 1 < len(tokens) and tokens[position].kind == "AS" {
+                    bound = tokens[position + 1].val
+                    position = position + 2
+                }
+                if not module_contains(context.public_names[dependency], sym_tok.val) { report_error_at("W1001", sym_tok, "member is not exported: " + sym_tok.val) }
+                if module_contains(names, bound) or module_contains(aliases, bound) or module_contains(use_locals, bound) { report_error_at("W1002", sym_tok, "imported symbol conflicts with declaration: " + bound) }
+                use_locals.append(bound)
+                use_targets.append(module_name(dependency, sym_tok.val))
+                if public_use { context.public_names[index].append(bound) }
+            }
+            if position >= len(tokens) - 1 or tokens[position].kind != "RBRACE" { report_error_at("W0006", token, "expected '}' in from-use declaration") }
+            position = position + 1
         } else {
             body.append(token)
             position = position + 1
@@ -793,7 +837,7 @@ fn module_expand(context: ModuleLoader, src: str, path: str, entry: bool) -> int
                     consumed = true
                 }
             }
-            if not consumed and not entry and module_contains(names, token.val) {
+            if not consumed {
                 let mut field = false
                 if position > 0 and body[position - 1].kind == "DOT" { field = true }
                 if position + 1 < len(body) and body[position + 1].kind == "COLON" and parentheses == 0 {
@@ -801,7 +845,21 @@ fn module_expand(context: ModuleLoader, src: str, path: str, entry: bool) -> int
                     if position > 0 and (body[position - 1].kind == "LET" or body[position - 1].kind == "MUT") { field = false }
                 }
                 if braces > 0 and position > 0 and body[position - 1].kind == "FN" { field = true }
-                if not field { context.output.append(Token { kind: token.kind, val: module_name(index, token.val), line: token.line, col: token.col, file: token.file }) consumed = true position = position + 1 }
+                if not field {
+                    for u in 0..len(use_locals) {
+                        if token.val == use_locals[u] {
+                            context.output.append(Token { kind: token.kind, val: use_targets[u], line: token.line, col: token.col, file: token.file })
+                            consumed = true
+                            position = position + 1
+                            break
+                        }
+                    }
+                }
+                if not consumed and not entry and module_contains(names, token.val) and not field {
+                    context.output.append(Token { kind: token.kind, val: module_name(index, token.val), line: token.line, col: token.col, file: token.file })
+                    consumed = true
+                    position = position + 1
+                }
             }
         }
         if not consumed { context.output.append(token) position = position + 1 }
@@ -907,6 +965,9 @@ class SemanticContext {
     arms: list[CheckedArm]
     last_pattern: int
     expected_type: int
+    last_method_template: int
+    last_method_owner: int
+    last_method_args: list[int]
     nodes: list[CheckedNode]
     symbols: list[CheckedBinding]
     checked_functions: list[CheckedFunction]
@@ -965,6 +1026,10 @@ class SemanticContext {
         this.arms = initial_arms
         this.last_pattern = -1
         this.expected_type = -1
+        this.last_method_template = -1
+        this.last_method_owner = -1
+        let empty_method_args: list[int] = []
+        this.last_method_args = empty_method_args
         this.checking_definition = false
         this.collecting_declarations = false
         let pending_key_types: list[int] = []
@@ -1080,36 +1145,56 @@ fn checked_records(context: SemanticContext) -> list[CheckedRecord] {
             let mut methods: list[CheckedMethod] = []
             let mut interfaces: list[int] = []
             let mut parent = -1
-            let mut lineage: list[str] = [type_.name]
-            let mut current = type_.name
+            let mut lineage_types: list[int] = [id]
+            let mut current_type = id
             let mut visits = 0
-            while current != "" and visits <= len(context.classes) {
-                let mut next = ""
-                for class_ in context.classes { if class_.name == current { next = class_.parent if current == type_.name { for interface_ in class_.interfaces { interfaces.append(sem_named(context, interface_)) } } } }
-                if next != "" { if parent < 0 { parent = sem_named(context, next) } lineage.append(next) }
-                current = next visits = visits + 1
+            while current_type >= 0 and visits <= len(context.classes) {
+                let current_name = context.types[current_type].name
+                if current_type == id {
+                    for class_ in context.classes {
+                        if class_.name == current_name {
+                            for interface_ in class_.interfaces { interfaces.append(sem_named(context, interface_)) }
+                        }
+                    }
+                }
+                let next_type = if context.types[current_type].kind == "class" { sem_class_parent_type(context, current_type) } else { -1 }
+                if next_type >= 0 {
+                    if parent < 0 { parent = next_type }
+                    lineage_types.append(next_type)
+                }
+                current_type = next_type
+                visits = visits + 1
             }
-            let mut names: list[str] = []
             let generic = sem_generic_type(context, type_.name)
-            if generic >= 0 { sem_require_nominal_budget(context, id) names = context.generic_types[generic].params }
-            let mut owner_index = len(lineage) - 1
+            if generic >= 0 { sem_require_nominal_budget(context, id) }
+            let mut owner_index = len(lineage_types) - 1
             while owner_index >= 0 {
-                let owner_name = lineage[owner_index]
+                let owner_type_id = lineage_types[owner_index]
+                let owner_type = context.types[owner_type_id]
+                let owner_name = owner_type.name
+                let owner_generic = sem_generic_type(context, owner_name)
+                let mut owner_names: list[str] = []
+                if owner_generic >= 0 {
+                    sem_require_nominal_budget(context, owner_type_id)
+                    owner_names = context.generic_types[owner_generic].params
+                }
                 for field in context.fields {
-                    if field.owner == owner_name { fields.append(CheckedField { name: field.name, type_id: sem_substitute_type(context, field.type_id, names, type_.args), visible: field.visible }) }
+                    if field.owner == owner_name { fields.append(CheckedField { name: field.name, type_id: sem_substitute_type(context, field.type_id, owner_names, owner_type.args), visible: field.visible }) }
                 }
                 for i in 0..len(context.functions) {
                     let function = context.functions[i]
                     if function.owner == owner_name + "." and len(function.name) > len(function.owner) and slice(function.name, 0, len(function.owner)) == function.owner {
+                        # Independent generic methods are direct-called on specializations, never placed in class vtables.
+                        if len(function.type_params) > len(owner_names) { continue }
                         let method_name = slice(function.name, len(function.owner), len(function.name))
                         let mut target = i
                         let mut method_owner = sem_named(context, owner_name)
                         let mut method_type = function.type_id
-                        if generic >= 0 {
-                            method_owner = id
-                            method_type = sem_substitute_type(context, method_type, names, type_.args)
+                        if owner_generic >= 0 {
+                            method_owner = owner_type_id
+                            method_type = sem_substitute_type(context, method_type, owner_names, owner_type.args)
                             target = -1
-                            for specialization in context.specializations { if specialization.template == i and specialization.arguments == type_.args { target = specialization.function } }
+                            for specialization in context.specializations { if specialization.template == i and specialization.arguments == owner_type.args { target = specialization.function } }
                             if target < 0 { report_error_at("W9999", context.tokens[0], "missing specialized method") }
                         }
                         let method = CheckedMethod { name: method_name, type_id: method_type, target: target, owner: method_owner, visible: function.visible }
@@ -1120,6 +1205,8 @@ fn checked_records(context: SemanticContext) -> list[CheckedRecord] {
                 }
                 owner_index = owner_index - 1
             }
+            let mut names: list[str] = []
+            if generic >= 0 { names = context.generic_types[generic].params }
             for i in 0..len(context.variants) {
                 if context.types[context.variant_types[i]].name == type_.name {
                     let mut payloads: list[int] = []
@@ -1480,6 +1567,51 @@ fn sem_generic_type(context: SemanticContext, name: str) -> int {
     for i in 0..len(context.generic_types) { if context.generic_types[i].name == name { return i } }
     return -1
 }
+fn sem_class_parent_type(context: SemanticContext, type_id: int) -> int {
+    if type_id < 0 { return -1 }
+    let type_ = context.types[type_id]
+    if type_.kind != "class" { return -1 }
+    for class_ in context.classes {
+        if class_.name == type_.name {
+            if class_.parent == "" { return -1 }
+            let mut names: list[str] = []
+            let generic = sem_generic_type(context, type_.name)
+            if generic >= 0 { names = context.generic_types[generic].params }
+            let mut resolved_args: list[int] = []
+            for arg_id in class_.parent_args {
+                resolved_args.append(sem_substitute_type(context, arg_id, names, type_.args))
+            }
+            return sem_intern(context, "class", class_.parent, resolved_args)
+        }
+    }
+    return -1
+}
+fn sem_resolve_member_owner(context: SemanticContext, receiver_type_id: int, owner_name: str) -> int {
+    let mut current = receiver_type_id
+    let mut visits = 0
+    while current >= 0 and visits <= len(context.classes) {
+        if context.types[current].name == owner_name { return current }
+        current = sem_class_parent_type(context, current)
+        visits = visits + 1
+    }
+    return receiver_type_id
+}
+fn sem_check_nominal_constraints(context: SemanticContext, name: str, arguments: list[int], location: Token) {
+    let generic = sem_generic_type(context, name)
+    if generic < 0 { return }
+    let constraints = context.generic_types[generic].constraints
+    for i in 0..len(arguments) {
+        if i < len(constraints) and constraints[i] != "" {
+            let concrete = arguments[i]
+            if not sem_symbolic(context, concrete) {
+                let bound = sem_named(context, constraints[i])
+                if not sem_assignable(context, concrete, bound) {
+                    report_error_at("W2001", location, "generic constraint not satisfied: " + constraints[i])
+                }
+            }
+        }
+    }
+}
 fn sem_same_type_declaration(context: SemanticContext, declaration: int, instance: int) -> bool {
     let declared = context.types[declaration]
     let concrete = context.types[instance]
@@ -1576,19 +1708,19 @@ fn sem_assignable(context: SemanticContext, source: int, target: int) -> bool {
         return sem_error_channel_assignable(context, source, target)
     }
     if s.kind == "class" and (t.kind == "class" or t.kind == "interface") {
-        if s.kind == "class" and t.kind == "class" and s.name == t.name { return s.args == t.args }
-        let mut current = s.name
+        let mut current_id = source
         let mut visits = 0
-        while current != "" and visits <= len(context.classes) {
-            if current == t.name { return true }
-            let mut next = ""
+        while current_id >= 0 and visits <= len(context.classes) {
+            let current_type = context.types[current_id]
+            if t.kind == "class" and current_type.name == t.name {
+                return current_id == target
+            }
             for class_ in context.classes {
-                if class_.name == current {
+                if class_.name == current_type.name {
                     for interface_ in class_.interfaces { if interface_ == t.name { return true } }
-                    next = class_.parent
                 }
             }
-            current = next
+            current_id = sem_class_parent_type(context, current_id)
             visits = visits + 1
         }
     }
@@ -1684,6 +1816,7 @@ fn sem_type(context: SemanticContext) -> int {
                 while sem_match(context, "COMMA") { arguments.append(sem_type(context)) }
                 sem_expect(context, "RBRACKET")
                 if len(arguments) != len(context.generic_types[generic].params) { report_error_at("W2001", source, "generic type arity: " + name) }
+                sem_check_nominal_constraints(context, name, arguments, source)
                 result = sem_intern(context, context.types[base].kind, name, arguments)
             } else {
                 if generic >= 0 { report_error_at("W2001", source, "generic type arguments required: " + name) }
@@ -1793,8 +1926,15 @@ fn sem_collect_function(context: SemanticContext, owner: str, visible: bool) {
     let previous_type_params = context.type_params
     let mut type_params: list[str] = previous_type_params
     let mut constraints: list[str] = []
-    for parameter in type_params { constraints.append("") }
-    if len(previous_type_params) > 0 and sem_is(context, "LBRACKET") { sem_error(context, "W2013", "generic methods in parameterized classes are not supported") }
+    let owner_name = if len(owner) > 0 { slice(owner, 0, len(owner) - 1) } else { "" }
+    let owner_generic = if owner_name != "" { sem_generic_type(context, owner_name) } else { -1 }
+    for i in 0..len(type_params) {
+        if owner_generic >= 0 and i < len(context.generic_types[owner_generic].constraints) {
+            constraints.append(context.generic_types[owner_generic].constraints[i])
+        } else {
+            constraints.append("")
+        }
+    }
     if sem_match(context, "LBRACKET") {
         while not sem_is(context, "RBRACKET") {
             let parameter = sem_expect(context, "IDENT")
@@ -1876,7 +2016,6 @@ fn sem_collect_record(context: SemanticContext, kind: str) {
                     let mut declared_interface = false
                     for candidate in context.types { if candidate.name == constraint.val and candidate.kind == "interface" { declared_interface = true } }
                     if not declared_interface { report_error_at("W2012", constraint, "generic constraint is not a declared interface") }
-                    report_error_at("W2013", constraint, "Compiler native-core-v1 does not support constrained parameterized classes")
                 }
             }
             parameter_index = parameter_index + 1
@@ -1886,16 +2025,28 @@ fn sem_collect_record(context: SemanticContext, kind: str) {
     }
     let type_id = sem_named(context, name)
     let mut parent = ""
+    let mut parent_args: list[int] = []
     let mut interfaces: list[str] = []
-    if sem_match(context, "EXTENDS") { parent = sem_expect(context, "IDENT").val }
+    if sem_match(context, "EXTENDS") {
+        let parent_token = sem_expect(context, "IDENT")
+        parent = parent_token.val
+        let parent_generic = sem_generic_type(context, parent)
+        if sem_match(context, "LBRACKET") {
+            if parent_generic < 0 { report_error_at("W2001", parent_token, "base class is not generic: " + parent) }
+            parent_args.append(sem_type(context))
+            while sem_match(context, "COMMA") { parent_args.append(sem_type(context)) }
+            sem_expect(context, "RBRACKET")
+            if len(parent_args) != len(context.generic_types[parent_generic].params) { report_error_at("W2001", parent_token, "generic base class arity: " + parent) }
+            sem_check_nominal_constraints(context, parent, parent_args, parent_token)
+        } elif parent_generic >= 0 {
+            report_error_at("W2001", parent_token, "generic base class requires type arguments: " + parent)
+        }
+    }
     if sem_match(context, "IMPLEMENTS") {
         interfaces.append(sem_expect(context, "IDENT").val)
         while sem_match(context, "COMMA") { interfaces.append(sem_expect(context, "IDENT").val) }
     }
-    if generic_class and (parent != "" or len(interfaces) > 0) {
-        report_error_at("W2013", name_token, "Compiler native-core-v1 supports parameterized classes only with fields and no inheritance or interfaces")
-    }
-    if kind == "class" { context.classes.append(SemClass { name: name, parent: parent, interfaces: interfaces }) }
+    if kind == "class" { context.classes.append(SemClass { name: name, parent: parent, parent_args: parent_args, interfaces: interfaces }) }
     sem_expect(context, "LBRACE")
     while true {
         sem_skip_separators(context)
@@ -2088,6 +2239,7 @@ fn sem_check_call(context: SemanticContext, signature: int, args: list[int], sou
                 concrete.append(found)
             }
             target = sem_intern(context, "enum", owner, concrete)
+            sem_check_nominal_constraints(context, owner, concrete, sem_source_at(context, sources, 0))
         } elif generic >= 0 {
             unification.names = context.generic_types[generic].params
             unification.types = context.types[target].args
@@ -2129,6 +2281,7 @@ fn sem_check_call(context: SemanticContext, signature: int, args: list[int], sou
                 concrete.append(inferred)
             }
             target = sem_intern(context, context.generic_types[generic].kind, type_.name, concrete)
+            sem_check_nominal_constraints(context, type_.name, concrete, sem_source_at(context, sources, 0))
         }
         return target
     }
@@ -2137,9 +2290,11 @@ fn sem_check_call(context: SemanticContext, signature: int, args: list[int], sou
         let method = sem_method(context, context.types[target].name, "init")
         if method >= 0 {
             let mut selected = context.functions[method].type_id
-            let target_type = context.types[target]
-            let generic = sem_generic_type(context, target_type.name)
-            if generic >= 0 { selected = sem_substitute_type(context, selected, context.generic_types[generic].params, target_type.args) }
+            let owner_name = slice(context.functions[method].owner, 0, len(context.functions[method].owner) - 1)
+            let owner_type_id = sem_resolve_member_owner(context, target, owner_name)
+            let owner_type = context.types[owner_type_id]
+            let generic = sem_generic_type(context, owner_type.name)
+            if generic >= 0 { selected = sem_substitute_type(context, selected, context.generic_types[generic].params, owner_type.args) }
             sem_check_call(context, selected, args, sources, false)
         }
         elif len(args) != 0 { sem_error(context, "W2005", "constructor arity") }
@@ -2277,9 +2432,11 @@ fn sem_member(context: SemanticContext, receiver: SemValue, name: str, location:
             if context.initializing and receiver.root == "this" { root = "this:" + name }
         }
         let mut field_type = field.type_id
-        let generic = sem_generic_type(context, type_.name)
-        if generic >= 0 and len(type_.args) == len(context.generic_types[generic].params) {
-            field_type = sem_substitute_type(context, field_type, context.generic_types[generic].params, type_.args)
+        let field_owner_type_id = sem_resolve_member_owner(context, receiver.type_id, field.owner)
+        let field_owner_type = context.types[field_owner_type_id]
+        let generic = sem_generic_type(context, field_owner_type.name)
+        if generic >= 0 and len(field_owner_type.args) == len(context.generic_types[generic].params) {
+            field_type = sem_substitute_type(context, field_type, context.generic_types[generic].params, field_owner_type.args)
         }
         return SemValue { type_id: field_type, root: root, writable: field_type, terminates: false, node: -1 }
     }
@@ -2288,8 +2445,13 @@ fn sem_member(context: SemanticContext, receiver: SemValue, name: str, location:
         let method = context.functions[method_index]
         if not method.visible and method.owner != context.owner + "." { report_error_at("W3002", location, "private method access") }
         let mut method_type = method.type_id
-        let generic = sem_generic_type(context, type_.name)
-        if generic >= 0 and len(type_.args) == len(context.generic_types[generic].params) { method_type = sem_substitute_type(context, method_type, context.generic_types[generic].params, type_.args) }
+        let method_owner_name = if len(method.owner) > 0 { slice(method.owner, 0, len(method.owner) - 1) } else { type_.name }
+        let method_owner_type_id = sem_resolve_member_owner(context, receiver.type_id, method_owner_name)
+        let method_owner_type = context.types[method_owner_type_id]
+        let generic = sem_generic_type(context, method_owner_type.name)
+        if generic >= 0 and len(method_owner_type.args) == len(context.generic_types[generic].params) {
+            method_type = sem_substitute_type(context, method_type, context.generic_types[generic].params, method_owner_type.args)
+        }
         return SemValue { type_id: method_type, root: "#method", writable: -1, terminates: false, node: -1 }
     }
     report_error_at("W3002", location, "unknown member: " + name)
@@ -2458,7 +2620,12 @@ fn sem_prefix(context: SemanticContext, allow_struct: bool, statement: bool) -> 
         }
         let symbol = sem_lookup(context, "self")
         if symbol < 0 { report_error_at("W9999", source, "checked receiver binding missing") }
-        return sem_expr(context, if is_super { "super" } else { "binding" }, SemValue { type_id: if is_super { sem_named(context, owner) } else { context.variables[symbol].type_id }, root: "this", writable: -1, terminates: false, node: -1 }, source, "self", [], context.variables[symbol].binding, -1)
+        let mut target_type = context.variables[symbol].type_id
+        if is_super {
+            target_type = sem_class_parent_type(context, target_type)
+            if target_type < 0 { target_type = sem_named(context, owner) }
+        }
+        return sem_expr(context, if is_super { "super" } else { "binding" }, SemValue { type_id: target_type, root: "this", writable: -1, terminates: false, node: -1 }, source, "self", [], context.variables[symbol].binding, -1)
     }
     sem_match(context, "NEW")
     let name_token = sem_expect(context, "IDENT")
@@ -2519,6 +2686,7 @@ fn sem_prefix(context: SemanticContext, allow_struct: bool, statement: bool) -> 
         }
         sem_expect(context, "RBRACKET")
         if len(type_arguments) != len(context.generic_types[generic_type].params) { report_error_at("W2001", source, "generic type arity: " + name) }
+        sem_check_nominal_constraints(context, name, type_arguments, source)
         selected_type = sem_intern(context, context.generic_types[generic_type].kind, name, type_arguments)
     } elif context.expected_type >= 0 and generic_type >= 0 and sem_same_type_declaration(context, sem_named(context, name), context.expected_type) {
         selected_type = context.expected_type
@@ -2604,6 +2772,7 @@ fn sem_prefix(context: SemanticContext, allow_struct: bool, statement: bool) -> 
                     concrete_types.append(concrete)
                 }
                 named_type = sem_intern(context, context.generic_types[generic_type].kind, name, concrete_types)
+                sem_check_nominal_constraints(context, name, concrete_types, source)
             }
             let constructed = sem_expr(context, "struct", sem_value(named_type), source, name, values, -1, -1)
             if context.capture_nodes { context.nodes[constructed.node].labels = initialized }
@@ -2629,6 +2798,8 @@ fn sem_expression(context: SemanticContext, minimum: int, allow_struct: bool) ->
     context.statement_context = false
     let source = sem_at(context)
     let mut left = sem_prefix(context, allow_struct, statement)
+    context.last_method_template = -1
+    context.last_method_owner = -1
     if context.capture_nodes and left.node < 0 { left = sem_expr(context, "unsupported", left, source, source.kind, [], -1, -1) }
     while true {
         let saved = context.pos
@@ -2642,6 +2813,13 @@ fn sem_expression(context: SemanticContext, minimum: int, allow_struct: bool) ->
         let call_file = call_token.file
         if sem_match(context, "LPAREN") {
             let callee = left
+            let active_method_template = context.last_method_template
+            let active_method_owner = context.last_method_owner
+            let active_method_explicit = context.last_method_args
+            context.last_method_template = -1
+            context.last_method_owner = -1
+            let empty_m_args: list[int] = []
+            context.last_method_args = empty_m_args
             let mut argument_nodes: list[int] = []
             let mut args: list[int] = []
             let mut arg_sources: list[Token] = []
@@ -2678,8 +2856,65 @@ fn sem_expression(context: SemanticContext, minimum: int, allow_struct: bool) ->
                     sem_check_generic_constraints(context, function_index, args, call_file, call_line, call_col)
                 }
             }
-            let actual = sem_check_call(context, left.type_id, args, arg_sources, statement)
             let mut concrete_target = -1
+            if callee.root == "#method" and active_method_template >= 0 {
+                let m_template = context.functions[active_method_template]
+                let m_owner_args = context.types[active_method_owner].args
+                if len(m_template.type_params) > len(m_owner_args) {
+                    let mut full_args: list[int] = []
+                    for a_id in m_owner_args { full_args.append(a_id) }
+                    if len(active_method_explicit) > 0 {
+                        for a_id in active_method_explicit { full_args.append(a_id) }
+                    } else {
+                        let m_unification = new SemUnification()
+                        let u_names: list[str] = []
+                        let u_types: list[int] = []
+                        m_unification.names = u_names
+                        m_unification.types = u_types
+                        let sig_args = context.types[callee.type_id].args
+                        if len(sig_args) > 0 and len(args) == len(sig_args) - 1 {
+                            for i in 0..len(args) { sem_unify_type(context, m_unification, sig_args[i], args[i]) }
+                            if previous_expected >= 0 {
+                                sem_unify_type(context, m_unification, sig_args[len(sig_args) - 1], previous_expected)
+                            }
+                            let mut own_params: list[str] = []
+                            let mut own_inferred: list[int] = []
+                            for p_idx in len(m_owner_args)..len(m_template.type_params) {
+                                let pname = m_template.type_params[p_idx]
+                                let mut found = -1
+                                for u_idx in 0..len(m_unification.names) {
+                                    if m_unification.names[u_idx] == pname { found = m_unification.types[u_idx] }
+                                }
+                                if found < 0 or (context.capture_nodes and sem_symbolic(context, found)) {
+                                    report_error_at("W2001", call_token, "cannot infer generic method type argument: " + pname)
+                                }
+                                own_params.append(pname)
+                                own_inferred.append(found)
+                                full_args.append(found)
+                            }
+                            let mut inst_parts: list[int] = []
+                            for part in sig_args { inst_parts.append(sem_substitute_type(context, part, own_params, own_inferred)) }
+                            left = SemValue { type_id: sem_intern(context, "function", "", inst_parts), root: left.root, writable: left.writable, terminates: left.terminates, node: left.node }
+                        }
+                    }
+                    if len(full_args) == len(m_template.type_params) {
+                        for i in len(m_owner_args)..len(m_template.type_params) {
+                            let constraint = m_template.constraints[i]
+                            if constraint != "" and not sem_symbolic(context, full_args[i]) {
+                                if not sem_assignable(context, full_args[i], sem_named(context, constraint)) {
+                                    report_error_at("W2001", call_token, "generic constraint not satisfied: " + constraint)
+                                }
+                            }
+                        }
+                        let mut m_all_concrete = not sem_symbolic(context, active_method_owner)
+                        for a_id in full_args { if sem_symbolic(context, a_id) { m_all_concrete = false } }
+                        if context.capture_nodes and m_all_concrete {
+                            concrete_target = sem_specialize_arguments(context, active_method_template, full_args, call_token)
+                        }
+                    }
+                }
+            }
+            let actual = sem_check_call(context, left.type_id, args, arg_sources, statement)
             if context.capture_nodes and len(callee.root) >= 3 and slice(callee.root, 0, 3) == "fn:" {
                 let template = sem_function(context, slice(callee.root, 3, len(callee.root)))
                 if template >= 0 and len(context.functions[template].type_params) > 0 { concrete_target = sem_specialize(context, template, callee.type_id, args, call_token) }
@@ -2714,42 +2949,97 @@ fn sem_expression(context: SemanticContext, minimum: int, allow_struct: bool) ->
             let name = sem_expect(context, "IDENT").val
             let receiver = left
             left = sem_member(context, left, name, name_token)
-            if context.capture_nodes {
-                let receiver_type = context.types[receiver.type_id]
-                if left.root == "#method" {
-                    let mut target = sem_method(context, receiver_type.name, name)
-                    let generic = sem_generic_type(context, receiver_type.name)
-                    if generic >= 0 and not sem_symbolic(context, receiver.type_id) { target = sem_specialize_arguments(context, target, receiver_type.args, name_token) }
-                    let kind = if context.nodes[receiver.node].kind == "super" or name == "init" { "direct_method" } else { "method" }
-                    left = sem_expr(context, kind, left, call_token, context.functions[target].name, [receiver.node], -1, target)
-                    context.nodes[left.node].labels = [receiver_type.name, name]
-                } else {
-                    let mut category = if left.root == "#collection" { "collection_method" } else { "member" }
-                    if receiver_type.kind == "enum" and context.nodes[receiver.node].kind == "namespace" { category = if sem_kind(context, left.type_id) == "enum_ctor" { "enum_callee" } else { "enum" } }
-                    left = sem_expr(context, category, left, call_token, name, if category == "enum" or category == "enum_callee" { [] } else { [receiver.node] }, -1, -1)
-                    if category == "enum" or category == "enum_callee" { context.nodes[left.node].labels = [receiver_type.name, name] }
+            let receiver_type = context.types[receiver.type_id]
+            context.last_method_template = -1
+            context.last_method_owner = -1
+            let empty_m_args: list[int] = []
+            context.last_method_args = empty_m_args
+            if left.root == "#method" {
+                let mut method_index = sem_method(context, receiver_type.name, name)
+                if method_index < 0 and receiver_type.kind == "typeparam" {
+                    let mut constraint = ""
+                    for i in 0..len(context.type_params) {
+                        if context.type_params[i] == receiver_type.name and i < len(context.active_constraints) { constraint = context.active_constraints[i] }
+                    }
+                    if constraint != "" { method_index = sem_method(context, constraint, name) }
                 }
+                if method_index >= 0 {
+                    let method = context.functions[method_index]
+                    let method_owner_name = if len(method.owner) > 0 { slice(method.owner, 0, len(method.owner) - 1) } else { receiver_type.name }
+                    let owner_type_id = sem_resolve_member_owner(context, receiver.type_id, method_owner_name)
+                    let owner_args = context.types[owner_type_id].args
+                    let has_own_generic = len(method.type_params) > len(owner_args)
+                    context.last_method_template = method_index
+                    context.last_method_owner = owner_type_id
+                    if context.capture_nodes {
+                        let mut target = method_index
+                        if not has_own_generic and len(owner_args) > 0 and not sem_symbolic(context, owner_type_id) {
+                            target = sem_specialize_arguments(context, target, owner_args, name_token)
+                        }
+                        let kind = if context.nodes[receiver.node].kind == "super" or name == "init" or has_own_generic { "direct_method" } else { "method" }
+                        left = sem_expr(context, kind, left, call_token, context.functions[target].name, [receiver.node], -1, target)
+                        context.nodes[left.node].labels = [receiver_type.name, name]
+                    }
+                }
+            } elif context.capture_nodes {
+                let mut category = if left.root == "#collection" { "collection_method" } else { "member" }
+                if receiver_type.kind == "enum" and context.nodes[receiver.node].kind == "namespace" { category = if sem_kind(context, left.type_id) == "enum_ctor" { "enum_callee" } else { "enum" } }
+                left = sem_expr(context, category, left, call_token, name, if category == "enum" or category == "enum_callee" { [] } else { [receiver.node] }, -1, -1)
+                if category == "enum" or category == "enum_callee" { context.nodes[left.node].labels = [receiver_type.name, name] }
             }
         } elif sem_match(context, "LBRACKET") {
-            let receiver = left
-            let index_source = sem_at(context)
-            let indexed = sem_expression(context, 0, true)
-            let index = indexed.type_id
-            sem_expect(context, "RBRACKET")
-            let type_ = context.types[left.type_id]
-            if type_.kind == "list" {
-                sem_require_at(context, index, context.integer_type, "W2001", index_source)
-                left = SemValue { type_id: type_.args[0], root: left.root, writable: type_.args[0], terminates: false, node: -1 }
-            } elif type_.kind == "dict" {
-                # `d[k]` yields V and panics with W4002 when the key is absent; the
-                # optional form is `d.get(k)`. See SPEC 10.2.
-                sem_require_at(context, index, type_.args[0], "W2001", index_source)
-                left = SemValue { type_id: type_.args[1], root: left.root, writable: type_.args[1], terminates: false, node: -1 }
-            } elif left.type_id == context.string_type {
-                sem_require_at(context, index, context.integer_type, "W2001", index_source)
-                left = sem_value(context.string_type)
-            } else { report_error_at("W2001", call_token, "value cannot be indexed") }
-            left = sem_expr(context, "index", left, call_token, "", [receiver.node, indexed.node], -1, -1)
+            if left.root == "#method" and context.last_method_template >= 0 {
+                let method = context.functions[context.last_method_template]
+                let owner_args = context.types[context.last_method_owner].args
+                let mut explicit_args: list[int] = []
+                while not sem_is(context, "RBRACKET") {
+                    explicit_args.append(sem_type(context))
+                    if not sem_match(context, "COMMA") { break }
+                }
+                sem_expect(context, "RBRACKET")
+                let own_count = len(method.type_params) - len(owner_args)
+                if own_count <= 0 or len(explicit_args) != own_count {
+                    report_error_at("W2001", call_token, "generic method type arity")
+                }
+                let mut own_params: list[str] = []
+                for p_idx in len(owner_args)..len(method.type_params) {
+                    let a_idx = p_idx - len(owner_args)
+                    let constraint = method.constraints[p_idx]
+                    if constraint != "" and not sem_symbolic(context, explicit_args[a_idx]) {
+                        if not sem_assignable(context, explicit_args[a_idx], sem_named(context, constraint)) {
+                            report_error_at("W2001", call_token, "generic constraint not satisfied: " + constraint)
+                        }
+                    }
+                    own_params.append(method.type_params[p_idx])
+                }
+                let sig_type = context.types[left.type_id]
+                let mut subst_parts: list[int] = []
+                for part in sig_type.args { subst_parts.append(sem_substitute_type(context, part, own_params, explicit_args)) }
+                left = SemValue { type_id: sem_intern(context, "function", "", subst_parts), root: left.root, writable: left.writable, terminates: left.terminates, node: left.node }
+                if context.capture_nodes and left.node >= 0 { context.nodes[left.node].type_id = left.type_id }
+                context.last_method_args = explicit_args
+                if not sem_is(context, "LPAREN") { report_error_at("W2001", call_token, "generic method specialization must be called") }
+            } else {
+                let receiver = left
+                let index_source = sem_at(context)
+                let indexed = sem_expression(context, 0, true)
+                let index = indexed.type_id
+                sem_expect(context, "RBRACKET")
+                let type_ = context.types[left.type_id]
+                if type_.kind == "list" {
+                    sem_require_at(context, index, context.integer_type, "W2001", index_source)
+                    left = SemValue { type_id: type_.args[0], root: left.root, writable: type_.args[0], terminates: false, node: -1 }
+                } elif type_.kind == "dict" {
+                    # `d[k]` yields V and panics with W4002 when the key is absent; the
+                    # optional form is `d.get(k)`. See SPEC 10.2.
+                    sem_require_at(context, index, type_.args[0], "W2001", index_source)
+                    left = SemValue { type_id: type_.args[1], root: left.root, writable: type_.args[1], terminates: false, node: -1 }
+                } elif left.type_id == context.string_type {
+                    sem_require_at(context, index, context.integer_type, "W2001", index_source)
+                    left = sem_value(context.string_type)
+                } else { report_error_at("W2001", call_token, "value cannot be indexed") }
+                left = sem_expr(context, "index", left, call_token, "", [receiver.node, indexed.node], -1, -1)
+            }
         } elif sem_match(context, "QUESTION") {
             let operand_node = left.node
             let type_ = context.types[left.type_id]
@@ -3580,22 +3870,26 @@ fn sem_initialize(context: SemanticContext, tokens: list[Token]) {
             sem_intern(context, tag, name, empty)
             if tokens[i + 2].kind == "LBRACKET" {
                 let mut params: list[str] = []
+                let mut g_constraints: list[str] = []
                 let mut position = i + 3
                 while position < len(tokens) and tokens[position].kind != "RBRACKET" {
                     let parameter = tokens[position]
                     if parameter.kind != "IDENT" { report_error_at("W0006", parameter, "expected generic type parameter") }
                     params.append(parameter.val)
                     position = position + 1
+                    let mut constraint_name = ""
                     if position < len(tokens) and tokens[position].kind == "COLON" {
                         position = position + 1
                         if position >= len(tokens) or tokens[position].kind != "IDENT" { report_error_at("W0006", tokens[position - 1], "expected generic constraint") }
+                        constraint_name = tokens[position].val
                         position = position + 1
                     }
+                    g_constraints.append(constraint_name)
                     if position < len(tokens) and tokens[position].kind == "COMMA" { position = position + 1 }
                     elif position < len(tokens) and tokens[position].kind != "RBRACKET" { report_error_at("W0006", tokens[position], "expected ',' in generic parameters") }
                 }
                 if len(params) == 0 { report_error_at("W2001", tokens[i + 2], "generic declaration requires a type parameter") }
-                context.generic_types.append(SemGenericType { name: name, kind: tag, params: params })
+                context.generic_types.append(SemGenericType { name: name, kind: tag, params: params, constraints: g_constraints })
             }
         }
     }
@@ -3734,7 +4028,10 @@ fn sem_lambda(context: SemanticContext) -> SemValue {
     sem_expect(context, "PIPE")
     let mut returned = -1
     if sem_match(context, "ARROW") { returned = sem_type(context) }
-    elif expected >= 0 and sem_kind(context, expected) == "function" { returned = context.types[expected].args[len(context.types[expected].args) - 1] }
+    elif expected >= 0 and sem_kind(context, expected) == "function" {
+        let exp_ret = context.types[expected].args[len(context.types[expected].args) - 1]
+        if not sem_symbolic(context, exp_ret) { returned = exp_ret }
+    }
     context.return_type = returned
     context.expected_type = returned
     context.loop = 0
@@ -3754,7 +4051,7 @@ fn sem_lambda(context: SemanticContext) -> SemValue {
     }
     types.append(returned)
     let signature = sem_intern(context, "function", "", types)
-    if expected >= 0 { sem_require_at(context, signature, expected, "W2001", token) }
+    if expected >= 0 and not sem_symbolic(context, expected) { sem_require_at(context, signature, expected, "W2001", token) }
     let captures = context.capture_names
     sem_leave_scope(context, scope)
     context.return_type = previous_return
@@ -3828,7 +4125,13 @@ fn sem_validate_inheritance(context: SemanticContext) {
                 if inherited >= 0 {
                     let parent = context.functions[inherited]
                     if not parent.visible or not method.visible { sem_error(context, "W3002", "invalid override visibility") }
-                    if not sem_compatible_override(context, method.type_id, parent.type_id) { sem_error(context, "W3003", "incompatible override") }
+                    let mut parent_sig = parent.type_id
+                    let parent_owner = if len(parent.owner) > 0 { slice(parent.owner, 0, len(parent.owner) - 1) } else { "" }
+                    if parent_owner == class_.parent and len(class_.parent_args) > 0 {
+                        let p_gen = sem_generic_type(context, parent_owner)
+                        if p_gen >= 0 { parent_sig = sem_substitute_type(context, parent_sig, context.generic_types[p_gen].params, class_.parent_args) }
+                    }
+                    if not sem_compatible_override(context, method.type_id, parent_sig) { sem_error(context, "W3003", "incompatible override") }
                 }
             }
         }
@@ -3988,6 +4291,8 @@ fn sem_complete_specializations(context: SemanticContext) {
             let type_ = context.types[type_id]
             let generic = sem_generic_type(context, type_.name)
             if type_.kind == "class" and generic >= 0 and len(type_.args) == len(context.generic_types[generic].params) and not sem_symbolic(context, type_id) {
+                let parent_type = sem_class_parent_type(context, type_id)
+                if parent_type >= 0 { let _ = parent_type }
                 for id in 0..function_count {
                     let function = context.functions[id]
                     if function.owner == type_.name + "." and len(function.type_params) == len(type_.args) and len(function.name) > len(function.owner) and slice(function.name, 0, len(function.owner)) == function.owner {
