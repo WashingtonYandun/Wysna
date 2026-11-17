@@ -13,7 +13,7 @@ Wysna Compiler's `native-core-v1` profile uses verified MIR for its normal C99 r
 The table comes from an actual `tools/ci_conformance.py --profile=release` run. Its
 `summary.json` records the Git revision and hashes of the source, fixture and harness
 inputs; the measured input digest is
-`c09159f0199741f815c6f3ffdd6eea236d5b92130a87d0421c04b44b8b42d04e`.
+`2c6102a3e1521cb2ac5801d3cdfc0c3ae34202eea434494885e45bf13003b2c8`.
 Release CI uploads that evidence with the run. The matrix covers the public runtime
 examples and negative fixtures, with no unsupported exclusions. The separate sanitizer
 gate checks memory safety; neither gate establishes universal language parity or measures
@@ -51,11 +51,10 @@ nominal error identity, exhaustive handlers and managed payload cleanup.
 ## Expansion boundaries
 
 Function values, captures, FFI, the standard library and LSP have separate
-contracts in `tests/unit/test_expansion_contracts.py`. A green core corpus does not
-imply Wysna Compiler support for every expansion combination. The measured
-`generic_class_methods` category covers concrete type arguments and methods that use
-those arguments; constrained classes, methods that introduce their own type parameters,
-inheritance and interfaces on parameterized classes remain outside that profile. Scoped
+contracts in `tests/unit/test_expansion_contracts.py` (with Stage-3 native LSP covered in `tests/unit/test_phase4_native_lsp.py`). A green core corpus does not
+imply Wysna Compiler support for every expansion combination. Constrained parameterized classes,
+independent generic class methods, parameterized inheritance, parameterized interfaces, and stackless CPS `async fn`
+coroutines are now implemented in both Seed and Selfhost (`native-core-v1`); unresolved generic nominal values, `wysna.toml` manifests, library-mode exports, and WASM remain outside `native-core-v1`. Scoped
 resources have a separate
 four-engine gate in `tests/unit/test_audit_readiness.py`. The SQLite adapter/application
 also has dedicated checks; see [C interoperability](FFI_VALIDATION.md).

@@ -172,11 +172,11 @@ flowchart LR
 2. **Verified MIR (`src/mir/`):**
    - Control Flow Graph (CFG) consisting of Basic Blocks with strictly validated terminators (`Jump`, `Branch`, `Return`, `Panic`).
    - Dominator tree verification (`Verifier.py`) ensuring all SSA values are defined prior to use.
-3. **MIR Optimizations (`src/mir/Optimizer.py`):**
-   - **Scalar Unboxing:** Bypasses heap allocation for `i64`, `f64`, and `bool` values in basic block computations.
-   - **CFG Simplification & Dead Block Pruning:** Eliminates unreachable blocks and simplifies conditional jumps with known branch conditions.
-   - **Trampoline Elimination:** Merges linear basic blocks connected by unconditional jumps.
-   - **Clone Hoisting:** Reorders temporary clone releases to avoid false CoW detach operations on local mutations.
+3. **MIR Optimizations (`src/mir/Optimizer.py` & `08_mir_c99.wysna`):**
+   - **Scalar Unboxing & Fast Paths:** Bypasses heap allocation for `i64`, `f64`, and `bool` values in basic block computations, `wysna_range_count_i64`, `wysna_div_i64_at`, `wysna_mod_i64_at`, and `wysna_div_f64_at`.
+   - **Constant Folding & Store Coalescing:** Folds pure scalar/boolean constant expressions (`fold_scalar_constants`), coalesces single-use temporary `store(moves=(0,))` hops (`coalesce_temporary_stores`), and eliminates unread pure temps/placeholders (`eliminate_dead_pure_ops`).
+   - **CFG Simplification & Block Merging:** Eliminates unreachable blocks, folds constant branches, bypasses empty trampolines, and merges linear `goto` chains (`merge_linear_blocks`).
+   - **CoW / Ownership Optimizations:** Reorders temporary clone releases (`optimize_local_cow_uniqueness`) and eliminates read-only parameter copies (`optimize_parameter_reads`, `optimize_interprocedural_cow`).
 
 ---
 
@@ -292,7 +292,7 @@ Despite the architectural achievements of v0.6.0, an exhaustive audit reveals cl
 | **Immutable Snapshot Closures** | Lambdas capture outer variables by **immutable snapshot only**. Captured mutable variables cannot be modified inside a closure, and mutations outside after capture are not observed. | `src/checker/ClosureConversion.py`<br>`docs/KNOWN_LIMITS.md §1` | Intentional design contract unless opt-in mutable cells are decided. Workaround: Use a `class` with fields. |
 | **Expanded Error Unions (Closed v0.7.0)** | `T ! E1 \| E2` supports scalars, non-generic & concrete generic `struct`/`enum`, and `class` error alternatives across Seed & LLVM (`Selfhost` supports scalars, non-generic ADTs, and non-generic `class`). Collections, tuples, and functions remain excluded. | `src/checker/TypeChecker.py`<br>`runtime/wysna_runtime_core.h`<br>`selfhost/src/08_semantics.wysna` | Rich OOP and generic ADT error types work directly in error unions without manual wrapping. |
 | **Tuple Dictionary Keys (Closed v0.7.0)** | `dict[K, V]` accepts `int`, `str`, `bool`, `enum`, and hashable `tuple` composites across all 5 engines; `float` and composites containing `float`/collections/classes remain rejected (`W2010`). | `src/checker/TypeInterner.py`<br>`runtime/wysna_runtime_memory.h`<br>`selfhost/src/08_semantics.wysna` | Composite tuple keys (`dict[tuple[int, str], V]`) hash and compare structurally without workarounds. |
-| **Independent Generic Class Methods (Closed v0.7.0 in Seed/LLVM)** | Both concrete and parameterized classes support independent generic methods (`Box[T].transform[R]`) with interface bounds and inheritance across Interpreter, AST, HIR/MIR C99, and LLVM. Selfhost keeps explicit `W2013` boundary for parameterized class generic methods. | `src/checker/OopGenerics.py`<br>`src/checker/TypeChecker.py`<br>`src/checker/Generics.py` | Generic OOP transform chains compile and specialize cleanly in Seed and LLVM. |
+| **Independent Generic Class Methods & Parameterized Interfaces (Closed v0.7.0 across Seed, Selfhost & LLVM)** | Both Seed/LLVM and Selfhost (`native-core-v1`) support constrained parameterized classes, independent generic methods (`Box[T].transform[R]`), parameterized class inheritance, and parameterized interfaces. | `src/checker/OopGenerics.py`<br>`selfhost/src/08_semantics.wysna`<br>`selfhost/src/08_generics.wysna` | Full generic OOP hierarchies compile uniformly without Python fallback. |
 | **No Complex Trait / Typeclass System** | Interfaces are strictly nominal and apply only to classes (`class A implements Interface`). Structural typing, duck typing, and retroactive trait implementations for primitives/structs do not exist. | `src/checker/TypeRelations.py` | Code cannot define interfaces that apply retroactively to built-in types like `int` or `str`. |
 
 ---
@@ -312,7 +312,7 @@ Despite the architectural achievements of v0.6.0, an exhaustive audit reveals cl
 
 | Item | Technical Description | Root Cause / File | Impact / Workaround |
 | :--- | :--- | :--- | :--- |
-| **OS-Thread `parallel_*`, OS-Thread `std/async.spawn`, Timers/HTTP & Eager `async fn`** | `std/algorithms` (`parallel_map`, `parallel_batch`, `parallel_filter`, `parallel_reduce`) and `std/async.spawn` dispatch across OS worker threads (`pthread` / `CreateThread` / Python pool) backed by atomic ARC and copy-first CoW detach across all 5 engines (`interpreter`, `ast`, `hir`, `selfhost`, `llvm`), with automatic task result hydration in `wait`/`all`/`race`/`await` and deterministic exit thread-join cleanup under `WYSNA_MEM_CHECK=1`. `std/async` also multiplexes monotonic timers (`sleep_ms`) and non-blocking `curl_multi` HTTP transfers. User `async fn` declarations still lower eagerly without stackless CPS state-machine suspension. | `runtime/wysna_host.h`<br>`runtime/HostAbi.py`<br>`stdlib/async.wysna`<br>`stdlib/algorithms.wysna` | Multi-threaded background tasks, timer/HTTP racing, and data-parallel CoW transforms run concurrently across all engines; stackless single-thread CPS lowering for arbitrary `async fn` remains open. |
+| **OS-Thread Pools, Cooperative CPS `async fn`, `std/async.spawn` & Non-Blocking Timers/HTTP (Closed v0.7.0)** | `async fn` declarations lower via true stackless CPS state-machine transformation across Seed HIR/MIR (`src/mir/AsyncLowering.py`, `src/mir/CCodeGen.py`), LLVM (`src/mir/LlvmCodeGen.py`), and Selfhost (`selfhost/src/08_mir_c99.wysna:mir_c_async_function`), backed by the cooperative `WysnaCoroTask` scheduler in `runtime/wysna_host.h` and `HostAbi.py` (with deferred lazy start, loop/nested `await`, fallible `async fn` `?`/`else`, and leak-free shutdown). `std/algorithms` (`parallel_*`), `std/async.spawn`, timers, and `curl_multi` HTTP run concurrently alongside CPS coroutines across all 5 engines (`ast` uses deferred lazy start). | `src/mir/AsyncLowering.py`<br>`runtime/wysna_host.h`<br>`runtime/HostAbi.py`<br>`selfhost/src/08_mir_c99.wysna` | Arbitrary user `async fn` coroutines multiplex single-threaded without blocking OS threads per task. |
 
 ---
 
@@ -330,7 +330,7 @@ Despite the architectural achievements of v0.6.0, an exhaustive audit reveals cl
 
 | Item | Technical Description | Root Cause / File | Impact / Workaround |
 | :--- | :--- | :--- | :--- |
-| **Native Selfhost Tooling & Parity Scope** | `selfhost/compiler.wysna` implements the `native-core-v1` profile plus native formatting (`--fmt` / `--fmt-write` via `selfhost/src/09_main.wysna`) and multi-file directory `wysna test` discovery with `.expected` / `# RUNTIME_PANIC:` parity in `packaging/native/driver.c`. It still lacks project manifest management (`wysna.toml`), lockfiles, parameterized class inheritance, generic methods on parameterized classes (`W2013`), and Stage-3 LSP services. | `selfhost/src/`<br>`packaging/native/driver.c`<br>`packaging/native/platform.h`<br>`docs/COMPILER_ARCHITECTURE.md` | Single/multi-file compilation, verification, MIR export, formatting, and test-directory execution run without Python; package manifests and LSP continue to use Seed. |
+| **Native Selfhost Tooling & Stage-3 LSP (Closed v0.7.0)** | `selfhost/compiler.wysna` implements the `native-core-v1` profile with full generic OOP, Agent-First CLI tools (`graph`, `inspect`, `patch` `W5005`, `explain`, `check`/`fmt --output-format=json-v1`), multi-file `wysna test` discovery, and Stage-3 native LSP (`selfhost/src/09_lsp.wysna`, routed directly by `packaging/native/driver.c` via `wysna lsp`) without Python. Only project manifests (`wysna.toml`), lockfiles, library-mode exports, and WASM remain in Seed. | `selfhost/src/`<br>`packaging/native/driver.c`<br>`docs/COMPILER_ARCHITECTURE.md` | Compilation, verification, MIR export, formatting, semantic graph inspection/patching, testing, and IDE LSP run natively without Python. |
 
 ---
 

@@ -198,14 +198,54 @@ fn diag_clean_cli_args() -> list[str] {
     let mut clean: list[str] = []
     let mut i = 1
     while i < len(raw) {
-        if raw[i] == "--stdlib-root" and i + 1 < len(raw) {
+        if (raw[i] == "--stdlib-root" or raw[i] == "--diag-out") and i + 1 < len(raw) {
             i = i + 2
+        } elif raw[i] == "--overlay" and i + 2 < len(raw) {
+            i = i + 3
         } else {
             clean.append(raw[i])
             i = i + 1
         }
     }
     return clean
+}
+
+fn diag_out_path() -> str {
+    let raw = args()
+    let mut i = 1
+    while i < len(raw) {
+        if raw[i] == "--diag-out" and i + 1 < len(raw) { return raw[i + 1] }
+        i = i + 1
+    }
+    return ""
+}
+
+fn diag_write_output(payload: str) -> unit {
+    let out = diag_out_path()
+    if out != "" {
+        write_file(out, payload) else err {
+            print(payload)
+            return
+        }
+        return
+    }
+    print(payload)
+}
+
+fn diag_read_snippet_source(file: str) -> str {
+    let raw = args()
+    let mut i = 1
+    while i < len(raw) {
+        if raw[i] == "--overlay" and i + 2 < len(raw) {
+            if raw[i + 1] == file {
+                return read_file(raw[i + 2]) else error { "" }
+            }
+            i = i + 3
+        } else {
+            i = i + 1
+        }
+    }
+    return read_file(file) else error { "" }
 }
 
 fn diag_cli_json_mode() -> str {
@@ -224,7 +264,7 @@ fn diag_cli_command() -> str {
     let first = clean[0]
     if first == "check" or first == "--check" or first == "--check-json" { return "check" }
     if first == "fmt" or first == "--fmt" or first == "--fmt-write" { return "fmt" }
-    if first == "graph" or first == "inspect" or first == "patch" or first == "explain" { return first }
+    if first == "graph" or first == "inspect" or first == "patch" or first == "explain" or first == "lsp" { return first }
     if first == "--emit-c-mir" or first == "--emit-mir" or first == "--check-mir" { return "build" }
     return "check"
 }
@@ -237,17 +277,17 @@ fn diag_emit_and_exit(file: str, code: str, line: int, col: int, msg: str) -> un
     }
     let mut src = ""
     if file != "" and file != "<stdin>" and file != "<unknown>" and file != "<cli>" {
-        src = read_file(file) else error { "" }
+        src = diag_read_snippet_source(file)
     }
     let stage = diag_stage_for_code(code)
     let diag_json = diag_record_json(code, stage, "error", msg, file, line, col, src)
     if mode == "check-json" {
-        print("{\"schema_version\":\"wysna.cli.result/1\",\"compiler_version\":\"0.6.0\",\"command\":\"check\",\"ok\":false,\"exit_code\":1,\"diagnostics\":[" + diag_json + "],\"data\":null}")
+        diag_write_output("{\"schema_version\":\"wysna.cli.result/1\",\"compiler_version\":\"0.6.0\",\"command\":\"check\",\"ok\":false,\"exit_code\":1,\"diagnostics\":[" + diag_json + "],\"data\":null}")
         exit(1)
     }
     let cmd = diag_cli_command()
     let status = if code == "W5002" or code == "W5003" or code == "W5004" or code == "W5005" { "usage_error" } else { "diagnostic_error" }
-    print(diag_tool_envelope_json(cmd, status, 1, "[" + diag_json + "]", "", "", "[]"))
+    diag_write_output(diag_tool_envelope_json(cmd, status, 1, "[" + diag_json + "]", "", "", "[]"))
     exit(1)
 }
 fn report_error(file: str, code: str, line: int, col: int, msg: str) -> unit {
@@ -789,6 +829,36 @@ fn module_canonical(path: str) -> str {
     return if resolved == "" { module_normalize(path) } else { resolved }
 }
 
+fn module_read_with_overlays(path: str, ov_paths: list[str], ov_texts: list[str]) -> list[str] {
+    let canon = module_canonical(path)
+    for i in 0..len(ov_paths) {
+        if ov_paths[i] == canon or ov_paths[i] == path {
+            return ["1", ov_texts[i]]
+        }
+    }
+    let raw = args()
+    let mut idx = 1
+    while idx < len(raw) {
+        if raw[idx] == "--overlay" and idx + 2 < len(raw) {
+            let target = raw[idx + 1]
+            let ov_canon = module_canonical(target)
+            if target == path or ov_canon == canon {
+                let ov_src = read_file(raw[idx + 2]) else error { "" }
+                return ["1", ov_src]
+            }
+            idx = idx + 3
+        } else {
+            idx = idx + 1
+        }
+    }
+    let disk = read_file(path) else error { return ["0", ""] }
+    return ["1", disk]
+}
+
+fn module_read_text_or_overlay(path: str) -> list[str] {
+    return module_read_with_overlays(path, [], [])
+}
+
 # An import graph belongs to one source expansion.
 class ModuleLoader {
     paths: list[str]
@@ -800,6 +870,8 @@ class ModuleLoader {
     import_targets: list[int]
     import_public: list[bool]
     output: list[Token]
+    ov_paths: list[str]
+    ov_texts: list[str]
     fn init() {
         let initial_paths: list[str] = []
         this.paths = initial_paths
@@ -819,7 +891,16 @@ class ModuleLoader {
         this.import_public = initial_import_public
         let initial_output: list[Token] = []
         this.output = initial_output
+        let initial_ov_paths: list[str] = []
+        this.ov_paths = initial_ov_paths
+        let initial_ov_texts: list[str] = []
+        this.ov_texts = initial_ov_texts
     }
+}
+
+fn module_loader_file_readable(context: ModuleLoader, path: str) -> bool {
+    let res = module_read_with_overlays(path, context.ov_paths, context.ov_texts)
+    return res[0] == "1"
 }
 # Module expansion shares one token stream with the standalone semantic checker.
 
@@ -883,8 +964,8 @@ fn module_stdlib_confined(requested: str, resolved: str) -> bool {
 }
 
 fn module_file_readable(path: str) -> bool {
-    let content = read_file(path) else error { return false }
-    return true
+    let res = module_read_text_or_overlay(path)
+    return res[0] == "1"
 }
 
 fn module_stdlib_path(requested: str) -> str {
@@ -916,21 +997,21 @@ fn module_load_source(context: ModuleLoader, canonical: str, requested: str, tok
         let need_ext = len(requested) < 6 or slice(requested, len(requested) - 6, len(requested)) != ".wysna"
         let rel_ext = if need_ext { module_normalize(base_dir + requested + ".wysna") } else { "" }
         let cwd_ext = if need_ext { module_normalize(requested + ".wysna") } else { "" }
-        if module_file_readable(resolved) {
+        if module_loader_file_readable(context, resolved) {
             resolved = resolved
-        } elif rel_ext != "" and module_file_readable(rel_ext) {
+        } elif rel_ext != "" and module_loader_file_readable(context, rel_ext) {
             resolved = rel_ext
-        } elif module_file_readable(module_normalize(requested)) {
+        } elif module_loader_file_readable(context, module_normalize(requested)) {
             resolved = module_normalize(requested)
-        } elif cwd_ext != "" and module_file_readable(cwd_ext) {
+        } elif cwd_ext != "" and module_loader_file_readable(context, cwd_ext) {
             resolved = cwd_ext
         }
     }
-    let content = read_file(resolved) else err {
+    let loaded = module_read_with_overlays(resolved, context.ov_paths, context.ov_texts)
+    if loaded[0] != "1" {
         report_error_at("W1003", token, "module not found: " + requested)
-        ""
     }
-    return module_expand(context, content, resolved, false)
+    return module_expand(context, loaded[1], resolved, false)
 }
 
 fn module_expand(context: ModuleLoader, src: str, path: str, entry: bool) -> int {
@@ -1091,11 +1172,17 @@ fn module_expand(context: ModuleLoader, src: str, path: str, entry: bool) -> int
     context.states[index] = 2
     return index
 }
-fn module_tokens(src: str, path: str) -> list[Token] {
+fn module_tokens_with_overlays(src: str, path: str, ov_paths: list[str], ov_texts: list[str]) -> list[Token] {
     let context = new ModuleLoader()
+    context.ov_paths = ov_paths
+    context.ov_texts = ov_texts
     module_expand(context, src, path, true)
     context.output.append(Token { kind: "EOF", val: "", line: 1, col: 1, file: module_normalize(path) })
     return context.output
+}
+
+fn module_tokens(src: str, path: str) -> list[Token] {
+    return module_tokens_with_overlays(src, path, [], [])
 }
 # Explicit scalar/opaque ABI policy; no source traversal or emission context.
 fn foreign_native_name(name: str) -> str {
@@ -4686,11 +4773,15 @@ fn check_program(tokens: list[Token], file: str, capture: bool) -> CheckedProgra
     return checked_finish(context, tokens, file)
 }
 
-fn check_source(src: str, in_path: str) -> CheckedProgram {
+fn check_source_with_overlays(src: str, in_path: str, ov_paths: list[str], ov_texts: list[str]) -> CheckedProgram {
     let file = module_canonical(in_path)
-    let checked = check_program(module_tokens(src, file), file, true)
+    let checked = check_program(module_tokens_with_overlays(src, file, ov_paths, ov_texts), file, true)
     for node in checked.nodes { if node.kind == "unsupported" { report_error_at("W2013", node.source, "Compiler native-core-v1 does not support expression " + node.text) } }
     return checked
+}
+
+fn check_source(src: str, in_path: str) -> CheckedProgram {
+    return check_source_with_overlays(src, in_path, [], [])
 }
 # Backend-independent typed CFG and ownership data.
 struct MirLiteral { type_id: int, integer: int, floating: float, boolean: bool, text: str }
@@ -8358,17 +8449,18 @@ fn tool_walk_subtree(program: CheckedProgram, graph: ToolGraph, caller_idx: int,
     }
 }
 
-fn tool_build_graph(src: str, file: str) -> ToolGraph {
+fn tool_build_graph_with_overlays(src: str, file: str, ov_paths: list[str], ov_texts: list[str]) -> ToolGraph {
     let canonical = module_canonical(file)
-    let expanded = module_tokens(src, canonical)
-    let program = check_source(src, canonical)
+    let expanded = module_tokens_with_overlays(src, canonical, ov_paths, ov_texts)
+    let program = check_source_with_overlays(src, canonical, ov_paths, ov_texts)
     let graph = new ToolGraph(canonical, src)
     graph.mod_names.append(canonical)
     tool_scan_decl_nodes(graph, program, src, canonical)
     for etok in expanded {
         if etok.file != "" and etok.file != "<unknown>" and not tool_str_contains(graph.mod_names, etok.file) {
             graph.mod_names.append(etok.file)
-            let ext_src = read_file(etok.file) else err { "" }
+            let ext_res = module_read_with_overlays(etok.file, ov_paths, ov_texts)
+            let ext_src = if ext_res[0] == "1" { ext_res[1] } else { "" }
             if ext_src != "" {
                 tool_scan_decl_nodes(graph, program, ext_src, etok.file)
             }
@@ -8475,6 +8567,10 @@ fn tool_build_graph(src: str, file: str) -> ToolGraph {
     payload_parts.append(join_strings(tool_sort_strings(edge_sigs), ";"))
     graph.graph_hash = "graph:" + slice(diag_sha256_hex(join_strings(payload_parts, "")), 0, 16)
     return graph
+}
+
+fn tool_build_graph(src: str, file: str) -> ToolGraph {
+    return tool_build_graph_with_overlays(src, file, [], [])
 }
 
 fn tool_edge_json(e: ToolGraphEdge) -> str {
@@ -8993,18 +9089,19 @@ fn tool_handle_explain(args: list[str], json_mode: bool) -> unit {
 }
 
 fn tool_handle_check_v1(file: str, legacy_json: bool, json_v1: bool) -> unit {
-    let src = read_file(file) else err {
+    let loaded = module_read_text_or_overlay(file)
+    if loaded[0] != "1" {
         report_error(file, "W5003", 1, 1, "cannot read input file: " + file)
-        ""
     }
+    let src = loaded[1]
     let module = mir_build(check_source(src, file))
     mir_verify(module)
     let fn_count = str(len(module.functions))
     if json_v1 {
         let artifacts_json = "[{\"kind\":\"checked_program\",\"media_type\":\"application/json\",\"file\":" + diag_json_quote(file) + ",\"functions\":" + fn_count + "}]"
-        print(diag_tool_envelope_json("check", "ok", 0, "[]", "", "", artifacts_json))
+        diag_write_output(diag_tool_envelope_json("check", "ok", 0, "[]", "", "", artifacts_json))
     } elif legacy_json {
-        print("{\"schema_version\":\"wysna.cli.result/1\",\"compiler_version\":\"0.6.0\",\"command\":\"check\",\"ok\":true,\"exit_code\":0,\"diagnostics\":[],\"data\":{\"file\":" + diag_json_quote(file) + ",\"functions\":" + fn_count + "}}")
+        diag_write_output("{\"schema_version\":\"wysna.cli.result/1\",\"compiler_version\":\"0.6.0\",\"command\":\"check\",\"ok\":true,\"exit_code\":0,\"diagnostics\":[],\"data\":{\"file\":" + diag_json_quote(file) + ",\"functions\":" + fn_count + "}}")
     } else {
         print("[Wysna Compiler] Checked " + file + " (" + fn_count + " functions, MIR verified)")
     }
@@ -9021,6 +9118,7 @@ fn tool_emit_fmt_v1(formatted: str, in_path: str, write_in_place: bool) -> unit 
     print(diag_tool_envelope_json("fmt", "ok", 0, "[]", "", "", "[" + artifact + "]"))
     exit(0)
 }
+
 fn selfhost_trim_line(line: str) -> str {
     let n = len(line)
     let mut start = 0
@@ -9163,7 +9261,1166 @@ fn selfhost_format_body(source: str, in_path: str) -> str {
     }
     return join_strings(out_lines, "\n")
 }
+# Native Language Server Protocol (LSP 3.17) server backed by the semantic graph and compiler frontend.
 
+extern "C" fn wysna_host_stdin_read_line(output: opaque) -> int
+extern "C" fn wysna_host_stdin_read_exact(output: opaque, count: int) -> int
+extern "C" fn wysna_host_stdout_write_raw(input: opaque) -> int
+extern "C" fn wysna_host_self_executable(output: opaque) -> int
+extern "C" fn wysna_host_fs(first: opaque, second: opaque, operation: int) -> int
+extern "C" fn wysna_host_process_run(executable: opaque, arguments: opaque, timeout_ms: int) -> int
+
+fn lsp_buf_from_str(text: str) -> opaque {
+    let buf = wysna_host_buffer_new()
+    for b in bytes(text) { wysna_host_buffer_append(buf, b) }
+    return buf
+}
+
+fn lsp_buf_to_str(buf: opaque, count: int) -> str {
+    let mut parts: list[str] = []
+    let mut i = 0
+    while i < count {
+        let first = wysna_host_buffer_get(buf, i)
+        if first < 0 { break }
+        let width = if first < 128 { 1 } elif first < 224 { 2 } elif first < 240 { 3 } else { 4 }
+        if i + width > count { break }
+        let mut cp = if width == 1 { first } elif width == 2 { first % 32 } elif width == 3 { first % 16 } else { first % 8 }
+        for offset in 1..width {
+            cp = cp * 64 + (wysna_host_buffer_get(buf, i + offset) % 64)
+        }
+        parts.append(chr(cp))
+        i = i + width
+    }
+    return join_strings(parts, "")
+}
+
+fn lsp_pack_argv_buf(arguments: list[str]) -> opaque {
+    let buf = wysna_host_buffer_new()
+    for arg in arguments {
+        let raw = bytes(arg)
+        let n = len(raw)
+        let b0 = (n / 16777216) % 256
+        let b1 = (n / 65536) % 256
+        let b2 = (n / 256) % 256
+        let b3 = n % 256
+        wysna_host_buffer_append(buf, b0)
+        wysna_host_buffer_append(buf, b1)
+        wysna_host_buffer_append(buf, b2)
+        wysna_host_buffer_append(buf, b3)
+        for ch in raw { wysna_host_buffer_append(buf, ch) }
+    }
+    return buf
+}
+
+fn lsp_remove_file(path: str) -> unit {
+    if path == "" { return }
+    let first = lsp_buf_from_str(path)
+    let second = lsp_buf_from_str("")
+    let _st = wysna_host_fs(first, second, 3)
+    wysna_host_close(first)
+    wysna_host_close(second)
+}
+
+fn lsp_self_exe_path() -> str {
+    let buf = wysna_host_buffer_new()
+    let sz = wysna_host_self_executable(buf)
+    let path = if sz > 0 { lsp_buf_to_str(buf, sz) } else { "" }
+    wysna_host_close(buf)
+    if path != "" { return path }
+    let a = args()
+    if len(a) > 0 { return a[0] }
+    return ""
+}
+
+fn lsp_stdlib_root_arg() -> str {
+    let raw = args()
+    let mut i = 1
+    while i < len(raw) {
+        if raw[i] == "--stdlib-root" and i + 1 < len(raw) { return raw[i + 1] }
+        i = i + 1
+    }
+    return ""
+}
+
+fn lsp_tmp_dir() -> str {
+    let t1 = env("TMPDIR") ?? ""
+    if t1 != "" {
+        let n1 = len(t1)
+        return if n1 > 1 and t1[n1 - 1] == "/" { slice(t1, 0, n1 - 1) } else { t1 }
+    }
+    let t2 = env("TEMP") ?? ""
+    if t2 != "" { return t2 }
+    return "/tmp"
+}
+
+fn lsp_next_tmp_path(state: LspServerState, prefix: str, ext: str) -> str {
+    state.tmp_seq = state.tmp_seq + 1
+    return lsp_tmp_dir() + "/" + prefix + "_" + str(unix_time()) + "_" + str(state.tmp_seq) + ext
+}
+
+fn lsp_ascii_lower(s: str) -> str {
+    let mut parts: list[str] = []
+    for i in 0..len(s) {
+        let ch = s[i]
+        let c = ord(ch)
+        if c >= 65 and c <= 90 { parts.append(chr(c + 32)) } else { parts.append(ch) }
+    }
+    return join_strings(parts, "")
+}
+
+fn lsp_trim(s: str) -> str {
+    let mut lo = 0
+    let mut hi = len(s)
+    while lo < hi and (s[lo] == " " or s[lo] == "\t" or s[lo] == "\r" or s[lo] == "\n") { lo = lo + 1 }
+    while hi > lo and (s[hi - 1] == " " or s[hi - 1] == "\t" or s[hi - 1] == "\r" or s[hi - 1] == "\n") { hi = hi - 1 }
+    return slice(s, lo, hi)
+}
+
+fn lsp_parse_int(s: str, default_val: int) -> int {
+    let t = lsp_trim(s)
+    if t == "" { return default_val }
+    let mut sign = 1
+    let mut idx = 0
+    if t[0] == "-" {
+        sign = -1
+        idx = 1
+    } elif t[0] == "+" {
+        idx = 1
+    }
+    if idx >= len(t) { return default_val }
+    let mut acc = 0
+    while idx < len(t) {
+        let c = ord(t[idx])
+        if c < 48 or c > 57 { return default_val }
+        acc = acc * 10 + (c - 48)
+        idx = idx + 1
+    }
+    return acc * sign
+}
+
+fn lsp_buf_read_line_len(buf: opaque) -> int {
+    let mut n = 0
+    while wysna_host_buffer_get(buf, n) >= 0 { n = n + 1 }
+    return n
+}
+
+fn lsp_send_message(json_body: str) -> unit {
+    let body_bytes = bytes(json_body)
+    let header = "Content-Length: " + str(len(body_bytes)) + "\r\n\r\n"
+    let out = wysna_host_buffer_new()
+    for b in bytes(header) { wysna_host_buffer_append(out, b) }
+    for b in body_bytes { wysna_host_buffer_append(out, b) }
+    let _w = wysna_host_stdout_write_raw(out)
+    wysna_host_close(out)
+}
+
+fn lsp_read_frame_clean(state: LspServerState) -> str {
+    let mut content_length = -1
+    let mut got_header = false
+    while true {
+        let buf = wysna_host_buffer_new()
+        let st = wysna_host_stdin_read_line(buf)
+        if st <= 0 {
+            wysna_host_close(buf)
+            state.eof_reached = true
+            return ""
+        }
+        let line_len = lsp_buf_read_line_len(buf)
+        let line = lsp_buf_to_str(buf, line_len)
+        wysna_host_close(buf)
+        let trimmed = lsp_trim(line)
+        if trimmed == "" {
+            if got_header { break }
+            continue
+        }
+        got_header = true
+        let mut colon = -1
+        for i in 0..len(trimmed) {
+            if trimmed[i] == ":" {
+                colon = i
+                break
+            }
+        }
+        if colon > 0 {
+            let key = lsp_ascii_lower(lsp_trim(slice(trimmed, 0, colon)))
+            if key == "content-length" {
+                content_length = lsp_parse_int(slice(trimmed, colon + 1, len(trimmed)), -1)
+            }
+        }
+    }
+    if content_length <= 0 { return "" }
+    let body_buf = wysna_host_buffer_new()
+    let got = wysna_host_stdin_read_exact(body_buf, content_length)
+    if got <= 0 {
+        wysna_host_close(body_buf)
+        state.eof_reached = true
+        return ""
+    }
+    let payload = lsp_buf_to_str(body_buf, got)
+    wysna_host_close(body_buf)
+    return payload
+}
+
+class LspJson {
+    kind: str
+    str_val: str
+    int_val: int
+    bool_val: bool
+    keys: list[str]
+    vals: list[LspJson]
+    items: list[LspJson]
+
+    fn init(kind: str) {
+        this.kind = kind
+        this.str_val = ""
+        this.int_val = 0
+        this.bool_val = false
+        let ks: list[str] = []
+        this.keys = ks
+        let vs: list[LspJson] = []
+        this.vals = vs
+        let its: list[LspJson] = []
+        this.items = its
+    }
+}
+
+fn lsp_json_null() -> LspJson {
+    return new LspJson("null")
+}
+
+fn lsp_json_has(obj: LspJson, key: str) -> bool {
+    if obj.kind != "object" { return false }
+    for k in obj.keys {
+        if k == key { return true }
+    }
+    return false
+}
+
+fn lsp_json_get(obj: LspJson, key: str) -> LspJson {
+    if obj.kind != "object" { return lsp_json_null() }
+    for i in 0..len(obj.keys) {
+        if obj.keys[i] == key { return obj.vals[i] }
+    }
+    return lsp_json_null()
+}
+
+fn lsp_json_str(obj: LspJson, key: str, def_val: str) -> str {
+    let v = lsp_json_get(obj, key)
+    if v.kind == "str" { return v.str_val }
+    return def_val
+}
+
+fn lsp_json_int(obj: LspJson, key: str, def_val: int) -> int {
+    let v = lsp_json_get(obj, key)
+    if v.kind == "int" { return v.int_val }
+    return def_val
+}
+
+fn lsp_json_bool(obj: LspJson, key: str, def_val: bool) -> bool {
+    let v = lsp_json_get(obj, key)
+    if v.kind == "bool" { return v.bool_val }
+    return def_val
+}
+
+fn lsp_json_raw_literal(v: LspJson) -> str {
+    if v.kind == "int" { return str(v.int_val) }
+    if v.kind == "str" { return diag_json_quote(v.str_val) }
+    if v.kind == "bool" { return if v.bool_val { "true" } else { "false" } }
+    return "null"
+}
+
+class LspJsonCursor {
+    src: str
+    pos: int
+
+    fn init(src: str) {
+        this.src = src
+        this.pos = 0
+    }
+}
+
+fn lsp_jc_skip_ws(c: LspJsonCursor) -> unit {
+    let n = len(c.src)
+    while c.pos < n {
+        let ch = c.src[c.pos]
+        if ch == " " or ch == "\t" or ch == "\r" or ch == "\n" {
+            c.pos = c.pos + 1
+        } else {
+            return
+        }
+    }
+}
+
+fn lsp_jc_hex4(c: LspJsonCursor) -> int {
+    if c.pos + 4 > len(c.src) { return -1 }
+    let mut acc = 0
+    for k in 0..4 {
+        let d = hex_val(ord(c.src[c.pos + k]))
+        if d < 0 { return -1 }
+        acc = acc * 16 + d
+    }
+    c.pos = c.pos + 4
+    return acc
+}
+
+fn lsp_jc_parse_str(c: LspJsonCursor) -> str {
+    let n = len(c.src)
+    if c.pos >= n or c.src[c.pos] != "\"" { return "" }
+    c.pos = c.pos + 1
+    let mut parts: list[str] = []
+    while c.pos < n {
+        let ch = c.src[c.pos]
+        c.pos = c.pos + 1
+        if ch == "\"" { return join_strings(parts, "") }
+        if ch == "\\" and c.pos < n {
+            let esc = c.src[c.pos]
+            c.pos = c.pos + 1
+            if esc == "\"" { parts.append("\"") }
+            elif esc == "\\" { parts.append("\\") }
+            elif esc == "/" { parts.append("/") }
+            elif esc == "b" { parts.append(chr(8)) }
+            elif esc == "f" { parts.append(chr(12)) }
+            elif esc == "n" { parts.append("\n") }
+            elif esc == "r" { parts.append("\r") }
+            elif esc == "t" { parts.append("\t") }
+            elif esc == "u" {
+                let code = lsp_jc_hex4(c)
+                if code >= 55296 and code <= 56319 and c.pos + 2 <= n and c.src[c.pos] == "\\" and c.src[c.pos + 1] == "u" {
+                    c.pos = c.pos + 2
+                    let low = lsp_jc_hex4(c)
+                    if low >= 56320 and low <= 57343 {
+                        let cp = 65536 + ((code - 55296) * 1024) + (low - 56320)
+                        parts.append(chr(cp))
+                    } else {
+                        parts.append(chr(code))
+                    }
+                } elif code >= 0 {
+                    parts.append(chr(code))
+                }
+            } else {
+                parts.append(esc)
+            }
+        } else {
+            parts.append(ch)
+        }
+    }
+    return join_strings(parts, "")
+}
+
+fn lsp_jc_parse_val(c: LspJsonCursor) -> LspJson {
+    lsp_jc_skip_ws(c)
+    let n = len(c.src)
+    if c.pos >= n { return lsp_json_null() }
+    let ch = c.src[c.pos]
+    if ch == "\"" {
+        let out = new LspJson("str")
+        out.str_val = lsp_jc_parse_str(c)
+        return out
+    }
+    if ch == "{" {
+        c.pos = c.pos + 1
+        let obj = new LspJson("object")
+        lsp_jc_skip_ws(c)
+        if c.pos < n and c.src[c.pos] == "}" {
+            c.pos = c.pos + 1
+            return obj
+        }
+        while c.pos < n {
+            lsp_jc_skip_ws(c)
+            let k = lsp_jc_parse_str(c)
+            lsp_jc_skip_ws(c)
+            if c.pos < n and c.src[c.pos] == ":" { c.pos = c.pos + 1 }
+            let v = lsp_jc_parse_val(c)
+            obj.keys.append(k)
+            obj.vals.append(v)
+            lsp_jc_skip_ws(c)
+            if c.pos < n and c.src[c.pos] == "," {
+                c.pos = c.pos + 1
+                continue
+            }
+            if c.pos < n and c.src[c.pos] == "}" { c.pos = c.pos + 1 }
+            break
+        }
+        return obj
+    }
+    if ch == "[" {
+        c.pos = c.pos + 1
+        let arr = new LspJson("array")
+        lsp_jc_skip_ws(c)
+        if c.pos < n and c.src[c.pos] == "]" {
+            c.pos = c.pos + 1
+            return arr
+        }
+        while c.pos < n {
+            let item = lsp_jc_parse_val(c)
+            arr.items.append(item)
+            lsp_jc_skip_ws(c)
+            if c.pos < n and c.src[c.pos] == "," {
+                c.pos = c.pos + 1
+                continue
+            }
+            if c.pos < n and c.src[c.pos] == "]" { c.pos = c.pos + 1 }
+            break
+        }
+        return arr
+    }
+    if ch == "t" and c.pos + 4 <= n and slice(c.src, c.pos, c.pos + 4) == "true" {
+        c.pos = c.pos + 4
+        let out = new LspJson("bool")
+        out.bool_val = true
+        return out
+    }
+    if ch == "f" and c.pos + 5 <= n and slice(c.src, c.pos, c.pos + 5) == "false" {
+        c.pos = c.pos + 5
+        let out = new LspJson("bool")
+        out.bool_val = false
+        return out
+    }
+    if ch == "n" and c.pos + 4 <= n and slice(c.src, c.pos, c.pos + 4) == "null" {
+        c.pos = c.pos + 4
+        return lsp_json_null()
+    }
+    let start = c.pos
+    if c.pos < n and c.src[c.pos] == "-" { c.pos = c.pos + 1 }
+    while c.pos < n and is_digit(ord(c.src[c.pos])) { c.pos = c.pos + 1 }
+    let int_part = slice(c.src, start, c.pos)
+    while c.pos < n {
+        let nc = c.src[c.pos]
+        if nc == "." or nc == "e" or nc == "E" or nc == "+" or nc == "-" or is_digit(ord(nc)) {
+            c.pos = c.pos + 1
+        } else {
+            break
+        }
+    }
+    let num = new LspJson("int")
+    num.int_val = lsp_parse_int(int_part, 0)
+    return num
+}
+
+fn lsp_parse_json(src: str) -> LspJson {
+    let cursor = new LspJsonCursor(src)
+    return lsp_jc_parse_val(cursor)
+}
+
+fn lsp_uri_decode_pct(raw: str) -> str {
+    let mut parts: list[str] = []
+    let n = len(raw)
+    let mut i = 0
+    while i < n {
+        if raw[i] == "%" and i + 2 < n {
+            let hi = hex_val(ord(raw[i + 1]))
+            let lo = hex_val(ord(raw[i + 2]))
+            if hi >= 0 and lo >= 0 {
+                parts.append(chr(hi * 16 + lo))
+                i = i + 3
+                continue
+            }
+        }
+        parts.append(raw[i])
+        i = i + 1
+    }
+    return join_strings(parts, "")
+}
+
+fn lsp_uri_to_path(uri: str) -> str {
+    let mut raw = uri
+    if len(uri) >= 7 and slice(uri, 0, 7) == "file://" {
+        let rest = slice(uri, 7, len(uri))
+        if len(rest) >= 10 and slice(rest, 0, 9) == "localhost" and rest[9] == "/" {
+            raw = slice(rest, 9, len(rest))
+        } else {
+            raw = rest
+        }
+        raw = lsp_uri_decode_pct(raw)
+        if len(raw) >= 3 and raw[0] == "/" and is_alpha(ord(raw[1])) and raw[2] == ":" {
+            raw = slice(raw, 1, len(raw))
+        }
+    }
+    return module_canonical(raw)
+}
+
+fn lsp_path_to_uri(path: str) -> str {
+    let canon = module_canonical(path)
+    let mut prefix = "file://"
+    if len(canon) >= 2 and is_alpha(ord(canon[0])) and canon[1] == ":" {
+        prefix = "file:///"
+    } elif len(canon) == 0 or canon[0] != "/" {
+        prefix = "file:///"
+    }
+    let mut parts: list[str] = [prefix]
+    for i in 0..len(canon) {
+        let ch = canon[i]
+        if ch == " " { parts.append("%20") }
+        elif ch == "#" { parts.append("%23") }
+        elif ch == "?" { parts.append("%3F") }
+        elif ch == "%" { parts.append("%25") }
+        else { parts.append(ch) }
+    }
+    return join_strings(parts, "")
+}
+
+fn lsp_utf16_offset(src: str, target_line: int, target_char: int) -> int {
+    let n = len(src)
+    let mut line = 0
+    let mut i = 0
+    while i < n and line < target_line {
+        if src[i] == "\n" { line = line + 1 }
+        i = i + 1
+    }
+    let mut u16 = 0
+    while i < n and src[i] != "\n" and u16 < target_char {
+        let width = if ord(src[i]) > 65535 { 2 } else { 1 }
+        if u16 + width > target_char { break }
+        u16 = u16 + width
+        i = i + 1
+    }
+    return i
+}
+
+fn lsp_utf16_pos(src: str, char_off: int) -> list[int] {
+    let mut limit = char_off
+    let n = len(src)
+    if limit < 0 { limit = 0 }
+    if limit > n { limit = n }
+    let mut line = 0
+    let mut u16 = 0
+    for i in 0..limit {
+        if src[i] == "\n" {
+            line = line + 1
+            u16 = 0
+        } else {
+            u16 = u16 + (if ord(src[i]) > 65535 { 2 } else { 1 })
+        }
+    }
+    return [line, u16]
+}
+
+fn lsp_char_offset_from_utf8_byte(src: str, target_byte: int) -> int {
+    if target_byte <= 0 { return 0 }
+    let mut byte_pos = 0
+    let mut i = 0
+    let n = len(src)
+    while i < n and byte_pos < target_byte {
+        let cp = ord(src[i])
+        let w = if cp < 128 { 1 } elif cp < 2048 { 2 } elif cp < 65536 { 3 } else { 4 }
+        byte_pos = byte_pos + w
+        i = i + 1
+    }
+    return i
+}
+
+fn lsp_pos_json(line: int, ch: int) -> str {
+    return "{\"line\":" + str(line) + ",\"character\":" + str(ch) + "}"
+}
+
+fn lsp_range_json_offsets(src: str, start_off: int, end_off: int) -> str {
+    let p0 = lsp_utf16_pos(src, start_off)
+    let p1 = lsp_utf16_pos(src, end_off)
+    return "{\"start\":" + lsp_pos_json(p0[0], p0[1]) + ",\"end\":" + lsp_pos_json(p1[0], p1[1]) + "}"
+}
+
+fn lsp_span_range_json(src: str, line_1: int, col_1: int, width_chars: int) -> str {
+    let l1 = if line_1 < 1 { 1 } else { line_1 }
+    let c1 = if col_1 < 1 { 1 } else { col_1 }
+    let start_off = lsp_utf16_offset(src, l1 - 1, c1 - 1)
+    let w = if width_chars < 1 { 1 } else { width_chars }
+    let mut end_off = start_off + w
+    if end_off > len(src) { end_off = len(src) }
+    return lsp_range_json_offsets(src, start_off, end_off)
+}
+
+class LspDocument {
+    uri: str
+    path: str
+    version: int
+    text: str
+    tmp_path: str
+    has_graph: bool
+    clean_ok: bool
+    graph: ToolGraph
+
+    fn init(uri: str, path: str, version: int, text: str, tmp_path: str) {
+        this.uri = uri
+        this.path = path
+        this.version = version
+        this.text = text
+        this.tmp_path = tmp_path
+        this.has_graph = false
+        this.clean_ok = false
+        this.graph = new ToolGraph(path, text)
+    }
+}
+
+class LspServerState {
+    docs: list[LspDocument]
+    stopping: bool
+    eof_reached: bool
+    tmp_seq: int
+    diag_tmp_path: str
+    self_exe: str
+    stdlib_root: str
+
+    fn init() {
+        let d0: list[LspDocument] = []
+        this.docs = d0
+        this.stopping = false
+        this.eof_reached = false
+        this.tmp_seq = 1
+        this.diag_tmp_path = lsp_tmp_dir() + "/wysna_lsp_diag_" + str(unix_time()) + "_1.json"
+        this.self_exe = lsp_self_exe_path()
+        this.stdlib_root = lsp_stdlib_root_arg()
+    }
+}
+
+fn lsp_find_doc_idx(state: LspServerState, uri: str) -> int {
+    for i in 0..len(state.docs) {
+        if state.docs[i].uri == uri { return i }
+    }
+    return -1
+}
+
+fn lsp_overlay_paths(state: LspServerState) -> list[str] {
+    let mut paths: list[str] = []
+    for doc in state.docs { paths.append(doc.path) }
+    return paths
+}
+
+fn lsp_overlay_texts(state: LspServerState) -> list[str] {
+    let mut texts: list[str] = []
+    for doc in state.docs { texts.append(doc.text) }
+    return texts
+}
+
+fn lsp_apply_content_changes(text: str, changes: LspJson) -> str {
+    if changes.kind != "array" { return text }
+    let mut current = text
+    for change in changes.items {
+        let rep = lsp_json_str(change, "text", "")
+        if lsp_json_has(change, "range") {
+            let rng = lsp_json_get(change, "range")
+            let st = lsp_json_get(rng, "start")
+            let en = lsp_json_get(rng, "end")
+            let start_off = lsp_utf16_offset(current, lsp_json_int(st, "line", 0), lsp_json_int(st, "character", 0))
+            let end_off = lsp_utf16_offset(current, lsp_json_int(en, "line", 0), lsp_json_int(en, "character", 0))
+            current = slice(current, 0, start_off) + rep + slice(current, end_off, len(current))
+        } else {
+            current = rep
+        }
+    }
+    return current
+}
+
+fn lsp_publish_empty_diags(uri: str) -> unit {
+    lsp_send_message("{\"jsonrpc\":\"2.0\",\"method\":\"textDocument/publishDiagnostics\",\"params\":{\"uri\":" + diag_json_quote(uri) + ",\"diagnostics\":[]}}")
+}
+
+fn lsp_check_and_publish(state: LspServerState, doc_idx: int) -> unit {
+    if doc_idx < 0 or doc_idx >= len(state.docs) { return }
+    let doc = state.docs[doc_idx]
+    for d in state.docs {
+        write_file(d.tmp_path, d.text) else _err { }
+    }
+    let mut argv: list[str] = []
+    if state.stdlib_root != "" {
+        argv.append("--stdlib-root")
+        argv.append(state.stdlib_root)
+    }
+    argv.append("check")
+    argv.append(doc.path)
+    argv.append("--output-format=json-v1")
+    argv.append("--diag-out")
+    argv.append(state.diag_tmp_path)
+    for d in state.docs {
+        argv.append("--overlay")
+        argv.append(d.path)
+        argv.append(d.tmp_path)
+    }
+    let exe_buf = lsp_buf_from_str(state.self_exe)
+    let args_buf = lsp_pack_argv_buf(argv)
+    let rc = wysna_host_process_run(exe_buf, args_buf, 30000)
+    wysna_host_close(exe_buf)
+    wysna_host_close(args_buf)
+
+    let diag_raw = read_file(state.diag_tmp_path) else err { "" }
+    lsp_remove_file(state.diag_tmp_path)
+    let mut diag_items: list[str] = []
+    let mut parsed_ok = false
+    if diag_raw != "" {
+        let parsed = lsp_parse_json(diag_raw)
+        if lsp_json_str(parsed, "status", "") == "ok" and rc == 0 {
+            parsed_ok = true
+        }
+        let d_arr = lsp_json_get(parsed, "diagnostics")
+        if d_arr.kind == "array" {
+            for item in d_arr.items {
+                let code = lsp_json_str(item, "code", "W0001")
+                let sev_str = lsp_json_str(item, "severity", "error")
+                let sev = if sev_str == "warning" { 2 } elif sev_str == "info" { 3 } else { 1 }
+                let msg = lsp_json_str(item, "message", "Compiler diagnostic")
+                let sp = lsp_json_get(item, "primary_span")
+                let mut range_json = "{\"start\":{\"line\":0,\"character\":0},\"end\":{\"line\":0,\"character\":1}}"
+                if sp.kind == "object" {
+                    let sb = lsp_json_int(sp, "start_byte", 0)
+                    let eb = lsp_json_int(sp, "end_byte", sb + 1)
+                    let span_file = lsp_json_str(sp, "source_id", "")
+                    let span_src = lsp_node_source_text(state, doc, span_file)
+                    let start_c = lsp_char_offset_from_utf8_byte(span_src, sb)
+                    let mut end_c = lsp_char_offset_from_utf8_byte(span_src, eb)
+                    if end_c <= start_c { end_c = start_c + 1 }
+                    if end_c > len(span_src) { end_c = len(span_src) }
+                    range_json = lsp_range_json_offsets(span_src, start_c, end_c)
+                }
+                diag_items.append("{\"range\":" + range_json + ",\"severity\":" + str(sev) + ",\"code\":" + diag_json_quote(code) + ",\"source\":\"wysna\",\"message\":" + diag_json_quote(msg) + "}")
+            }
+        }
+    }
+    lsp_send_message("{\"jsonrpc\":\"2.0\",\"method\":\"textDocument/publishDiagnostics\",\"params\":{\"uri\":" + diag_json_quote(doc.uri) + ",\"diagnostics\":[" + join_strings(diag_items, ",") + "]}}")
+
+    if parsed_ok {
+        doc.graph = tool_build_graph_with_overlays(doc.text, doc.path, lsp_overlay_paths(state), lsp_overlay_texts(state))
+        doc.has_graph = true
+        doc.clean_ok = true
+    } else {
+        doc.clean_ok = false
+    }
+}
+
+fn lsp_ident_bounds_at(src: str, offset: int) -> list[int] {
+    let n = len(src)
+    let mut pos = offset
+    if pos > 0 and (pos == n or not is_alnum(ord(src[pos]))) and is_alnum(ord(src[pos - 1])) {
+        pos = pos - 1
+    }
+    if pos >= n or not is_alnum(ord(src[pos])) { return [-1, -1] }
+    let mut lo = pos
+    while lo > 0 and is_alnum(ord(src[lo - 1])) { lo = lo - 1 }
+    let mut hi = pos + 1
+    while hi < n and is_alnum(ord(src[hi])) { hi = hi + 1 }
+    if is_digit(ord(src[lo])) { return [-1, -1] }
+    return [lo, hi]
+}
+
+fn lsp_qualifier_before(src: str, ident_lo: int) -> str {
+    if ident_lo < 2 or src[ident_lo - 1] != "." { return "" }
+    let mut q_hi = ident_lo - 1
+    let mut q_lo = q_hi
+    while q_lo > 0 and is_alnum(ord(src[q_lo - 1])) { q_lo = q_lo - 1 }
+    if q_lo == q_hi { return "" }
+    return slice(src, q_lo, q_hi)
+}
+
+fn lsp_resolve_nodes_at(doc: LspDocument, line: int, character: int) -> list[int] {
+    let mut matched: list[int] = []
+    if not doc.has_graph { return matched }
+    let off = lsp_utf16_offset(doc.text, line, character)
+    let bounds = lsp_ident_bounds_at(doc.text, off)
+    if bounds[0] < 0 { return matched }
+    let word = slice(doc.text, bounds[0], bounds[1])
+    let qual = lsp_qualifier_before(doc.text, bounds[0])
+    if qual != "" {
+        let dotted = qual + "." + word
+        for i in 0..len(doc.graph.nodes) {
+            let n = doc.graph.nodes[i]
+            if n.qualified_name == dotted or n.name == word and (n.owner == qual or tool_basename(n.file) == qual + ".wysna") {
+                matched.append(i)
+            }
+        }
+        if len(matched) > 0 { return matched }
+    }
+    for i in 0..len(doc.graph.nodes) {
+        let n = doc.graph.nodes[i]
+        if n.name == word or n.qualified_name == word { matched.append(i) }
+    }
+    return matched
+}
+
+fn lsp_node_source_text(state: LspServerState, doc: LspDocument, file: str) -> str {
+    if file == doc.path { return doc.text }
+    for d in state.docs {
+        if d.path == file { return d.text }
+    }
+    let res = module_read_text_or_overlay(file)
+    return if res[0] == "1" { res[1] } else { doc.text }
+}
+
+fn lsp_node_location_json(state: LspServerState, doc: LspDocument, n: ToolGraphNode) -> str {
+    let target_src = lsp_node_source_text(state, doc, n.file)
+    let range_json = lsp_span_range_json(target_src, n.line, n.col, len(n.name))
+    return "{\"uri\":" + diag_json_quote(lsp_path_to_uri(n.file)) + ",\"range\":" + range_json + "}"
+}
+
+fn lsp_handle_definition(state: LspServerState, doc: LspDocument, pos_obj: LspJson) -> str {
+    let idxs = lsp_resolve_nodes_at(doc, lsp_json_int(pos_obj, "line", 0), lsp_json_int(pos_obj, "character", 0))
+    if len(idxs) == 0 { return "null" }
+    return lsp_node_location_json(state, doc, doc.graph.nodes[idxs[0]])
+}
+
+fn lsp_handle_implementation(state: LspServerState, doc: LspDocument, pos_obj: LspJson) -> str {
+    let idxs = lsp_resolve_nodes_at(doc, lsp_json_int(pos_obj, "line", 0), lsp_json_int(pos_obj, "character", 0))
+    if len(idxs) == 0 { return "[]" }
+    let node = doc.graph.nodes[idxs[0]]
+    let mut locs: list[str] = []
+    for target_id in node.implemented_by {
+        let tidx = tool_find_node_idx(doc.graph, target_id)
+        if tidx >= 0 { locs.append(lsp_node_location_json(state, doc, doc.graph.nodes[tidx])) }
+    }
+    for sub_id in node.subclasses {
+        let sidx = tool_find_node_idx(doc.graph, sub_id)
+        if sidx >= 0 { locs.append(lsp_node_location_json(state, doc, doc.graph.nodes[sidx])) }
+    }
+    return "[" + join_strings(locs, ",") + "]"
+}
+
+fn lsp_rel_line(label: str, items: list[str]) -> str {
+    if len(items) == 0 { return "" }
+    return "- **" + label + ":** `" + join_strings(items, "`, `") + "`"
+}
+
+fn lsp_add_rel(lines: list[str], label: str, items: list[str]) -> list[str] {
+    let entry = lsp_rel_line(label, items)
+    if entry == "" { return lines }
+    let mut out = lines
+    out.append(entry)
+    return out
+}
+
+fn lsp_handle_hover(doc: LspDocument, pos_obj: LspJson) -> str {
+    let idxs = lsp_resolve_nodes_at(doc, lsp_json_int(pos_obj, "line", 0), lsp_json_int(pos_obj, "character", 0))
+    if len(idxs) == 0 { return "null" }
+    let n = doc.graph.nodes[idxs[0]]
+    let mut lines: list[str] = ["```wysna", n.signature, "```", "", "`" + n.kind + "` in `" + tool_basename(n.file) + "`"]
+    if n.super_class != "" { lines.append("- **Extends:** `" + n.super_class + "`") }
+    lines = lsp_add_rel(lines, "Implements", n.implements_list)
+    lines = lsp_add_rel(lines, "Implemented by", n.implemented_by)
+    lines = lsp_add_rel(lines, "Subclasses", n.subclasses)
+    lines = lsp_add_rel(lines, "Calls", n.calls)
+    lines = lsp_add_rel(lines, "Called by", n.called_by)
+    lines = lsp_add_rel(lines, "Uses types", n.uses_types)
+    lines = lsp_add_rel(lines, "Effects", n.effects)
+    lines = lsp_add_rel(lines, "Capabilities", n.capabilities)
+    let md = join_strings(lines, "\n")
+    return "{\"contents\":{\"kind\":\"markdown\",\"value\":" + diag_json_quote(md) + "}}"
+}
+
+class LspRefCollector {
+    locs: list[str]
+    seen: list[str]
+
+    fn init() {
+        let l0: list[str] = []
+        this.locs = l0
+        let s0: list[str] = []
+        this.seen = s0
+    }
+}
+
+fn lsp_scan_word_locs(acc: LspRefCollector, file_path: str, src: str, word: str, skip_decl_line: int) -> unit {
+    let n = len(src)
+    let wlen = len(word)
+    let uri = lsp_path_to_uri(file_path)
+    let mut i = 0
+    while i < n {
+        if src[i] == "#" {
+            while i < n and src[i] != "\n" { i = i + 1 }
+            continue
+        }
+        if is_alpha(ord(src[i])) or src[i] == "_" {
+            let start = i
+            while i < n and is_alnum(ord(src[i])) { i = i + 1 }
+            if i - start == wlen and slice(src, start, i) == word {
+                let pos = lsp_utf16_pos(src, start)
+                if skip_decl_line > 0 and pos[0] + 1 == skip_decl_line { continue }
+                let loc_key = uri + ":" + str(pos[0]) + ":" + str(pos[1])
+                if not tool_str_contains(acc.seen, loc_key) {
+                    acc.seen.append(loc_key)
+                    acc.locs.append("{\"uri\":" + diag_json_quote(uri) + ",\"range\":" + lsp_range_json_offsets(src, start, i) + "}")
+                }
+            }
+        } else {
+            i = i + 1
+        }
+    }
+}
+
+fn lsp_handle_references(state: LspServerState, doc: LspDocument, pos_obj: LspJson, include_decl: bool) -> str {
+    let off = lsp_utf16_offset(doc.text, lsp_json_int(pos_obj, "line", 0), lsp_json_int(pos_obj, "character", 0))
+    let bounds = lsp_ident_bounds_at(doc.text, off)
+    if bounds[0] < 0 { return "[]" }
+    let word = slice(doc.text, bounds[0], bounds[1])
+    let idxs = lsp_resolve_nodes_at(doc, lsp_json_int(pos_obj, "line", 0), lsp_json_int(pos_obj, "character", 0))
+    let skip_file = if not include_decl and len(idxs) > 0 { doc.graph.nodes[idxs[0]].file } else { "" }
+    let skip_line = if not include_decl and len(idxs) > 0 { doc.graph.nodes[idxs[0]].line } else { -1 }
+
+    let acc = new LspRefCollector()
+    let mut scanned_files: list[str] = []
+    for d in state.docs {
+        scanned_files.append(d.path)
+        let sk = if d.path == skip_file { skip_line } else { -1 }
+        lsp_scan_word_locs(acc, d.path, d.text, word, sk)
+    }
+    if doc.has_graph {
+        for mpath in doc.graph.mod_names {
+            if not tool_str_contains(scanned_files, mpath) {
+                scanned_files.append(mpath)
+                let res = module_read_text_or_overlay(mpath)
+                if res[0] == "1" {
+                    let sk = if mpath == skip_file { skip_line } else { -1 }
+                    lsp_scan_word_locs(acc, mpath, res[1], word, sk)
+                }
+            }
+        }
+    }
+    return "[" + join_strings(acc.locs, ",") + "]"
+}
+
+fn lsp_completion_kind(kind: str) -> int {
+    if kind == "fn" { return 3 }
+    if kind == "method" { return 2 }
+    if kind == "field" { return 5 }
+    if kind == "struct" { return 22 }
+    if kind == "class" { return 7 }
+    if kind == "interface" { return 8 }
+    if kind == "enum" { return 13 }
+    return 6
+}
+
+fn lsp_handle_completion(doc: LspDocument, pos_obj: LspJson) -> str {
+    let off = lsp_utf16_offset(doc.text, lsp_json_int(pos_obj, "line", 0), lsp_json_int(pos_obj, "character", 0))
+    let mut lo = off
+    while lo > 0 and is_alnum(ord(doc.text[lo - 1])) { lo = lo - 1 }
+    let prefix = slice(doc.text, lo, off)
+    let qual = lsp_qualifier_before(doc.text, lo)
+    let mut items: list[str] = []
+    let mut seen_labels: list[str] = []
+
+    if doc.has_graph {
+        for n in doc.graph.nodes {
+            if qual != "" {
+                let matches_owner = n.owner == qual or tool_short_name(n.owner) == qual or tool_basename(n.file) == qual + ".wysna"
+                if not matches_owner { continue }
+            }
+            if prefix != "" and (len(n.name) < len(prefix) or slice(n.name, 0, len(prefix)) != prefix) {
+                continue
+            }
+            if not tool_str_contains(seen_labels, n.name) {
+                seen_labels.append(n.name)
+                items.append("{\"label\":" + diag_json_quote(n.name) + ",\"kind\":" + str(lsp_completion_kind(n.kind)) + ",\"detail\":" + diag_json_quote(n.signature) + "}")
+            }
+        }
+    }
+    if qual == "" {
+        let kws: list[str] = ["fn", "async", "struct", "class", "interface", "enum", "let", "mut", "if", "elif", "else", "for", "while", "match", "return", "await", "import", "pub", "true", "false", "None", "Some", "Ok", "Err"]
+        for kw in kws {
+            if prefix != "" and (len(kw) < len(prefix) or slice(kw, 0, len(prefix)) != prefix) { continue }
+            if not tool_str_contains(seen_labels, kw) {
+                seen_labels.append(kw)
+                items.append("{\"label\":" + diag_json_quote(kw) + ",\"kind\":14}")
+            }
+        }
+    }
+    return "[" + join_strings(items, ",") + "]"
+}
+
+fn lsp_handle_formatting(doc: LspDocument) -> str {
+    if not doc.clean_ok { return "[]" }
+    let body = selfhost_format_body(doc.text, doc.path)
+    let formatted = if len(body) > 0 { body + "\n" } else { "" }
+    if formatted == doc.text { return "[]" }
+    let rng = lsp_range_json_offsets(doc.text, 0, len(doc.text))
+    return "[{\"range\":" + rng + ",\"newText\":" + diag_json_quote(formatted) + "}]"
+}
+
+fn lsp_semantic_tok_type(tok: Token) -> int {
+    # Legend index: 0:keyword, 1:type, 2:class, 3:interface, 4:enum, 5:struct,
+    # 6:function, 7:method, 8:property, 9:variable, 10:parameter, 11:string, 12:number, 13:operator
+    let k = tok.kind
+    if k == "STR" or k == "FSTR" { return 11 }
+    if k == "INT" or k == "FLOAT" { return 12 }
+    if k == "FN" or k == "LET" or k == "MUT" or k == "STRUCT" or k == "CLASS" or k == "INTERFACE" or k == "ENUM" or k == "IF" or k == "ELIF" or k == "ELSE" or k == "FOR" or k == "IN" or k == "WHILE" or k == "RETURN" or k == "MATCH" or k == "IMPORT" or k == "FROM" or k == "AS" or k == "PUB" or k == "TRUE" or k == "FALSE" or k == "NONE" or k == "THIS" or k == "SUPER" or k == "NEW" or k == "EXTERN" or k == "AND" or k == "OR" or k == "NOT" or k == "REQUIRES" or k == "ENSURES" {
+        return 0
+    }
+    if k == "IDENT" {
+        if tok.val == "async" or tok.val == "await" { return 0 }
+        if tok.val == "int" or tok.val == "float" or tok.val == "str" or tok.val == "bool" or tok.val == "unit" or tok.val == "list" or tok.val == "dict" or tok.val == "opaque" {
+            return 1
+        }
+        if len(tok.val) > 0 and ord(tok.val[0]) >= 65 and ord(tok.val[0]) <= 90 { return 1 }
+        return 9
+    }
+    if k == "PLUS" or k == "MINUS" or k == "STAR" or k == "SLASH" or k == "PERCENT" or k == "EQ" or k == "NEQ" or k == "LT" or k == "LTE" or k == "GT" or k == "GTE" or k == "ASSIGN" or k == "ARROW" or k == "FAT_ARROW" {
+        return 13
+    }
+    return -1
+}
+
+fn lsp_handle_semantic_tokens(doc: LspDocument) -> str {
+    if not doc.clean_ok { return "{\"data\":[]}" }
+    let tokens = tokenize(doc.text, doc.path)
+    let mut nums: list[str] = []
+    let mut prev_line = 0
+    let mut prev_col = 0
+    for i in 0..len(tokens) {
+        let tok = tokens[i]
+        let mut ttype = lsp_semantic_tok_type(tok)
+        if ttype < 0 { continue }
+        if ttype == 9 and i + 1 < len(tokens) and tokens[i + 1].kind == "LPAREN" {
+            ttype = 6
+        }
+        let mut tok_len = len(tok.val)
+        if tok.kind == "STR" { tok_len = tok_len + 2 }
+        if tok_len <= 0 { continue }
+        let line0 = if tok.line > 0 { tok.line - 1 } else { 0 }
+        let off = lsp_utf16_offset(doc.text, line0, if tok.col > 0 { tok.col - 1 } else { 0 })
+        let u16 = lsp_utf16_pos(doc.text, off)
+        let cur_line = u16[0]
+        let cur_col = u16[1]
+        let d_line = cur_line - prev_line
+        let d_col = if d_line == 0 { cur_col - prev_col } else { cur_col }
+        nums.append(str(d_line))
+        nums.append(str(d_col))
+        nums.append(str(tok_len))
+        nums.append(str(ttype))
+        nums.append("0")
+        prev_line = cur_line
+        prev_col = cur_col
+    }
+    return "{\"data\":[" + join_strings(nums, ",") + "]}"
+}
+
+fn lsp_recheck_dependents(state: LspServerState, exclude_uri: str) -> unit {
+    for i in 0..len(state.docs) {
+        if state.docs[i].uri != exclude_uri {
+            lsp_check_and_publish(state, i)
+        }
+    }
+}
+
+fn lsp_cleanup(state: LspServerState) -> unit {
+    lsp_remove_file(state.diag_tmp_path)
+    for d in state.docs { lsp_remove_file(d.tmp_path) }
+}
+
+fn lsp_dispatch_message(state: LspServerState, msg: LspJson) -> bool {
+    let method = lsp_json_str(msg, "method", "")
+    let params = lsp_json_get(msg, "params")
+    let has_id = lsp_json_has(msg, "id")
+    let req_id_raw = if has_id { lsp_json_raw_literal(lsp_json_get(msg, "id")) } else { "null" }
+
+    if method == "initialize" {
+        let legend = "\"tokenTypes\":[\"keyword\",\"type\",\"class\",\"interface\",\"enum\",\"struct\",\"function\",\"method\",\"property\",\"variable\",\"parameter\",\"string\",\"number\",\"operator\",\"comment\"],\"tokenModifiers\":[]"
+        let caps = "\"positionEncoding\":\"utf-16\",\"textDocumentSync\":{\"openClose\":true,\"change\":2},\"definitionProvider\":true,\"implementationProvider\":true,\"hoverProvider\":true,\"referencesProvider\":true,\"documentFormattingProvider\":true,\"completionProvider\":{\"triggerCharacters\":[\".\"]},\"semanticTokensProvider\":{\"legend\":{" + legend + "},\"full\":true,\"range\":false}"
+        let res = "{\"capabilities\":{" + caps + "},\"serverInfo\":{\"name\":\"wysna-native\",\"version\":\"0.6.0\"}}"
+        if has_id { lsp_send_message("{\"jsonrpc\":\"2.0\",\"id\":" + req_id_raw + ",\"result\":" + res + "}") }
+        return true
+    }
+    if method == "initialized" { return true }
+    if method == "shutdown" {
+        state.stopping = true
+        if has_id { lsp_send_message("{\"jsonrpc\":\"2.0\",\"id\":" + req_id_raw + ",\"result\":null}") }
+        return true
+    }
+    if method == "exit" { return false }
+    if state.stopping {
+        if has_id { lsp_send_message("{\"jsonrpc\":\"2.0\",\"id\":" + req_id_raw + ",\"error\":{\"code\":-32600,\"message\":\"Server is shutting down\"}}") }
+        return true
+    }
+
+    if method == "textDocument/didOpen" {
+        let td = lsp_json_get(params, "textDocument")
+        let uri = lsp_json_str(td, "uri", "")
+        let text = lsp_json_str(td, "text", "")
+        let version = lsp_json_int(td, "version", 0)
+        let path = lsp_uri_to_path(uri)
+        let existing = lsp_find_doc_idx(state, uri)
+        if existing >= 0 {
+            state.docs[existing].text = text
+            state.docs[existing].version = version
+            lsp_check_and_publish(state, existing)
+        } else {
+            let tmp_p = lsp_next_tmp_path(state, "wysna_lsp_doc", ".wysna")
+            let doc = new LspDocument(uri, path, version, text, tmp_p)
+            state.docs.append(doc)
+            lsp_check_and_publish(state, len(state.docs) - 1)
+        }
+        lsp_recheck_dependents(state, uri)
+        return true
+    }
+    if method == "textDocument/didChange" {
+        let td = lsp_json_get(params, "textDocument")
+        let uri = lsp_json_str(td, "uri", "")
+        let version = lsp_json_int(td, "version", 0)
+        let idx = lsp_find_doc_idx(state, uri)
+        if idx >= 0 and version >= state.docs[idx].version {
+            state.docs[idx].version = version
+            state.docs[idx].text = lsp_apply_content_changes(state.docs[idx].text, lsp_json_get(params, "contentChanges"))
+            lsp_check_and_publish(state, idx)
+            lsp_recheck_dependents(state, uri)
+        }
+        return true
+    }
+    if method == "textDocument/didClose" {
+        let td = lsp_json_get(params, "textDocument")
+        let uri = lsp_json_str(td, "uri", "")
+        let idx = lsp_find_doc_idx(state, uri)
+        if idx >= 0 {
+            lsp_remove_file(state.docs[idx].tmp_path)
+            let mut next_docs: list[LspDocument] = []
+            for j in 0..len(state.docs) {
+                if j != idx { next_docs.append(state.docs[j]) }
+            }
+            state.docs = next_docs
+        }
+        lsp_publish_empty_diags(uri)
+        lsp_recheck_dependents(state, uri)
+        return true
+    }
+
+    let td_req = lsp_json_get(params, "textDocument")
+    let req_uri = lsp_json_str(td_req, "uri", "")
+    let req_pos = lsp_json_get(params, "position")
+    let idx = lsp_find_doc_idx(state, req_uri)
+    let mut result_json = "null"
+    let mut handled = true
+
+    if method == "textDocument/definition" {
+        result_json = if idx >= 0 { lsp_handle_definition(state, state.docs[idx], req_pos) } else { "null" }
+    } elif method == "textDocument/implementation" {
+        result_json = if idx >= 0 { lsp_handle_implementation(state, state.docs[idx], req_pos) } else { "[]" }
+    } elif method == "textDocument/hover" {
+        result_json = if idx >= 0 { lsp_handle_hover(state.docs[idx], req_pos) } else { "null" }
+    } elif method == "textDocument/references" {
+        let ctx = lsp_json_get(params, "context")
+        let inc_decl = lsp_json_bool(ctx, "includeDeclaration", true)
+        result_json = if idx >= 0 { lsp_handle_references(state, state.docs[idx], req_pos, inc_decl) } else { "[]" }
+    } elif method == "textDocument/completion" {
+        result_json = if idx >= 0 { lsp_handle_completion(state.docs[idx], req_pos) } else { "[]" }
+    } elif method == "textDocument/formatting" {
+        result_json = if idx >= 0 { lsp_handle_formatting(state.docs[idx]) } else { "[]" }
+    } elif method == "textDocument/semanticTokens/full" {
+        result_json = if idx >= 0 { lsp_handle_semantic_tokens(state.docs[idx]) } else { "{\"data\":[]}" }
+    } else {
+        handled = false
+    }
+
+    if not handled {
+        if has_id { lsp_send_message("{\"jsonrpc\":\"2.0\",\"id\":" + req_id_raw + ",\"error\":{\"code\":-32601,\"message\":\"Method not found\"}}") }
+        return true
+    }
+    if has_id { lsp_send_message("{\"jsonrpc\":\"2.0\",\"id\":" + req_id_raw + ",\"result\":" + result_json + "}") }
+    return true
+}
+
+fn lsp_serve() -> unit {
+    let state = new LspServerState()
+    while not state.eof_reached {
+        let payload = lsp_read_frame_clean(state)
+        if state.eof_reached { break }
+        if payload == "" { continue }
+        let msg = lsp_parse_json(payload)
+        if not lsp_dispatch_message(state, msg) { break }
+    }
+    lsp_cleanup(state)
+}
 fn selfhost_json_quote(s: str) -> str {
     let mut out = "\""
     let n = len(s)
@@ -9208,6 +10465,10 @@ fn run_compiler() -> unit ! IoError {
     }
     if cmd == "explain" {
         tool_handle_explain(clean, json_v1)
+        return
+    }
+    if cmd == "lsp" {
+        lsp_serve()
         return
     }
     if cmd == "check" {

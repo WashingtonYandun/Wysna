@@ -34,6 +34,9 @@
 #include <sys/wait.h>
 #include <time.h>
 #include <unistd.h>
+#ifdef __APPLE__
+#include <mach-o/dyld.h>
+#endif
 #if (defined(__GNUC__) || defined(__clang__)) && !defined(__APPLE__)
 #pragma weak pthread_create
 #pragma weak pthread_join

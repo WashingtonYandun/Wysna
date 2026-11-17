@@ -218,7 +218,7 @@ class Instantiator:
             owner_checker._active_type_subst = previous_subst
             owner_checker.current_scope = previous_scope
 
-        fn_type = FunctionType(params=p_types, ret=ret_t, is_async=getattr(cloned_fn, "is_async", False))
+        fn_type = FunctionType(params=p_types, ret=ret_t, is_async=getattr(cloned, "is_async", False))
         info = ClassMethodInfo(fn_type=fn_type, is_public=template.is_public, owner_class=template.owner_class)
         owner_cls_type = owner_checker.global_scope.lookup_type(template.owner_class)
         if not isinstance(owner_cls_type, ClassType):

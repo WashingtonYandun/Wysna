@@ -171,14 +171,54 @@ fn diag_clean_cli_args() -> list[str] {
     let mut clean: list[str] = []
     let mut i = 1
     while i < len(raw) {
-        if raw[i] == "--stdlib-root" and i + 1 < len(raw) {
+        if (raw[i] == "--stdlib-root" or raw[i] == "--diag-out") and i + 1 < len(raw) {
             i = i + 2
+        } elif raw[i] == "--overlay" and i + 2 < len(raw) {
+            i = i + 3
         } else {
             clean.append(raw[i])
             i = i + 1
         }
     }
     return clean
+}
+
+fn diag_out_path() -> str {
+    let raw = args()
+    let mut i = 1
+    while i < len(raw) {
+        if raw[i] == "--diag-out" and i + 1 < len(raw) { return raw[i + 1] }
+        i = i + 1
+    }
+    return ""
+}
+
+fn diag_write_output(payload: str) -> unit {
+    let out = diag_out_path()
+    if out != "" {
+        write_file(out, payload) else err {
+            print(payload)
+            return
+        }
+        return
+    }
+    print(payload)
+}
+
+fn diag_read_snippet_source(file: str) -> str {
+    let raw = args()
+    let mut i = 1
+    while i < len(raw) {
+        if raw[i] == "--overlay" and i + 2 < len(raw) {
+            if raw[i + 1] == file {
+                return read_file(raw[i + 2]) else error { "" }
+            }
+            i = i + 3
+        } else {
+            i = i + 1
+        }
+    }
+    return read_file(file) else error { "" }
 }
 
 fn diag_cli_json_mode() -> str {
@@ -197,7 +237,7 @@ fn diag_cli_command() -> str {
     let first = clean[0]
     if first == "check" or first == "--check" or first == "--check-json" { return "check" }
     if first == "fmt" or first == "--fmt" or first == "--fmt-write" { return "fmt" }
-    if first == "graph" or first == "inspect" or first == "patch" or first == "explain" { return first }
+    if first == "graph" or first == "inspect" or first == "patch" or first == "explain" or first == "lsp" { return first }
     if first == "--emit-c-mir" or first == "--emit-mir" or first == "--check-mir" { return "build" }
     return "check"
 }
@@ -210,16 +250,16 @@ fn diag_emit_and_exit(file: str, code: str, line: int, col: int, msg: str) -> un
     }
     let mut src = ""
     if file != "" and file != "<stdin>" and file != "<unknown>" and file != "<cli>" {
-        src = read_file(file) else error { "" }
+        src = diag_read_snippet_source(file)
     }
     let stage = diag_stage_for_code(code)
     let diag_json = diag_record_json(code, stage, "error", msg, file, line, col, src)
     if mode == "check-json" {
-        print("{\"schema_version\":\"wysna.cli.result/1\",\"compiler_version\":\"0.6.0\",\"command\":\"check\",\"ok\":false,\"exit_code\":1,\"diagnostics\":[" + diag_json + "],\"data\":null}")
+        diag_write_output("{\"schema_version\":\"wysna.cli.result/1\",\"compiler_version\":\"0.6.0\",\"command\":\"check\",\"ok\":false,\"exit_code\":1,\"diagnostics\":[" + diag_json + "],\"data\":null}")
         exit(1)
     }
     let cmd = diag_cli_command()
     let status = if code == "W5002" or code == "W5003" or code == "W5004" or code == "W5005" { "usage_error" } else { "diagnostic_error" }
-    print(diag_tool_envelope_json(cmd, status, 1, "[" + diag_json + "]", "", "", "[]"))
+    diag_write_output(diag_tool_envelope_json(cmd, status, 1, "[" + diag_json + "]", "", "", "[]"))
     exit(1)
 }

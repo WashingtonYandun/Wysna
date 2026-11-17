@@ -29,6 +29,36 @@ fn module_canonical(path: str) -> str {
     return if resolved == "" { module_normalize(path) } else { resolved }
 }
 
+fn module_read_with_overlays(path: str, ov_paths: list[str], ov_texts: list[str]) -> list[str] {
+    let canon = module_canonical(path)
+    for i in 0..len(ov_paths) {
+        if ov_paths[i] == canon or ov_paths[i] == path {
+            return ["1", ov_texts[i]]
+        }
+    }
+    let raw = args()
+    let mut idx = 1
+    while idx < len(raw) {
+        if raw[idx] == "--overlay" and idx + 2 < len(raw) {
+            let target = raw[idx + 1]
+            let ov_canon = module_canonical(target)
+            if target == path or ov_canon == canon {
+                let ov_src = read_file(raw[idx + 2]) else error { "" }
+                return ["1", ov_src]
+            }
+            idx = idx + 3
+        } else {
+            idx = idx + 1
+        }
+    }
+    let disk = read_file(path) else error { return ["0", ""] }
+    return ["1", disk]
+}
+
+fn module_read_text_or_overlay(path: str) -> list[str] {
+    return module_read_with_overlays(path, [], [])
+}
+
 # An import graph belongs to one source expansion.
 class ModuleLoader {
     paths: list[str]
@@ -40,6 +70,8 @@ class ModuleLoader {
     import_targets: list[int]
     import_public: list[bool]
     output: list[Token]
+    ov_paths: list[str]
+    ov_texts: list[str]
     fn init() {
         let initial_paths: list[str] = []
         this.paths = initial_paths
@@ -59,7 +91,16 @@ class ModuleLoader {
         this.import_public = initial_import_public
         let initial_output: list[Token] = []
         this.output = initial_output
+        let initial_ov_paths: list[str] = []
+        this.ov_paths = initial_ov_paths
+        let initial_ov_texts: list[str] = []
+        this.ov_texts = initial_ov_texts
     }
+}
+
+fn module_loader_file_readable(context: ModuleLoader, path: str) -> bool {
+    let res = module_read_with_overlays(path, context.ov_paths, context.ov_texts)
+    return res[0] == "1"
 }
 # Module expansion shares one token stream with the standalone semantic checker.
 
@@ -123,8 +164,8 @@ fn module_stdlib_confined(requested: str, resolved: str) -> bool {
 }
 
 fn module_file_readable(path: str) -> bool {
-    let content = read_file(path) else error { return false }
-    return true
+    let res = module_read_text_or_overlay(path)
+    return res[0] == "1"
 }
 
 fn module_stdlib_path(requested: str) -> str {
@@ -156,21 +197,21 @@ fn module_load_source(context: ModuleLoader, canonical: str, requested: str, tok
         let need_ext = len(requested) < 6 or slice(requested, len(requested) - 6, len(requested)) != ".wysna"
         let rel_ext = if need_ext { module_normalize(base_dir + requested + ".wysna") } else { "" }
         let cwd_ext = if need_ext { module_normalize(requested + ".wysna") } else { "" }
-        if module_file_readable(resolved) {
+        if module_loader_file_readable(context, resolved) {
             resolved = resolved
-        } elif rel_ext != "" and module_file_readable(rel_ext) {
+        } elif rel_ext != "" and module_loader_file_readable(context, rel_ext) {
             resolved = rel_ext
-        } elif module_file_readable(module_normalize(requested)) {
+        } elif module_loader_file_readable(context, module_normalize(requested)) {
             resolved = module_normalize(requested)
-        } elif cwd_ext != "" and module_file_readable(cwd_ext) {
+        } elif cwd_ext != "" and module_loader_file_readable(context, cwd_ext) {
             resolved = cwd_ext
         }
     }
-    let content = read_file(resolved) else err {
+    let loaded = module_read_with_overlays(resolved, context.ov_paths, context.ov_texts)
+    if loaded[0] != "1" {
         report_error_at("W1003", token, "module not found: " + requested)
-        ""
     }
-    return module_expand(context, content, resolved, false)
+    return module_expand(context, loaded[1], resolved, false)
 }
 
 fn module_expand(context: ModuleLoader, src: str, path: str, entry: bool) -> int {
@@ -331,9 +372,15 @@ fn module_expand(context: ModuleLoader, src: str, path: str, entry: bool) -> int
     context.states[index] = 2
     return index
 }
-fn module_tokens(src: str, path: str) -> list[Token] {
+fn module_tokens_with_overlays(src: str, path: str, ov_paths: list[str], ov_texts: list[str]) -> list[Token] {
     let context = new ModuleLoader()
+    context.ov_paths = ov_paths
+    context.ov_texts = ov_texts
     module_expand(context, src, path, true)
     context.output.append(Token { kind: "EOF", val: "", line: 1, col: 1, file: module_normalize(path) })
     return context.output
+}
+
+fn module_tokens(src: str, path: str) -> list[Token] {
+    return module_tokens_with_overlays(src, path, [], [])
 }

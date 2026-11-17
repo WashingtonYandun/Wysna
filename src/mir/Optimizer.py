@@ -322,7 +322,13 @@ def eliminate_dead_pure_ops(function) -> bool:
                 continue
             if r not in release_slots and (slot.storage != 'value' or op.data.get('placeholder')):
                 dead_op_ids.add(id(op))
-            elif slot.storage == 'value' and slot.ownership == 'owned' and def_counts.get(r) == 1 and not op.moves:
+            elif (
+                slot.storage == 'value'
+                and slot.ownership == 'owned'
+                and def_counts.get(r) == 1
+                and not op.moves
+                and ((op.opcode == 'const' and op.data.get('value') is None) or not slot.name)
+            ):
                 pair_dead.add(r)
 
     if not dead_op_ids and not pair_dead:

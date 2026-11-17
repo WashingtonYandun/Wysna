@@ -1239,6 +1239,58 @@ def getcwd(output_handle):
     return len(data)
 
 
+def stdin_read_exact(output_handle, count):
+    import sys
+    if count < 0 or count > 16777216:
+        return failure(ValueError("Invalid read byte count"))
+    out = find(output_handle, 'buffer')
+    if out is None:
+        return failure(ValueError("Invalid buffer handle"))
+    out.clear()
+    if count == 0:
+        return 0
+    stream = getattr(sys.stdin, 'buffer', None)
+    try:
+        chunk = stream.read(count) if stream is not None else sys.stdin.read(count).encode('utf-8')
+    except (OSError, ValueError) as error:
+        return failure(error)
+    if not chunk:
+        return 0
+    if len(chunk) < count:
+        return -1
+    out.extend(chunk)
+    return len(chunk)
+
+
+def stdout_write_raw(input_handle):
+    import sys
+    data = find(input_handle, 'buffer')
+    if data is None:
+        return failure(ValueError("Invalid buffer handle"))
+    stream = getattr(sys.stdout, 'buffer', None)
+    try:
+        if stream is not None:
+            stream.write(bytes(data))
+            stream.flush()
+        else:
+            sys.stdout.write(bytes(data).decode('utf-8', errors='replace'))
+            sys.stdout.flush()
+    except (OSError, ValueError) as error:
+        return failure(error)
+    return 0
+
+
+def self_executable(output_handle):
+    import sys
+    out = find(output_handle, 'buffer')
+    if out is None:
+        return failure(ValueError("Invalid buffer handle"))
+    out.clear()
+    raw = (sys.executable or "").encode('utf-8')
+    out.extend(raw)
+    return len(raw)
+
+
 def _rotl32(value, count):
     return ((value << count) & 0xFFFFFFFF) | (value >> (32 - count))
 
@@ -1341,6 +1393,9 @@ FUNCTIONS = {
     'wysna_host_stdout_flush': stdout_flush,
     'wysna_host_stdin_read_line': stdin_read_line,
     'wysna_host_stdin_read_all': stdin_read_all,
+    'wysna_host_stdin_read_exact': stdin_read_exact,
+    'wysna_host_stdout_write_raw': stdout_write_raw,
+    'wysna_host_self_executable': self_executable,
     'wysna_host_getcwd': getcwd,
     'wysna_host_unicode_normalize': unicode_normalize,
     'wysna_host_last_error': lambda: _error_code,

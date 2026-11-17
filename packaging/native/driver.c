@@ -22,6 +22,7 @@
 #define SDK_COMPILE_TIMEOUT_MS 600000
 
 #ifdef _WIN32
+#include <process.h>
 #define SDK_ENGINE "libexec/wysna-compiler.exe"
 #define SDK_ZIG "toolchain/zig/zig.exe"
 #define SDK_PROGRAM "program.exe"
@@ -72,6 +73,7 @@ static void sdk_help(void) {
          "       wysna inspect SOURCE [--symbol NAME] [--with-deps] [--output-format=json-v1]\n"
          "       wysna patch SOURCE --symbol NAME (--with CODE | --with-file PATH) [--expect-graph-hash HASH] [--apply] [--output-format=json-v1]\n"
          "       wysna explain (SOURCE | --code Wxxxx) [--function NAME] [--output-format=json-v1]\n"
+         "       wysna lsp\n"
          "Build and run accept --include-dir DIR, --link FILE, --library-dir DIR and --library NAME.\n"
          "This SDK compiles through verified MIR without Python. See native-sdk.json for its profile.");
 }
@@ -84,9 +86,14 @@ static int sdk_has_json_v1(int argc, char** argv) {
 }
 static int sdk_is_agent_passthrough(const char* cmd) {
     return strcmp(cmd, "graph") == 0 || strcmp(cmd, "inspect") == 0 ||
-           strcmp(cmd, "patch") == 0 || strcmp(cmd, "explain") == 0;
+           strcmp(cmd, "patch") == 0 || strcmp(cmd, "explain") == 0 ||
+           strcmp(cmd, "lsp") == 0;
 }
 static int sdk_parse(SdkOptions* options, int argc, char** argv) {
+    if (argc >= 2 && argc <= SDK_ARGUMENT_LIMIT && strcmp(argv[1], "lsp") == 0) {
+        options->command = argv[1]; options->profile = "dev"; options->timeout = 0; options->source = "";
+        return 1;
+    }
     if (argc < 3 || argc > SDK_ARGUMENT_LIMIT) return 0;
     options->command = argv[1]; options->profile = "dev"; options->timeout = 600000;
     if (sdk_is_agent_passthrough(options->command)) {
@@ -424,6 +431,23 @@ cleanup:
 
 static int sdk_execute(SdkInvocation* invocation, const SdkOptions* options, int argc, char** argv) {
     if (!sdk_component_paths(invocation)) return sdk_error("W5001", "Cannot locate the native compiler beside this SDK", NULL);
+    if (strcmp(options->command, "lsp") == 0) {
+        const char* engine_arguments[SDK_ARGUMENT_LIMIT + 4];
+        engine_arguments[0] = invocation->engine;
+        engine_arguments[1] = "--stdlib-root";
+        engine_arguments[2] = invocation->stdlib;
+        int out_count = 3;
+        for (int i = 1; i < argc && out_count < SDK_ARGUMENT_LIMIT + 3; i++) {
+            engine_arguments[out_count++] = argv[i];
+        }
+        engine_arguments[out_count] = NULL;
+#ifdef _WIN32
+        return (int)_spawnv(_P_WAIT, invocation->engine, engine_arguments);
+#else
+        execv(invocation->engine, (char* const*)engine_arguments);
+        return sdk_error("W5001", "Cannot start the native LSP server", invocation->engine);
+#endif
+    }
     if (sdk_is_agent_passthrough(options->command) ||
         (strcmp(options->command, "check") == 0 && sdk_has_json_v1(argc, argv)) ||
         strcmp(options->command, "fmt") == 0) {
