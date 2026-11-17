@@ -6,6 +6,9 @@ oracle execution, multi-attempt repair cycles, and metrics calculation.
 
 import os
 import sys
+import json
+from pathlib import Path
+import subprocess
 import pytest
 
 REPO_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..", ".."))
@@ -19,6 +22,20 @@ from bench.ai_eval.token_audit import (
     run_self_healing_efficiency_audit,
     run_token_density_audit,
 )
+
+
+def test_runner_from_source_checkout(tmp_path):
+    runner = Path(REPO_ROOT) / "bench" / "ai_eval" / "run_eval.py"
+    report = tmp_path / "results.json"
+    process = subprocess.run(
+        [sys.executable, "-I", str(runner), "--provider=mock", "--task=TASK-01",
+         "--output", str(report)],
+        cwd=tmp_path, capture_output=True, text=True, timeout=60,
+    )
+    assert process.returncode == 0, process.stderr
+    result = json.loads(report.read_text(encoding="utf-8"))
+    assert [task["task_id"] for task in result["results"]] == ["TASK-01"]
+    assert result["results"][0]["attempts"][0]["check_passed"]
 
 
 def test_code_block_extraction():

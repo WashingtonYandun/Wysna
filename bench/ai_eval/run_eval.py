@@ -10,10 +10,9 @@ import json
 import os
 import sys
 
-# Ensure repository root is on sys.path
+# Load both the benchmark package and the compiler from the source checkout.
 REPO_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
-if REPO_ROOT not in sys.path:
-    sys.path.insert(0, REPO_ROOT)
+sys.path[:0] = [REPO_ROOT, os.path.join(REPO_ROOT, "src")]
 
 from bench.ai_eval.harness import EvaluationHarness
 from bench.ai_eval.models import Task

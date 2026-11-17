@@ -55,6 +55,7 @@ jobs:
           tests/unit/test_target_profiles.py
           tests/unit/test_exit_runtime.py
           tests/unit/test_package_download.py
+          bench/ai_eval/tests/test_harness.py
 
   native-diagnostics:
     name: Native diagnostics (${{ matrix.os }})
