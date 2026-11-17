@@ -62,18 +62,37 @@ static int sdk_error(const char* code, const char* message, const char* detail) 
 }
 static void sdk_help(void) {
     puts("Wysna " WYSNA_NATIVE_VERSION " native SDK\n"
-         "Usage: wysna check SOURCE\n"
+         "Usage: wysna check SOURCE [--output-format=json-v1]\n"
          "       wysna emit-c|emit-mir SOURCE [-o OUTPUT]\n"
          "       wysna build SOURCE [-o OUTPUT] [--profile dev|release|size]\n"
          "       wysna run SOURCE [--profile dev|release|size] [--timeout-ms N] [-- ARGUMENTS]\n"
          "       wysna test TARGET [--timeout-ms N] [-- ARGUMENTS]\n"
-         "       wysna fmt SOURCE\n"
+         "       wysna fmt SOURCE [--write] [--output-format=json-v1]\n"
+         "       wysna graph SOURCE [--symbol NAME] [--rel KIND] [--output-format=json-v1]\n"
+         "       wysna inspect SOURCE [--symbol NAME] [--with-deps] [--output-format=json-v1]\n"
+         "       wysna patch SOURCE --symbol NAME (--with CODE | --with-file PATH) [--expect-graph-hash HASH] [--apply] [--output-format=json-v1]\n"
+         "       wysna explain (SOURCE | --code Wxxxx) [--function NAME] [--output-format=json-v1]\n"
          "Build and run accept --include-dir DIR, --link FILE, --library-dir DIR and --library NAME.\n"
          "This SDK compiles through verified MIR without Python. See native-sdk.json for its profile.");
+}
+static int sdk_has_json_v1(int argc, char** argv) {
+    for (int i = 2; i < argc; i++) {
+        if (strcmp(argv[i], "--output-format=json-v1") == 0) return 1;
+        if (strcmp(argv[i], "--output-format") == 0 && i + 1 < argc && strcmp(argv[i + 1], "json-v1") == 0) return 1;
+    }
+    return 0;
+}
+static int sdk_is_agent_passthrough(const char* cmd) {
+    return strcmp(cmd, "graph") == 0 || strcmp(cmd, "inspect") == 0 ||
+           strcmp(cmd, "patch") == 0 || strcmp(cmd, "explain") == 0;
 }
 static int sdk_parse(SdkOptions* options, int argc, char** argv) {
     if (argc < 3 || argc > SDK_ARGUMENT_LIMIT) return 0;
     options->command = argv[1]; options->profile = "dev"; options->timeout = 600000;
+    if (sdk_is_agent_passthrough(options->command)) {
+        options->source = argv[2];
+        return 1;
+    }
     if (strcmp(options->command, "check") && strcmp(options->command, "emit-c") &&
         strcmp(options->command, "emit-mir") && strcmp(options->command, "build") &&
         strcmp(options->command, "run") && strcmp(options->command, "test") &&
@@ -82,9 +101,16 @@ static int sdk_parse(SdkOptions* options, int argc, char** argv) {
         const char* value = argv[index];
         if (strcmp(value, "--") == 0 && (strcmp(options->command, "run") == 0 || strcmp(options->command, "test") == 0)) { options->arguments = index + 1; break; }
         if (value[0] != '-') { if (options->source) return 0; options->source = value; continue; }
+        if (strcmp(value, "--output-format=json-v1") == 0 &&
+            (strcmp(options->command, "check") == 0 || strcmp(options->command, "fmt") == 0)) continue;
+        if ((strcmp(value, "--write") == 0 || strcmp(value, "-w") == 0) && strcmp(options->command, "fmt") == 0) continue;
         if (++index == argc) return 0;
         const char* argument = argv[index];
         if (strcmp(value, "-o") == 0) { if (options->output) return 0; options->output = argument; }
+        else if (strcmp(value, "--output-format") == 0 &&
+                 (strcmp(options->command, "check") == 0 || strcmp(options->command, "fmt") == 0)) {
+            if (strcmp(argument, "json-v1") != 0) return 0;
+        }
         else if (strcmp(value, "--profile") == 0) { if (options->profile_set++) return 0; options->profile = argument; }
         else if (strcmp(value, "--timeout-ms") == 0) {
             if (options->timeout_set++) return 0;
@@ -398,10 +424,21 @@ cleanup:
 
 static int sdk_execute(SdkInvocation* invocation, const SdkOptions* options, int argc, char** argv) {
     if (!sdk_component_paths(invocation)) return sdk_error("W5001", "Cannot locate the native compiler beside this SDK", NULL);
+    if (sdk_is_agent_passthrough(options->command) ||
+        (strcmp(options->command, "check") == 0 && sdk_has_json_v1(argc, argv)) ||
+        strcmp(options->command, "fmt") == 0) {
+        const char* engine_arguments[SDK_ARGUMENT_LIMIT + 3];
+        engine_arguments[0] = "--stdlib-root";
+        engine_arguments[1] = invocation->stdlib;
+        int out_count = 2;
+        for (int i = 1; i < argc && out_count < SDK_ARGUMENT_LIMIT + 2; i++) {
+            engine_arguments[out_count++] = argv[i];
+        }
+        return sdk_child(invocation->engine, out_count, engine_arguments, options->timeout);
+    }
     int build = strcmp(options->command, "build") == 0;
     int run = strcmp(options->command, "run") == 0;
     int test = strcmp(options->command, "test") == 0;
-    int fmt = strcmp(options->command, "fmt") == 0;
     if (!sdk_absolute(invocation->source, options->source, 1)) return sdk_error("W5001", "Source is not an accessible regular file", options->source);
     if (test && sdk_is_directory(invocation->source)) {
         char** test_files = NULL;
@@ -425,14 +462,6 @@ static int sdk_execute(SdkInvocation* invocation, const SdkOptions* options, int
         return failed == 0 ? 0 : 1;
     }
     if (!sdk_is_file(invocation->source)) return sdk_error("W5001", "Source is not an accessible regular file", options->source);
-    if (fmt) {
-        const char* engine_arguments[4];
-        engine_arguments[0] = "--stdlib-root";
-        engine_arguments[1] = invocation->stdlib;
-        engine_arguments[2] = "--fmt";
-        engine_arguments[3] = invocation->source;
-        return sdk_child(invocation->engine, 4, engine_arguments, options->timeout);
-    }
     if (test) {
         return sdk_run_test_case(invocation, options, invocation->source, options->source, argc, argv);
     }

@@ -1,9 +1,5 @@
 # The compiler owns canonicalization buffers; no path storage crosses the ABI.
-extern "C" fn wysna_host_buffer_new() -> opaque
-extern "C" fn wysna_host_buffer_append(handle: opaque, value: int) -> int
-extern "C" fn wysna_host_buffer_get(handle: opaque, index: int) -> int
 extern "C" fn wysna_host_fs_canonical(path: opaque, output: opaque) -> int
-extern "C" fn wysna_host_close(handle: opaque) -> int
 
 fn module_canonical_resolved(path: str) -> str {
     let input = wysna_host_buffer_new()

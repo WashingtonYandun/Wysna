@@ -159,47 +159,128 @@ fn selfhost_json_quote(s: str) -> str {
 
 fn run_compiler() -> unit ! IoError {
     let raw_cli = args()
-    let mut cli = raw_cli
-    if len(raw_cli) > 1 and raw_cli[1] == "--stdlib-root" {
-        if len(raw_cli) < 4 { eprint("[W5002] Missing SDK compiler arguments") exit(2) }
-        cli = [raw_cli[0]]
-        for index in 3..len(raw_cli) { cli.append(raw_cli[index]) }
+    let clean = diag_clean_cli_args()
+    if len(clean) == 0 {
+        eprint("[W5002] Usage: Wysna Compiler INPUT OUTPUT")
+        exit(2)
     }
-    if len(cli) == 2 and (cli[1] == "--version" or cli[1] == "-v") {
+    let json_v1 = diag_cli_json_mode() == "json-v1"
+    let cmd = clean[0]
+    if cmd == "--version" or cmd == "-v" {
+        if len(clean) != 1 { eprint("[W5002] Usage: Wysna Compiler --version") exit(2) }
         print("wysna 0.6.0")
         return
     }
-    if len(cli) > 1 and (cli[1] == "--check" or cli[1] == "--check-json") {
-        if len(cli) != 3 {
-            eprint("[W5002] Usage: Wysna Compiler --check INPUT")
-            exit(2)
+    if cmd == "graph" {
+        tool_handle_graph(clean, json_v1)
+        return
+    }
+    if cmd == "inspect" {
+        tool_handle_inspect(clean, json_v1)
+        return
+    }
+    if cmd == "patch" {
+        tool_handle_patch(clean, json_v1)
+        return
+    }
+    if cmd == "explain" {
+        tool_handle_explain(clean, json_v1)
+        return
+    }
+    if cmd == "check" {
+        let mut target = ""
+        let mut legacy = false
+        let mut i = 1
+        while i < len(clean) {
+            let a = clean[i]
+            if a == "--output-format=json-v1" { i = i + 1 }
+            elif a == "--output-format" and i + 1 < len(clean) { i = i + 2 }
+            elif a == "--json" { legacy = true i = i + 1 }
+            elif len(a) > 0 and a[0] != "-" and target == "" { target = a i = i + 1 }
+            else { report_error("<cli>", "W5002", 1, 1, "unknown option for check: " + a) }
         }
-        let in_path = cli[2]
-        let source = read_file(in_path)?
-        let module = mir_build(check_source(source, in_path))
-        mir_verify(module)
-        if cli[1] == "--check-json" {
-            let fn_count = str(len(module.functions))
-            let payload = "{\"schema_version\":\"wysna.cli.result/1\",\"compiler_version\":\"0.6.0\",\"command\":\"check\",\"ok\":true,\"exit_code\":0,\"diagnostics\":[],\"data\":{\"file\":" + selfhost_json_quote(in_path) + ",\"functions\":" + fn_count + "}}"
-            print(payload)
+        if target == "" { report_error("<cli>", "W5002", 1, 1, "check requires a source file path") }
+        tool_handle_check_v1(target, legacy, json_v1)
+        return
+    }
+    if cmd == "fmt" {
+        let mut target = ""
+        let mut write_in_place = false
+        let mut i = 1
+        while i < len(clean) {
+            let a = clean[i]
+            if a == "--output-format=json-v1" { i = i + 1 }
+            elif a == "--output-format" and i + 1 < len(clean) { i = i + 2 }
+            elif a == "--write" or a == "-w" { write_in_place = true i = i + 1 }
+            elif len(a) > 0 and a[0] != "-" and target == "" { target = a i = i + 1 }
+            else { report_error("<cli>", "W5002", 1, 1, "unknown option for fmt: " + a) }
+        }
+        if target == "" { report_error("<cli>", "W5002", 1, 1, "fmt requires a source file path") }
+        let source = read_file(target) else err {
+            report_error(target, "W5003", 1, 1, "cannot read input file: " + target)
+            ""
+        }
+        let body = selfhost_format_body(source, target)
+        let formatted = if len(body) > 0 { body + "\n" } else { "" }
+        if write_in_place { write_file(target, formatted)? }
+        if json_v1 {
+            tool_emit_fmt_v1(formatted, target, write_in_place)
+        } elif write_in_place {
+            print("Formatted", target)
         } else {
-            print("[Wysna Compiler] Checked", in_path)
+            print(body)
         }
         return
     }
+    let mut cli: list[str] = [raw_cli[0]]
+    for item in clean { cli.append(item) }
+    if len(cli) > 1 and (cli[1] == "--check" or cli[1] == "--check-json") {
+        let mut in_path = ""
+        let mut i = 2
+        while i < len(cli) {
+            let a = cli[i]
+            if a == "--output-format=json-v1" { i = i + 1 }
+            elif a == "--output-format" and i + 1 < len(cli) { i = i + 2 }
+            elif len(a) > 0 and a[0] != "-" and in_path == "" { in_path = a i = i + 1 }
+            else {
+                eprint("[W5002] Usage: Wysna Compiler --check INPUT")
+                exit(2)
+            }
+        }
+        if in_path == "" {
+            eprint("[W5002] Usage: Wysna Compiler --check INPUT")
+            exit(2)
+        }
+        tool_handle_check_v1(in_path, cli[1] == "--check-json", json_v1)
+        return
+    }
     if len(cli) > 1 and (cli[1] == "--fmt" or cli[1] == "--fmt-write") {
-        if len(cli) != 3 {
+        let mut in_path = ""
+        let mut i = 2
+        while i < len(cli) {
+            let a = cli[i]
+            if a == "--output-format=json-v1" { i = i + 1 }
+            elif a == "--output-format" and i + 1 < len(cli) { i = i + 2 }
+            elif len(a) > 0 and a[0] != "-" and in_path == "" { in_path = a i = i + 1 }
+            else {
+                eprint("[W5002] Usage: Wysna Compiler --fmt INPUT")
+                exit(2)
+            }
+        }
+        if in_path == "" {
             eprint("[W5002] Usage: Wysna Compiler --fmt INPUT")
             exit(2)
         }
-        let in_path = cli[2]
         let source = read_file(in_path)?
         let body = selfhost_format_body(source, in_path)
+        let formatted = if len(body) > 0 { body + "\n" } else { "" }
         if cli[1] == "--fmt-write" {
-            write_file(in_path, body + "\n")?
-            print("Formatted", in_path)
+            write_file(in_path, formatted)?
+            if json_v1 { tool_emit_fmt_v1(formatted, in_path, true) }
+            else { print("Formatted", in_path) }
         } else {
-            print(body)
+            if json_v1 { tool_emit_fmt_v1(formatted, in_path, false) }
+            else { print(body) }
         }
         return
     }

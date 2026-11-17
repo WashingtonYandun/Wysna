@@ -1,6 +1,5 @@
 fn report_error(file: str, code: str, line: int, col: int, msg: str) -> unit {
-    eprint("[" + code + "] " + file + ":" + str(line) + ":" + str(col) + " - " + msg)
-    exit(1)
+    diag_emit_and_exit(file, code, line, col, msg)
 }
 
 fn report_error_at(code: str, token: Token, msg: str) -> unit {
