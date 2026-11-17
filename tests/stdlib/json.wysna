@@ -22,6 +22,11 @@ fn report_limited(label: str, source: str, max_input_bytes: int, max_depth: int,
     print(label, "ok", encoded)
 }
 
+fn array_size(value: json.Value) -> int {
+    let rows = json.as_array(value) else { return -1 }
+    return len(rows)
+}
+
 fn main() -> unit {
     let decoded = json.parse("{\"name\":\"Wysna\",\"items\":[true,false,null],\"number\":-12.5e+2,\"unicode\":\"\\uD83D\\uDE00\",\"text\":\"line\\nnext\\t\\\"\"}") else error {
         print("parse error", error.offset, error.message)
@@ -35,6 +40,7 @@ fn main() -> unit {
     let name_value = json.get(decoded, "name") ?? json.null()
     print("name", json.as_string(name_value) ?? "missing")
     let items = json.get(decoded, "items") ?? json.null()
+    print("array size", array_size(items), array_size(json.null()))
     let first = json.at(items, 0) ?? json.null()
     let third = json.at(items, 2) ?? json.null()
     print("items", json.as_bool(first) ?? false, json.is_null(third))

@@ -318,6 +318,8 @@ def evaluate_postfix_try_expr(interpreter: "Interpreter", expr: PostfixTryExpr, 
 
 def evaluate_else_err_expr(interpreter: "Interpreter", expr: ElseErrExpr, env: Environment) -> WysnaValue:
     val = interpreter.eval_expr(expr.operand, env)
+    if isinstance(val, WysnaEnumValue) and val.enum_name == "Option" and val.variant == "Some":
+        return val.payload[0]
     if isinstance(val, WysnaOk):
         return val.value
     if isinstance(val, WysnaEnumValue) and (val.enum_name == "Result" or val.enum_name.startswith("Result__")) and val.variant == "Ok":
