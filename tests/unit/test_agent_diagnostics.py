@@ -600,3 +600,242 @@ def test_mir_local_cow_uniqueness_eliminates_false_detaches_on_read_then_mutate(
     assert "detach_list=1" in alias_line
 
 
+def test_patch_and_fix_reject_concurrent_writer_conflict_with_barrier(tmp_path):
+    import stat
+    import time
+
+    target = tmp_path / "concurrent.wysna"
+    initial = (
+        "struct User { name: str }\n"
+        "fn label(u: User) -> str {\n"
+        "    return u.name\n"
+        "}\n"
+        "fn helper() -> int {\n"
+        "    return 1\n"
+        "}\n"
+    )
+    target.write_bytes(initial.encode("utf-8"))
+    if os.name != "nt":
+        os.chmod(target, 0o750)
+
+    entered_marker = tmp_path / "patch_entered.flag"
+    release_marker = tmp_path / "patch_release.flag"
+
+    # Process A validates `helper` replacement and pauses right before acquiring the cooperative write lock.
+    worker_a = subprocess.Popen(
+        [
+            sys.executable,
+            "-c",
+            (
+                "import sys, time; from pathlib import Path\n"
+                "sys.path[:0] = [sys.argv[1], sys.argv[2]]\n"
+                "from error.Error import WysnaError\n"
+                "from tooling.AgentGraphCLI import patch_source\n"
+                "entered, release, target = Path(sys.argv[3]), Path(sys.argv[4]), sys.argv[5]\n"
+                "def hook():\n"
+                "    entered.write_text('ready', encoding='utf-8')\n"
+                "    deadline = time.monotonic() + 15\n"
+                "    while not release.exists():\n"
+                "        if time.monotonic() > deadline: raise TimeoutError('barrier')\n"
+                "        time.sleep(0.02)\n"
+                "try:\n"
+                "    patch_source(target, 'helper', 'fn helper() -> int { return 99 }', apply=True, before_write_hook=hook)\n"
+                "    sys.exit(0)\n"
+                "except WysnaError as err:\n"
+                "    print(err.code)\n"
+                "    sys.exit(1 if err.code == 'W5005' else 9)\n"
+            ),
+            str(ROOT / "src"),
+            str(ROOT),
+            str(entered_marker),
+            str(release_marker),
+            str(target),
+        ],
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+    )
+    try:
+        deadline = time.monotonic() + 15
+        while not entered_marker.exists():
+            if worker_a.poll() is not None:
+                out, err = worker_a.communicate()
+                raise AssertionError(f"worker A exited early: {worker_a.returncode}, {out!r}, {err!r}")
+            assert time.monotonic() < deadline, "worker A did not reach write barrier"
+            time.sleep(0.02)
+
+        # Process B patches `label` through real CLI and wins the race cleanly.
+        res_b = run_cli(
+            "patch",
+            target,
+            "--symbol",
+            "label",
+            "--with",
+            'fn label(u: User) -> str {\n    return "winner:" + u.name\n}',
+            "--apply",
+            "--output-format=json-v1",
+        )
+        assert res_b.returncode == 0, res_b.stdout + res_b.stderr
+        assert json.loads(res_b.stdout)["result"]["written"] is True
+    finally:
+        release_marker.write_text("go", encoding="utf-8")
+
+    out_a, err_a = worker_a.communicate(timeout=20)
+    assert worker_a.returncode == 1 and out_a.strip() == "W5005", (worker_a.returncode, out_a, err_a)
+    after_b = target.read_text(encoding="utf-8")
+    assert '"winner:" + u.name' in after_b
+    assert "return 1" in after_b and "return 99" not in after_b
+    if os.name != "nt":
+        assert stat.S_IMODE(target.stat().st_mode) == 0o750
+
+    # Now race `fix` against a winning `patch` using the same shared write protocol.
+    fix_target = tmp_path / "concurrent_fix.wysna"
+    fix_source = (
+        "struct User { name: str }\n"
+        "fn label(u: User) -> str {\n"
+        "    return u.nme\n"
+        "}\n"
+        "fn helper() -> int {\n"
+        "    return 1\n"
+        "}\n"
+    )
+    fix_target.write_bytes(fix_source.encode("utf-8"))
+    fix_entered = tmp_path / "fix_entered.flag"
+    fix_release = tmp_path / "fix_release.flag"
+
+    worker_fix = subprocess.Popen(
+        [
+            sys.executable,
+            "-c",
+            (
+                "import sys, time; from pathlib import Path\n"
+                "sys.path[:0] = [sys.argv[1], sys.argv[2]]\n"
+                "from error.Error import WysnaError\n"
+                "from tooling.FixCLI import apply_fix_to_file\n"
+                "entered, release, target = Path(sys.argv[3]), Path(sys.argv[4]), sys.argv[5]\n"
+                "def hook():\n"
+                "    entered.write_text('ready', encoding='utf-8')\n"
+                "    deadline = time.monotonic() + 15\n"
+                "    while not release.exists():\n"
+                "        if time.monotonic() > deadline: raise TimeoutError('barrier')\n"
+                "        time.sleep(0.02)\n"
+                "try:\n"
+                "    apply_fix_to_file(target, apply=True, before_write_hook=hook)\n"
+                "    sys.exit(0)\n"
+                "except WysnaError as err:\n"
+                "    print(err.code)\n"
+                "    sys.exit(1 if err.code == 'W5005' else 9)\n"
+            ),
+            str(ROOT / "src"),
+            str(ROOT),
+            str(fix_entered),
+            str(fix_release),
+            str(fix_target),
+        ],
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+    )
+    try:
+        deadline = time.monotonic() + 15
+        while not fix_entered.exists():
+            if worker_fix.poll() is not None:
+                out, err = worker_fix.communicate()
+                raise AssertionError(f"fix worker exited early: {worker_fix.returncode}, {out!r}, {err!r}")
+            assert time.monotonic() < deadline, "fix worker did not reach write barrier"
+            time.sleep(0.02)
+
+        res_fix = run_cli("fix", "--apply", "--output-format=json-v1", fix_target)
+        assert res_fix.returncode == 0, res_fix.stdout + res_fix.stderr
+        res_patch = run_cli(
+            "patch",
+            fix_target,
+            "--symbol",
+            "helper",
+            "--with",
+            "fn helper() -> int {\n    return 2\n}",
+            "--apply",
+            "--output-format=json-v1",
+        )
+        assert res_patch.returncode == 0, res_patch.stdout + res_patch.stderr
+    finally:
+        fix_release.write_text("go", encoding="utf-8")
+
+    out_fix, err_fix = worker_fix.communicate(timeout=20)
+    assert worker_fix.returncode == 1 and out_fix.strip() == "W5005", (worker_fix.returncode, out_fix, err_fix)
+    final_fix_text = fix_target.read_text(encoding="utf-8")
+    assert "return 2" in final_fix_text and "u.name" in final_fix_text and "u.nme" not in final_fix_text
+    assert not list(tmp_path.glob("*.tmp")) and not list(tmp_path.glob("*.lock"))
+
+
+def test_patch_and_fix_preserve_crlf_utf8_spans_permissions_and_mcp_errors(tmp_path):
+    import stat
+
+    crlf_path = tmp_path / "crlf_utf8.wysna"
+    crlf_bytes = (
+        "struct User { name: str }\r\n"
+        "# café 🚀\r\n"
+        "fn greet(u: User) -> str {\r\n"
+        "    return u.nme\r\n"
+        "}\r\n"
+        "fn keep() -> str {\r\n"
+        '    return "café 🚀"\r\n'
+        "}\r\n"
+    ).encode("utf-8")
+    crlf_path.write_bytes(crlf_bytes)
+    if os.name != "nt":
+        os.chmod(crlf_path, 0o740)
+
+    fix_res = run_cli("fix", "--apply", "--output-format=json-v1", crlf_path)
+    assert fix_res.returncode == 0, fix_res.stdout + fix_res.stderr
+    assert json.loads(fix_res.stdout)["result"]["written"] is True
+    after_fix = crlf_path.read_bytes()
+    assert b"\r\n" in after_fix and b"u.name" in after_fix and "café 🚀".encode("utf-8") in after_fix
+    assert after_fix.replace(b"\r\n", b"").find(b"\n") == -1
+    if os.name != "nt":
+        assert stat.S_IMODE(crlf_path.stat().st_mode) == 0o740
+
+    patch_res = run_cli(
+        "patch",
+        crlf_path,
+        "--symbol",
+        "greet",
+        "--with",
+        "fn greet(u: User) -> str {\r\n    return \"hi \" + u.name\r\n}",
+        "--apply",
+        "--output-format=json-v1",
+    )
+    assert patch_res.returncode == 0, patch_res.stdout + patch_res.stderr
+    after_patch = crlf_path.read_bytes()
+    assert after_patch.replace(b"\r\n", b"").find(b"\n") == -1
+    assert '"hi " + u.name'.encode("utf-8") in after_patch
+    assert '"café 🚀"'.encode("utf-8") in after_patch
+    if os.name != "nt":
+        assert stat.S_IMODE(crlf_path.stat().st_mode) == 0o740
+
+    # Verify MCP wysna_fix preserves CRLF and handles W5005 when write fails revision check.
+    mcp_path = tmp_path / "mcp_crlf.wysna"
+    mcp_path.write_bytes("struct U { name: str }\r\nfn f(u: U) -> str { return u.nme }\r\n".encode("utf-8"))
+    server = McpServer(tmp_path)
+    failed, payload = call(server, "wysna_fix", {"path": "mcp_crlf.wysna", "apply": True})
+    assert not failed and payload["written"] is True
+    assert mcp_path.read_bytes().replace(b"\r\n", b"").find(b"\n") == -1
+    assert b"u.name" in mcp_path.read_bytes()
+
+    from unittest.mock import patch as mock_patch
+    from error.Error import WysnaError
+
+    mcp_path.write_bytes("struct U { name: str }\r\nfn f(u: U) -> str { return u.nme }\r\n".encode("utf-8"))
+    with mock_patch(
+        "tooling.McpServer.write_verified_source",
+        side_effect=WysnaError("Stale source snapshot", file=str(mcp_path), code="W5005", stage="fix"),
+    ):
+        failed_conflict, payload_conflict = call(server, "wysna_fix", {"path": "mcp_crlf.wysna", "apply": True})
+    assert not failed_conflict
+    assert payload_conflict["status"] == "diagnostic_error"
+    assert payload_conflict["diagnostics"][0]["code"] == "W5005"
+    assert b"u.nme" in mcp_path.read_bytes()
+    assert not list(tmp_path.glob("*.tmp"))
+
+
+

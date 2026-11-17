@@ -13,6 +13,7 @@ that root.
 """
 
 import contextlib
+import hashlib
 import io
 import json
 import os
@@ -23,6 +24,7 @@ from common.Version import WYSNA_VERSION
 from compiler.CompilerService import CompilerService
 from error.Error import WysnaError
 from formatter.Formatter import Formatter
+from tooling.SourceWrite import read_source_snapshot, write_verified_source
 from tooling.ToolResult import diagnostic_from_error, tool_result
 
 PROTOCOL_VERSION = "2025-06-18"
@@ -128,13 +130,12 @@ class McpServer:
             raise ToolError("provide exactly one of 'path' or 'source'")
         if path is not None:
             resolved = self._confine(path)
-            with open(resolved, "r", encoding="utf-8") as handle:
-                text = handle.read()
-            self.service.set_overlay(resolved, text)
+            _, text, _ = read_source_snapshot(resolved)
+            self.service.set_overlay(str(resolved), text)
             try:
-                yield resolved, text
+                yield str(resolved), text
             finally:
-                self.service.remove_overlay(resolved)
+                self.service.remove_overlay(str(resolved))
             return
         self.service.set_overlay(self._inline_path, source)
         try:
@@ -274,7 +275,7 @@ class McpServer:
         if not raw_path or not symbol or not replacement:
             raise ToolError("'wysna_patch' requires 'path', 'symbol', and 'replacement'")
         resolved = self._confine(raw_path)
-        source = open(resolved, "r", encoding="utf-8").read()
+        _, source, _ = read_source_snapshot(resolved)
         try:
             payload = patch_source(
                 resolved,
@@ -309,6 +310,7 @@ class McpServer:
         if apply and arguments.get("path") is None:
             raise ToolError("'apply' requires 'path'")
         with self._resolve_source(arguments) as (path, source):
+            before_sha256 = hashlib.sha256(source.encode("utf-8")).hexdigest()
             result = fix_source(
                 path,
                 source,
@@ -317,8 +319,15 @@ class McpServer:
             )
             written = False
             if apply and result["changed"]:
-                with open(path, "w", encoding="utf-8") as handle:
-                    handle.write(result["fixed_source"])
+                try:
+                    write_verified_source(
+                        path,
+                        result["fixed_source"],
+                        expected_sha256=before_sha256,
+                        stage="fix",
+                    )
+                except WysnaError as error:
+                    return self._diagnostics_envelope("fix", error, path, source)
                 written = True
             result["written"] = written
             return result

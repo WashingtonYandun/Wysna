@@ -19,6 +19,7 @@ import sys
 
 from compiler.CompilerService import CompilerService
 from error.Error import WysnaError
+from tooling.SourceWrite import read_source_snapshot, write_verified_source
 from tooling.ToolResult import (
     diagnostic_from_error,
     diagnostic_record,
@@ -96,6 +97,28 @@ def fix_source(path, source, *, include_maybe=False, service=None):
     }
 
 
+def apply_fix_to_file(
+    path,
+    *,
+    include_maybe=False,
+    apply=False,
+    service=None,
+    before_write_hook=None,
+):
+    """Compute fixes from an exact disk snapshot and atomically write if requested."""
+    target_path, source, before_sha256 = read_source_snapshot(path)
+    result = fix_source(str(target_path), source, include_maybe=include_maybe, service=service)
+    if apply and result["changed"]:
+        write_verified_source(
+            target_path,
+            result["fixed_source"],
+            expected_sha256=before_sha256,
+            stage="fix",
+            before_lock_hook=before_write_hook,
+        )
+    return result, source
+
+
 def run_fix_command(argv):
     parser = _Parser(prog="wysna fix", description=__doc__)
     parser.add_argument("source")
@@ -104,15 +127,17 @@ def run_fix_command(argv):
                         help="Also use fixes marked 'maybe' (heuristic suggestions)")
     parser.add_argument("--output-format", choices=("json-v1",))
     json_output = "--output-format=json-v1" in argv
+    source_text = None
+    source_path = None
     try:
         options = parser.parse_args(list(argv))
         json_output = options.output_format == "json-v1"
-        with open(options.source, "r", encoding="utf-8") as handle:
-            source = handle.read()
-        result = fix_source(options.source, source, include_maybe=options.include_maybe)
-        if options.apply and result["changed"]:
-            with open(options.source, "w", encoding="utf-8") as handle:
-                handle.write(result["fixed_source"])
+        source_path = options.source
+        result, source_text = apply_fix_to_file(
+            options.source,
+            include_maybe=options.include_maybe,
+            apply=options.apply,
+        )
         still_failing = bool(result["remaining_diagnostics"])
         if json_output:
             payload = {k: v for k, v in result.items() if k != "fixed_source"}
@@ -134,6 +159,15 @@ def run_fix_command(argv):
                 print(f"{len(result['remaining_diagnostics'])} diagnostic(s) remain; run 'wysna check'.",
                       file=sys.stderr)
         return 1 if still_failing else 0
+    except WysnaError as error:
+        if json_output:
+            sources = {source_path: source_text} if source_path and source_text is not None else {}
+            write_tool_result(tool_result("fix", "diagnostic_error", 1,
+                                          diagnostics=[diagnostic_from_error(error, sources)]),
+                              sys.stdout)
+        else:
+            print(f"[{error.code}] {error.message}", file=sys.stderr)
+        return 1
     except (ValueError, OSError, UnicodeDecodeError) as error:
         message = str(error)
         if json_output:
