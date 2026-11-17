@@ -1,12 +1,12 @@
 <p align="center">
-  <img src="assets/wawi.jpg" alt="Wysna mascot" width="140" />
+  <img src="assets/wawi.jpg" alt="Wysna mascot Wawi" width="128" />
 </p>
 
 <h1 align="center">Wysna</h1>
 
 <p align="center">
-  <strong>The Statically Typed, Agent-First Programming Language.</strong><br />
-  <em>Predictable automation, high-speed execution, and native safety for autonomous AI agents and systems engineering.</em>
+  <strong>The statically typed, native, Agent-First systems programming language.</strong><br />
+  <em>8-byte NaN-boxed ABI · Lock-free ARC + Copy-on-Write · Stackless CPS async · Self-hosted compiler & Stage-3 LSP</em>
 </p>
 
 <p align="center">
@@ -14,173 +14,146 @@
     <img src="https://github.com/WashingtonYandun/Wysna/actions/workflows/ci.yml/badge.svg?branch=develop" alt="CI status on develop" />
   </a>
   <a href="https://github.com/WashingtonYandun/Wysna/releases/tag/v0.6.0">
-    <img src="https://img.shields.io/badge/version-0.6.0-blue?style=flat-square" alt="Version 0.6.0" />
+    <img src="https://img.shields.io/badge/release-v0.6.0-blue?style=flat-square" alt="Latest release v0.6.0" />
+  </a>
+  <a href="CHANGELOG.md">
+    <img src="https://img.shields.io/badge/mainline-0.7.0--candidate-0ea5e9?style=flat-square" alt="Mainline 0.7.0 Candidate" />
+  </a>
+  <a href="docs/ENGINE_PARITY_MATRIX.md">
+    <img src="https://img.shields.io/badge/corpus_parity-209%2F209_(100%25)-22c55e?style=flat-square" alt="4-Engine Corpus Parity 209/209" />
+  </a>
+  <a href="docs/MIR_DESIGN.md">
+    <img src="https://img.shields.io/badge/runtime-ABI_v3_(8B_WVal)-6366f1?style=flat-square" alt="Runtime ABI v3 (8B WVal)" />
   </a>
   <a href="LICENSE">
-    <img src="https://img.shields.io/badge/license-Apache--2.0-blue?style=flat-square" alt="Apache 2.0 license" />
+    <img src="https://img.shields.io/badge/license-Apache--2.0-slate?style=flat-square" alt="Apache 2.0 license" />
   </a>
-  <img src="https://img.shields.io/badge/platforms-Windows%20x64%20%7C%20macOS%20arm64%20%7C%20Linux%20x64-lightgrey?style=flat-square" alt="Windows x64, macOS arm64 and Linux x64" />
 </p>
 
 <p align="center">
-  <a href="#why-wysna">Why Wysna</a> ·
-  <a href="#why-wysna-for-ai-agents">Agent-First Matrix</a> ·
-  <a href="#quick-start">Quick start</a> ·
-  <a href="#language-tour">Language tour</a> ·
+  <a href="#overview">Overview</a> ·
+  <a href="#agent-first-by-design">Agent-First</a> ·
+  <a href="#quick-start">Quick Start</a> ·
+  <a href="#language-tour">Language Tour</a> ·
+  <a href="#architecture-and-parity">Architecture</a> ·
   <a href="#toolchain">Toolchain</a> ·
-  <a href="#status-and-scope">Status</a> ·
-  <a href="WYSNA_SINTAXIS.md">Syntax Manual</a> ·
+  <a href="#standard-library">Stdlib</a> ·
+  <a href="#security">Security</a> ·
   <a href="#documentation">Docs</a>
 </p>
 
 ---
 
-Wysna is an independent, statically typed programming language engineered from first
-principles for the **AI Agent era**. It bridges the gap between high-level scripting
-and low-level native performance (C99 and LLVM), delivering the deterministic safety,
-strict execution quotas, token economy, and zero-turn self-healing loops that autonomous
-agents need to write, verify, and run production software reliably.
+## Overview
+
+Wysna is an independent, statically typed programming language built from first principles for **deterministic systems engineering** and **autonomous AI code generation**. It compiles through a verified intermediate representation (HIR/MIR) to portable native C99 (default) and experimental LLVM IR, pairing predictable memory ownership with machine-verifiable tooling.
+
+> [!NOTE]
+> **Release & Line Status:** The latest tagged installer release is [**v0.6.0**](https://github.com/WashingtonYandun/Wysna/releases/tag/v0.6.0) (pre-1.0, unsigned desktop installers). The active **0.7.0 Candidate** branch (see [CHANGELOG.md](CHANGELOG.md)) delivers the unified 8-byte `WVal` ABI v3, lock-free atomic ARC, stackless CPS `async fn`, compiled C99 capability sandbox (`--sandbox`), constrained OOP generics in Selfhost, native Agent-First CLI tools, and a Python-free Stage-3 LSP (`wysna lsp`). Review [scope and limits](docs/SCOPE.md) before relying on Wysna in production.
+
+| Architectural Pillar | What It Delivers |
+| :--- | :--- |
+| **Unified 8B `WVal` ABI v3 & Atomic ARC + CoW** | Single 8-byte NaN-boxed value representation across C99, Seed AST/HIR/MIR, Selfhost, and LLVM (`<=6B` SSO inline strings, 48-bit inline `int`, $O(1)$ `WStringBuf.hash_cache`). Lock-free atomic ARC, `memcpy` CoW unboxed scalar lists (`list[int]`/`float`/`bool`), `weak` references, and opt-in Bacon-Rajan cycle collection (`WYSNA_COLLECT_CYCLES=1`). |
+| **Explicit Error Channels & First-Class Contracts** | Typed `T ! E` signatures (`?`, `else error`, `ClassError`), exhaustive pattern matching with guards, and runtime-enforced `requires`/`ensures` contracts (`[W4005]`) exported to JSON Schema (Draft 2020-12) via `wysna schema`. |
+| **Stackless CPS Async & OS-Thread Concurrency** | `async fn` and `await` lower to stackless CPS state machines across Seed C99, LLVM, and Selfhost Stage-2 (`std/async`), complemented by OS worker threads (`std/async.spawn`, `std/algorithms.parallel_*`) and multiplexed HTTP (`curl_multi`). |
+| **Agent-First Closed-Loop Tooling** | Structured `json-v1` multi-error diagnostics, deterministic auto-repairs (`wysna fix --apply`), semantic code graph (`wysna graph`), surgical token slicing (`wysna inspect`), SHA-guarded edits (`wysna patch`), static effect analysis (`wysna explain`), and `wysna mcp`. |
+| **Quotas, Effect Replay & Compiled C99 Sandbox** | Step and heap execution budgets (`--max-steps`, `--max-heap-mb` -> `[W4004]`), deterministic offline I/O cassettes (`--record-trace` / `--replay-trace`), Seed static gates (`--allow`/`--deny`), and compiled `#define WYSNA_DENY_CAP_*` C99 traps (`wysna build --sandbox` -> `[W5006]`). |
+| **Zero-Dependency Security & Unicode** | Header-only C99 cryptography (`std/crypto`: ChaCha20-Poly1305 AEAD, SHA-256/512, HMAC, constant-time compare, OS CSPRNG) and Unicode 16.0.0 UAX #15 normalization (`std/text`: `NFC`/`NFD`/`NFKC`/`NFKD`). |
 
 > [!TIP]
-> **Canonical Language Reference:** Consult [**`WYSNA_SINTAXIS.md`**](WYSNA_SINTAXIS.md) for the
-> complete, 16-pillar syntax manual covering imports, pattern matching, contracts,
-> effect handlers, unboxed scalar buffers, and structured concurrency.
+> **Canonical Syntax Manual:** Read [**`WYSNA_SINTAXIS.md`**](WYSNA_SINTAXIS.md) for the complete 16-pillar reference covering imports, ADTs, contracts, error unions, FFI, and structured concurrency.
 
-> [!WARNING]
-> **Wysna 0.6.0 is a pre-1.0 release** with documented language, platform and
-> security limits. Its Windows, macOS and Linux installers are unsigned; the macOS
-> package is not notarized, so operating systems may display security warnings.
-> Read [scope and status](docs/SCOPE.md) before relying on Wysna for critical work.
+---
 
-## Why Wysna
+## Agent-First by Design
 
-| Principle | What it gives you |
-| :--- | :--- |
-| **Errors are values** | `T ! E` puts declared errors in the signature. `else error`, `?` and exhaustive `match` make those errors explicit; runtime failures remain possible. |
-| **Memory you can reason about** | Single-threaded ARC and copy-on-write provide predictable lifetime management and cheap snapshots, with $O(1)$ fast paths for unboxed scalar lists. Strong cycles are not collected automatically, and abnormal termination can bypass cleanup; `Weak` helps break cycles. |
-| **First-class contracts** | Native `requires` and `ensures` enforce preconditions and postconditions statically and dynamically (`W4005`), exportable as JSON Schema (Draft 2020-12) via `wysna schema`. |
-| **Structured cooperative async** | Native `async fn` and `await` with zero-allocation scalar futures, combinators (`std/async`), and non-blocking multiplexed HTTP dispatch without heavy thread overhead. |
-| **Zero-dependency cryptography** | Clean, self-contained header-only C99 primitives (SHA-256, SHA-512, MD5, HMAC), timing-safe comparisons, and native CSPRNG (`/dev/urandom`) without external `-lcrypto` dependencies. |
-| **Deterministic quotas** | `--max-steps` and `--max-heap-mb` bound execution budgets with deterministic fail-stop `W4004` across interpreter, LLVM, and native binaries. |
-| **Effect cassette replay** | `--record-trace` and `--replay-trace` capture and replay external I/O interactions (`wysna.effect.trace/1`) for reproducible testing and agent sandboxing. |
-| **Deterministic concurrency** | Index-ordered parallel batching, mapping, and HTTP dispatch over thread-safe multi-core worker runtimes. |
-| **Progressive native tooling** | `wysna check`, `fmt`, `run`, and `test` with `--engine=compiler` / `--native` for sub-millisecond static verification and test execution on the self-hosted binary. |
-| **A verified pipeline** | Source → typed HIR or checked nodes → verified MIR → C99. Independent oracles, a self-hosted compiler and conformance tests check the same language from different angles. |
-| **One install for the core** | The Seed distribution carries private CPython and Zig, so core CLI, projects, formatter and LSP work without host Python, a virtual environment or a C SDK. |
-| **Tools for humans and agents** | Scriptable commands, JSON Schema export, and versioned `json-v1` envelopes let editors, scripts and AI agents inspect and bound programs before execution. |
-| **Native first, portable by design** | Native C99 is the default. WASI is a declared target; browser libraries and LLVM are explicit, bounded experiments. |
+Most toolchains bolt AI integration onto error formats and runtimes designed strictly for humans. Wysna builds machine inspectability, bounded execution, and deterministic repair directly into the compiler:
 
-## Why Wysna for AI Agents
-
-While traditional programming languages were designed solely for human ergonomics, Wysna is engineered from the compiler front-end to runtime for **autonomous machine code generation**:
-
-| Capability | Python | Rust | Go | **Wysna (Agent-First)** |
-| :--- | :---: | :---: | :---: | :---: |
-| **Self-Healing Diagnostics** | ❌ Runtime crash tracebacks | ⚠️ Complex lifetime borrow errors | ❌ Unstructured human text | ✅ **Machine `json-v1` facts & `wysna fix`** |
-| **Token Economy (BPE)** | ⚠️ Verbose runtime boilerplate | ❌ Heavy lifetime annotations (`'a`) | ⚠️ Repetitive `if err != nil` | ✅ **~18% fewer BPE tokens (`from...use`, `?`)** |
-| **Execution Budgets (Quotas)** | ❌ Unbounded execution (infinite loops) | ❌ Requires external OS process limits | ❌ Manual context propagation | ✅ **Built-in `--max-steps` & `--max-heap-mb` (`W4004`)** |
-| **Effect Cassettes & Replay** | ❌ Fragile runtime monkey-patching | ❌ Complex trait mocking overhead | ❌ Heavy manual interface injection | ✅ **`--record-trace` & offline `--replay-trace`** |
-| **Contracts & Tool Calling** | ❌ Runtime validation (Pydantic/eval) | ❌ Third-party procedural macros | ❌ Not supported natively | ✅ **First-class `requires`/`ensures` + `wysna schema`** |
-| **Memory Architecture** | ❌ Tracing GC latency spikes | ⚠️ High LLM reasoning failure rate | ❌ Stop-the-world GC pauses | ✅ **Deterministic ARC + CoW (unboxed scalar lists)** |
-| **Native Compilation** | ❌ Slow bytecode / JIT warmup | ✅ Native machine code | ✅ Native machine code | ✅ **Native C99 / LLVM (<35KB standalone binaries)** |
-| **Agent Protocol Support** | ❌ Requires external SDKs / daemons | ❌ Requires external SDKs / daemons | ❌ Requires external SDKs / daemons | ✅ **Built-in `wysna mcp` daemon over stdio** |
+| Capability | Python | Rust | Go | **Wysna** |
+| :--- | :---: | :---: | :---: | :--- |
+| **Machine Diagnostics & Auto-Fix** | Runtime tracebacks | Text borrow errors | Prose compiler errors | **`json-v1` facts + SHA-256 `wysna fix` & `patch`** |
+| **Semantic Context Slicing** | External AST scripts | `rust-analyzer` RPC | `gopls` / packages | **Native `wysna graph` & `wysna inspect --with-deps`** |
+| **Execution Budgets** | External OS limits | External OS limits | Manual `context` checks | **Built-in `--max-steps` & `--max-heap-mb` (`W4004`)** |
+| **Offline Effect Replay** | Monkey-patching | Trait mocks | Interface mocks | **Deterministic `wysna.effect.trace/1` cassettes** |
+| **Contracts & Tool Schemas** | External libs (Pydantic) | Proc macros | None natively | **Native `requires`/`ensures` -> `wysna schema`** |
+| **Memory & Binary Model** | Tracing GC | Static lifetimes (`'a`) | Concurrent GC | **Lock-free ARC + CoW, 8B `WVal`, standalone C99 binaries** |
 
 ```mermaid
 flowchart LR
-    A["Autonomous Agent<br/>(Generates Wysna)"] --> B["wysna check<br/>(Multi-Error json-v1)"]
-    B -->|0-Turn Machine Repair| C["wysna fix --apply<br/>(SHA-256 Verified Edits)"]
-    C --> D["wysna schema<br/>(Draft 2020-12 Tool Bounds)"]
-    D --> E["wysna run / build<br/>(--max-steps & --max-heap-mb)"]
-    E -->|Safe Execution| F["Verified Output &<br/>Offline Effect Replay"]
+    A["AI Agent / Developer"] --> B["wysna check / graph\n(json-v1 & wysna.graph/1)"]
+    B --> C["wysna inspect\n(--with-deps surgical slice)"]
+    C --> D["wysna patch / fix\n(SHA-256 & W5005 guarded)"]
+    D --> E["wysna build --sandbox\n(C99 WYSNA_DENY_CAP_* + quotas)"]
+    E --> F["Verified Native Binary\n(Offline --replay-trace)"]
 ```
 
-## Quick start
+---
 
-### Install the Seed distribution
+## Quick Start
 
-The recommended installation is the **complete Seed distribution**. Download the
-installer for your host from the [Wysna 0.6.0 release](https://github.com/WashingtonYandun/Wysna/releases/tag/v0.6.0).
-The release includes SHA-256 manifests and per-platform provenance records.
+### 1. Install the Seed Distribution
 
-| Host | Package | Launcher |
+Download the installer for your host from the [**v0.6.0 release**](https://github.com/WashingtonYandun/Wysna/releases/tag/v0.6.0) (includes SHA-256 manifests and private CPython/Zig so core workflows require zero host setup; see [Seed distribution](docs/SEED_DISTRIBUTION.md)):
+
+| Host | Package | Default Launcher |
 | :--- | :--- | :--- |
-| Windows x64 | `.exe` (Inno Setup) | `wysna.exe` or `open-terminal.cmd` |
-| macOS arm64 | `.pkg` | `/usr/local/bin/wysna` |
-| Linux x64 | `.deb` / `.rpm` | `/usr/bin/wysna` |
-
-The 0.6.0 release includes the Windows `.exe`, macOS `.pkg`, and Linux `.deb` and
-`.rpm` installers. They are unsigned, and the macOS package is not notarized. See
-[Seed distribution](docs/SEED_DISTRIBUTION.md) for installation, repair, update,
-uninstall and dependency details. Other hosts can use the source checkout described
-in [Development](#development); the native SDK and WASI profiles have their own limits.
+| **Windows x64** | `.exe` (Inno Setup) | `wysna.exe` / `open-terminal.cmd` |
+| **macOS arm64** | `.pkg` | `/usr/local/bin/wysna` |
+| **Linux x64** | `.deb` / `.rpm` | `/usr/bin/wysna` |
 
 ```sh
 wysna --version
 wysna doctor
 ```
 
-`doctor` exists only in the installed distribution. On Windows, `open-terminal.cmd`
-sets up a terminal-local `PATH`; build outputs use `.exe`.
+### 2. Hello, Wysna
 
-### Hello, Wysna
-
-Save this as `hello.wysna`:
+Save as `hello.wysna`:
 
 ```wysna
-import "std/json"
-
-let value = json.number("42") else error { json.null() }
-let output = json.stringify(json.object({"answer": value})) else error { "{}" }
-print(output)
-```
-
-```sh
-wysna check hello.wysna
-wysna run hello.wysna          # {"answer":42}
-wysna build hello.wysna -o hello
-wysna explain hello.wysna --output-format=json-v1
-wysna schema hello.wysna       # JSON Schema contracts & shapes
-```
-
-`run` executes source through the reference runtime. `build` produces a native
-executable through verified MIR and C99. Arguments after `--` belong to the program.
-Create a project with `wysna project new example`, then run `wysna project test`
-from its directory. The separate `wysna test` command runs the compiler's own
-maintenance suite and requires a source checkout.
-`wysna repl` keeps definitions and values between inputs and continues while delimiters
-are open. `:help` lists the commands; `:reload` reloads imports in a fresh runtime
-if the session has no declarations. Otherwise, use `:reset` and import again.
-`exit` closes the session.
-
-## Language tour
-
-### Agent-First selective imports
-
-Wysna provides structured, token-dense symbol imports designed for AI agents and developer ergonomics:
-
-```wysna-agent
-from std.json use {
+from "std/json" use {
     number,
     null,
     object,
     stringify,
 }
 
-let value = number("42") else error { null() }
-let output = stringify(object({"answer": value})) else error { "{}" }
-print(output)
+let answer = number("42") else error { null() }
+let payload = stringify(object({"answer": answer})) else error { "{}" }
+print(payload)
 ```
 
-`from ... use { ... }` brings declared symbols directly into the current scope, eliminating repetitive namespace prefixes and reducing token consumption in LLM context windows (~13%–22% fewer tokens). For hierarchical submodules, symbol aliasing prevents naming collisions:
+Run, typecheck, inspect effects, and compile to native machine code:
 
-```wysna-agent
-from app.domain.user use { User as DomainUser, get_name }
-from app.infrastructure.auth use { User as AuthUser, get_email }
+```sh
+wysna check hello.wysna
+wysna run hello.wysna            # {"answer":42}
+wysna build hello.wysna -o hello # Verified MIR -> C99 native binary
+wysna schema hello.wysna         # Draft 2020-12 JSON Schema
+wysna explain hello.wysna --output-format=json-v1
 ```
 
-Whole-module namespace imports (`import "std/json"` or `import "std/algorithms" as alg`) remain fully supported across both Wysna Seed and the self-hosted compiler for unified qualification.
+Create an isolated package with `wysna project new myapp && cd myapp && wysna project test`, or launch an interactive session with `wysna repl` (`:help`, `:reload`, `:reset`, `exit`).
 
-### Explicit error channels
+---
+
+## Language Tour
+
+Every code snippet in this section is compiled and executed in CI across all four verification engines (Seed Interpreter, Seed AST C99, Seed Typed HIR/MIR C99, and Self-Hosted Stage-2).
+
+### Explicit Imports, Nested Comments & Unicode Normalization
+
+```wysna
+from "std/text" use { normalize, trim }
+
+/* Nested block comments /* work cleanly */ across lexers and formatter */
+let raw = trim("  cafe\u0301  ")
+let normalized = normalize(raw, "NFC")
+print(normalized)
+print(len(normalized))
+```
+
+### Explicit Error Channels (`T ! E`)
 
 ```wysna
 import "std/parse"
@@ -190,12 +163,12 @@ fn compute_ratio(raw: str, divisor: int) -> int ! str {
     if divisor == 0 { return Err("division by zero") }
     return value / divisor
 }
+
+let ok_val = compute_ratio("84", 2) else error { 0 }
+print(ok_val)
 ```
 
-Error sets are part of the type. `?` propagates a compatible error set, `else error`
-handles it locally, and `match` inspects the payload.
-
-### Algebraic data types and pattern matching
+### Algebraic Data Types & Pattern Matching
 
 ```wysna
 enum Status { Active, Suspended(str), Terminated(int, str) }
@@ -204,27 +177,15 @@ fn describe(status: Status) -> str {
     return match status {
         Status.Active => "active",
         Status.Suspended(reason) => "suspended: " + reason,
-        Status.Terminated(code, message) => "terminated (" + str(code) + "): " + message
+        Status.Terminated(code, msg) => "terminated (" + str(code) + "): " + msg
     }
 }
 
 print(describe(Status.Active))
+print(describe(Status.Terminated(13, "quota")))
 ```
 
-### Copy-on-write values
-
-```wysna
-let original = [1, 2, 3, 4]
-let mut copy = original   # shares storage until mutation
-copy.append(5)
-print(original)           # [1, 2, 3, 4]
-print(copy)               # [1, 2, 3, 4, 5]
-```
-
-Scalar-only lists (`list[int]`, `list[bool]`, `list[float]`) benefit from $O(1)$ release
-and `memcpy` copy-on-write detachment with unboxed element access in native binaries.
-
-### First-class contracts
+### Copy-on-Write Collections & Contracts
 
 ```wysna
 fn withdraw(balance: int, amount: int) -> int
@@ -234,32 +195,26 @@ fn withdraw(balance: int, amount: int) -> int
     return balance - amount
 }
 
-print(withdraw(100, 40))   # 60
-# withdraw(100, 150)       # raises [W4005] contract violation
+let original = [1, 2, 3, 4]
+let mut alias = original
+alias.append(5)
+
+print(original)              # [1, 2, 3, 4]
+print(alias)                 # [1, 2, 3, 4, 5]
+print(withdraw(100, 40))     # 60
 ```
 
-Function signatures support preconditions (`requires`) and postconditions (`ensures`).
-`result` binds to the returned value inside postconditions. Both the Seed compiler and
-the native self-hosted compiler enforce contracts dynamically with `W4005` fail-stop
-diagnostics. In addition, `wysna schema` extracts typed numeric and string boundaries
-(e.g., `minimum`, `exclusiveMinimum`) directly into standard JSON Schema (Draft 2020-12)
-for agent tool calling.
-
-### Deterministic concurrency and batching
+### Deterministic Multi-Core Parallelism
 
 ```wysna
 import "std/algorithms" as alg
 
 let numbers = [1, 2, 3, 4, 5]
-let squares = alg.parallel_map[int, int] (numbers, |n: int| => n * n)
-print(squares)  # [1, 4, 9, 16, 25]
+let squares = alg.parallel_map[int, int](numbers, |n: int| => n * n)
+print(squares)
 ```
 
-`std/algorithms` provides `parallel_batch`, `parallel_filter`, `parallel_reduce`, and
-`parallel_map`. Worker tasks execute across available CPU cores with thread-safe runtime
-locks, guaranteeing strict deterministic index-ordered output.
-
-### Structured cooperative async (async/await & std/async)
+### Stackless CPS Async (`async fn` / `await`)
 
 ```wysna
 import "std/async"
@@ -269,178 +224,132 @@ async fn compute_job(id: int) -> int {
 }
 
 let base = await compute_job(4)
-let task_a = async.ready[int] (base + 2)
-let task_b = async.ready[int] (100)
-
-# Combinators: wait for all or race the first resolved task
-let values = async.all[int] ([task_a, task_b]) else err { [] }
-print(values)  # [42, 100]
+let task_a = async.ready(base + 2)
+let task_b = async.ready(100)
+let values = async.all([task_a, task_b]) else error { [] }
+print(values)
 ```
 
-Wysna provides structured, cooperative asynchronous I/O via `async fn` and `await`. Asynchronous functions evaluate tasks without blocking the main OS thread. Combined with `std/http`'s non-blocking multiplexed dispatcher (`curl_multi_*`), agents can concurrently orchestrate multiple LLM calls, vector database queries, and external APIs with zero memory leaks and single-threaded ARC safety.
-
-### Cryptographic security and CSPRNG (std/crypto)
+### Zero-Dependency Cryptography (`std/crypto`)
 
 ```wysna
 import "std/crypto"
 
-let digest = crypto.sha512("wysna-agent-security") else err { "" }
-let session_id = crypto.random_hex(16) else err { "" }
-let token = "expected-bearer-secret"
+let key = "0123456789abcdef0123456789abcdef"
+let nonce = "123456789012"
+let sealed = crypto.aead_seal(key, nonce, "agent-payload", "hdr") else error { "" }
+let opened = crypto.aead_open(key, nonce, sealed, "hdr") else error { "" }
+let digest = crypto.sha256("wysna") else error { "" }
 
-# Timing-attack resistant verification
-let is_valid = crypto.constant_time_eq(token, token)
-
-print("Hash prefix: " + slice(digest, 0, 16))
-print("Session hex length: " + str(len(session_id)))
-print("Constant-time valid: " + str(is_valid))
+print(opened)
+print(crypto.constant_time_eq(opened, "agent-payload"))
+print(slice(digest, 0, 16))
 ```
 
-`std/crypto` provides header-only, self-contained C99 cryptographic primitives without external dynamic dependencies (`-lcrypto` is not required):
-- **Hashing:** NIST FIPS 180-4 SHA-256 and SHA-512, RFC 1321 MD5.
-- **Message Authentication:** RFC 2104 HMAC-SHA256 and HMAC-SHA512.
-- **Operating System CSPRNG:** `random_bytes(count)` and `random_hex(count)` backed by `/dev/urandom` on POSIX and `CryptGenRandom` on Windows.
-- **Side-Channel Protection:** `constant_time_eq` and `constant_time_eq_bytes` to protect against timing attacks.
+Explore standalone programs in [examples/language](examples/language) and FFI pilots in [FFI validation](docs/FFI_VALIDATION.md).
 
-See [more executable examples](examples/language), including bounded resources,
-error channels, contracts and pattern matching.
+---
+
+## Architecture and Parity
+
+Wysna maintains a shared language specification backed by independent execution and compilation engines:
+
+```mermaid
+flowchart LR
+    Src["Wysna Source\n(.wysna / from...use)"] --> Fe["Checked AST / Typed HIR\n(Interface-Digest Cache)"]
+    Fe --> Interp["Seed Interpreter\n(Reference Semantics & Trace)"]
+    Fe --> Mir["Verified MIR\n(CPS Async + CoW + Optimizer)"]
+    Mir --> C99["Default C99 Backend\n(ABI v3 8B WVal + Sandbox)"]
+    Mir -. "opt-in" .-> Llvm["LLVM IR Backend\n(Experimental)"]
+    Mir -. "target" .-> Wasm["WASI / Browser WASM"]
+```
+
+- **Wysna Seed (`src/`):** Canonical Python reference compiler, runtime interpreter, project/manifest toolchain (`wysna.toml` / `wysna.lock`), MCP server, JSON Schema extractor, WASI/LLVM drivers, and differential AST C99 oracle.
+- **Wysna Compiler (`selfhost/` + `packaging/native/driver.c`):** 3-stage bootstrapped self-hosted compiler emitting C99 via verified MIR (`native-core-v1`, 28 modules / 10,602 bundled lines) with a **Python-free native driver** for `check`, `fmt`, `run`, `build`, multi-file `test`, Agent-First tools (`graph`, `inspect`, `patch`, `explain`), and **Stage-3 native LSP (`wysna lsp`)**.
+
+### Tested 4-Engine Parity (`tools/ci_conformance.py --profile=release`)
+
+| Engine | Role | Verified Release Corpus |
+| :--- | :--- | :---: |
+| **Wysna Seed (Interpreter)** | Reference semantics, quotas & trace replay | **209 / 209 (100.0%)** |
+| **Wysna Seed (AST C99)** | Independent differential C99 oracle | **209 / 209 (100.0%)** |
+| **Wysna Seed (HIR/MIR C99)** | Default production compilation pipeline | **209 / 209 (100.0%)** |
+| **Wysna Compiler (Self-Hosted)** | `native-core-v1` Stage-2 bootstrapped binary | **209 / 209 (100.0%)** |
+
+See [engine parity matrix](docs/ENGINE_PARITY_MATRIX.md) for the SHA-pinned evidence summary (`source_fingerprint`).
+
+### Current Status & Honest Scope
+
+| Surface | Status | Details |
+| :--- | :--- | :--- |
+| Core language, contracts, ABI v3, CPS `async fn`, C99 builds, Stage-3 LSP | **Supported** | Bounded by [docs/SCOPE.md](docs/SCOPE.md) and [docs/KNOWN_LIMITS.md](docs/KNOWN_LIMITS.md). |
+| Seed distribution (private CPython + Zig) | **v0.6.0 Release** | Unsigned installers per platform (`.exe`, `.pkg`, `.deb`, `.rpm`). |
+| Native SDK (`wysna` Python-free Stage-2/3 binary) | **Supported (`native-core-v1`)** | Supports native compilation, Agent CLI (`graph`/`inspect`/`patch`/`explain`), `test`, and `lsp`; `interface Foo[T]` stays Seed-only (`W2013`). |
+| WASI (`wasi-command`) | **Declared target** | Wasmtime boundary with preopens, fuel, and linear-memory limits. |
+| LLVM backend & Browser WASM library | **Experimental** | Opt-in via `--backend=llvm-experimental` or Emscripten workflow. |
+| Remote package registry, preemptive cross-thread shared graphs, OS kernel sandbox | **Not implemented** | Local/vendor `wysna.toml` manifests and snapshot closures are documented in [KNOWN_LIMITS.md](docs/KNOWN_LIMITS.md). |
+
+---
 
 ## Toolchain
 
-| Command | Purpose |
-| :--- | :--- |
-| `wysna check` | Typecheck without executing; supports `--engine=compiler` (native MIR) and `--output-format=json-v1`. |
-| `wysna fix` | Apply deterministic compiler self-healing repairs with verified SHA-256 edits. |
-| `wysna graph` | Build and query the compile-time semantic relationship graph (`implements`, `usages`, `calls`, `impact`) in `json-v1`. |
-| `wysna inspect` | Extract a surgical, token-efficient symbol slice, dependencies (`--with-deps`), contracts, and effects. |
-| `wysna patch` | Apply hash-guarded (`--expect-graph-hash`), in-memory typechecked declaration patches cleanly before writing disk. |
-| `wysna skills` | Serve embedded, version-matched agent coding workflows (`overview`, `agent-loop`, `syntax`, `graph`, `patch`, `contracts`, `stdlib`). |
-| `wysna explain` | Conservative MIR effect report (`file.wysna`) or structured diagnostic guide (`--code Wxxxx`). |
-| `wysna run` | Execute source through the reference runtime or native binary (`--engine=compiler`), with `--max-steps` / `--max-heap-mb`. |
-| `wysna build` | Compile a native executable through verified MIR → C99. |
-| `wysna fmt` | Canonical, deterministic formatting; supports `--engine=compiler` verification. |
-| `wysna test` | Run conformance, differential, fuzz, or native test runner (`--engine=compiler` / `--native`). |
-| `wysna schema` | Export function contracts and struct shapes to JSON Schema (Draft 2020-12). |
-| `wysna mcp` | In-memory Model Context Protocol daemon exposing `check`, `fix`, `fmt`, `graph`, `inspect`, `patch`, `skills`, `explain`, `schema`, `api`, and `capabilities`. |
-| `wysna project` | Create, lock, check, build, run and test local projects. |
-| `wysna api` / `wysna capabilities` | Discover standard-library APIs and target availability. |
-| `wysna lsp` | Language server over stdio with code action quickfixes. |
+| Category | Commands | Highlights |
+| :--- | :--- | :--- |
+| **Compile & Run** | `wysna check` · `run` · `build` · `emit-c` | `--engine=seed\|compiler`, `--backend=c99\|llvm-experimental`, `--sandbox`, `--allow`/`--deny`, `--max-steps`, `--max-heap-mb` |
+| **Agent-First Loop** | `wysna graph` · `inspect` · `patch` · `fix` · `schema` · `mcp` | `json-v1` envelopes, SHA-256 `patch --expect-graph-hash` (`[W5005]`), Draft 2020-12 JSON Schema, stdio MCP daemon |
+| **Verification & Effects** | `wysna test` · `explain` · `fmt` · `bench` | Multi-file `test <dir>`, conservative MIR effect reports (`explain --code Wxxxx`), deterministic canonical formatter |
+| **IDE & Projects** | `wysna lsp` · `project` · `repl` · `skills` · `api` · `capabilities` · `doctor` | Native Stage-3 LSP 3.17 (`didChange`, `definition`, `implementation`, `references`, `hover`, `completion`, `semanticTokens`), local `wysna.lock` |
 
-For native source compilation, `--engine=seed|compiler` selects the compiler
-implementation and `--backend=c99|llvm-experimental` selects the output target.
-Seed plus C99 is the supported default. The Compiler engine is based on
-`native-core-v1`; in this CLI it supports `check`, `fmt`, `run`, `emit-c`, `build`,
-and native testing (`wysna test --native`), while its standalone SDK provides its own
-embedded driver. AST-to-C emission is only a differential test oracle. C99 is translated
-source: the selected C toolchain produces and links the machine-code executable. LLVM IR
-is available as an experimental Seed target.
+### Quotas & Effect Cassettes
 
-### Deterministic Execution & Effect Cassettes
+- **Quotas (`[W4004]`):** Bound instruction steps with `--max-steps=<N>` and dynamic allocations with `--max-heap-mb=<N>` / `--max-heap-bytes=<N>` (or `WYSNA_MAX_STEPS` / `WYSNA_MAX_HEAP_BYTES` in compiled binaries).
+- **Offline Replay (`wysna.effect.trace/1`):** Record external I/O and clocks with `--record-trace=<file>` and replay deterministically without touching host I/O using `--replay-trace=<file>`.
 
-Wysna provides built-in mechanisms to constrain and record program execution:
+---
 
-- **Resource quotas:** `--max-steps=<N>` bounds instruction steps, and `--max-heap-mb=<N>`
-  (or `--max-heap-bytes=<N>`) bounds dynamic heap allocations. Exceeding either limit halts
-  execution deterministically with error code `[W4004]`. In native binaries, quotas can also
-  be injected via the `WYSNA_MAX_STEPS` and `WYSNA_MAX_HEAP_BYTES` environment variables.
-- **Effect cassette replay:** `--record-trace=<file>` serializes external effect outcomes
-  (HTTP calls, file operations, clocks) using the versioned `wysna.effect.trace/1` envelope.
-  `--replay-trace=<file>` re-executes the program against the recorded cassette without
-  performing actual network or host I/O, guaranteeing bit-for-bit deterministic replays
-  for tests, regression detection, and agent sandboxing.
-
-Structured commands accept `--output-format=json-v1`. `explain` reports transitive
-effects and marks unknown FFI or indirect calls. `wysna run --allow=...` or
-`--deny=...` applies that report as a static pre-execution gate and refuses
-incomplete analyses. It is **not** an operating-system sandbox, does not cover
-native builds or project runs, and is not a purity proof. See
-[effect contracts](docs/EFFECTS.md). Agent-generated changes should follow the
-[AI agent workflow](docs/AI_AGENT_GUIDE.md), including target discovery and
-source-hash-checked diagnostics.
-
-## Standard library
+## Standard Library
 
 | Area | Modules |
 | :--- | :--- |
-| Data & Algorithms | `std/json`, `std/text`, `std/parse`, `std/algorithms`, `std/bytes`, `std/crypto` |
-| Concurrency & Async | `std/async` (`Task[T]`, `all`, `race`, `wait`) |
-| I/O and files | `std/files`, `std/buffer`, `std/fs`, `std/path`, `std/io`, `std/resources` |
-| Host & Network | `std/environment`, `std/process`, `std/time`, `std/http` |
-| Testing | `std/test` |
+| **Data, Parsing & Security** | `std/json`, `std/text` (Unicode UAX #15), `std/parse`, `std/bytes`, `std/algorithms` (`parallel_*`), `std/crypto` (ChaCha20-Poly1305 AEAD, SHA-256/512, HMAC, CSPRNG) |
+| **Async & Networking** | `std/async` (`async fn`, `spawn`, `all`, `race`, timers), `std/http` (libcurl TLS + `curl_multi` non-blocking dispatch) |
+| **Filesystem, Host & Testing** | `std/files`, `std/buffer`, `std/fs`, `std/path`, `std/io`, `std/environment`, `std/process`, `std/time`, `std/resources`, `std/test` |
 
-`std/algorithms` includes scalar list specializations along with deterministic multi-core
-operations (`parallel_batch`, `parallel_filter`, `parallel_reduce`, `parallel_map`).
-Native HTTP uses libcurl with TLS verification, deadlines, response limits, parallel
-`batch_get`, and non-blocking event loop dispatch (`curl_multi_*`). `std/crypto` delivers
-self-contained, header-only C99 implementations of SHA-256/512, MD5, HMAC, timing-safe
-equality, and OS-level CSPRNG. HTTP remains an explicit dependency, as do C FFI libraries
-and their headers. Projects use `wysna.toml`, contained local dependencies and hash-checked
-lockfiles; there is no public package registry.
+See [standard library reference](docs/STDLIB.md) and [projects guide](docs/PROJECTS.md).
 
-## Status and scope
-
-Wysna is developed as a set of explicitly bounded contracts, not a promise of
-universal parity.
-
-| Area | Status |
-| :--- | :--- |
-| Native CLI, scripting, projects, formatter, LSP core, effect reports | **Supported** for the declared profiles; host and package limits are recorded in [scope](docs/SCOPE.md). |
-| Seed distribution with private CPython and Zig | **0.6.0 release**; unsigned installers are qualified per source commit. |
-| Deterministic execution quotas & effect cassette replay | **Supported** across interpreter, native C99, and LLVM backends. |
-| Structured deterministic concurrency | **Supported** for data-parallel batching and HTTP dispatch (`std/algorithms`, `std/http`). |
-| WASI command profile | **Declared target** with a Wasmtime boundary, fuel, memory limits and explicit preopens. |
-| LLVM backend and LLVM SDK | **Experimental**, opt-in and qualification-gated. |
-| Wysna Compiler / native SDK | **Experimental**, bounded by the `native-core-v1` profile. |
-| Browser library, local service pilot, JSON/HTTP/SQLite app | **Experimental**, with explicit dependencies and limits. |
-| Public package registry, arbitrary preemptive threads, sandbox for untrusted native code | **Not implemented**. |
-
-### Two compilers, one language
-
-- **Wysna Seed** is the reference implementation in Python and the default compiler.
-  It provides the complete project and editor tooling, the C99 backend, JSON Schema extraction,
-  and the independent interpreter and AST oracles.
-- **Wysna Compiler** is the self-hosted implementation in Wysna. It ships as a bounded
-  Python-free native SDK for the `native-core-v1` profile, supports native `check`, `fmt`,
-  `test`, `build`, `run`, Agent-First tools (`graph`, `inspect`, `patch`, `explain`),
-  Stage-3 native `lsp`, constrained generic OOP classes/methods, `from ... use` imports,
-  and lowers contracts (`requires`/`ensures`) and stackless CPS `async fn` through verified MIR.
-
-Both use verified MIR and C99. See [compiler architecture](docs/COMPILER_ARCHITECTURE.md)
-and [engine parity](docs/ENGINE_PARITY_MATRIX.md).
+---
 
 ## Security
 
-Native programs and the reference runtime execute with the user's OS authority.
-Process isolation alone does not restrict filesystem, network or FFI access. The WASI
-profile has a Wasmtime boundary with declared preopens, fuel and linear-memory limits.
-`wysna run --allow=...` and `--deny=...` enforce static capability gates before Seed
-interpretation (`W5006`), while Seed `wysna build --sandbox` (with `--allow`/`--deny`)
-compiles `WYSNA_DENY_CAP_*` runtime guards directly into C99 host adapters (`W5006`);
-neither replaces an OS kernel sandbox for external native C libraries.
+- Native executables and Seed runs inherit the invoking user's OS privileges.
+- `wysna run --allow=...` / `--deny=...` applies a static conservative effect gate (`[W5006]`) prior to interpretation.
+- `wysna build --sandbox` (with optional `--allow`/`--deny`) compiles `#define WYSNA_DENY_CAP_*` traps directly into the C99 runtime/host adapters (`[W5006]`), while external native C FFI libraries remain outside the C macro boundary.
+- The WASI profile enforces Wasmtime preopens, fuel, and linear-memory bounds.
 
-Do not run untrusted native code based on effect reports. See [SECURITY.md](SECURITY.md)
-and [scope](docs/SCOPE.md) for the full boundary.
+Never treat effect reports as an OS kernel sandbox for untrusted native dependencies. Consult [SECURITY.md](SECURITY.md) and [docs/SCOPE.md](docs/SCOPE.md).
+
+---
 
 ## Documentation
 
-| Start here | Go deeper |
+| Core Guides | Deep-Dive Architecture |
 | :--- | :--- |
-| [Syntax manual](WYSNA_SINTAXIS.md) | [Compiler architecture](docs/COMPILER_ARCHITECTURE.md) |
-| [AI agent guide](docs/AI_AGENT_GUIDE.md) | [MIR design](docs/MIR_DESIGN.md) |
-| [Scope and status](docs/SCOPE.md) | [Full architecture audit](docs/FULL_LANGUAGE_CAPABILITIES_AND_DEBT_AUDIT.md) |
-| [Seed distribution](docs/SEED_DISTRIBUTION.md) | [Effect reports](docs/EFFECTS.md) |
-| [Projects and tests](docs/PROJECTS.md) | [Known limits](docs/KNOWN_LIMITS.md) |
-| [Standard library](docs/STDLIB.md) | [Engine parity](docs/ENGINE_PARITY_MATRIX.md) |
-| [Examples](examples/language) | [Language specification](SPEC.md) |
-| [Changelog](CHANGELOG.md) | [Security policy](SECURITY.md) |
+| [Syntax Manual (`WYSNA_SINTAXIS.md`)](WYSNA_SINTAXIS.md) | [Compiler Architecture](docs/COMPILER_ARCHITECTURE.md) |
+| [AI Agent Guide](docs/AI_AGENT_GUIDE.md) | [MIR Design & ABI v3](docs/MIR_DESIGN.md) |
+| [Scope & Status](docs/SCOPE.md) | [Type System Design](docs/TYPE_SYSTEM_DESIGN.md) |
+| [Known Limits](docs/KNOWN_LIMITS.md) | [Ownership & Lifetimes](docs/OWNERSHIP_LIFETIME.md) |
+| [Standard Library](docs/STDLIB.md) | [Effect Contracts](docs/EFFECTS.md) |
+| [Projects & Tests](docs/PROJECTS.md) | [Engine Parity Matrix](docs/ENGINE_PARITY_MATRIX.md) |
+| [Seed Distribution](docs/SEED_DISTRIBUTION.md) | [Native SDK](docs/NATIVE_SDK.md) |
+| [Changelog](CHANGELOG.md) | [Full Capabilities & Debt Audit](docs/FULL_LANGUAGE_CAPABILITIES_AND_DEBT_AUDIT.md) |
 
-The full [documentation index](docs/README.md) covers ownership, FFI, the native SDK,
-LLVM, the service pilot and distribution details.
+Full index: [docs/README.md](docs/README.md) · Language Spec: [SPEC.md](SPEC.md) · Security Policy: [SECURITY.md](SECURITY.md)
+
+---
 
 ## Development
 
-Source work requires Python 3.10 or newer and a C99 compiler for native builds. A
-source checkout exposes the full toolchain, including `wysna test` and `wysna bench`.
+Source builds require Python 3.10+ and a C99 compiler (`clang` or `gcc`):
 
 ```sh
 git clone --branch develop https://github.com/WashingtonYandun/Wysna.git
@@ -450,29 +359,18 @@ python3 -m pip install -e '.[dev]'
 ./wysna test
 ```
 
-The `dev` extra installs pytest and the optional HTTP/service dependencies used by
-the complete unit suite. Without those extras, the full suite fails rather than
-silently skipping the affected contracts.
-
-On Windows, run the source CLI as `py -3 main.py`.
-
-Run `./wysna test --sanitize` for ASan/UBSan builds, or
-`python3 tools/ci_conformance.py --profile=release` for the release corpus. The
-self-hosted compiler has a deterministic bootstrap check:
+Additional qualification gates (use `py -3 main.py` on Windows):
 
 ```sh
-python3 -m tests.unit.test_bootstrap_conformance
+./wysna test --sanitize                                  # Full suite under ASan + UBSan
+python3 tools/ci_conformance.py --profile=release        # 4-engine parity verification
+python3 -m tests.unit.test_bootstrap_conformance         # 3-stage selfhost SHA-256 fixed-point
 ```
 
-See [CONTRIBUTING.md](CONTRIBUTING.md) for architecture, test layers and the pull
-request workflow.
+See [CONTRIBUTING.md](CONTRIBUTING.md) and [CODE_OF_CONDUCT.md](CODE_OF_CONDUCT.md).
 
-## Contributing
-
-Contributions are welcome. Start with [CONTRIBUTING.md](CONTRIBUTING.md), follow the
-[Code of Conduct](CODE_OF_CONDUCT.md), and report security issues privately as
-described in [SECURITY.md](SECURITY.md).
+---
 
 ## License
 
-Apache-2.0 © 2024–2026 Washington Yandún. See [LICENSE](LICENSE) and [NOTICE](NOTICE).
+Apache License, Version 2.0 © 2024–2026 Washington Yandún. See [LICENSE](LICENSE) and [NOTICE](NOTICE).
