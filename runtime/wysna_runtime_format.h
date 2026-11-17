@@ -59,12 +59,12 @@ static inline void wysna_format_push(WFormatTask** tasks, int32_t* count, int32_
                                  bool* heap_tasks, WFormatTask task) {
     if (*count == INT32_MAX) {
         fprintf(stderr, "[W4003] RuntimeError: Formatting work list is too large\n");
-        exit(1);
+        wysna_panic_exit(1);
     }
     if (*count == *capacity) {
         if (*capacity > INT32_MAX / 2) {
             fprintf(stderr, "[W4003] RuntimeError: Formatting work list is too large\n");
-            exit(1);
+            wysna_panic_exit(1);
         }
         int32_t new_capacity = *capacity * 2;
         WFormatTask* grown = (WFormatTask*)wysna_alloc_safe(
@@ -80,8 +80,7 @@ static inline void wysna_format_push(WFormatTask** tasks, int32_t* count, int32_
 
 static inline void wysna_format_push_text(WFormatTask** tasks, int32_t* count, int32_t* capacity,
                                       bool* heap_tasks, const char* text) {
-    WVal empty = {0};
-    empty.tag = W_UNIT;
+    WVal empty = wysna_unit();
     WFormatTask task = {empty, text, true, false, false, strlen(text)};
     wysna_format_push(tasks, count, capacity, heap_tasks, task);
 }
@@ -89,7 +88,7 @@ static inline void wysna_format_push_text(WFormatTask** tasks, int32_t* count, i
 static inline void wysna_format_push_name(WFormatTask** tasks, int32_t* count, int32_t* capacity,
                                           bool* heap_tasks, const char* name) {
     WNominalName display = wysna_nominal_display_name(name);
-    WVal empty = {0}; empty.tag = W_UNIT;
+    WVal empty = wysna_unit();
     WFormatTask task = {empty, display.data, true, false, false, display.length};
     wysna_format_push(tasks, count, capacity, heap_tasks, task);
 }
@@ -104,7 +103,7 @@ static inline void wysna_format_append(char** buffer, size_t* length, size_t* ca
                                    const char* data, size_t data_length) {
     if (data_length > SIZE_MAX - *length - 1) {
         fprintf(stderr, "[W4003] RuntimeError: Formatted value is too large\n");
-        exit(1);
+        wysna_panic_exit(1);
     }
     size_t needed = *length + data_length + 1;
     if (needed > *capacity) {
@@ -209,7 +208,7 @@ static inline char* wysna_to_cstr(WVal v, bool quote_str) {
     while (task_count > 0) {
         WFormatTask task = tasks[--task_count];
         if (task.leave_object) {
-            wysna_format_object_leave(&active_objects, task.value.as.st);
+            wysna_format_object_leave(&active_objects, wysna_as_struct(task.value));
             continue;
         }
         if (task.is_text) {
@@ -218,17 +217,20 @@ static inline char* wysna_to_cstr(WVal v, bool quote_str) {
         }
 
         WVal value = task.value;
-        switch (value.tag) {
+        WTag vtag = wysna_tag(value);
+        switch (vtag) {
             case W_POINTER:
                 wysna_format_append_text(&buffer, &buffer_length, &buffer_capacity, "<opaque>");
                 break;
             case W_FUNCTION:
                 wysna_format_append_text(&buffer, &buffer_length, &buffer_capacity, "<function>");
                 break;
-            case W_WEAK:
+            case W_WEAK: {
+                WWeakControl* wk = wysna_as_weak(value);
                 wysna_format_append_text(&buffer, &buffer_length, &buffer_capacity,
-                    value.as.weak->object ? "weak(alive)" : "weak(expired)");
+                    (wk && wk->object) ? "weak(alive)" : "weak(expired)");
                 break;
+            }
             case W_UNIT:
                 wysna_format_append_text(&buffer, &buffer_length, &buffer_capacity, "unit");
                 break;
@@ -237,44 +239,48 @@ static inline char* wysna_to_cstr(WVal v, bool quote_str) {
                 break;
             case W_INT: {
                 char number[32];
-                snprintf(number, sizeof(number), "%" PRId64, value.as.i);
+                snprintf(number, sizeof(number), "%" PRId64, wysna_as_int(value));
                 wysna_format_append_text(&buffer, &buffer_length, &buffer_capacity, number);
                 break;
             }
             case W_FLOAT: {
-                char* number = wysna_format_float(value.as.f);
+                char* number = wysna_format_float(wysna_as_float(value));
                 wysna_format_append_text(&buffer, &buffer_length, &buffer_capacity, number);
                 free(number);
                 break;
             }
             case W_BOOL:
                 wysna_format_append_text(&buffer, &buffer_length, &buffer_capacity,
-                                     value.as.b ? "true" : "false");
+                                     wysna_as_bool(value) ? "true" : "false");
                 break;
-            case W_STR:
+            case W_STR: {
+                char sb[7];
+                size_t slen = 0;
+                const char* sdata = wysna_str_bytes(value, sb, &slen);
                 if (!task.quote_str) {
-                    wysna_format_append(&buffer, &buffer_length, &buffer_capacity,
-                                    value.as.string.data, value.as.string.length);
+                    wysna_format_append(&buffer, &buffer_length, &buffer_capacity, sdata, slen);
                 } else {
                     wysna_format_append_text(&buffer, &buffer_length, &buffer_capacity, "\"");
-                    for (size_t i = 0; i < value.as.string.length; i++) {
-                        if (value.as.string.data[i] == 0) {
+                    for (size_t i = 0; i < slen; i++) {
+                        if (sdata[i] == 0) {
                             wysna_format_append_text(&buffer, &buffer_length, &buffer_capacity, "\\0");
                         } else {
-                            wysna_format_append(&buffer, &buffer_length, &buffer_capacity,
-                                            value.as.string.data + i, 1);
+                            wysna_format_append(&buffer, &buffer_length, &buffer_capacity, sdata + i, 1);
                         }
                     }
                     wysna_format_append_text(&buffer, &buffer_length, &buffer_capacity, "\"");
                 }
                 break;
-            case W_ENUM:
-                if (strcmp(value.as.en.enum_name, "Option") == 0 &&
-                    strcmp(value.as.en.variant, "Some") == 0 && value.as.en.box) {
+            }
+            case W_ENUM: {
+                WEnumBuf* en = wysna_as_enum(value);
+                if (!en) break;
+                if (strcmp(en->enum_name, "Option") == 0 &&
+                    strcmp(en->variant, "Some") == 0 && en->has_payload) {
                     wysna_format_push_value(&tasks, &task_count, &task_capacity, &heap_tasks,
-                                        value.as.en.box->val, task.quote_str);
-                } else if (value.as.en.box && value.as.en.box->val.tag == W_TUPLE) {
-                    WTupleBuf* payload = value.as.en.box->val.as.tuple;
+                                        en->payload, task.quote_str);
+                } else if (en->has_payload && wysna_tag(en->payload) == W_TUPLE) {
+                    WTupleBuf* payload = wysna_as_tuple(en->payload);
                     wysna_format_push_text(&tasks, &task_count, &task_capacity, &heap_tasks, ")");
                     for (int32_t i = payload->len - 1; i >= 0; i--) {
                         wysna_format_push_value(&tasks, &task_count, &task_capacity, &heap_tasks,
@@ -283,28 +289,26 @@ static inline char* wysna_to_cstr(WVal v, bool quote_str) {
                                                       &heap_tasks, ", ");
                     }
                     wysna_format_push_text(&tasks, &task_count, &task_capacity, &heap_tasks, "(");
-                    wysna_format_push_text(&tasks, &task_count, &task_capacity, &heap_tasks,
-                                       value.as.en.variant);
+                    wysna_format_push_text(&tasks, &task_count, &task_capacity, &heap_tasks, en->variant);
                     wysna_format_push_text(&tasks, &task_count, &task_capacity, &heap_tasks, ".");
-                    wysna_format_push_name(&tasks, &task_count, &task_capacity, &heap_tasks, value.as.en.enum_name);
-                } else if (value.as.en.box) {
+                    wysna_format_push_name(&tasks, &task_count, &task_capacity, &heap_tasks, en->enum_name);
+                } else if (en->has_payload) {
                     wysna_format_push_text(&tasks, &task_count, &task_capacity, &heap_tasks, ")");
                     wysna_format_push_value(&tasks, &task_count, &task_capacity, &heap_tasks,
-                                        value.as.en.box->val, true);
+                                        en->payload, true);
                     wysna_format_push_text(&tasks, &task_count, &task_capacity, &heap_tasks, "(");
-                    wysna_format_push_text(&tasks, &task_count, &task_capacity, &heap_tasks,
-                                       value.as.en.variant);
+                    wysna_format_push_text(&tasks, &task_count, &task_capacity, &heap_tasks, en->variant);
                     wysna_format_push_text(&tasks, &task_count, &task_capacity, &heap_tasks, ".");
-                    wysna_format_push_name(&tasks, &task_count, &task_capacity, &heap_tasks, value.as.en.enum_name);
+                    wysna_format_push_name(&tasks, &task_count, &task_capacity, &heap_tasks, en->enum_name);
                 } else {
-                    wysna_format_push_text(&tasks, &task_count, &task_capacity, &heap_tasks,
-                                       value.as.en.variant);
+                    wysna_format_push_text(&tasks, &task_count, &task_capacity, &heap_tasks, en->variant);
                     wysna_format_push_text(&tasks, &task_count, &task_capacity, &heap_tasks, ".");
-                    wysna_format_push_name(&tasks, &task_count, &task_capacity, &heap_tasks, value.as.en.enum_name);
+                    wysna_format_push_name(&tasks, &task_count, &task_capacity, &heap_tasks, en->enum_name);
                 }
                 break;
+            }
             case W_LIST: {
-                WListBuf* list = value.as.list;
+                WListBuf* list = wysna_as_list(value);
                 wysna_format_push_text(&tasks, &task_count, &task_capacity, &heap_tasks, "]");
                 for (int32_t i = list->len - 1; i >= 0; i--) {
                     wysna_format_push_value(&tasks, &task_count, &task_capacity, &heap_tasks,
@@ -316,7 +320,7 @@ static inline char* wysna_to_cstr(WVal v, bool quote_str) {
                 break;
             }
             case W_TUPLE: {
-                WTupleBuf* tuple = value.as.tuple;
+                WTupleBuf* tuple = wysna_as_tuple(value);
                 wysna_format_push_text(&tasks, &task_count, &task_capacity, &heap_tasks, ")");
                 for (int32_t i = tuple->len - 1; i >= 0; i--) {
                     wysna_format_push_value(&tasks, &task_count, &task_capacity, &heap_tasks,
@@ -328,7 +332,7 @@ static inline char* wysna_to_cstr(WVal v, bool quote_str) {
                 break;
             }
             case W_DICT: {
-                WDictBuf* dict = value.as.dict;
+                WDictBuf* dict = wysna_as_dict(value);
                 wysna_format_push_text(&tasks, &task_count, &task_capacity, &heap_tasks, "}");
                 for (int32_t i = dict->len - 1; i >= 0; i--) {
                     wysna_format_push_value(&tasks, &task_count, &task_capacity, &heap_tasks,
@@ -344,8 +348,8 @@ static inline char* wysna_to_cstr(WVal v, bool quote_str) {
             }
             case W_STRUCT:
             case W_OBJECT: {
-                WStructBuf* structure = value.as.st;
-                if (value.tag == W_OBJECT) {
+                WStructBuf* structure = wysna_as_struct(value);
+                if (vtag == W_OBJECT) {
                     if (!wysna_format_object_enter(&active_objects, structure)) {
                         wysna_format_append_text(&buffer, &buffer_length, &buffer_capacity, "<cycle>");
                         break;
@@ -368,15 +372,17 @@ static inline char* wysna_to_cstr(WVal v, bool quote_str) {
                 break;
             }
             case W_OK:
-            case W_ERR:
+            case W_ERR: {
+                WBoxBuf* bx = wysna_as_box(value);
                 wysna_format_push_text(&tasks, &task_count, &task_capacity, &heap_tasks, ")");
-                if (value.as.box) {
+                if (bx) {
                     wysna_format_push_value(&tasks, &task_count, &task_capacity, &heap_tasks,
-                                        value.as.box->val, false);
+                                        bx->val, false);
                 }
                 wysna_format_push_text(&tasks, &task_count, &task_capacity, &heap_tasks,
-                                   value.tag == W_OK ? "Ok(" : "Err(");
+                                   vtag == W_OK ? "Ok(" : "Err(");
                 break;
+            }
         }
     }
 

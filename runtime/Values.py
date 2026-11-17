@@ -219,6 +219,9 @@ class WysnaTuple(WysnaValue):
             return other == self
         return isinstance(other, WysnaTuple) and self.elements == other.elements
 
+    def __hash__(self) -> int:
+        return hash(tuple(self.elements))
+
     def __str__(self) -> str:
         return display_value(self)
 

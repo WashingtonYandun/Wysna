@@ -173,7 +173,10 @@ def test_documentation_consistency():
     from urllib.parse import unquote
     documents = [ROOT / 'README.md', ROOT / 'SPEC.md'] + sorted((ROOT / 'docs').glob('*.md'))
     for document in documents:
-        for destination in re.findall(r'\[[^\]]+\]\(([^)]+)\)', document.read_text()):
+        # Ignore fenced code blocks and inline code spans so Wysna generic syntax like
+        # `parallel_map[int, int](xs, ...)` is not misread as a Markdown hyperlink.
+        prose = re.sub(r'```.*?```|`[^`\n]+`', '', document.read_text(), flags=re.S)
+        for destination in re.findall(r'\[[^\]]+\]\(([^)]+)\)', prose):
             target = destination.split('#', 1)[0].strip('<>')
             if not target or re.match(r'[a-zA-Z][a-zA-Z0-9+.-]*:', target):
                 continue

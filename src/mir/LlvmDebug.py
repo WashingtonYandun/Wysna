@@ -78,19 +78,8 @@ class DebugInfo:
                 self.value_types[key] = self.basic(name, bits, encoding)
             else:
                 if 'WVal' not in self.value_types:
-                    integer = self.basic('int64', 64, 'DW_ATE_signed')
-                    float_ = self.basic('double', 64, 'DW_ATE_float')
-                    boolean = self.basic('bool', 8, 'DW_ATE_boolean')
-                    pointer = self.add('!DIDerivedType(tag: DW_TAG_pointer_type, baseType: null, size: 64)')
-                    string = self.composite('WString', [self.member('data', pointer, 64), self.member('length', integer, 64, 64),
-                                                       self.member('owner', pointer, 64, 128)], 192)
-                    payload = self.composite('WPayload', [self.member('i', integer, 64), self.member('f', float_, 64),
-                                                         self.member('b', boolean, 8), self.member('string', string, 192),
-                                                         self.member('pointer', pointer, 64), self.member('list', pointer, 64),
-                                                         self.member('st', pointer, 64), self.member('box', pointer, 64)],
-                                             192, 'DW_TAG_union_type')
-                    tag = self.basic('WTag', 32, 'DW_ATE_signed')
-                    self.value_types['WVal'] = self.composite('WVal', [self.member('tag', tag, 32), self.member('as', payload, 192, 64)], 256)
+                    bits = self.basic('uint64', 64, 'DW_ATE_unsigned')
+                    self.value_types['WVal'] = self.composite('WVal', [self.member('bits', bits, 64)], 64)
                 name = str(interner.to_type(type_id))
                 self.value_types[key] = self.add('!DIDerivedType(tag: DW_TAG_typedef, name: ' + quote_bytes(name.encode()) +
                                                 ', baseType: !' + str(self.value_types['WVal']) + ')')

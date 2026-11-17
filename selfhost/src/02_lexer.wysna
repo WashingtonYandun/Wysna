@@ -1,6 +1,5 @@
 fn report_error(file: str, code: str, line: int, col: int, msg: str) -> unit {
-    eprint("[" + code + "] " + file + ":" + str(line) + ":" + str(col) + " - " + msg)
-    exit(1)
+    diag_emit_and_exit(file, code, line, col, msg)
 }
 
 fn report_error_at(code: str, token: Token, msg: str) -> unit {
@@ -172,6 +171,47 @@ fn tokenize(src: str, file: str) -> list[Token] {
             while i < n and ord(src[i]) != 10 and ord(src[i]) != 13 {
                 i = i + 1
                 col = col + 1
+            }
+        } elif ch == "/" and i + 1 < n and src[i + 1] == "*" {
+            let comment_line = line
+            let comment_col = col
+            let mut depth = 1
+            let mut saw_newline = false
+            let mut nl_line = line
+            let mut nl_col = col
+            i = i + 2
+            col = col + 2
+            while i < n and depth > 0 {
+                let c = ord(src[i])
+                if c == 47 and i + 1 < n and ord(src[i + 1]) == 42 {
+                    depth = depth + 1
+                    i = i + 2
+                    col = col + 2
+                } elif c == 42 and i + 1 < n and ord(src[i + 1]) == 47 {
+                    depth = depth - 1
+                    i = i + 2
+                    col = col + 2
+                } elif c == 10 or c == 13 {
+                    if not saw_newline {
+                        nl_line = line
+                        nl_col = col
+                        saw_newline = true
+                    }
+                    line = line + 1
+                    col = 1
+                    i = i + 1
+                    if c == 13 and i < n and ord(src[i]) == 10 {
+                        i = i + 1
+                    }
+                } else {
+                    i = i + 1
+                    col = col + 1
+                }
+            }
+            if depth > 0 {
+                report_error(file, "W0002", comment_line, comment_col, "Unterminated block comment")
+            } elif saw_newline and paren_depth == 0 and bracket_depth == 0 and len(tokens) > 0 and line_terminates_statement(tokens[len(tokens) - 1].kind) {
+                tokens.append(Token { kind: "NEWLINE", val: "\n", line: nl_line, col: nl_col, file: file })
             }
         } elif is_alpha(code) {
             let start = i

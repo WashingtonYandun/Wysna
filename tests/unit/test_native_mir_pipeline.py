@@ -531,9 +531,9 @@ class NativeMirPipelineTests(unittest.TestCase):
             ('class Box[T] { value: T\nfn init(v: T) {} }\nlet b: Box[int] = new Box[int](1)', 'W3004'),
             ('class Box[T] { value: T\nfn init(v: T) { this.value = v }\nfn twice() -> T { this.value + this.value } }\nlet b: Box[bool] = new Box[bool](true)\nprint(b.twice())', 'W2001'),
             ('class Box[T: Missing] { value: T }', 'W2012'),
-            ('interface Show { fn show() -> str }\nclass Box[T: Show] { value: T }', 'W2013'),
-            ('class Box[T] { value: T\n    fn get[U](value: U) -> U { value } }', 'W2013'),
-            ('class Base { value: int }\nclass Box[T] extends Base { value: T }', 'W2013'),
+            ('interface Show { fn show() -> str }\nclass Box[T: Show] { value: T\n    fn init(v: T) { this.value = v } }\nlet b = new Box[int](1)', 'W2001'),
+            ('interface Show { fn show() -> str }\nclass Box[T] { value: T\n    fn init(v: T) { this.value = v }\n    fn render[U: Show](x: U) -> str { x.show() } }\nlet b = new Box[int](1)\nprint(b.render(42))', 'W2001'),
+            ('class Base { value: int }\nclass Box[T] extends Base { value: T }', 'W3003'),
             ('interface Action[T] { fn apply(value: T) -> T }', 'W2013'),
             ('enum Maybe[T] { None, Value(T) }\nprint(Maybe.None)', 'W2013'),
             ('enum Maybe[T] { None, Value(T) }\nprint(Maybe.None == Maybe.None)', 'W2013'),
@@ -570,6 +570,54 @@ class NativeMirPipelineTests(unittest.TestCase):
                         self.assertNotEqual(result.returncode, 0)
                         self.assertIn("[" + diagnostic + "]", result.stderr)
                         self.assertEqual(result.stdout, "")
+
+    def test_native_oop_generics_and_from_use(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            directory = Path(temporary).resolve()
+            (directory / "lib.wysna").write_text(
+                'pub interface Show {\n'
+                '    fn show() -> str\n'
+                '}\n'
+                'pub class Box[T: Show] implements Show {\n'
+                '    public value: T\n'
+                '    public fn init(v: T) { this.value = v }\n'
+                '    public fn show() -> str { this.value.show() }\n'
+                '    public fn transform[R: Show](f: fn(T) -> R) -> Box[R] {\n'
+                '        return new Box[R](f(this.value))\n'
+                '    }\n'
+                '}\n'
+                'pub class ChildBox[T: Show] extends Box[T] {\n'
+                '    tag: str\n'
+                '    public fn init(v: T, t: str) {\n'
+                '        super.init(v)\n'
+                '        this.tag = t\n'
+                '    }\n'
+                '    public fn show() -> str { this.tag + ":" + super.show() }\n'
+                '}\n',
+                encoding="utf-8",
+            )
+            source = directory / "main.wysna"
+            source.write_text(
+                'from "lib" use { Show, Box as LibBox, ChildBox }\n'
+                'class Label implements Show {\n'
+                '    text: str\n'
+                '    fn init(t: str) { this.text = t }\n'
+                '    fn show() -> str { "[" + this.text + "]" }\n'
+                '}\n'
+                'let base: LibBox[Label] = new LibBox[Label](new Label("ok"))\n'
+                'let child: ChildBox[Label] = new ChildBox[Label](new Label("sub"), "tag")\n'
+                'let mapped = base.transform(|l: Label| => new Label(l.show() + "!"))\n'
+                'print(base.show(), child.show(), mapped.show())\n',
+                encoding="utf-8",
+            )
+            module, arena = import_module(self.invoke("--emit-mir", source))
+            service = CompilerService()
+            checked = service.check_file(source)
+            expected = self.execute(service.emit_c(checked).source, directory, "seed")
+            self.assertEqual(expected[0], 0, expected[2].decode("utf-8", errors="replace"))
+            self.assertEqual(expected[1], b"[ok] tag:[sub] [[ok]!]\n")
+            self.assertEqual(self.execute(CCodeGen(arena).generate(module), directory, "exchange"), expected)
+            self.assertEqual(self.execute(self.invoke("--emit-c-mir", source), directory, "native"), expected)
 
 
 if __name__ == "__main__":

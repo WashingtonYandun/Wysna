@@ -10,14 +10,14 @@ CONTRACT = r'''
 #include <assert.h>
 int main(void) {
     WVal empty_weak = wysna_empty_weak();
-    assert(wysna_builtin_upgrade(empty_weak).tag == W_NONE);
+    assert(wysna_is_none(wysna_builtin_upgrade(empty_weak)));
     WVal empty_copy = wysna_clone(empty_weak);
     wysna_release(empty_weak); wysna_release(empty_copy);
     assert(wysna_g_live_objects == 0);
     WVal object = wysna_make_object("Node", 0, NULL, NULL);
     WVal weak = wysna_builtin_weak(object);
     WVal copy = wysna_clone(weak);
-    WWeakControl* control = weak.as.weak;
+    WWeakControl* control = wysna_as_weak(weak);
     assert(control->strong == 1 && control->weak == 3);
     WVal upgraded = wysna_builtin_upgrade(weak);
     assert(control->strong == 2 && wysna_eq(object, upgraded));
@@ -25,7 +25,7 @@ int main(void) {
     assert(control->strong == 1);
     wysna_release(upgraded);
     assert(control->object == NULL && control->strong == 0 && control->weak == 2);
-    assert(wysna_builtin_upgrade(weak).tag == W_NONE);
+    assert(wysna_is_none(wysna_builtin_upgrade(weak)));
     assert(wysna_eq(weak, copy));
     wysna_release(copy);
     assert(control->weak == 1);
@@ -50,7 +50,7 @@ int main(void) {
     wysna_assign(wysna_member_ref(&parent, "link"), wysna_clone(child));
     wysna_release(child);
     wysna_release(parent);
-    assert(weak.as.weak->object == NULL);
+    assert(wysna_as_weak(weak)->object == NULL);
     wysna_release(weak);
     assert(wysna_g_live_objects == 0);
     wysna_runtime_cleanup();

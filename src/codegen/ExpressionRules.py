@@ -15,6 +15,7 @@ from node.NodeType import (
     SuperExpr,
     NewExpr,
     UnaryExpr,
+    AwaitExpr,
     BinaryExpr,
     CoalesceExpr,
     RangeExpr,
@@ -42,9 +43,12 @@ def emit_lambda_expr(emitter: "CCodeGen", expr: LambdaExpr, out: List[str]) -> s
 
 
 def emit_int_literal(emitter: "CCodeGen", expr: IntLiteral, out: List[str]) -> str:
-    if expr.value == -9223372036854775808:
-        return "wysna_int((-9223372036854775807LL - 1LL))"
-    return f"wysna_int({expr.value}LL)"
+    if -(1 << 47) <= expr.value <= ((1 << 47) - 1):
+        return f"wysna_int({expr.value}LL)"
+    lit = emitter.new_aux("_ilit")
+    val_c = "(-9223372036854775807LL - 1LL)" if expr.value == -9223372036854775808 else f"{expr.value}LL"
+    out.append(f"static WIntBox {lit} = {{ W_INT, -1, {val_c} }};")
+    return f"wysna_make_hi_ptr(WVAL_HI_EXT, &{lit})"
 
 
 def emit_float_literal(emitter: "CCodeGen", expr: FloatLiteral, out: List[str]) -> str:
@@ -53,11 +57,12 @@ def emit_float_literal(emitter: "CCodeGen", expr: FloatLiteral, out: List[str]) 
 
 
 def emit_string_literal(emitter: "CCodeGen", expr: StringLiteral, out: List[str]) -> str:
-    if len(expr.value) <= 1:
-        return f"wysna_str_n({emitter.escape_c_str(expr.value)}, {len(expr.value.encode('utf-8'))})"
+    utf8_len = len(expr.value.encode('utf-8'))
+    if utf8_len <= 6:
+        return f"wysna_str_n({emitter.escape_c_str(expr.value)}, {utf8_len})"
     literal = emitter.new_aux("_literal")
     out.append(f"static WStringLiteral {literal} = {{0}};")
-    return f"wysna_literal_str_n(&{literal}, {emitter.escape_c_str(expr.value)}, {len(expr.value.encode('utf-8'))})"
+    return f"wysna_literal_str_n(&{literal}, {emitter.escape_c_str(expr.value)}, {utf8_len})"
 
 
 def emit_bool_literal(emitter: "CCodeGen", expr: BoolLiteral, out: List[str]) -> str:
@@ -84,16 +89,23 @@ def emit_ident_expr(emitter: "CCodeGen", expr: IdentExpr, out: List[str]) -> str
         return "wysna_none()"
     if hasattr(expr, "resolved_enum_name"):
         en_name = expr.resolved_enum_name
-        return f'wysna_enum("{en_name}", "{expr.name}")'
+        elit = emitter.new_aux("_elit")
+        out.append(f"static WEnumBuf {elit} = {{0}};")
+        return f'wysna_enum_literal(&{elit}, "{en_name}", "{expr.name}")'
     return emitter.c_var(expr.name)
 
 
 def emit_unary_expr(emitter: "CCodeGen", expr: UnaryExpr, out: List[str]) -> str:
     op_val = emitter.emit_expr(expr.operand, out)
     if expr.op == "-":
-        return f"wysna_neg({op_val})"
+        return emitter._bind_call(f"wysna_neg({op_val})", out)
     if expr.op == "not":
-        return f"wysna_bool(!({op_val}).as.b)"
+        return f"wysna_bool(!wysna_as_bool({op_val}))"
+
+
+def emit_await_expr(emitter: "CCodeGen", expr: AwaitExpr, out: List[str]) -> str:
+    operand = emitter.emit_expr(expr.operand, out)
+    return emitter._bind_call(f"wysna_await({emitter._own_expr(operand)})", out)
 
 
 def emit_binary_expr(emitter: "CCodeGen", expr: BinaryExpr, out: List[str]) -> str:
@@ -101,11 +113,11 @@ def emit_binary_expr(emitter: "CCodeGen", expr: BinaryExpr, out: List[str]) -> s
         lhs = emitter.emit_expr(expr.left, out)
         res = emitter.new_temp()
         emitter._declare_owned_var(res, "wysna_bool(false)", out)
-        out.append(f"if (({lhs}).as.b) {{")
+        out.append(f"if (wysna_as_bool({lhs})) {{")
         emitter._push_scope("block")
         rhs_stmts: List[str] = []
         rhs = emitter.emit_expr(expr.right, rhs_stmts)
-        rhs_stmts.append(f"{res} = wysna_bool(({rhs}).as.b);")
+        rhs_stmts.append(f"{res} = wysna_bool(wysna_as_bool({rhs}));")
         emitter._pop_scope(rhs_stmts)
         for s in rhs_stmts:
             out.append(f"    {s}")
@@ -116,11 +128,11 @@ def emit_binary_expr(emitter: "CCodeGen", expr: BinaryExpr, out: List[str]) -> s
         lhs = emitter.emit_expr(expr.left, out)
         res = emitter.new_temp()
         emitter._declare_owned_var(res, "wysna_bool(true)", out)
-        out.append(f"if (!({lhs}).as.b) {{")
+        out.append(f"if (!wysna_as_bool({lhs})) {{")
         emitter._push_scope("block")
         rhs_stmts = []
         rhs = emitter.emit_expr(expr.right, rhs_stmts)
-        rhs_stmts.append(f"{res} = wysna_bool(({rhs}).as.b);")
+        rhs_stmts.append(f"{res} = wysna_bool(wysna_as_bool({rhs}));")
         emitter._pop_scope(rhs_stmts)
         for s in rhs_stmts:
             out.append(f"    {s}")
@@ -143,10 +155,12 @@ def emit_binary_expr(emitter: "CCodeGen", expr: BinaryExpr, out: List[str]) -> s
     if expr.op in op_map:
         call = f"{op_map[expr.op]}({lhs}, {rhs})"
         if expr.op == "/":
-            return emitter._source_call("wysna_div_at", f"{lhs}, {rhs}", expr)
+            return emitter._bind_call(emitter._source_call("wysna_div_at", f"{lhs}, {rhs}", expr), out)
         if expr.op == "%":
-            return emitter._source_call("wysna_mod_at", f"{lhs}, {rhs}", expr)
-        return emitter._bind_call(call, out) if expr.op == "+" else call
+            return emitter._bind_call(emitter._source_call("wysna_mod_at", f"{lhs}, {rhs}", expr), out)
+        if expr.op in ("+", "-", "*"):
+            return emitter._bind_call(call, out)
+        return call
     if expr.op == "==":
         return f"wysna_bool(wysna_eq({lhs}, {rhs}))"
     if expr.op == "!=":
@@ -157,7 +171,7 @@ def emit_coalesce_expr(emitter: "CCodeGen", expr: CoalesceExpr, out: List[str]) 
     lhs = emitter.emit_expr(expr.left, out)
     res = emitter.new_temp()
     emitter._declare_owned_var(res, emitter._own_expr(lhs), out)
-    out.append(f"if ({res}.tag == W_NONE) {{")
+    out.append(f"if (wysna_is_none({res})) {{")
     emitter._push_scope("block")
     rhs_stmts = []
     rhs = emitter.emit_expr(expr.right, rhs_stmts)
@@ -186,7 +200,7 @@ def emit_postfix_try_expr(emitter: "CCodeGen", expr: PostfixTryExpr, out: List[s
     none_cleanup: List[str] = []
     emitter._emit_cleanup_until_fn(none_cleanup)
     channel_enabled = expr.propagation_kind == "optional"
-    out.append(f"if ({str(channel_enabled).lower()} && ({tmp}.tag == W_NONE)) {{")
+    out.append(f"if ({str(channel_enabled).lower()} && wysna_is_none({tmp})) {{")
     for cl in none_cleanup:
         out.append(f"    {cl}")
     out.append("    return wysna_none();")
@@ -196,7 +210,7 @@ def emit_postfix_try_expr(emitter: "CCodeGen", expr: PostfixTryExpr, out: List[s
     err_cleanup: List[str] = []
     emitter._emit_cleanup_until_fn(err_cleanup)
     channel_enabled = expr.propagation_kind == "result"
-    out.append(f"if ({str(channel_enabled).lower()} && ({tmp}.tag == W_ERR)) {{")
+    out.append(f"if ({str(channel_enabled).lower()} && wysna_is_err({tmp})) {{")
     out.append(f"    WVal {err_hold} = wysna_clone({tmp});")
     for cl in err_cleanup:
         out.append(f"    {cl}")
@@ -215,7 +229,7 @@ def emit_else_err_expr(emitter: "CCodeGen", expr: ElseErrExpr, out: List[str]) -
     emitter._declare_owned_var(tmp, emitter._own_expr(op_val), out)
     res = emitter.new_temp()
     emitter._declare_owned_var(res, "wysna_unit()", out)
-    out.append(f"if ({tmp}.tag == W_ERR || {tmp}.tag == W_NONE) {{")
+    out.append(f"if (wysna_is_err({tmp}) || wysna_is_none({tmp})) {{")
     emitter._push_scope("block")
     handler_stmts: List[str] = []
     if expr.err_name is not None:
@@ -248,7 +262,9 @@ def emit_member_expr(emitter: "CCodeGen", expr: MemberExpr, out: List[str]) -> s
         if expr.object.name in emitter.enum_names and not hasattr(expr.object, 'resolved_symbol'):
             if expr.object.name == "Option" and expr.property in ("None", "none"):
                 return "wysna_none()"
-            return f'wysna_enum("{emitter._enum_name(expr, expr.object.name)}", "{expr.property}")'
+            elit = emitter.new_aux("_elit")
+            out.append(f"static WEnumBuf {elit} = {{0}};")
+            return f'wysna_enum_literal(&{elit}, "{emitter._enum_name(expr, expr.object.name)}", "{expr.property}")'
         if f"v_{expr.object.name}_{expr.property}" in emitter.global_vars:
             return f"v_{expr.object.name}_{expr.property}"
     obj_val = emitter.emit_expr(expr.object, out)
@@ -280,7 +296,9 @@ def emit_call_expr(emitter: "CCodeGen", expr: CallExpr, out: List[str]) -> str:
         if fn_name in emitter.enum_variants and not hasattr(expr.callee, 'resolved_symbol'):
             en_name = emitter.enum_variants[fn_name]
             if len(arg_vals) == 0:
-                return f'wysna_enum("{en_name}", "{fn_name}")'
+                elit = emitter.new_aux("_elit")
+                out.append(f"static WEnumBuf {elit} = {{0}};")
+                return f'wysna_enum_literal(&{elit}, "{en_name}", "{fn_name}")'
             elif len(arg_vals) == 1:
                 return emitter._bind_call(f'wysna_enum_payload("{en_name}", "{fn_name}", {emitter._own_expr(arg_vals[0])})', out)
             else:
@@ -365,7 +383,9 @@ def emit_call_expr(emitter: "CCodeGen", expr: CallExpr, out: List[str]) -> str:
             if (en_name == "Option" or en_name.startswith("Option__")) and method in ("None", "none"):
                 return "wysna_none()"
             if len(arg_vals) == 0:
-                return f'wysna_enum("{en_name}", "{method}")'
+                elit = emitter.new_aux("_elit")
+                out.append(f"static WEnumBuf {elit} = {{0}};")
+                return f'wysna_enum_literal(&{elit}, "{en_name}", "{method}")'
             elif len(arg_vals) == 1:
                 return emitter._bind_call(f'wysna_enum_payload("{en_name}", "{method}", {emitter._own_expr(arg_vals[0])})', out)
             else:
@@ -474,7 +494,7 @@ def emit_if_expr(emitter: "CCodeGen", expr: IfExpr, out: List[str]) -> str:
     res = emitter.new_temp()
     emitter._declare_owned_var(res, "wysna_unit()", out)
     cond_v = emitter.emit_expr(expr.condition, out)
-    out.append(f"if (({cond_v}).as.b) {{")
+    out.append(f"if (wysna_as_bool({cond_v})) {{")
     emitter._push_scope("block")
     then_stmts: List[str] = []
     then_v = emitter.emit_block_value(expr.then_branch, then_stmts)
@@ -516,6 +536,7 @@ EXPRESSION_RULES = ExpressionDispatch('codegen', {
     NewExpr: emit_new_expr,
     IdentExpr: emit_ident_expr,
     UnaryExpr: emit_unary_expr,
+    AwaitExpr: emit_await_expr,
     BinaryExpr: emit_binary_expr,
     CoalesceExpr: emit_coalesce_expr,
     RangeExpr: emit_range_expr,

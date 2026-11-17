@@ -18,6 +18,13 @@ declare void @wysna_llvm_invoke(ptr nocapture, ptr nocapture readonly, i32, ptr 
 declare void @wysna_llvm_virtual(ptr nocapture, ptr nocapture readonly, i32, i32, ptr nocapture readonly)
 declare void @wysna_llvm_set_vtable(ptr nocapture, ptr)
 declare i32 @wysna_llvm_entry_status(ptr nocapture readonly) readonly
+declare i64 @wysna_llvm_async_spawn(ptr nocapture readonly)
+declare void @wysna_llvm_async_take_option(ptr nocapture, i64, ptr nocapture readonly)
+declare void @wysna_llvm_coro_spawn(ptr nocapture, ptr, i64, i64, ptr nocapture readonly, ptr nocapture readonly)
+declare i32 @wysna_llvm_coro_try_resolve_await(ptr nocapture, ptr nocapture, ptr nocapture)
+declare i64 @wysna_llvm_coro_restore_int(ptr nocapture)
+declare double @wysna_llvm_coro_restore_float(ptr nocapture)
+declare i32 @wysna_llvm_coro_restore_bool(ptr nocapture)
 ''' + '\n'.join('declare void @wysna_llvm_rt_' + name + '(ptr nocapture, i32, ptr, ptr nocapture readonly, ptr nocapture readonly, i32, ptr nocapture readonly, i32, i32)' for name in sorted(OPERATION_CODES)) + '\n'
 
 
@@ -36,6 +43,10 @@ class ManagedEmission:
                 gen.emit('store %WysnaValue zeroinitializer, ptr ' + gen.pointer(index))
         return gen.cell(0) if args else 'null'
 
+    def release_arguments(self, args, moves=()):
+        for offset, index in enumerate(args):
+            self.gen.release_boxed(index, offset, moved=offset in moves)
+
     def output(self, index):
         gen = self.gen
         if gen.slots[index].storage == 'value':
@@ -51,6 +62,8 @@ class ManagedEmission:
             name = {TYPE_INT: 'int', TYPE_FLOAT: 'float', TYPE_BOOL: 'bool'}[type_id]
             type_ = 'i32' if type_id == TYPE_BOOL else SCALAR_TYPES[type_id]
             value = gen.result('call ' + type_ + ' @wysna_llvm_' + name + '(ptr ' + pointer + ')')
+            if type_id == TYPE_INT:
+                gen.emit('call void @wysna_llvm_release(ptr ' + pointer + ')')
             if type_id == TYPE_BOOL:
                 value = gen.result('icmp ne i32 ' + value + ', 0')
             gen.write(index, value)
@@ -64,6 +77,7 @@ class ManagedEmission:
             else:
                 index = gen.boxed(projection.index)
                 pointer = gen.result('call ptr @wysna_llvm_index_ref(ptr ' + pointer + ', ptr ' + index + ', ' + self.location(projection.source) + ')')
+                gen.release_boxed(projection.index)
         return pointer
 
     def runtime(self, operation):
@@ -75,6 +89,7 @@ class ManagedEmission:
         second = data.get('variant', '')
         gen.emit('call void @wysna_llvm_rt_' + data['name'] + '(ptr ' + output + ', i32 ' + str(len(operation.args)) + ', ptr ' + arguments + ', ptr ' + gen.string(first) +
                  ', ptr ' + gen.string(second) + ', i32 ' + str(int(data.get('inclusive', False))) + ', ' + self.location(operation.source) + ')')
+        self.release_arguments(operation.args, operation.moves)
         self.complete(operation.result, output)
 
     def operation(self, operation):
@@ -97,6 +112,7 @@ class ManagedEmission:
             gen.emit('call void @wysna_llvm_construct(ptr ' + gen.pointer(result) + ', i32 ' +
                      str(('list', 'tuple', 'dict', 'struct', 'object').index(category)) + ', ptr ' + name +
                      ', i32 ' + str(len(args)) + ', ptr ' + keys + ', ptr ' + values + ')')
+            self.release_arguments(ordered)
         elif kind in ('load_field', 'tuple_get'):
             value = gen.boxed(args[0])
             output = self.output(result)
@@ -110,6 +126,8 @@ class ManagedEmission:
             output = self.output(result)
             gen.emit('call void @wysna_llvm_mutate(ptr ' + output + ', ptr ' + pointer + ', ptr ' + value + ', i32 ' +
                      str(('append', 'pop', 'clear').index(data['method'])) + ', ' + self.location(operation.source) + ')')
+            if args:
+                gen.release_boxed(args[0])
             self.complete(result, output)
         elif kind == 'function':
             environment = gen.boxed(args[0]) if args else 'null'
@@ -121,6 +139,8 @@ class ManagedEmission:
             extra = ', i32 ' + str(data['slot']) if kind == 'virtual' else ''
             helper = 'virtual' if kind == 'virtual' else 'invoke'
             gen.emit('call void @wysna_llvm_' + helper + '(ptr ' + output + ', ptr ' + receiver + extra + ', i32 ' + str(len(args) - 1) + ', ptr ' + values + ')')
+            self.release_arguments(args[1:])
+            gen.release_boxed(args[0], len(args) - 1)
             self.complete(result, output)
         elif kind == 'set_vtable':
             gen.emit('call void @wysna_llvm_set_vtable(ptr ' + gen.boxed(args[0]) + ', ptr @vtable_' + data['class'] + ')')
@@ -141,6 +161,7 @@ class ManagedEmission:
             kinds = ('none', 'err', 'failed', 'tuple', 'error_type', 'variant', 'present', 'ok')
             value = gen.result('call i32 @wysna_llvm_test(ptr ' + gen.boxed(args[0]) + ', i32 ' + str(kinds.index(test)) +
                                ', ptr ' + gen.string(first) + ', ptr ' + gen.string(second) + ', i32 ' + str(data.get('length', 0)) + ')')
+            gen.release_boxed(args[0])
             gen.write(result, gen.result('icmp ne i32 ' + value + ', 0'))
         else:
             raise WysnaError('Verified LLVM MIR operation has no emitter: ' + kind, code='W9999',
@@ -149,13 +170,15 @@ class ManagedEmission:
 
     def adapter(self, name, function, arity, captured):
         gen = self.gen
-        environment = 'ptr byval(%WysnaValue) align 8' if gen.triple.startswith('x86_64-') else 'ptr'
-        lines = ['define internal void @adapter_' + name + '(ptr sret(%WysnaValue) align 8 %out, ' + environment +
-                 ' %environment, i32 %count, ptr %arguments) {', 'entry:',
+        lines = ['define internal i64 @adapter_' + name + '(i64 %environment_bits, i32 %count, ptr %arguments) {', 'entry:',
                  '  %arity = icmp eq i32 %count, ' + str(arity), '  br i1 %arity, label %invoke, label %invalid',
                  'invalid:', '  call void @wysna_llvm_fail(ptr ' + gen.string('W4003') + ', ptr ' +
                  gen.string('Call arity mismatch') + ', ptr ' + gen.string('') + ', i32 0, i32 0)', '  unreachable', 'invoke:',
+                 '  %out = alloca %WysnaValue, align 8',
                  '  store %WysnaValue zeroinitializer, ptr %out']
+        if captured:
+            lines.extend(['  %environment = alloca %WysnaValue, align 8',
+                          '  store i64 %environment_bits, ptr %environment, align 8'])
         parameters = []
         for position, index in enumerate(function.params):
             type_id = function.slots[index].type_id
@@ -190,7 +213,7 @@ class ManagedEmission:
                 value = '%wide'
                 type_ = 'i32'
             lines.append('  call void @wysna_llvm_box_' + method + '(ptr %out, ' + type_ + ' ' + value + ')')
-        return lines + ['  ret void', '}', '']
+        return lines + ['  %returned_bits = load i64, ptr %out, align 8', '  ret i64 %returned_bits', '}', '']
 
     def metadata_and_adapters(self):
         gen = self.gen

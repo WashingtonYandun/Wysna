@@ -176,6 +176,71 @@ class LanguageServerTests(unittest.TestCase):
         self.open(uri, source)
         self.assertIsNone(self.server.rename(uri, position_at(source, source.index('value')), 'other'))
 
+    def _open_workspace(self, files):
+        for name, text in files.items():
+            (self.root / name).write_text(text, encoding='utf-8')
+        self.request('initialize', {'rootUri': self.root.as_uri()}, 1)
+
+    def test_workspace_rename_updates_exported_symbols_in_unopened_dependents(self):
+        library_source = 'pub fn plus(value: int) -> int { return value + 1 }\n'
+        main_source = ('import "library.wysna" as library\n'
+                       'print(library.plus(1))\n')
+        other_source = ('import "library.wysna" as lib\n'
+                        'fn twice(value: int) -> int { return lib.plus(lib.plus(value)) }\n'
+                        'print(twice(1))\n')
+        self._open_workspace({'library.wysna': library_source, 'other.wysna': other_source})
+        self.open(self.library_uri, library_source)
+        self.open(self.main_uri, main_source)
+        position = position_at(main_source, main_source.index('plus'))
+        result = self.server.rename(self.main_uri, position, 'add')
+        self.assertIsNotNone(result)
+        changes = result['changes']
+        other_uri = (self.root / 'other.wysna').as_uri()
+        self.assertEqual(set(changes), {self.library_uri, self.main_uri, other_uri})
+        self.assertEqual([len(changes[uri]) for uri in (self.library_uri, self.main_uri, other_uri)],
+                         [1, 1, 2])
+        self.assertTrue(all(edit['newText'] == 'add' for edits in changes.values() for edit in edits))
+
+    def test_workspace_rename_refuses_collisions_and_broken_dependents(self):
+        library_source = 'pub fn plus(value: int) -> int { return value + 1 }\n'
+        main_source = ('import "library.wysna" as library\n'
+                       'let add = 1\n'
+                       'print(library.plus(add))\n')
+        self._open_workspace({'library.wysna': library_source})
+        self.open(self.library_uri, library_source)
+        self.open(self.main_uri, main_source)
+        position = position_at(main_source, main_source.index('plus'))
+        self.assertIsNone(self.server.rename(self.main_uri, position, 'add'))
+        self.assertIsNotNone(self.server.rename(self.main_uri, position, 'sum'))
+        (self.root / 'broken.wysna').write_text('let = =\n', encoding='utf-8')
+        self.assertIsNone(self.server.rename(self.main_uri, position, 'sum'))
+
+    def test_semantic_tokens_classify_declarations_and_literals(self):
+        source = ('# note\nstruct Point { x: int }\nfn show(p: Point) -> int { return p.x }\n'
+                  'print(show(Point { x: 1 }), "h\u00e9")\n')
+        uri = (self.root / 'semantic.wysna').as_uri()
+        self.open(uri, source)
+        self.request('initialize', {}, 7)
+        provider = self.messages[-1]['result']['capabilities']['semanticTokensProvider']
+        legend = provider['legend']['tokenTypes']
+        self.request('textDocument/semanticTokens/full', {'textDocument': {'uri': uri}}, 8)
+        data = self.messages[-1]['result']['data']
+        lines = source.split('\n')
+        decoded, line, column = [], 0, 0
+        for index in range(0, len(data), 5):
+            delta_line, delta_char, length, kind, modifiers = data[index:index + 5]
+            line += delta_line
+            column = delta_char if delta_line else column + delta_char
+            decoded.append((legend[kind], lines[line][column:column + length], modifiers))
+        self.assertIn(('comment', '# note', 0), decoded)
+        self.assertIn(('struct', 'Point', 1), decoded)
+        self.assertIn(('function', 'show', 1), decoded)
+        self.assertIn(('parameter', 'p', 1), decoded)
+        self.assertIn(('property', 'x', 0), decoded)
+        self.assertIn(('number', '1', 0), decoded)
+        self.assertIn(('string', '"h\u00e9"', 0), decoded)
+        self.assertIn(('keyword', 'return', 0), decoded)
+
     def test_definition_resolves_same_name_parameter_on_declaration_line(self):
         source = 'fn item(item: int) -> int { return item }\nprint(item(1))\n'
         uri = (self.root / 'same-line.wysna').as_uri()

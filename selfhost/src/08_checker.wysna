@@ -65,9 +65,13 @@ fn check_program(tokens: list[Token], file: str, capture: bool) -> CheckedProgra
     return checked_finish(context, tokens, file)
 }
 
-fn check_source(src: str, in_path: str) -> CheckedProgram {
+fn check_source_with_overlays(src: str, in_path: str, ov_paths: list[str], ov_texts: list[str]) -> CheckedProgram {
     let file = module_canonical(in_path)
-    let checked = check_program(module_tokens(src, file), file, true)
+    let checked = check_program(module_tokens_with_overlays(src, file, ov_paths, ov_texts), file, true)
     for node in checked.nodes { if node.kind == "unsupported" { report_error_at("W2013", node.source, "Compiler native-core-v1 does not support expression " + node.text) } }
     return checked
+}
+
+fn check_source(src: str, in_path: str) -> CheckedProgram {
+    return check_source_with_overlays(src, in_path, [], [])
 }

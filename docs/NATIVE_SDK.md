@@ -10,7 +10,14 @@ Extract the archive into a new directory. On Windows, `open-terminal.cmd` opens 
 
 ```sh
 wysna --version
-wysna check program.wysna
+wysna check program.wysna --output-format=json-v1
+wysna fmt program.wysna --output-format=json-v1
+wysna test tests/
+wysna graph program.wysna --output-format=json-v1
+wysna inspect program.wysna --symbol main --with-deps --output-format=json-v1
+wysna patch program.wysna --symbol main --expect-graph-hash graph:... --with "..." --apply
+wysna explain program.wysna --output-format=json-v1
+wysna lsp
 wysna emit-mir program.wysna -o program.mir.json
 wysna emit-c program.wysna -o program.c
 wysna build program.wysna -o program --profile release
@@ -25,7 +32,7 @@ The `dev`, `release` and `size` profiles select `-O0 -g`, `-O2` and `-Os`. All p
 
 The native pipeline covers scalars, UTF-8 strings and paths, globals, collections, CoW mutation, direct ranges and nested tuple loop bindings, optional and Result channels, closed error unions, structs/enums, classes/inheritance/interfaces, pattern matching with guards, closures by snapshot, function values, concrete generic functions/structs/enums and the scalar/opaque C ABI. The profile and independent-verifier contracts are described in [MIR design](MIR_DESIGN.md).
 
-Parameterized classes with fields and methods are supported when their type arguments are concrete; the class arguments are substituted into each method signature and body. `std/environment.arguments()`, `std/environment.get(name)` and `std/time.unix_seconds()` are supported; `get` reads the process environment inherited by the program and does not provide sandboxing. Constrained parameterized classes, methods that introduce their own type parameters inside a parameterized class, inheritance or interfaces on parameterized classes, parameterized interfaces, generic nominal values whose type arguments remain unresolved, library-mode exports, WebAssembly targets and the Seed project/package/LSP/formatter commands are outside this SDK profile. An unresolved nominal value needs an explicit type context. Native profile exclusions report `W2013`; unsupported commands report `W5002`. The SDK does not claim universal Seed parity.
+Parameterized classes (including constrained type parameters, independent generic methods `Box[T].transform[R]`, and parameterized class inheritance) as well as stackless CPS `async fn` coroutines and `from ... use` imports are supported in the native profile; parameterized interface declarations (`interface Container[T]`) remain Seed-only (`W2013` in Selfhost). `std/environment.arguments()`, `std/environment.get(name)` and `std/time.unix_seconds()` remain supported; C99 builds generated via Seed `wysna build --sandbox` (with optional `--allow`/`--deny`) enforce `WYSNA_DENY_CAP_*` capability sandbox guards (`W5006`) at runtime host boundaries. The native SDK includes `fmt`, `test`, `graph`, `inspect`, `patch`, `explain`, and `wysna lsp` (Stage-3 native LSP) without Python; project manifests (`wysna.toml`), library-mode exports, `fix`/`schema`/`mcp`, and WebAssembly targets stay in Seed. Native profile exclusions report `W2013`; unsupported commands report `W5002`.
 
 For a small CLI, read user arguments and environment configuration through the standard module:
 

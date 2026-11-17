@@ -110,8 +110,12 @@ def test_engine_and_backend_contracts():
 
         compiler_check = _run_cmd([sys.executable, wysna_cli, "check", "--engine=compiler",
                                    src_path], cwd=repo_root)
-        assert compiler_check[0] == 2, compiler_check
-        assert "standalone Compiler SDK" in compiler_check[2]
+        assert compiler_check[0] == 0, compiler_check
+        assert "[Wysna Compiler] Checked" in compiler_check[1], compiler_check
+        compiler_ast = _run_cmd([sys.executable, wysna_cli, "ast", "--engine=compiler",
+                                 src_path], cwd=repo_root)
+        assert compiler_ast[0] == 2, compiler_ast
+        assert "--engine=compiler supports emit-c, build, check, fmt, and run" in compiler_ast[2], compiler_ast
         compiler_llvm = _run_cmd([sys.executable, wysna_cli, "emit-c", "--engine=compiler",
                                   "--backend=llvm-experimental", src_path], cwd=repo_root)
         assert compiler_llvm[0] == 2, compiler_llvm

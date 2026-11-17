@@ -1,3 +1,8 @@
+import "std/buffer"
+import "std/bytes" as utf8
+
+extern "C" fn wysna_host_unicode_normalize(input: opaque, form: int, output: opaque) -> int
+
 pub fn join(parts: list[str], separator: str) -> str {
     return join_strings(parts, separator)
 }
@@ -163,4 +168,37 @@ pub fn repeat(text: str, count: int) -> str {
         parts.append(text)
     }
     return join_strings(parts, "")
+}
+
+# Unicode canonical normalization (UAX #15). Text is already valid UTF-8 by construction.
+fn normalize(value: str, form: int) -> str {
+    let input = buffer.from_text(value)
+    let output = new buffer.Bytes()
+    let status = wysna_host_unicode_normalize(input.borrow(), form, output.borrow())
+    input.close()
+    if status != 0 {
+        output.close()
+        return value
+    }
+    let mut octets: list[int] = []
+    for index in 0..output.size() {
+        octets.append(output.get(index) else err { 0 })
+    }
+    output.close()
+    return utf8.decode(octets) else err { value }
+}
+
+# Composed form: "e" + U+0301 becomes U+00E9.
+pub fn normalize_nfc(value: str) -> str {
+    return normalize(value, 0)
+}
+
+# Decomposed form: U+00E9 becomes "e" + U+0301.
+pub fn normalize_nfd(value: str) -> str {
+    return normalize(value, 1)
+}
+
+# True when both strings are canonically equivalent.
+pub fn canonical_equal(left: str, right: str) -> bool {
+    return normalize(left, 0) == normalize(right, 0)
 }

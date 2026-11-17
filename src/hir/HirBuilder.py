@@ -11,7 +11,7 @@ from node.NodeType import (
     LetDecl, WhileStmt, ForStmt, ReturnStmt, BreakStmt, ContinueStmt,
     IntLiteral, FloatLiteral, StringLiteral, BoolLiteral, NoneLiteral, IdentExpr,
     ThisExpr, SuperExpr, NewExpr,
-    UnaryExpr, BinaryExpr, CoalesceExpr, RangeExpr, PostfixTryExpr, ElseErrExpr,
+    UnaryExpr, AwaitExpr, BinaryExpr, CoalesceExpr, RangeExpr, PostfixTryExpr, ElseErrExpr,
     CallExpr, MemberExpr, IndexExpr, AssignmentExpr, StructInitExpr,
     ListExpr, DictExpr, TupleExpr, IfExpr, MatchExpr
 )
@@ -563,16 +563,20 @@ class HirBuilder:
             is_fallible = True
             err_type_name = self._get_type_name_from_node(decl.return_type.err_type)
 
+        is_async = bool(getattr(decl, "is_async", False))
+        external_ret_tid = self.interner.find_or_create_task_struct(ret_tid) if is_async else ret_tid
         return HirFnDecl(
             name=decl.name,
             params=params,
-            return_type_id=ret_tid,
+            return_type_id=external_ret_tid,
             body=body_hir,
             is_fallible=is_fallible,
             err_type_name=err_type_name,
             is_method=False,
             is_public=bool(getattr(decl, "is_exported", False)),
-            span=self._span(decl)
+            span=self._span(decl),
+            is_async=is_async,
+            async_return_type_id=ret_tid,
         )
 
     def _discard_unit_result_tail(self, body):
@@ -654,16 +658,20 @@ class HirBuilder:
             is_fallible = True
             err_type_name = self._get_type_name_from_node(decl.return_type.err_type)
 
+        is_async = bool(getattr(decl, "is_async", False))
+        external_ret_tid = self.interner.find_or_create_task_struct(ret_tid) if is_async else ret_tid
         return HirFnDecl(
             name=decl.name,
             params=params,
-            return_type_id=ret_tid,
+            return_type_id=external_ret_tid,
             body=body_hir,
             is_fallible=is_fallible,
             err_type_name=err_type_name,
             is_method=True,
             is_public=decl.is_public,
-            span=self._span(decl)
+            span=self._span(decl),
+            is_async=is_async,
+            async_return_type_id=ret_tid,
         )
 
     # -------------------------------------------------------------
@@ -796,6 +804,11 @@ class HirBuilder:
         elif isinstance(expr, UnaryExpr):
             operand_hir = self._lower_expr(expr.operand)
             return HirUnaryOp(getattr(expr, "op", getattr(expr, "operator", "-")), operand_hir, tid, span)
+        elif isinstance(expr, AwaitExpr):
+            operand_hir = self._lower_expr(expr.operand)
+            if operand_hir.type_id == tid:
+                return operand_hir
+            return HirCoerce(operand_hir, tid, kind="await", span=span)
         elif isinstance(expr, BinaryExpr):
             left_hir = self._lower_expr(expr.left)
             right_hir = self._lower_expr(expr.right)

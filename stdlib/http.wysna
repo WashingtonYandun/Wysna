@@ -13,6 +13,22 @@ extern "C" fn wysna_host_http_request(
     timeout_ms: int,
     max_response_bytes: int
 ) -> int
+extern "C" fn wysna_host_http_async_start(
+    url: opaque,
+    method: opaque,
+    request_headers: opaque,
+    request_body: opaque,
+    timeout_ms: int,
+    max_response_bytes: int
+) -> int
+extern "C" fn wysna_host_http_async_poll(transfer_id: int) -> int
+extern "C" fn wysna_host_http_multi_poll(timeout_ms: int) -> int
+extern "C" fn wysna_host_http_async_finish(
+    transfer_id: int,
+    response_headers: opaque,
+    response_body: opaque
+) -> int
+extern "C" fn wysna_host_http_async_cancel(transfer_id: int) -> int
 extern "C" fn wysna_host_last_error() -> int
 
 pub enum HttpErrorKind {
@@ -244,6 +260,75 @@ pub fn response_json(response: Response) -> json.Value ! HttpError | json.JsonEr
     return json.parse(source)?
 }
 
+pub struct AsyncRequest {
+    handle: int,
+    url: str,
+}
+
+pub fn get_async(url: str) -> AsyncRequest ! HttpError {
+    let empty_headers = new buffer.Bytes()
+    let empty_body = new buffer.Bytes()
+    let encoded_url = buffer.from_text(url)
+    let encoded_method = buffer.from_text("GET")
+    let handle = wysna_host_http_async_start(
+        encoded_url.borrow(),
+        encoded_method.borrow(),
+        empty_headers.borrow(),
+        empty_body.borrow(),
+        30000,
+        1048576,
+    )
+    encoded_url.close()
+    encoded_method.close()
+    empty_headers.close()
+    empty_body.close()
+    if handle < 0 {
+        return Err(HttpError { kind: error_kind(-handle), code: wysna_host_last_error() })
+    }
+    return AsyncRequest { handle: handle, url: url }
+}
+
+pub fn poll(request: AsyncRequest) -> int {
+    if request.handle < 0 { return -1 }
+    return wysna_host_http_async_poll(request.handle)
+}
+
+pub fn cancel(request: AsyncRequest) -> int {
+    if request.handle < 0 { return 0 }
+    return wysna_host_http_async_cancel(request.handle)
+}
+
+pub fn finish(request: AsyncRequest) -> Response ! HttpError {
+    if request.handle < 0 {
+        return Err(HttpError { kind: HttpErrorKind.InvalidRequest, code: 0 })
+    }
+    let response_headers = new buffer.Bytes()
+    let response_body = new buffer.Bytes()
+    let status = wysna_host_http_async_finish(
+        request.handle,
+        response_headers.borrow(),
+        response_body.borrow(),
+    )
+    if status < 0 {
+        let kind = error_kind(-status)
+        let code = wysna_host_last_error()
+        response_headers.close()
+        response_body.close()
+        return Err(HttpError { kind: kind, code: code })
+    }
+    let header_text = decode_buffer(response_headers) else error {
+        response_headers.close()
+        response_body.close()
+        return Err(error)
+    }
+    response_headers.close()
+    let parsed_headers = parse_response_headers(header_text) else error {
+        response_body.close()
+        return Err(error)
+    }
+    return Response { status: status, headers: parsed_headers, body: response_body }
+}
+
 pub struct BatchItemResult {
     url: str,
     ok: bool,
@@ -252,13 +337,40 @@ pub struct BatchItemResult {
 }
 
 pub fn batch_get(urls: list[str]) -> list[BatchItemResult] {
-    let mut results: list[BatchItemResult] = []
+    let mut requests: list[AsyncRequest] = []
     for index in 0..len(urls) {
         let target_url = urls[index]
-        let mut item_err: HttpError? = none
+        let req = get_async(target_url) else err {
+            AsyncRequest { handle: -1, url: target_url }
+        }
+        requests.append(req)
+    }
+
+    let mut all_finished = false
+    while not all_finished {
+        all_finished = true
+        for index in 0..len(requests) {
+            let req = requests[index]
+            if req.handle >= 0 {
+                let st = wysna_host_http_async_poll(req.handle)
+                if st == 0 {
+                    all_finished = false
+                }
+            }
+        }
+        if not all_finished {
+            wysna_host_http_multi_poll(10)
+        }
+    }
+
+    let mut results: list[BatchItemResult] = []
+    for index in 0..len(requests) {
+        let target_url = urls[index]
+        let req = requests[index]
         let mut item_ok = true
+        let mut item_err: HttpError? = none
         let empty_headers: list[Header] = []
-        let resp = get(target_url) else err {
+        let resp = finish(req) else err {
             item_ok = false
             item_err = Some(err)
             Response { status: 0, headers: empty_headers, body: new buffer.Bytes() }
@@ -284,15 +396,23 @@ pub fn batch_get(urls: list[str]) -> list[BatchItemResult] {
 }
 
 pub fn batch_get_all(urls: list[str]) -> list[Response] ! HttpError {
+    let items = batch_get(urls)
     let mut responses: list[Response] = []
-    for index in 0..len(urls) {
-        let resp = get(urls[index]) else err {
+    for item in items {
+        if item.ok {
+            match item.response {
+                Some(resp) => responses.append(resp),
+                None => { return Err(HttpError { kind: HttpErrorKind.InvalidResponse, code: 0 }) },
+            }
+        } else {
             for prior in responses {
                 prior.body.close()
             }
-            return Err(err)
+            match item.error {
+                Some(err) => { return Err(err) },
+                None => { return Err(HttpError { kind: HttpErrorKind.InvalidResponse, code: 0 }) },
+            }
         }
-        responses.append(resp)
     }
     return responses
 }

@@ -45,13 +45,8 @@ Browser-library exports belong to their dedicated target and are rejected here.
 
 The supported host triples are `arm64-apple-macosx13.0.0` and
 `x86_64-unknown-linux-gnu`. There is no cross-compilation, Windows or Wasm LLVM
-claim. The provider supplies and verifies the target data layout. ABI 2 uses
-pointer-based boxed-value boundaries; callback adapters implement each target's
-actual C `WInvoke` calling convention. Compile-time checks enforce WVal size 32,
-payload offset 8, string-literal metadata size 48, alignment 8, vtable layout and
-64-bit pointers. A single runtime translation unit owns runtime state and FFI
-wrappers. Program function bodies are LLVM IR; generated C program bodies and
-silent C99 fallback are forbidden.
+claim. The provider supplies and verifies the target data layout. ABI 3 passes
+and returns the unified 8-byte `WVal` by value in general-purpose registers (`i64`) across arm64 and x86_64 without target-specific `sret` or `byval` adapter branching. Compile-time checks enforce ABI 3, WVal size 8, `bits` offset 0, string-literal metadata size 48, alignment 8, vtable layout and 64-bit pointers. A single runtime translation unit owns runtime state and FFI wrappers. Program function bodies are LLVM IR; generated C program bodies and silent C99 fallback are forbidden.
 
 Independent MIR verification runs before emission. Invalid representations,
 ownership, CFGs and contracts produce `W9999`. LLVM verifies emitted IR and verifies

@@ -12,6 +12,19 @@ import time
 
 from common.Platform import compiler_command, executable_name, native_stack_link_args
 
+HTTP_TRANSPORT_SYMBOLS = (
+    'wysna_host_http_request',
+    'wysna_host_http_batch',
+    'wysna_host_http_async_start',
+    'wysna_host_http_async_finish',
+    'wysna_host_http_async_cancel',
+)
+
+
+def source_uses_http_transport(c_source: str) -> bool:
+    """Return True only when emitted C requires libcurl HTTP transport rather than async poll stubs."""
+    return any(symbol in c_source for symbol in HTTP_TRANSPORT_SYMBOLS)
+
 
 @dataclass(frozen=True)
 class NativeBuildResult:
@@ -45,7 +58,7 @@ class NativeToolchain:
 
     def build(self, c_source, output, sanitize=False, link_libraries=(), *, profile=None):
         """Compile C and explicit adapters, then link without owning caller inputs."""
-        uses_http = 'wysna_host_http_request' in c_source
+        uses_http = source_uses_http_transport(c_source)
         if uses_http and 'WYSNA_HAS_HTTP' not in c_source:
             include = '#include "runtime/wysna_runtime.h"'
             if include in c_source:
@@ -212,10 +225,47 @@ class NativeToolchain:
                     'selfhost', 'Wysna Compiler Error', result.stderr, result.returncode,
                 )
             source = Path(output_path).read_text(encoding='utf-8')
-            if 'wysna_host_http_request' in source and 'WYSNA_HAS_HTTP' not in source:
+            if source_uses_http_transport(source) and 'WYSNA_HAS_HTTP' not in source:
                 include = '#include "runtime/wysna_runtime.h"'
                 if include in source:
                     source = source.replace(include, '#define WYSNA_HAS_HTTP 1\n' + include, 1)
                 else:
                     source = '#define WYSNA_HAS_HTTP 1\n' + source
         return CompilerEmissionResult(source, codegen_ms)
+
+    def check_compiler(self, compiler_path, file, json_output=False):
+        """Use the independent selfhost compiler binary to check a source file without emitting code."""
+        input_path = os.path.abspath(os.fspath(file))
+        input_directory = os.path.dirname(input_path) or os.getcwd()
+        check_flag = "--check-json" if json_output else "--check"
+        started = time.perf_counter()
+        result = subprocess.run(
+            [os.fspath(compiler_path), "--stdlib-root", str(Path(self.repo_root) / "stdlib"),
+             check_flag, input_path],
+            capture_output=True, text=True, cwd=input_directory, timeout=120,
+        )
+        check_ms = (time.perf_counter() - started) * 1000.0
+        if result.returncode != 0:
+            raise NativeCompilationError(
+                'selfhost', 'Wysna Compiler Check Error', result.stderr, result.returncode,
+            )
+        return result.stdout, check_ms
+
+    def format_compiler(self, compiler_path, file, write=False):
+        """Format a source file natively via the selfhost compiler binary (--fmt / --fmt-write)."""
+        input_path = os.path.abspath(os.fspath(file))
+        input_directory = os.path.dirname(input_path) or os.getcwd()
+        fmt_flag = "--fmt-write" if write else "--fmt"
+        started = time.perf_counter()
+        result = subprocess.run(
+            [os.fspath(compiler_path), "--stdlib-root", str(Path(self.repo_root) / "stdlib"),
+             fmt_flag, input_path],
+            capture_output=True, text=True, cwd=input_directory, timeout=120,
+        )
+        fmt_ms = (time.perf_counter() - started) * 1000.0
+        if result.returncode != 0:
+            raise NativeCompilationError(
+                'selfhost', 'Wysna Compiler Format Error', result.stderr, result.returncode,
+            )
+        return result.stdout, fmt_ms
+

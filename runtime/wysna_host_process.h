@@ -141,6 +141,11 @@ static wchar_t* wysna_host_process_quote(const wchar_t* value) {
 }
 
 static int64_t wysna_host_process_run_cancellable(void* executable_handle, void* arguments_handle, int64_t timeout_ms, WysnaProcessCancellation* cancellation) {
+#ifdef WYSNA_DENY_CAP_PROCESSES
+    (void)executable_handle; (void)arguments_handle; (void)timeout_ms; (void)cancellation;
+    wysna_sandbox_deny("processes");
+    return -1;
+#endif
     wysna_host_error_code = 0; wysna_host_error_domain = 0;
     if (wysna_host_process_cancelled(cancellation)) return wysna_host_process_error(EINTR);
     if (timeout_ms < 1 || timeout_ms > 600000) return wysna_host_process_error(EINVAL);
@@ -269,6 +274,11 @@ static int64_t wysna_host_process_run_cancellable(void* executable_handle, void*
 }
 #else
 static int64_t wysna_host_process_run_cancellable(void* executable_handle, void* arguments_handle, int64_t timeout_ms, WysnaProcessCancellation* cancellation) {
+#ifdef WYSNA_DENY_CAP_PROCESSES
+    (void)executable_handle; (void)arguments_handle; (void)timeout_ms; (void)cancellation;
+    wysna_sandbox_deny("processes");
+    return -1;
+#endif
     wysna_host_error_code = 0; wysna_host_error_domain = 0;
     if (wysna_host_process_cancelled(cancellation)) return wysna_host_process_error(EINTR);
     if (timeout_ms < 1 || timeout_ms > 600000) return wysna_host_process_error(EINVAL);

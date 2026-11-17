@@ -561,11 +561,15 @@ class TypeInterner:
             current, expanded = pending.pop()
             if expanded:
                 active.remove(current)
-                definition = self.enum_defs[self.get_entry(current).data]
-                results[current] = results.get(current, True) and all(
-                    results[payload] for values in definition.variant_payloads.values()
-                    for payload in values
-                )
+                entry = self.get_entry(current)
+                if entry.tag == "tuple":
+                    results[current] = all(results[elem] for elem in entry.data)
+                else:
+                    definition = self.enum_defs[entry.data]
+                    results[current] = results.get(current, True) and all(
+                        results[payload] for values in definition.variant_payloads.values()
+                        for payload in values
+                    )
                 continue
             if current in results:
                 continue
@@ -576,6 +580,11 @@ class TypeInterner:
                 results[current] = False
                 continue
             entry = self.get_entry(current)
+            if entry.tag == "tuple":
+                active.add(current)
+                pending.append((current, True))
+                pending.extend((elem, False) for elem in entry.data)
+                continue
             definition = self.enum_defs.get(entry.data) if entry.tag == "enum" else None
             if definition is None:
                 results[current] = False
@@ -674,9 +683,17 @@ class TypeInterner:
         if src_entry.tag == "class" and dst_entry.tag == "interface":
             return self.class_implements_interface(src_id, dst_entry.data)
 
+        # Structural compatibility between canonical synthesized __WysnaTask__* and std/async Task[T]
+        if src_entry.tag == "struct" and dst_entry.tag == "struct":
+            return self._is_task_struct_pair(src_entry.data, dst_entry.data)
+
         # Invariant List subtyping: list[S] -> list[T] iff S == T (SPEC 4.1 & ADR-002)
         if src_entry.tag == "list" and dst_entry.tag == "list":
-            return src_entry.data == dst_entry.data
+            if src_entry.data == dst_entry.data:
+                return True
+            se = self.get_entry(src_entry.data)
+            de = self.get_entry(dst_entry.data)
+            return se.tag == "struct" and de.tag == "struct" and self._is_task_struct_pair(se.data, de.data)
 
         # Invariant Dict subtyping: dict[K1, V1] -> dict[K2, V2] iff K1 == K2 and V1 == V2
         if src_entry.tag == "dict" and dst_entry.tag == "dict":
@@ -702,6 +719,49 @@ class TypeInterner:
             return self.is_assignable(src_id, ok_id)
 
         return False
+
+    _TASK_FIELD_ORDER = ("id", "handle", "is_ready", "is_failed", "value", "error")
+
+    @staticmethod
+    def _is_task_struct_name(name: str) -> bool:
+        return name.startswith("__WysnaTask__") or name == "Task" or name.endswith("__Task") or "__Task__" in name
+
+    def _is_task_struct_pair(self, left_name: str, right_name: str) -> bool:
+        if left_name == right_name:
+            return True
+        if not (self._is_task_struct_name(left_name) and self._is_task_struct_name(right_name)):
+            return False
+        left_def = self.struct_defs.get(left_name)
+        right_def = self.struct_defs.get(right_name)
+        if not left_def or not right_def:
+            return False
+        if (tuple(left_def.fields.keys()) != self._TASK_FIELD_ORDER
+                or tuple(right_def.fields.keys()) != self._TASK_FIELD_ORDER):
+            return False
+        return all(left_def.fields[k] == right_def.fields[k] for k in self._TASK_FIELD_ORDER)
+
+    def find_or_create_task_struct(self, inner_tid: int) -> int:
+        val_tid = self.mk_optional(inner_tid)
+        for sname, sdef in self.struct_defs.items():
+            if (self._is_task_struct_name(sname)
+                    and tuple(sdef.fields.keys()) == self._TASK_FIELD_ORDER
+                    and sdef.fields.get("value") == val_tid
+                    and not sname.startswith("__WysnaTask__")):
+                return sdef.def_id
+        task_name = f"__WysnaTask__{inner_tid}"
+        if task_name in self.struct_defs:
+            return self.struct_defs[task_name].def_id
+        return self.mk_struct(
+            task_name,
+            {
+                "id": TYPE_INT,
+                "handle": TYPE_INT,
+                "is_ready": TYPE_BOOL,
+                "is_failed": TYPE_BOOL,
+                "value": val_tid,
+                "error": self.mk_optional(TYPE_STR),
+            },
+        )
 
     def equality_compatible(self, left_id: int, right_id: int) -> bool:
         """Compare canonical shapes, including unconstrained constructor channels."""

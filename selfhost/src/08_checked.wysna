@@ -6,7 +6,7 @@ struct CheckedRecord { type_id: int, fields: list[CheckedField], variants: list[
 struct CheckedArm { pattern: int, guard: int, body: int, source: Token }
 struct CheckedNode { pattern: int, arms: list[int], total: bool, labels: list[str], kind: str, type_id: int, source: Token, text: str, children: list[int], binding: int, target: int, discard: bool }
 struct CheckedBinding { name: str, type_id: int, mutable: bool, global: bool, source: Token }
-struct CheckedFunction { captures: list[int], closure: bool, name: str, type_id: int, params: list[int], body: int, source: Token }
+struct CheckedFunction { captures: list[int], closure: bool, name: str, type_id: int, params: list[int], body: int, source: Token, is_async: bool, async_return_type: int }
 struct CheckedSignature { abi_params: list[str], abi_return: str, native: str, name: str, params: list[str], type_params: list[str], type_id: int, foreign: bool, abstract: bool }
 struct CheckedProgram {
     templates: list[SemGenericType], obligations: list[SemObligation], has_nodes: bool, file: str, source: Token, records: list[CheckedRecord], types: list[SemType], signatures: list[CheckedSignature],
@@ -63,6 +63,9 @@ class SemanticContext {
     arms: list[CheckedArm]
     last_pattern: int
     expected_type: int
+    last_method_template: int
+    last_method_owner: int
+    last_method_args: list[int]
     nodes: list[CheckedNode]
     symbols: list[CheckedBinding]
     checked_functions: list[CheckedFunction]
@@ -121,6 +124,10 @@ class SemanticContext {
         this.arms = initial_arms
         this.last_pattern = -1
         this.expected_type = -1
+        this.last_method_template = -1
+        this.last_method_owner = -1
+        let empty_method_args: list[int] = []
+        this.last_method_args = empty_method_args
         this.checking_definition = false
         this.collecting_declarations = false
         let pending_key_types: list[int] = []
@@ -200,6 +207,7 @@ fn checked_finish(context: SemanticContext, tokens: list[Token], file: str) -> C
     for function in context.functions {
         let mut params = function.params
         let mut type_id = function.type_id
+        if function.is_async { type_id = sem_external_async_signature(context, type_id) }
         if function.owner != "" {
             let owner = sem_function_owner_type(context, function)
             type_id = checked_receiver_signature(context, owner, type_id)

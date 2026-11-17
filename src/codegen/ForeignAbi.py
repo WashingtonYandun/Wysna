@@ -10,8 +10,9 @@ def foreign_wrapper(c_name, native_name, signature):
     arguments = []
     for index, type_ in enumerate(params):
         value = 'v_' + str(index)
-        field = {'int': 'i', 'int64': 'i', 'float': 'f', 'double': 'f', 'bool': 'b', 'opaque': 'pointer'}.get(type_)
-        arguments.append('wysna_ffi_int32(' + value + ')' if type_ == 'int32' else value + '.as.' + field)
+        extractor = {'int': 'wysna_as_int', 'int64': 'wysna_as_int', 'float': 'wysna_as_float',
+                     'double': 'wysna_as_float', 'bool': 'wysna_as_bool', 'opaque': 'wysna_as_pointer'}.get(type_)
+        arguments.append('wysna_ffi_int32(' + value + ')' if type_ == 'int32' else extractor + '(' + value + ')')
     call = native_name + '(' + ', '.join(arguments) + ')'
     if returned == 'unit':
         body = call + '; return wysna_unit();'
@@ -21,4 +22,6 @@ def foreign_wrapper(c_name, native_name, signature):
         if native_name in ('wysna_host_buffer_new', 'wysna_host_file_open'):
             constructor = 'wysna_host_owned_pointer'
         body = 'return ' + constructor + '(' + call + ');'
-    return prototype, 'static WVal ' + c_name + '(' + wrapped_params + ') { ' + body + ' }'
+    if not native_name.startswith('wysna_'):
+        body = '#ifdef WYSNA_DENY_CAP_NATIVE_FFI\n    ' + ''.join('(void)v_' + str(i) + '; ' for i in range(len(params))) + 'wysna_sandbox_deny("native-ffi");\n#endif\n    ' + body
+    return prototype, 'static WVal ' + c_name + '(' + wrapped_params + ') {\n    ' + body + '\n}'

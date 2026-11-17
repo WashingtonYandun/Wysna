@@ -14,32 +14,32 @@ int main(int argc, char** argv) {
     if (argc != 2) return 2;
     if (strcmp(argv[1], "list") == 0) {
         WVal value = wysna_make_list(0, NULL);
-        value.as.list->refcount = INT32_MAX;
+        wysna_as_list(value)->refcount = INT32_MAX;
         (void)wysna_clone(value);
         return 3;
     }
     if (strcmp(argv[1], "struct") == 0) {
         WVal value = wysna_make_struct("Record", 0, NULL, NULL);
-        value.as.st->refcount = INT32_MAX;
+        wysna_as_struct(value)->refcount = INT32_MAX;
         (void)wysna_clone(value);
         return 3;
     }
     if (strcmp(argv[1], "object") == 0) {
         WVal value = wysna_make_object("Node", 0, NULL, NULL);
-        value.as.st->control->strong = INT32_MAX;
+        wysna_as_struct(value)->control->strong = INT32_MAX;
         (void)wysna_clone(value);
         return 3;
     }
     if (strcmp(argv[1], "weak-clone") == 0) {
         WVal object = wysna_make_object("Node", 0, NULL, NULL);
         WVal value = wysna_builtin_weak(object);
-        value.as.weak->weak = INT32_MAX;
+        wysna_as_weak(value)->weak = INT32_MAX;
         (void)wysna_clone(value);
         return 3;
     }
     if (strcmp(argv[1], "weak-create") == 0) {
         WVal object = wysna_make_object("Node", 0, NULL, NULL);
-        object.as.st->control->weak = INT32_MAX;
+        wysna_as_struct(object)->control->weak = INT32_MAX;
         (void)wysna_builtin_weak(object);
         return 3;
     }

@@ -63,6 +63,31 @@ TOOLS = [
     {"name": "wysna_capabilities",
      "description": "Installed commands, targets and their capability contracts.",
      "inputSchema": {"type": "object", "properties": {}}},
+    {"name": "wysna_graph",
+     "description": "Compile-time semantic relationship graph (interfaces, classes, usages, calls, blast radius).",
+     "inputSchema": {"type": "object", "properties": {
+         **_SOURCE_OR_PATH,
+         "symbol": {"type": "string", "description": "Optional symbol name or node ID filter."},
+         "relation": {"type": "string", "description": "Optional relation filter: implements|hierarchy|usages|callers|callees|impact."}}}},
+    {"name": "wysna_inspect",
+     "description": "Surgical, token-efficient symbol source slice, contract, effects, and dependency signatures.",
+     "inputSchema": {"type": "object", "properties": {
+         **_SOURCE_OR_PATH,
+         "symbol": {"type": "string", "description": "Symbol name to extract (omit for compact index)."},
+         "with_deps": {"type": "boolean", "description": "Include signatures of referenced types and callees."}}}},
+    {"name": "wysna_patch",
+     "description": "Checked declaration-level patch guarded by graph hash and in-memory typecheck.",
+     "inputSchema": {"type": "object", "properties": {
+         "path": {"type": "string", "description": "Path to a .wysna file inside the server root."},
+         "symbol": {"type": "string", "description": "Target declaration name or Class.method."},
+         "replacement": {"type": "string", "description": "Replacement declaration Wysna code."},
+         "expect_graph_hash": {"type": "string", "description": "Optional optimistic lock graph hash."},
+         "apply": {"type": "boolean", "description": "Write patch to disk after verification (default false)."}},
+         "required": ["path", "symbol", "replacement"]}},
+    {"name": "wysna_skills",
+     "description": "Version-matched concise coding and workflow guides embedded in Wysna.",
+     "inputSchema": {"type": "object", "properties": {
+         "topic": {"type": "string", "description": "overview, agent-loop, syntax, graph, patch, contracts, stdlib."}}}},
 ]
 
 
@@ -203,6 +228,80 @@ class McpServer:
 
     def tool_wysna_capabilities(self, arguments):
         return self._json_cli(["capabilities", "--output-format=json-v1"])
+
+    def tool_wysna_graph(self, arguments):
+        with self._resolve_source(arguments) as (path, source):
+            try:
+                checked = self.service.check(source, path)
+                payload = self.service.graph(
+                    checked,
+                    symbol=arguments.get("symbol"),
+                    relation=arguments.get("relation"),
+                )
+            except WysnaError as error:
+                return self._diagnostics_envelope("graph", error, path, source)
+            if arguments.get("symbol") and payload.get("found") is False:
+                err = WysnaError(
+                    f"Symbol '{arguments['symbol']}' not found in semantic graph",
+                    file=path, code="W1001", stage="graph",
+                )
+                return self._diagnostics_envelope("graph", err, path, source)
+            envelope = tool_result("graph", "ok", 0)
+            envelope["result"] = payload
+            return envelope
+
+    def tool_wysna_inspect(self, arguments):
+        from tooling.AgentGraphCLI import inspect_source
+        with self._resolve_source(arguments) as (path, source):
+            try:
+                payload = inspect_source(
+                    path,
+                    symbol=arguments.get("symbol"),
+                    with_deps=bool(arguments.get("with_deps")),
+                    service=self.service,
+                )
+            except WysnaError as error:
+                return self._diagnostics_envelope("inspect", error, path, source)
+            envelope = tool_result("inspect", "ok", 0)
+            envelope["result"] = payload
+            return envelope
+
+    def tool_wysna_patch(self, arguments):
+        from tooling.AgentGraphCLI import patch_source
+        raw_path = arguments.get("path")
+        symbol = arguments.get("symbol")
+        replacement = arguments.get("replacement")
+        if not raw_path or not symbol or not replacement:
+            raise ToolError("'wysna_patch' requires 'path', 'symbol', and 'replacement'")
+        resolved = self._confine(raw_path)
+        source = open(resolved, "r", encoding="utf-8").read()
+        try:
+            payload = patch_source(
+                resolved,
+                symbol,
+                replacement,
+                expect_graph_hash=arguments.get("expect_graph_hash"),
+                apply=bool(arguments.get("apply")),
+                service=self.service,
+            )
+        except WysnaError as error:
+            return self._diagnostics_envelope("patch", error, resolved, source)
+        except ValueError as error:
+            raise ToolError(str(error)) from error
+        result_body = {k: v for k, v in payload.items() if v is not None}
+        envelope = tool_result("patch", "ok", 0)
+        envelope["result"] = result_body
+        return envelope
+
+    def tool_wysna_skills(self, arguments):
+        from tooling.AgentGraphCLI import get_skill_topic
+        try:
+            payload = get_skill_topic(arguments.get("topic") or "overview")
+        except ValueError as error:
+            raise ToolError(str(error)) from error
+        envelope = tool_result("skills", "ok", 0)
+        envelope["result"] = payload
+        return envelope
 
     def tool_wysna_fix(self, arguments):
         from tooling.FixCLI import fix_source

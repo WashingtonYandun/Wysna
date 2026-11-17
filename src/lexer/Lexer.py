@@ -76,10 +76,56 @@ class Lexer:
                     self._stamp(tokens[-1], newline_start)
                 continue
 
-            # Comments: skip until a line ending or EOF.
+            # Line comments: skip until a line ending or EOF.
             if ch == '#':
                 while self.peek() is not None and self.peek() not in ('\n', '\r'):
                     self.advance()
+                continue
+
+            # Nested block comments: /* ... */
+            if ch == '/' and self.peek(1) == '*':
+                comment_line, comment_col = self.line, self.col
+                depth = 1
+                saw_newline = False
+                nl_line, nl_col, nl_pos = self.line, self.col, self.pos
+                self.advance()
+                self.advance()
+                while depth > 0:
+                    cur = self.peek()
+                    if cur is None:
+                        raise LexerError(
+                            message="Unterminated block comment",
+                            line=comment_line,
+                            col=comment_col,
+                            file=self.file,
+                            code="W0002"
+                        )
+                    if cur == '/' and self.peek(1) == '*':
+                        depth += 1
+                        self.advance()
+                        self.advance()
+                    elif cur == '*' and self.peek(1) == '/':
+                        depth -= 1
+                        self.advance()
+                        self.advance()
+                    elif cur in ('\n', '\r'):
+                        if not saw_newline:
+                            nl_line, nl_col, nl_pos = self.line, self.col, self.pos
+                            saw_newline = True
+                        if cur == '\r':
+                            self.pos += 1
+                            if self.peek() == '\n':
+                                self.pos += 1
+                            self.line += 1
+                            self.col = 1
+                        else:
+                            self.advance()
+                    else:
+                        self.advance()
+                if (saw_newline and paren_depth == 0 and bracket_depth == 0
+                        and tokens and tokens[-1].type in _LINE_TERMINATOR_TOKENS):
+                    tokens.append(Token(value="\n", type=TokenType.NEWLINE, line=nl_line, col=nl_col))
+                    self._stamp(tokens[-1], nl_pos)
                 continue
 
             token_start = self.pos

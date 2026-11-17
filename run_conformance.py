@@ -1,3 +1,4 @@
+import concurrent.futures
 import glob
 import hashlib
 import io
@@ -383,7 +384,12 @@ def _run_suite_in_repo(repo_root: str) -> None:
     if use_sanitize:
         print("[SANITIZERS ENABLED] Compiling with Clang ASan and UBSan (-fsanitize=address,undefined)")
 
+    compile_workers = min(4, max(1, os.cpu_count() or 2))
+    cc_cmd = os.environ.get("CC", "cc")
+
     with tempfile.TemporaryDirectory() as tmpdir:
+        seed_jobs = []
+        seed_failures = {}
         for f in c99_targets:
             path = os.path.join(runtime_dir, f)
             expected_path = os.path.join(runtime_dir, f[:-6] + ".expected")
@@ -391,7 +397,6 @@ def _run_suite_in_repo(repo_root: str) -> None:
                 code = stream.read()
             with open(expected_path, "r", encoding="utf-8") as exp_stream:
                 expected = exp_stream.read()
-
             try:
                 ast = Parser(file=path).parse(code)
                 TypeChecker(file=path).check(ast)
@@ -400,8 +405,35 @@ def _run_suite_in_repo(repo_root: str) -> None:
                 bin_path = os.path.join(tmpdir, f[:-6])
                 with open(c_path, "w", encoding="utf-8") as cf:
                     cf.write(c_code)
-                comp = subprocess.run([os.environ.get("CC", "cc"), "-std=c99", f"-I{repo_root}"] + extra_cc_flags + [c_path, "-o", bin_path], timeout=120, capture_output=True, text=True)
+                seed_jobs.append((f, c_path, bin_path, expected))
+            except Exception as e:
+                seed_failures[f] = e
+
+        def _build_seed_binary(job):
+            f, c_path, bin_path, expected = job
+            try:
+                comp = subprocess.run([cc_cmd, "-std=c99", f"-I{repo_root}"] + extra_cc_flags + [c_path, "-o", bin_path], timeout=120, capture_output=True, text=True)
                 assert comp.returncode == 0, comp.stderr
+                return f, (bin_path, expected), None
+            except Exception as exc:
+                return f, None, exc
+
+        if compile_workers > 1 and len(seed_jobs) > 1:
+            with concurrent.futures.ThreadPoolExecutor(max_workers=compile_workers) as pool:
+                built_map = {f: (res, err) for f, res, err in pool.map(_build_seed_binary, seed_jobs)}
+        else:
+            built_map = {f: (res, err) for f, res, err in (_build_seed_binary(job) for job in seed_jobs)}
+
+        for f in c99_targets:
+            if f in seed_failures:
+                print(f"  [C99 FAIL] {f}: {seed_failures[f]}")
+                continue
+            compiled, compile_err = built_map[f]
+            if compile_err is not None:
+                print(f"  [C99 FAIL] {f}: {compile_err}")
+                continue
+            bin_path, expected = compiled
+            try:
                 run_res = subprocess.run([bin_path], timeout=30, capture_output=True, text=True)
                 _assert_native_outcome(f, run_res, expected, panic_expectation(expected))
                 c99_passed += 1
@@ -415,16 +447,18 @@ def _run_suite_in_repo(repo_root: str) -> None:
         # 8. Self-Hosting Bootstrap Fixed-Point (Wysna Seed -> Wysna Compiler Stage 1 -> Wysna Compiler Stage 2)
         compiler_src_path = os.path.join(repo_root, "selfhost", "compiler.wysna")
         try:
-            from compiler.Bootstrap import bootstrap_compiler
+            from compiler.Bootstrap import bootstrap_compiler, publish_bootstrap_cache
             artifacts = bootstrap_compiler(repo_root, os.path.join(tmpdir, "bootstrap"))
             s2_bin = str(artifacts.compiler)
             h0, h1, h2 = artifacts.hashes
             assert h0 == h1 == h2, f"Native MIR hash mismatch: {h0} vs {h1} vs {h2}"
             bootstrap_ok = True
+            publish_bootstrap_cache(repo_root, artifacts)
 
             # 9. Verify Wysna Compiler Stage 2 Native Compiler on Core Runtime Conformance Programs
             selfhost_targets = [f for f in c99_targets if not unsupported_reason("tests/runtime/" + f, "selfhost")]
-            for f in selfhost_targets:
+
+            def _compile_selfhost_target(f):
                 path = os.path.join(runtime_dir, f)
                 expected_path = os.path.join(runtime_dir, f[:-6] + ".expected")
                 with open(expected_path, "r", encoding="utf-8") as exp_stream:
@@ -432,7 +466,16 @@ def _run_suite_in_repo(repo_root: str) -> None:
                 selfhost_c_path = os.path.join(tmpdir, "selfhost_" + f[:-6] + ".c")
                 selfhost_bin_path = os.path.join(tmpdir, "selfhost_" + f[:-6])
                 subprocess.run([s2_bin, path, selfhost_c_path], check=True, timeout=120, capture_output=True, cwd=repo_root)
-                subprocess.run([os.environ.get("CC", "cc"), "-std=c99", f"-I{repo_root}"] + extra_cc_flags + [selfhost_c_path, "-o", selfhost_bin_path], check=True, timeout=120, capture_output=True)
+                subprocess.run([cc_cmd, "-std=c99", f"-I{repo_root}"] + extra_cc_flags + [selfhost_c_path, "-o", selfhost_bin_path], check=True, timeout=120, capture_output=True)
+                return f, selfhost_bin_path, expected
+
+            if compile_workers > 1 and len(selfhost_targets) > 1:
+                with concurrent.futures.ThreadPoolExecutor(max_workers=compile_workers) as pool:
+                    selfhost_compiled = list(pool.map(_compile_selfhost_target, selfhost_targets))
+            else:
+                selfhost_compiled = [_compile_selfhost_target(f) for f in selfhost_targets]
+
+            for f, selfhost_bin_path, expected in selfhost_compiled:
                 run_res = subprocess.run([selfhost_bin_path], timeout=30, capture_output=True, text=True, cwd=repo_root)
                 _assert_native_outcome(f, run_res, expected, panic_expectation(expected))
                 selfhost_runtime_passed += 1

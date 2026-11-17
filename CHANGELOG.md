@@ -1,5 +1,18 @@
 # Changelog
 
+## 0.7.0 Candidate (Unreleased — `feat/close-language-gaps-v0.7`)
+
+### Runtime, ABI & Concurrency
+- Unifies `WVal == WVal64` (`8`-byte NaN-boxed representation, Runtime ABI v3) across C99 (`runtime/`), Seed AST/HIR/MIR, Selfhost Stage-2, MIR Exchange (`runtime_abi_version: 3`), and LLVM (`i64` register adapters), with `<=6B` inline Small String Optimization (SSO) and $O(1)$ `WStringBuf.hash_cache`.
+- Adds lock-free atomic ARC, deferred Bacon-Rajan cycle collection (`WYSNA_COLLECT_CYCLES=1`), OS-thread pools for `std/algorithms.parallel_*` and `std/async.spawn`, and monotonic cooperative timers.
+- Replaces single-shot `async fn` threading with stackless CPS state-machine lowering (`src/mir/AsyncLowering.py`, Seed C99, LLVM, and `selfhost/src/08_mir_c99.wysna`) backed by a cooperative scheduler, deferred lazy start, fixed `await f()?` / `await f() else err` precedence, and unboxed `wysna_range_count_i64` / `wysna_div_i64_at` / `wysna_div_f64_at` / `wysna_mod_i64_at` runtime helpers plus idempotent MIR scalar/store/block passes.
+- Adds compiled C99 runtime capability sandbox guards (`--sandbox` with optional `--allow`/`--deny` -> `#define WYSNA_DENY_CAP_*`, failing with `[W5006]`) alongside `CompilationSession` interface-digest incremental early cutoff.
+
+### Selfhost Parity, Agent-First CLI & Stage-3 Native LSP
+- Adds nested block comments (`/* /* ... */ */`), ChaCha20-Poly1305 AEAD (`std/crypto`), Unicode 16.0.0 UAX #15 normalization (`std/text`), `std/time` / `std/io` / `std/environment` expansions, `ClassError` in `T ! E`, and hashable `tuple` dictionary keys across engines.
+- Closes Selfhost OOP generics (`class Box[T: Show]`, `transform[R: Show]`, `ChildBox[T: Show] extends Box[T]`) and `from ... use` selective/aliased imports (`interface Foo[T]` remains bounded with `W2013` in Selfhost).
+- Ships Python-free native Agent-First tooling and editor services directly inside `selfhost/` and `packaging/native/driver.c`: `check`/`fmt --output-format=json-v1`, multi-file `test`, semantic `graph` (`--rel impact`), `inspect` (`--with-deps`), optimistic hash-guarded `patch` (`W5005`), `explain`, and Stage-3 native LSP 3.17 (`wysna lsp` via `selfhost/src/09_lsp.wysna`).
+
 ## 0.6.0 — 2026-11-01
 
 ### Agent-First Architecture & Tooling

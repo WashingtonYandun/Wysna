@@ -9,7 +9,7 @@ from node.NodeType import (
     ImportDecl, UseDecl, UseSymbol, LetDecl, WhileStmt, ForStmt, ReturnStmt, BreakStmt, ContinueStmt,
     IntLiteral, FloatLiteral, StringLiteral, BoolLiteral, NoneLiteral,
     IdentExpr, ThisExpr, SuperExpr, NewExpr,
-    UnaryExpr, BinaryExpr, CoalesceExpr, RangeExpr, PostfixTryExpr, ElseErrExpr,
+    UnaryExpr, AwaitExpr, BinaryExpr, CoalesceExpr, RangeExpr, PostfixTryExpr, ElseErrExpr,
     CallExpr, MemberExpr, IndexExpr, AssignmentExpr, FieldInit, StructInitExpr,
     ListExpr, DictEntry, DictExpr, TupleExpr, ElifBranch, IfExpr, MatchArm, MatchExpr
 )
@@ -210,12 +210,13 @@ class Formatter:
                 member_lines.append(f"{self._indent(level + 1)}{vis}{f.name}: {self.format_type(f.type_ann)}")
             for m in stmt.methods:
                 vis = "public " if m.is_public else "private "
+                m_tparams = f"[{', '.join(str(p) for p in m.type_params)}]" if getattr(m, "type_params", None) else ""
                 params_str = ", ".join([f"{p.name}: {self.format_type(p.type_ann)}" for p in m.params])
                 ret_str = self.format_type(m.return_type)
                 contracts_str = "".join(f" requires {self.format_expr(r, level + 1)}" for r in getattr(m, "requires", ()))
                 contracts_str += "".join(f" ensures {self.format_expr(e, level + 1)}" for e in getattr(m, "ensures", ()))
                 blk_str = self.format_block(m.body, level + 1)
-                member_lines.append(f"{self._indent(level + 1)}{vis}fn {m.name}({params_str}) -> {ret_str}{contracts_str} {blk_str}")
+                member_lines.append(f"{self._indent(level + 1)}{vis}fn {m.name}{m_tparams}({params_str}) -> {ret_str}{contracts_str} {blk_str}")
             body = "\n".join(member_lines)
             return f"{header} {{\n{body}\n{ind}}}"
 
@@ -226,7 +227,8 @@ class Formatter:
             contracts_str = "".join(f" requires {self.format_expr(r, level)}" for r in getattr(stmt, "requires", ()))
             contracts_str += "".join(f" ensures {self.format_expr(e, level)}" for e in getattr(stmt, "ensures", ()))
             block_str = self.format_block(stmt.body, level)
-            return f"{ind}fn {stmt.name}{tparams}({params_str}) -> {ret_str}{contracts_str} {block_str}"
+            async_prefix = "async " if getattr(stmt, "is_async", False) else ""
+            return f"{ind}{async_prefix}fn {stmt.name}{tparams}({params_str}) -> {ret_str}{contracts_str} {block_str}"
 
         if isinstance(stmt, LetDecl):
             mut_str = "mut " if stmt.is_mut else ""
@@ -353,6 +355,11 @@ class Formatter:
                 res = f"not {inner}"
             else:
                 res = f"-{inner}"
+            return f"({res})" if parent_prec > 10 else res
+
+        if isinstance(expr, AwaitExpr):
+            inner = self.format_expr(expr.operand, level, parent_prec=10)
+            res = f"await {inner}"
             return f"({res})" if parent_prec > 10 else res
 
         if isinstance(expr, BinaryExpr):

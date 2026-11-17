@@ -14,6 +14,7 @@ from node.NodeType import (
     SuperExpr,
     NewExpr,
     UnaryExpr,
+    AwaitExpr,
     BinaryExpr,
     CoalesceExpr,
     RangeExpr,
@@ -109,6 +110,68 @@ def evaluate_unary_expr(interpreter: "Interpreter", expr: UnaryExpr, env: Enviro
         col=expr.col,
         file=interpreter.file
     )
+
+
+def evaluate_await_expr(interpreter: "Interpreter", expr: AwaitExpr, env: Environment) -> WysnaValue:
+    val = interpreter.eval_expr(expr.operand, env)
+    fields = None
+    if hasattr(val, "storage") and hasattr(val.storage, "data"):
+        fields = val.storage.data
+    elif hasattr(val, "fields"):
+        fields = val.fields
+    if fields is not None:
+        if "is_ready" in fields:
+            handle_val_initial = getattr(fields.get("handle"), "value", 0)
+            while True:
+                is_ready = getattr(fields.get("is_ready"), "value", False)
+                is_failed = getattr(fields.get("is_failed"), "value", False)
+                if is_ready or is_failed:
+                    break
+                handle_val = getattr(fields.get("handle"), "value", 0)
+                if handle_val > 0:
+                    handle_val_initial = handle_val
+                    from runtime.HostAbi import http_multi_poll, http_async_poll, coro_current_id, coro_yield_until_ready
+                    if coro_current_id() is not None:
+                        coro_yield_until_ready(handle_val)
+                    else:
+                        http_multi_poll(10)
+                    poll_st = http_async_poll(handle_val)
+                    if poll_st == 1:
+                        break
+                    if poll_st == 2 or poll_st < 0:
+                        raise WysnaRuntimeError(
+                            message="Async transfer failed",
+                            line=expr.line,
+                            col=expr.col,
+                            file=interpreter.file,
+                        )
+                else:
+                    raise WysnaRuntimeError(
+                        message="Deadlock: awaiting pending Task with no active handle",
+                        line=expr.line,
+                        col=expr.col,
+                        file=interpreter.file,
+                    )
+            if getattr(fields.get("is_failed"), "value", False):
+                err_val = fields.get("error")
+                err_msg = "Async task failed"
+                if hasattr(err_val, "variant") and err_val.variant == "Some" and getattr(err_val, "payload", None):
+                    err_msg = getattr(err_val.payload[0], "value", "Async task failed")
+                elif hasattr(err_val, "value"):
+                    err_msg = err_val.value
+                raise WysnaRuntimeError(message=str(err_msg), line=expr.line, col=expr.col, file=interpreter.file)
+            if isinstance(handle_val_initial, int) and handle_val_initial >= 3000000:
+                from runtime.HostAbi import coro_get_result
+                return coro_get_result(handle_val_initial)
+            if isinstance(handle_val_initial, int) and handle_val_initial >= 2000000:
+                from runtime.HostAbi import spawn_get_result
+                return spawn_get_result(handle_val_initial)
+            val_item = fields.get("value")
+            if hasattr(val_item, "variant") and val_item.variant == "Some" and getattr(val_item, "payload", None):
+                return val_item.payload[0]
+            if val_item is not None:
+                return val_item
+    return val
 
 
 def evaluate_binary_expr(interpreter: "Interpreter", expr: BinaryExpr, env: Environment) -> WysnaValue:
@@ -408,23 +471,42 @@ def evaluate_call_expr(interpreter: "Interpreter", expr: CallExpr, env: Environm
         return callee.call_fn(args)
     if isinstance(callee, WysnaFunction):
         fn_name = callee.decl.name
-        if fn_name == "parallel_batch" and len(args) == 3 and isinstance(args[0], WysnaList) and isinstance(args[1], WysnaInt):
+        base_fn_name = fn_name
+        for candidate in ("parallel_batch", "parallel_map", "parallel_filter", "parallel_reduce", "batch_get", "_spawn_handle", "_take_task_value"):
+            if fn_name == candidate or f"__{candidate}__" in fn_name or fn_name.endswith(f"__{candidate}"):
+                base_fn_name = candidate
+                break
+        if base_fn_name == "_spawn_handle" and len(args) == 1 and isinstance(args[0], WysnaFunction):
+            from runtime.HostAbi import spawn_async_task
+            work_fn = args[0]
+            tid = spawn_async_task(lambda: interpreter.call_function(work_fn, []))
+            return WysnaInt(tid)
+        if base_fn_name == "_take_task_value" and len(args) == 2 and isinstance(args[0], WysnaInt):
+            handle_val = args[0].value
+            if handle_val >= 3000000:
+                from runtime.HostAbi import coro_get_result
+                return WysnaEnumValue("Option", "Some", [coro_get_result(handle_val)])
+            if handle_val >= 2000000:
+                from runtime.HostAbi import spawn_get_result
+                return WysnaEnumValue("Option", "Some", [spawn_get_result(handle_val)])
+            return args[1]
+        if base_fn_name == "parallel_batch" and len(args) == 3 and isinstance(args[0], WysnaList) and isinstance(args[1], WysnaInt):
             values = args[0].storage.data
             transform = args[2]
             results = interpreter.parallel_worker_dispatch(transform, values)
             return WysnaList(elements=results)
-        if fn_name == "parallel_map" and len(args) == 2 and isinstance(args[0], WysnaList):
+        if base_fn_name == "parallel_map" and len(args) == 2 and isinstance(args[0], WysnaList):
             values = args[0].storage.data
             transform = args[1]
             results = interpreter.parallel_worker_dispatch(transform, values)
             return WysnaList(elements=results)
-        if fn_name == "parallel_filter" and len(args) == 2 and isinstance(args[0], WysnaList):
+        if base_fn_name == "parallel_filter" and len(args) == 2 and isinstance(args[0], WysnaList):
             values = args[0].storage.data
             predicate = args[1]
             bools = interpreter.parallel_worker_dispatch(predicate, values)
             kept = [item for item, b in zip(values, bools) if isinstance(b, WysnaBool) and b.value]
             return WysnaList(elements=kept)
-        if fn_name == "parallel_reduce" and len(args) == 4 and isinstance(args[0], WysnaList):
+        if base_fn_name == "parallel_reduce" and len(args) == 4 and isinstance(args[0], WysnaList):
             values = args[0].storage.data
             initial = args[1]
             mapper = args[2]
@@ -434,7 +516,7 @@ def evaluate_call_expr(interpreter: "Interpreter", expr: CallExpr, env: Environm
             for item in mapped:
                 acc = interpreter.call_function(combiner, [acc, item]) if isinstance(combiner, WysnaFunction) else combiner(acc, item)
             return acc
-        if fn_name == "batch_get" and len(args) == 1 and isinstance(args[0], WysnaList) and len(args[0].storage.data) > 1:
+        if base_fn_name == "batch_get" and len(args) == 1 and isinstance(args[0], WysnaList) and len(args[0].storage.data) > 1:
             urls = args[0].storage.data
             def _get_one(u):
                 single_list = WysnaList(elements=[u])
@@ -527,6 +609,7 @@ EXPRESSION_RULES = ExpressionDispatch('runtime', {
     NoneLiteral: evaluate_none_literal,
     IdentExpr: evaluate_ident_expr,
     UnaryExpr: evaluate_unary_expr,
+    AwaitExpr: evaluate_await_expr,
     BinaryExpr: evaluate_binary_expr,
     CoalesceExpr: evaluate_coalesce_expr,
     RangeExpr: evaluate_range_expr,

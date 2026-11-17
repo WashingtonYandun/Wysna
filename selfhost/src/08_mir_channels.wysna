@@ -68,9 +68,10 @@ fn mir_channel(context: MirBuilder, value: int, source: Token, propagate: bool, 
     mir_terminate(context, "branch", [failed, succeeded], condition, source)
     context.current = failed
     if propagate {
-        if not mir_is_result(context.types, context.return_type) { report_error_at("W9999", source, "propagation requires a checked result return") }
+        let expected_ret = if context.is_async { context.async_return_type } else { context.return_type }
+        if not mir_is_result(context.types, expected_ret) { report_error_at("W9999", source, "propagation requires a checked result return") }
         let error = mir_op(context, "runtime", context.types[channel].args[1], [value], "wysna_unwrap_err", mir_literal_unit(), source)
-        let returned = mir_pack(context, error, context.return_type, true, source)
+        let returned = mir_pack(context, error, expected_ret, true, source)
         mir_return(context, returned, source)
     } else {
         let bindings = context.bindings
@@ -110,8 +111,9 @@ fn mir_optional_channel(context: MirBuilder, value: int, source: Token, propagat
     mir_terminate(context, "branch", [failed, succeeded], condition, source)
     context.current = failed
     if propagate {
-        if not mir_is_optional(context.types, context.return_type) { report_error_at("W9999", source, "optional propagation requires optional return") }
-        let absent = mir_constant(context, MirLiteral { type_id: 6, integer: 0, floating: 0.0, boolean: false, text: "" }, context.return_type, source)
+        let expected_ret = if context.is_async { context.async_return_type } else { context.return_type }
+        if not mir_is_optional(context.types, expected_ret) { report_error_at("W9999", source, "optional propagation requires optional return") }
+        let absent = mir_constant(context, MirLiteral { type_id: 6, integer: 0, floating: 0.0, boolean: false, text: "" }, expected_ret, source)
         mir_return(context, absent, source)
     } else {
         let fallback = mir_expression(context, handler)

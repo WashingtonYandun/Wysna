@@ -16,7 +16,7 @@ static inline void wysna_eq_push(WEqualityPair** items, int32_t* count, int32_t*
     if (*count == *capacity) {
         if (*capacity > INT32_MAX / 2) {
             fprintf(stderr, "[W4003] RuntimeError: Equality work list is too large\n");
-            exit(1);
+            wysna_panic_exit(1);
         }
         int32_t new_capacity = *capacity * 2;
         WEqualityPair* grown = (WEqualityPair*)wysna_alloc_safe(
@@ -34,22 +34,37 @@ static W_RUNTIME_NOINLINE bool wysna_eq_graph(WVal a, WVal b);
 
 /* Scalar equality must not create the structural comparison work list. */
 static inline bool wysna_eq(WVal a, WVal b) {
-    if (a.tag == b.tag) {
-        switch (a.tag) {
+    if (a.bits == b.bits && !wysna_is_double(a)) return true;
+    WTag ta = wysna_tag(a);
+    if (ta == wysna_tag(b)) {
+        switch (ta) {
             case W_UNIT:
             case W_NONE: return true;
-            case W_INT: return a.as.i == b.as.i;
-            case W_FLOAT: return a.as.f == b.as.f;
-            case W_BOOL: return a.as.b == b.as.b;
-            case W_STR: return a.as.string.length == b.as.string.length &&
-                (a.as.string.data == b.as.string.data || memcmp(a.as.string.data, b.as.string.data, a.as.string.length) == 0);
-            case W_POINTER: return a.as.pointer == b.as.pointer;
-            case W_OBJECT: return a.as.st == b.as.st;
-            case W_WEAK: return a.as.weak == b.as.weak;
-            case W_LIST: if (a.as.list == b.as.list) return true; break;
-            case W_TUPLE: if (a.as.tuple == b.as.tuple) return true; break;
-            case W_STRUCT: if (a.as.st == b.as.st) return true; break;
-            case W_DICT: if (a.as.dict == b.as.dict) return true; break;
+            case W_INT: return wysna_as_int(a) == wysna_as_int(b);
+            case W_FLOAT: return wysna_as_float(a) == wysna_as_float(b);
+            case W_BOOL: return a.bits == b.bits;
+            case W_STR: {
+                WStringBuf* oa = wysna_str_owner(a);
+                WStringBuf* ob = wysna_str_owner(b);
+                if (oa && ob) {
+                    if (oa == ob) return true;
+                    uint32_t ha = wysna_atomic_load_u32(&oa->hash_cache);
+                    uint32_t hb = wysna_atomic_load_u32(&ob->hash_cache);
+                    if (ha != 0 && hb != 0 && ha != hb) return false;
+                }
+                char sba[7], sbb[7];
+                size_t la = 0, lb = 0;
+                const char* da = wysna_str_bytes(a, sba, &la);
+                const char* db = wysna_str_bytes(b, sbb, &lb);
+                return la == lb && (da == db || memcmp(da, db, la) == 0);
+            }
+            case W_POINTER: return wysna_as_pointer(a) == wysna_as_pointer(b);
+            case W_OBJECT: return wysna_as_struct(a) == wysna_as_struct(b);
+            case W_WEAK: return wysna_as_weak(a) == wysna_as_weak(b);
+            case W_LIST: if (wysna_as_list(a) == wysna_as_list(b)) return true; break;
+            case W_TUPLE: if (wysna_as_tuple(a) == wysna_as_tuple(b)) return true; break;
+            case W_STRUCT: if (wysna_as_struct(a) == wysna_as_struct(b)) return true; break;
+            case W_DICT: if (wysna_as_dict(a) == wysna_as_dict(b)) return true; break;
             default: break;
         }
     }
@@ -69,168 +84,161 @@ static bool wysna_eq_graph(WVal a, WVal b) {
         WEqualityPair pair = items[--count];
         WVal left = pair.left;
         WVal right = pair.right;
-        bool left_some = left.tag == W_ENUM &&
-            strcmp(left.as.en.enum_name, "Option") == 0 &&
-            strcmp(left.as.en.variant, "Some") == 0;
-        bool right_some = right.tag == W_ENUM &&
-            strcmp(right.as.en.enum_name, "Option") == 0 &&
-            strcmp(right.as.en.variant, "Some") == 0;
+        if (left.bits == right.bits && !wysna_is_double(left)) continue;
+        WTag ltag = wysna_tag(left);
+        WTag rtag = wysna_tag(right);
+        WEnumBuf* lenum = ltag == W_ENUM ? wysna_as_enum(left) : NULL;
+        WEnumBuf* renum = rtag == W_ENUM ? wysna_as_enum(right) : NULL;
+        bool left_some = lenum && strcmp(lenum->enum_name, "Option") == 0 && strcmp(lenum->variant, "Some") == 0;
+        bool right_some = renum && strcmp(renum->enum_name, "Option") == 0 && strcmp(renum->variant, "Some") == 0;
 
-        if (left_some && !right_some && right.tag != W_NONE) {
-            if (!left.as.en.box) { equal = false; continue; }
-            wysna_eq_push(&items, &count, &capacity, &heap_items,
-                      left.as.en.box->val, right);
+        if (left_some && !right_some && rtag != W_NONE) {
+            if (!lenum->has_payload) { equal = false; continue; }
+            wysna_eq_push(&items, &count, &capacity, &heap_items, lenum->payload, right);
             continue;
         }
-        if (right_some && !left_some && left.tag != W_NONE) {
-            if (!right.as.en.box) { equal = false; continue; }
-            wysna_eq_push(&items, &count, &capacity, &heap_items,
-                      left, right.as.en.box->val);
+        if (right_some && !left_some && ltag != W_NONE) {
+            if (!renum->has_payload) { equal = false; continue; }
+            wysna_eq_push(&items, &count, &capacity, &heap_items, left, renum->payload);
             continue;
         }
 
-        if (left.tag != right.tag) {
-            if ((left.tag == W_NONE && right.tag == W_ENUM &&
-                 strcmp(right.as.en.enum_name, "Option") == 0 &&
-                 strcmp(right.as.en.variant, "None") == 0) ||
-                (right.tag == W_NONE && left.tag == W_ENUM &&
-                 strcmp(left.as.en.enum_name, "Option") == 0 &&
-                 strcmp(left.as.en.variant, "None") == 0)) {
+        if (ltag != rtag) {
+            if ((ltag == W_NONE && renum && strcmp(renum->enum_name, "Option") == 0 && strcmp(renum->variant, "None") == 0) ||
+                (rtag == W_NONE && lenum && strcmp(lenum->enum_name, "Option") == 0 && strcmp(lenum->variant, "None") == 0)) {
                 continue;
             }
-            bool left_result = left.tag == W_OK || left.tag == W_ERR;
-            bool right_result = right.tag == W_OK || right.tag == W_ERR;
-            const char* variant = (left.tag == W_OK || right.tag == W_OK) ? "Ok" : "Err";
-            if (left_result && right.tag == W_ENUM &&
-                strcmp(right.as.en.enum_name, "Result") == 0 &&
-                (right.as.en.variant == variant || strcmp(right.as.en.variant, variant) == 0) &&
-                left.as.box && right.as.en.box) {
-                wysna_eq_push(&items, &count, &capacity, &heap_items,
-                          left.as.box->val, right.as.en.box->val);
+            bool left_result = ltag == W_OK || ltag == W_ERR;
+            bool right_result = rtag == W_OK || rtag == W_ERR;
+            const char* variant = (ltag == W_OK || rtag == W_OK) ? "Ok" : "Err";
+            if (left_result && renum && strcmp(renum->enum_name, "Result") == 0 &&
+                (renum->variant == variant || strcmp(renum->variant, variant) == 0) &&
+                wysna_as_box(left) && renum->has_payload) {
+                wysna_eq_push(&items, &count, &capacity, &heap_items, wysna_as_box(left)->val, renum->payload);
                 continue;
             }
-            if (right_result && left.tag == W_ENUM &&
-                strcmp(left.as.en.enum_name, "Result") == 0 &&
-                (left.as.en.variant == variant || strcmp(left.as.en.variant, variant) == 0) &&
-                left.as.en.box && right.as.box) {
-                wysna_eq_push(&items, &count, &capacity, &heap_items,
-                          left.as.en.box->val, right.as.box->val);
+            if (right_result && lenum && strcmp(lenum->enum_name, "Result") == 0 &&
+                (lenum->variant == variant || strcmp(lenum->variant, variant) == 0) &&
+                lenum->has_payload && wysna_as_box(right)) {
+                wysna_eq_push(&items, &count, &capacity, &heap_items, lenum->payload, wysna_as_box(right)->val);
                 continue;
             }
             equal = false;
             continue;
         }
 
-        switch (left.tag) {
+        switch (ltag) {
             case W_POINTER:
-                equal = left.as.pointer == right.as.pointer;
+                equal = wysna_as_pointer(left) == wysna_as_pointer(right);
                 break;
             case W_FUNCTION:
-                equal = left.as.function == right.as.function;
+                equal = wysna_as_function(left) == wysna_as_function(right);
                 break;
             case W_UNIT:
             case W_NONE:
                 break;
             case W_INT:
-                equal = left.as.i == right.as.i;
+                equal = wysna_as_int(left) == wysna_as_int(right);
                 break;
             case W_FLOAT:
-                equal = left.as.f == right.as.f;
+                equal = wysna_as_float(left) == wysna_as_float(right);
                 break;
             case W_BOOL:
-                equal = left.as.b == right.as.b;
+                equal = left.bits == right.bits;
                 break;
-            case W_STR:
-                equal = left.as.string.length == right.as.string.length &&
-                    (left.as.string.data == right.as.string.data || memcmp(left.as.string.data, right.as.string.data, left.as.string.length) == 0);
+            case W_STR: {
+                char sba[7], sbb[7];
+                size_t la = 0, lb = 0;
+                const char* da = wysna_str_bytes(left, sba, &la);
+                const char* db = wysna_str_bytes(right, sbb, &lb);
+                equal = la == lb && (da == db || memcmp(da, db, la) == 0);
                 break;
+            }
             case W_ENUM:
-                if ((left.as.en.enum_name != right.as.en.enum_name && strcmp(left.as.en.enum_name, right.as.en.enum_name) != 0) ||
-                    (left.as.en.variant != right.as.en.variant && strcmp(left.as.en.variant, right.as.en.variant) != 0) ||
-                    (!!left.as.en.box != !!right.as.en.box)) {
+                if (!lenum || !renum ||
+                    (lenum->enum_name != renum->enum_name && strcmp(lenum->enum_name, renum->enum_name) != 0) ||
+                    (lenum->variant != renum->variant && strcmp(lenum->variant, renum->variant) != 0) ||
+                    (lenum->has_payload != renum->has_payload)) {
                     equal = false;
-                } else if (left.as.en.box) {
-                    wysna_eq_push(&items, &count, &capacity, &heap_items,
-                              left.as.en.box->val, right.as.en.box->val);
+                } else if (lenum->has_payload) {
+                    wysna_eq_push(&items, &count, &capacity, &heap_items, lenum->payload, renum->payload);
                 }
                 break;
-            case W_LIST:
-                if (left.as.list == right.as.list) break;
-                if (left.as.list->len != right.as.list->len) {
+            case W_LIST: {
+                WListBuf* la = wysna_as_list(left);
+                WListBuf* lb = wysna_as_list(right);
+                if (la == lb) break;
+                if (!la || !lb || la->len != lb->len) { equal = false; break; }
+                for (int32_t i = 0; i < la->len; i++) {
+                    wysna_eq_push(&items, &count, &capacity, &heap_items, la->data[i], lb->data[i]);
+                }
+                break;
+            }
+            case W_TUPLE: {
+                WTupleBuf* ta = wysna_as_tuple(left);
+                WTupleBuf* tb = wysna_as_tuple(right);
+                if (ta == tb) break;
+                if (!ta || !tb || ta->len != tb->len) { equal = false; break; }
+                for (int32_t i = 0; i < ta->len; i++) {
+                    wysna_eq_push(&items, &count, &capacity, &heap_items, ta->items[i], tb->items[i]);
+                }
+                break;
+            }
+            case W_DICT: {
+                WDictBuf* da = wysna_as_dict(left);
+                WDictBuf* db = wysna_as_dict(right);
+                if (da == db) break;
+                if (!da || !db || da->len != db->len) { equal = false; break; }
+                for (int32_t i = 0; i < da->len && equal; i++) {
+                    int32_t found = wysna_dict_find(db, da->keys[i]);
+                    if (found < 0) equal = false;
+                    else wysna_eq_push(&items, &count, &capacity, &heap_items, da->vals[i], db->vals[found]);
+                }
+                break;
+            }
+            case W_STRUCT: {
+                WStructBuf* sa = wysna_as_struct(left);
+                WStructBuf* sb = wysna_as_struct(right);
+                if (sa == sb) break;
+                if (!sa || !sb || (sa->name != sb->name && strcmp(sa->name, sb->name) != 0) || sa->len != sb->len) {
                     equal = false;
                     break;
                 }
-                for (int32_t i = 0; i < left.as.list->len; i++) {
-                    wysna_eq_push(&items, &count, &capacity, &heap_items,
-                              left.as.list->data[i], right.as.list->data[i]);
-                }
-                break;
-            case W_TUPLE:
-                if (left.as.tuple == right.as.tuple) break;
-                if (left.as.tuple->len != right.as.tuple->len) {
-                    equal = false;
-                    break;
-                }
-                for (int32_t i = 0; i < left.as.tuple->len; i++) {
-                    wysna_eq_push(&items, &count, &capacity, &heap_items,
-                              left.as.tuple->items[i], right.as.tuple->items[i]);
-                }
-                break;
-            case W_DICT:
-                if (left.as.dict == right.as.dict) break;
-                if (left.as.dict->len != right.as.dict->len) {
-                    equal = false;
-                    break;
-                }
-                for (int32_t i = 0; i < left.as.dict->len && equal; i++) {
-                    int32_t found = wysna_dict_find(right.as.dict, left.as.dict->keys[i]);
-                    if (found < 0) {
-                        equal = false;
-                    } else {
-                        wysna_eq_push(&items, &count, &capacity, &heap_items,
-                                  left.as.dict->vals[i], right.as.dict->vals[found]);
-                    }
-                }
-                break;
-            case W_STRUCT:
-                if (left.as.st == right.as.st) break;
-                if ((left.as.st->name != right.as.st->name && strcmp(left.as.st->name, right.as.st->name) != 0) ||
-                    left.as.st->len != right.as.st->len) {
-                    equal = false;
-                    break;
-                }
-                for (int32_t i = 0; i < left.as.st->len && equal; i++) {
+                for (int32_t i = 0; i < sa->len && equal; i++) {
                     int32_t found = i;
-                    if (left.as.st->keys[i] != right.as.st->keys[i] && strcmp(left.as.st->keys[i], right.as.st->keys[i]) != 0) {
+                    if (sa->keys[i] != sb->keys[i] && strcmp(sa->keys[i], sb->keys[i]) != 0) {
                         found = -1;
-                        for (int32_t j = 0; j < right.as.st->len; j++) {
-                            if (left.as.st->keys[i] == right.as.st->keys[j] || strcmp(left.as.st->keys[i], right.as.st->keys[j]) == 0) { found = j; break; }
+                        for (int32_t j = 0; j < sb->len; j++) {
+                            if (sa->keys[i] == sb->keys[j] || strcmp(sa->keys[i], sb->keys[j]) == 0) { found = j; break; }
                         }
                     }
                     if (found < 0) equal = false;
-                    else wysna_eq_push(&items, &count, &capacity, &heap_items,
-                                   left.as.st->vals[i], right.as.st->vals[found]);
+                    else wysna_eq_push(&items, &count, &capacity, &heap_items, sa->vals[i], sb->vals[found]);
                 }
                 break;
+            }
             case W_WEAK:
-                equal = left.as.weak == right.as.weak;
+                equal = wysna_as_weak(left) == wysna_as_weak(right);
                 break;
             case W_OBJECT:
-                equal = left.as.st == right.as.st;
+                equal = wysna_as_struct(left) == wysna_as_struct(right);
                 break;
             case W_OK:
-            case W_ERR:
-                if (!left.as.box || !right.as.box) {
-                    equal = left.as.box == right.as.box;
-                } else {
-                    wysna_eq_push(&items, &count, &capacity, &heap_items,
-                              left.as.box->val, right.as.box->val);
-                }
+            case W_ERR: {
+                WBoxBuf* ba = wysna_as_box(left);
+                WBoxBuf* bb = wysna_as_box(right);
+                if (!ba || !bb) equal = ba == bb;
+                else wysna_eq_push(&items, &count, &capacity, &heap_items, ba->val, bb->val);
                 break;
+            }
         }
     }
 
     if (heap_items) free(items);
     return equal;
+}
+
+static inline bool wysna_val64_eq(WVal64 a, WVal64 b) {
+    return wysna_eq(a, b);
 }
 #endif /* WYSNA_RUNTIME_EQUALITY_H */

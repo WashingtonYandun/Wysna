@@ -104,7 +104,7 @@ fn mir_expression(context: MirBuilder, id: int) -> int {
         if node.text == "MINUS" and operand_node.kind == "integer" { return mir_integer(context, operand_node.text, true, source) }
         let operand = mir_expression(context, node.children[0])
         if context.current < 0 { return -1 }
-        return mir_op(context, "runtime", mir_type(context, node.type_id, source), [operand], if node.text == "MINUS" { "wysna_neg" } else { "wysna_not" }, mir_literal_unit(), source)
+        return mir_op(context, "runtime", mir_type(context, node.type_id, source), [operand], if node.text == "MINUS" { "wysna_neg" } elif node.text == "AWAIT" { "wysna_await" } else { "wysna_not" }, mir_literal_unit(), source)
     }
     if node.kind == "propagate" or node.kind == "handler" {
         let value = mir_expression(context, node.children[0])
@@ -278,7 +278,8 @@ fn mir_statement(context: MirBuilder, id: int) -> int {
 fn mir_lower_function(context: MirBuilder, function: CheckedFunction) {
     let signature = context.program.types[function.type_id].args
     let returned = mir_type(context, signature[len(signature) - 1], function.source)
-    mir_begin(context, function.source, returned)
+    let inner_returned = if function.is_async { mir_type(context, function.async_return_type, function.source) } else { returned }
+    mir_begin_fn(context, function.source, returned, function.is_async, inner_returned)
     if function.closure and len(function.captures) > 0 {
         let mut captured_types: list[int] = []
         for id in function.captures { captured_types.append(mir_type(context, context.program.bindings[id].type_id, function.source)) }
@@ -293,7 +294,7 @@ fn mir_lower_function(context: MirBuilder, function: CheckedFunction) {
         context.bindings.append(MirBinding { symbol: function.params[i], slot: slot })
     }
     let value = mir_block(context, function.body)
-    if context.current >= 0 { mir_return(context, if returned == 1 { mir_constant(context, mir_literal_unit(), 1, function.source) } else { value }, function.source) }
+    if context.current >= 0 { mir_return(context, if inner_returned == 1 { mir_constant(context, mir_literal_unit(), 1, function.source) } else { value }, function.source) }
     mir_finish(context, if function.closure { "wysna_" + function.name } else { mir_abi_name(function.name) }, function.source)
 }
 
@@ -354,7 +355,7 @@ fn mir_module_json(module: MirModule) -> str {
     let mut enum_count = 0
     for record in module.records { if module.types[record.type_id].kind == "enum" { enum_count = enum_count + 1 } }
     let payload = "{\"$type\":\"Module\",\"file\":" + mir_quote(module.file) + ",\"arena_id\":\"compiler-native-core-v1\",\"functions\":" + functions + "],\"globals\":" + globals + ",\"layouts\":" + mir_layouts_json(module) + ",\"virtual_slots\":" + mir_virtual_slots_json(module) + ",\"externs\":" + mir_externs_json(module) + ",\"exports\":[],\"library_mode\":false,\"enum_count\":" + str(enum_count) + "}"
-    return "{\"format\":\"wysna.mir\",\"schema_version\":1,\"semantic_revision\":\"0.5.0\",\"runtime_abi_version\":2,\"type_arena\":" + mir_arena_json(module) + ",\"module\":" + payload + "}\n"
+    return "{\"format\":\"wysna.mir\",\"schema_version\":1,\"semantic_revision\":\"0.5.0\",\"runtime_abi_version\":3,\"type_arena\":" + mir_arena_json(module) + ",\"module\":" + payload + "}\n"
 }
 
 fn emit_mir_module(src: str, file: str) -> str {

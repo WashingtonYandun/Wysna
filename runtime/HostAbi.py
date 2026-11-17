@@ -7,6 +7,7 @@ from pathlib import Path
 import signal
 import subprocess
 import threading
+import time
 from urllib.parse import urlsplit
 
 _entries = {}
@@ -77,6 +78,13 @@ def cleanup():
         handles = list(_entries)
     for handle in handles:
         close(handle)
+    with _async_coro_cond:
+        for task in _async_coro_tasks.values():
+            task.done = True
+            task.active = False
+        _async_coro_tasks.clear()
+        _async_coro_active_stack.clear()
+        _async_coro_cond.notify_all()
 
 
 atexit.register(cleanup)
@@ -432,76 +440,16 @@ def _http_request_headers(data):
     return headers
 
 
-def http_request(url_handle, method_handle, request_headers_handle, request_body_handle,
-                 response_headers_handle, response_body_handle, timeout_ms, max_response_bytes):
-    """Perform one synchronous HTTP(S) request with bounded input and output."""
-    global _error_code, _error_domain
-    _error_code = 0
-    _error_domain = 0
-    url_bytes = find(url_handle, 'buffer')
-    method_bytes = find(method_handle, 'buffer')
-    request_headers = find(request_headers_handle, 'buffer')
-    request_body = find(request_body_handle, 'buffer')
-    response_headers = find(response_headers_handle, 'buffer')
-    response_body = find(response_body_handle, 'buffer')
-    handles = (url_handle, method_handle, request_headers_handle, request_body_handle,
-               response_headers_handle, response_body_handle)
-    if (any(value is None for value in (url_bytes, method_bytes, request_headers, request_body,
-                                        response_headers, response_body))
-            or len(set(handles)) != len(handles)):
-        return _http_failure(_HTTP_INVALID_REQUEST, errno.EBADF)
-    if (not 1 <= timeout_ms <= _HTTP_MAX_TIMEOUT_MS
-            or not 1 <= max_response_bytes <= _HTTP_MAX_BODY
-            or len(url_bytes) > _HTTP_MAX_URL or len(request_body) > _HTTP_MAX_BODY):
-        return _http_failure(_HTTP_INVALID_REQUEST, errno.EINVAL)
-
-    try:
-        url = bytes(url_bytes).decode('ascii')
-        method = bytes(method_bytes).decode('ascii')
-        parsed = urlsplit(url)
-        _ = parsed.port
-        if (parsed.scheme.lower() not in ('http', 'https') or not parsed.hostname
-                or parsed.username is not None or parsed.password is not None or parsed.fragment
-                or any(ord(character) <= 32 or ord(character) > 126 for character in url)):
-            raise ValueError('URL must be an ASCII HTTP or HTTPS URL without user info or fragment')
-        if method not in ('GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'HEAD'):
-            raise ValueError('unsupported HTTP method')
-        if method in ('GET', 'HEAD') and request_body:
-            raise ValueError('GET and HEAD requests cannot include a body')
-        headers = _http_request_headers(bytes(request_headers))
-    except (UnicodeError, ValueError, OverflowError):
-        return _http_failure(_HTTP_INVALID_REQUEST, errno.EINVAL)
-
-    trace_args = [
-        method,
-        url,
-        bytes(request_headers).hex(),
-        bytes(request_body).hex(),
-        timeout_ms,
-        max_response_bytes,
-    ]
-    if _active_trace is not None and _active_trace.is_replaying:
-        ok, payload = _active_trace.replay('host.http_request', trace_args)
-        if not ok:
-            if isinstance(payload, dict):
-                return _http_failure(
-                    int(payload.get('kind', _HTTP_TRANSPORT)),
-                    int(payload.get('error_code', errno.EIO)),
-                )
-            return _http_failure(_HTTP_TRANSPORT, errno.EIO)
-        response_headers[:] = bytes.fromhex(payload.get('headers_hex', ''))
-        response_body[:] = bytes.fromhex(payload.get('body_hex', ''))
-        return int(payload['status'])
-
+def _execute_http_transfer(url, method, headers, request_body, timeout_ms, max_response_bytes):
     try:
         import pycurl
     except ImportError:
-        return _http_failure(_HTTP_UNAVAILABLE, getattr(errno, 'ENOSYS', errno.EIO))
+        return (0, b'', b'', _HTTP_UNAVAILABLE, getattr(errno, 'ENOSYS', errno.EIO))
     try:
         if int(pycurl.version_info()[2]) < 0x080300:
-            return _http_failure(_HTTP_UNAVAILABLE, getattr(errno, 'EPROTONOSUPPORT', errno.EIO))
+            return (0, b'', b'', _HTTP_UNAVAILABLE, getattr(errno, 'EPROTONOSUPPORT', errno.EIO))
     except (AttributeError, IndexError, TypeError, ValueError):
-        return _http_failure(_HTTP_UNAVAILABLE, getattr(errno, 'EPROTONOSUPPORT', errno.EIO))
+        return (0, b'', b'', _HTTP_UNAVAILABLE, getattr(errno, 'EPROTONOSUPPORT', errno.EIO))
 
     response_headers_output = bytearray()
     response_body_output = bytearray()
@@ -578,23 +526,10 @@ def http_request(url_handle, method_handle, request_headers_handle, request_body
         status = int(curl.getinfo(pycurl.RESPONSE_CODE))
         if callback_error:
             code = getattr(errno, 'EOVERFLOW', errno.EINVAL) if callback_error == _HTTP_LIMIT else errno.EPROTO
-            return _http_failure(callback_error, code)
+            return (0, b'', b'', callback_error, code)
         if not 100 <= status <= 599:
-            return _http_failure(_HTTP_INVALID_RESPONSE, errno.EPROTO)
-        response_headers[:] = response_headers_output
-        response_body[:] = response_body_output
-        if _active_trace is not None and _active_trace.is_recording:
-            _active_trace.record(
-                'host.http_request',
-                trace_args,
-                ok=True,
-                result={
-                    'status': status,
-                    'headers_hex': bytes(response_headers_output).hex(),
-                    'body_hex': bytes(response_body_output).hex(),
-                },
-            )
-        return status
+            return (0, b'', b'', _HTTP_INVALID_RESPONSE, errno.EPROTO)
+        return (status, bytes(response_headers_output), bytes(response_body_output), 0, 0)
     except pycurl.error as error:
         curl_code = error.args[0] if error.args and isinstance(error.args[0], int) else errno.EIO
         if curl is None:
@@ -613,18 +548,481 @@ def http_request(url_handle, method_handle, request_headers_handle, request_body
             kind = _HTTP_INVALID_REQUEST
         else:
             kind = _HTTP_TRANSPORT
-        return _http_failure(kind, curl_code)
+        return (0, b'', b'', kind, curl_code)
     except (TypeError, ValueError, UnicodeError):
-        return _http_failure(_HTTP_INVALID_REQUEST, errno.EINVAL)
+        return (0, b'', b'', _HTTP_INVALID_REQUEST, errno.EINVAL)
     except OSError as error:
-        return _http_failure(_HTTP_TRANSPORT, getattr(error, 'errno', None) or errno.EIO)
+        return (0, b'', b'', _HTTP_TRANSPORT, getattr(error, 'errno', None) or errno.EIO)
     finally:
         if curl is not None:
-            curl.close()
+            try:
+                curl.close()
+            except Exception:
+                pass
+
+
+_async_http_transfers = {}
+_async_http_next_id = 1
+_TIMER_HANDLE_BASE = 1000000
+_SPAWN_HANDLE_BASE = 2000000
+_CORO_HANDLE_BASE = 3000000
+_async_timers = {}
+_async_timer_next_id = _TIMER_HANDLE_BASE
+_async_spawn_tasks = {}
+_async_spawn_next_id = _SPAWN_HANDLE_BASE
+_async_coro_tasks = {}
+_async_coro_next_id = _CORO_HANDLE_BASE
+_async_coro_cond = threading.Condition()
+_async_coro_active_stack = []
+_async_coro_tls = threading.local()
+_async_http_executor = concurrent.futures.ThreadPoolExecutor(max_workers=16)
+
+
+class _CoroTask:
+    def __init__(self, handle_id, thunk):
+        self.handle_id = handle_id
+        self.thunk = thunk
+        self.started = False
+        self.done = False
+        self.active = False
+        self.suspended_on = None
+        self.result = None
+        self.error = None
+        self.thread = None
+
+
+def coro_current_id():
+    return getattr(_async_coro_tls, 'current_coro_id', None)
+
+
+def coro_spawn(thunk):
+    global _async_coro_next_id
+    with _async_coro_cond:
+        tid = _async_coro_next_id
+        _async_coro_next_id += 1
+        _async_coro_tasks[tid] = _CoroTask(tid, thunk)
+        return tid
+
+
+def _poll_child_noblock(handle_id):
+    if handle_id >= _CORO_HANDLE_BASE:
+        return coro_poll(handle_id)
+    if handle_id >= _SPAWN_HANDLE_BASE:
+        with _host_lock:
+            future = _async_spawn_tasks.get(handle_id)
+        if future is None:
+            return -1
+        return 1 if future.done() else 0
+    if handle_id >= _TIMER_HANDLE_BASE:
+        now = time.monotonic()
+        with _host_lock:
+            entry = _async_timers.get(handle_id)
+            if entry is None:
+                return -1
+            deadline, done = entry
+            if not done and now >= deadline:
+                _async_timers[handle_id] = (deadline, True)
+                done = True
+            return 1 if done else 0
+    with _host_lock:
+        future = _async_http_transfers.get(handle_id)
+    if future is None:
+        return -1
+    return 1 if future.done() else 0
+
+
+def _coro_worker(task):
+    with _async_coro_cond:
+        while not _async_coro_active_stack or _async_coro_active_stack[-1] != task.handle_id:
+            if task.done:
+                return
+            _async_coro_cond.wait(timeout=0.05)
+    prev_id = getattr(_async_coro_tls, 'current_coro_id', None)
+    _async_coro_tls.current_coro_id = task.handle_id
+    res = None
+    err = None
     try:
-        process.kill()
-    except OSError:
-        pass
+        res = task.thunk()
+    except BaseException as exc:
+        err = exc
+    finally:
+        _async_coro_tls.current_coro_id = prev_id
+        with _async_coro_cond:
+            task.result = res
+            task.error = err
+            task.done = True
+            task.suspended_on = None
+            task.active = False
+            if _async_coro_active_stack and _async_coro_active_stack[-1] == task.handle_id:
+                _async_coro_active_stack.pop()
+            _async_coro_cond.notify_all()
+
+
+def coro_yield_until_ready(handle_id):
+    cur_id = coro_current_id()
+    if cur_id is None or handle_id is None or handle_id <= 0:
+        return
+    if handle_id < _CORO_HANDLE_BASE and _poll_child_noblock(handle_id) != 0:
+        return
+    with _async_coro_cond:
+        task = _async_coro_tasks.get(cur_id)
+        if task is None:
+            return
+        task.suspended_on = handle_id
+        task.active = False
+        if _async_coro_active_stack and _async_coro_active_stack[-1] == cur_id:
+            _async_coro_active_stack.pop()
+        _async_coro_cond.notify_all()
+        while not task.done:
+            if _async_coro_active_stack and _async_coro_active_stack[-1] == cur_id:
+                task.active = True
+                break
+            _async_coro_cond.wait(timeout=0.05)
+
+
+def coro_poll(handle_id):
+    with _async_coro_cond:
+        task = _async_coro_tasks.get(handle_id)
+        if task is None:
+            return -1
+        if task.done:
+            return 1
+        if task.active or task.handle_id in _async_coro_active_stack:
+            return 0
+        suspended_on = task.suspended_on if task.started else None
+    if suspended_on is not None:
+        if suspended_on < _CORO_HANDLE_BASE:
+            if _poll_child_noblock(suspended_on) == 0:
+                return 0
+        else:
+            child_st = coro_poll(suspended_on)
+            if child_st == 0:
+                return 0
+    with _async_coro_cond:
+        if task.done:
+            return 1
+        if task.active or task.handle_id in _async_coro_active_stack:
+            return 0
+        if not task.started:
+            task.started = True
+            task.thread = threading.Thread(target=_coro_worker, args=(task,), daemon=True)
+            task.thread.start()
+        task.suspended_on = None
+        task.active = True
+        _async_coro_active_stack.append(task.handle_id)
+        _async_coro_cond.notify_all()
+        while not task.done and task.suspended_on is None and task.handle_id in _async_coro_active_stack:
+            _async_coro_cond.wait(timeout=0.05)
+        return 1 if task.done else 0
+
+
+def coro_tick_all():
+    while True:
+        with _async_coro_cond:
+            pending_ids = [
+                tid for tid, t in _async_coro_tasks.items()
+                if not t.done and not t.active and tid not in _async_coro_active_stack
+            ]
+        if not pending_ids:
+            return 0
+        progressed = False
+        remaining = 0
+        for tid in pending_ids:
+            with _async_coro_cond:
+                t = _async_coro_tasks.get(tid)
+                if t is None or t.done:
+                    continue
+                if t.active or tid in _async_coro_active_stack:
+                    remaining += 1
+                    continue
+                was_started = t.started
+            st = coro_poll(tid)
+            if st == 1 or not was_started:
+                progressed = True
+            if st == 0:
+                remaining += 1
+        if not progressed or remaining == 0:
+            return remaining
+
+
+def coro_get_result(handle_id):
+    while True:
+        st = coro_poll(handle_id)
+        if st < 0:
+            raise RuntimeError(f"Invalid coroutine task handle: {handle_id}")
+        if st == 1:
+            break
+        http_multi_poll(10)
+    with _async_coro_cond:
+        task = _async_coro_tasks.get(handle_id)
+    if task is None:
+        return None
+    if task.error is not None:
+        raise task.error
+    return task.result
+
+
+def spawn_async_task(worker_callable):
+    global _async_spawn_next_id
+    with _host_lock:
+        tid = _async_spawn_next_id
+        _async_spawn_next_id += 1
+        future = _async_http_executor.submit(worker_callable)
+        _async_spawn_tasks[tid] = future
+    return tid
+
+
+def spawn_get_result(handle_id):
+    with _host_lock:
+        future = _async_spawn_tasks.get(handle_id)
+    if future is None:
+        raise RuntimeError(f"Invalid spawned task handle {handle_id}")
+    return future.result()
+
+
+def http_async_start(url_handle, method_handle, request_headers_handle, request_body_handle,
+                     timeout_ms, max_response_bytes):
+    global _error_code, _error_domain, _async_http_next_id
+    _error_code = 0
+    _error_domain = 0
+    url_bytes = find(url_handle, 'buffer')
+    method_bytes = find(method_handle, 'buffer')
+    request_headers = find(request_headers_handle, 'buffer')
+    request_body = find(request_body_handle, 'buffer')
+    handles = (url_handle, method_handle, request_headers_handle, request_body_handle)
+    if any(value is None for value in (url_bytes, method_bytes, request_headers, request_body)) or len(set(handles)) != len(handles):
+        return _http_failure(_HTTP_INVALID_REQUEST, errno.EBADF)
+    if (not 1 <= timeout_ms <= _HTTP_MAX_TIMEOUT_MS
+            or not 1 <= max_response_bytes <= _HTTP_MAX_BODY
+            or len(url_bytes) > _HTTP_MAX_URL or len(request_body) > _HTTP_MAX_BODY):
+        return _http_failure(_HTTP_INVALID_REQUEST, errno.EINVAL)
+
+    try:
+        url = bytes(url_bytes).decode('ascii')
+        method = bytes(method_bytes).decode('ascii')
+        parsed = urlsplit(url)
+        _ = parsed.port
+        if (parsed.scheme.lower() not in ('http', 'https') or not parsed.hostname
+                or parsed.username is not None or parsed.password is not None or parsed.fragment
+                or any(ord(character) <= 32 or ord(character) > 126 for character in url)):
+            raise ValueError('URL must be an ASCII HTTP or HTTPS URL without user info or fragment')
+        if method not in ('GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'HEAD'):
+            raise ValueError('unsupported HTTP method')
+        if method in ('GET', 'HEAD') and request_body:
+            raise ValueError('GET and HEAD requests cannot include a body')
+        headers = _http_request_headers(bytes(request_headers))
+    except (UnicodeError, ValueError, OverflowError):
+        return _http_failure(_HTTP_INVALID_REQUEST, errno.EINVAL)
+
+    with _host_lock:
+        transfer_id = _async_http_next_id
+        _async_http_next_id += 1
+        future = _async_http_executor.submit(
+            _execute_http_transfer,
+            url, method, headers, bytes(request_body), timeout_ms, max_response_bytes
+        )
+        _async_http_transfers[transfer_id] = future
+    return transfer_id
+
+
+def http_async_poll(transfer_id):
+    global _async_timer_next_id
+    if transfer_id <= -1000:
+        duration_ms = max(0, -(transfer_id + 1000))
+        now = time.monotonic()
+        with _host_lock:
+            tid = _async_timer_next_id
+            _async_timer_next_id += 1
+            _async_timers[tid] = (now + duration_ms / 1000.0, duration_ms == 0)
+        return tid
+    if transfer_id >= _CORO_HANDLE_BASE:
+        return coro_poll(transfer_id)
+    if transfer_id >= _SPAWN_HANDLE_BASE:
+        with _host_lock:
+            future = _async_spawn_tasks.get(transfer_id)
+        if future is None:
+            return -1
+        return 1 if future.done() else 0
+    if transfer_id >= _TIMER_HANDLE_BASE:
+        now = time.monotonic()
+        with _host_lock:
+            entry = _async_timers.get(transfer_id)
+            if entry is None:
+                return -1
+            deadline, done = entry
+            if not done and now >= deadline:
+                done = True
+                _async_timers[transfer_id] = (deadline, True)
+            return 1 if done else 0
+    with _host_lock:
+        future = _async_http_transfers.get(transfer_id)
+    if future is None:
+        return -1
+    if not future.done():
+        return 0
+    try:
+        status, _, _, err_kind, _ = future.result()
+        return -1 if err_kind != 0 else 1
+    except Exception:
+        return -1
+
+
+def http_multi_poll(timeout_ms):
+    coro_tick_all()
+    now = time.monotonic()
+    with _host_lock:
+        pending_http = [f for f in _async_http_transfers.values() if not f.done()]
+        pending_spawns = [f for f in _async_spawn_tasks.values() if not f.done()]
+        pending = pending_http + pending_spawns
+        pending_deadlines = []
+        for tid, (deadline, done) in list(_async_timers.items()):
+            if not done:
+                if now >= deadline:
+                    _async_timers[tid] = (deadline, True)
+                else:
+                    pending_deadlines.append(deadline)
+    if not pending and not pending_deadlines:
+        return 0
+    if not pending:
+        min_rem = min(max(0.001, d - now) for d in pending_deadlines)
+        time.sleep(min(max(0.001, timeout_ms / 1000.0), min_rem))
+        now2 = time.monotonic()
+        rem_count = 0
+        with _host_lock:
+            for tid, (deadline, done) in list(_async_timers.items()):
+                if not done:
+                    if now2 >= deadline:
+                        _async_timers[tid] = (deadline, True)
+                    else:
+                        rem_count += 1
+        coro_rem = coro_tick_all()
+        return rem_count + coro_rem
+    timeout_sec = max(0.001, timeout_ms / 1000.0)
+    if pending_deadlines:
+        timeout_sec = min(timeout_sec, min(max(0.001, d - now) for d in pending_deadlines))
+    done, not_done = concurrent.futures.wait(pending, timeout=timeout_sec, return_when=concurrent.futures.FIRST_COMPLETED)
+    now2 = time.monotonic()
+    with _host_lock:
+        rem_timers = 0
+        for tid, (deadline, t_done) in list(_async_timers.items()):
+            if not t_done:
+                if now2 >= deadline:
+                    _async_timers[tid] = (deadline, True)
+                else:
+                    rem_timers += 1
+    coro_rem = coro_tick_all()
+    return len(not_done) + rem_timers + coro_rem
+
+
+def http_async_finish(transfer_id, response_headers_handle, response_body_handle):
+    with _host_lock:
+        future = _async_http_transfers.pop(transfer_id, None)
+    if future is None:
+        return _http_failure(_HTTP_INVALID_REQUEST, errno.EINVAL)
+    response_headers = find(response_headers_handle, 'buffer')
+    response_body = find(response_body_handle, 'buffer')
+    if response_headers is None or response_body is None:
+        return _http_failure(_HTTP_INVALID_REQUEST, errno.EBADF)
+    try:
+        status, h_out, b_out, err_kind, err_code = future.result()
+    except Exception:
+        return _http_failure(_HTTP_TRANSPORT, errno.EIO)
+    if err_kind != 0:
+        return _http_failure(err_kind, err_code)
+    response_headers[:] = h_out
+    response_body[:] = b_out
+    return status
+
+
+def http_async_cancel(transfer_id):
+    with _host_lock:
+        future = _async_http_transfers.pop(transfer_id, None)
+    if future is None:
+        return 0
+    future.cancel()
+    return 1
+
+
+def http_request(url_handle, method_handle, request_headers_handle, request_body_handle,
+                 response_headers_handle, response_body_handle, timeout_ms, max_response_bytes):
+    """Perform one synchronous HTTP(S) request with bounded input and output."""
+    global _error_code, _error_domain
+    _error_code = 0
+    _error_domain = 0
+    url_bytes = find(url_handle, 'buffer')
+    method_bytes = find(method_handle, 'buffer')
+    request_headers = find(request_headers_handle, 'buffer')
+    request_body = find(request_body_handle, 'buffer')
+    response_headers = find(response_headers_handle, 'buffer')
+    response_body = find(response_body_handle, 'buffer')
+    handles = (url_handle, method_handle, request_headers_handle, request_body_handle,
+               response_headers_handle, response_body_handle)
+    if (any(value is None for value in (url_bytes, method_bytes, request_headers, request_body,
+                                        response_headers, response_body))
+            or len(set(handles)) != len(handles)):
+        return _http_failure(_HTTP_INVALID_REQUEST, errno.EBADF)
+    if (not 1 <= timeout_ms <= _HTTP_MAX_TIMEOUT_MS
+            or not 1 <= max_response_bytes <= _HTTP_MAX_BODY
+            or len(url_bytes) > _HTTP_MAX_URL or len(request_body) > _HTTP_MAX_BODY):
+        return _http_failure(_HTTP_INVALID_REQUEST, errno.EINVAL)
+
+    try:
+        url = bytes(url_bytes).decode('ascii')
+        method = bytes(method_bytes).decode('ascii')
+        parsed = urlsplit(url)
+        _ = parsed.port
+        if (parsed.scheme.lower() not in ('http', 'https') or not parsed.hostname
+                or parsed.username is not None or parsed.password is not None or parsed.fragment
+                or any(ord(character) <= 32 or ord(character) > 126 for character in url)):
+            raise ValueError('URL must be an ASCII HTTP or HTTPS URL without user info or fragment')
+        if method not in ('GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'HEAD'):
+            raise ValueError('unsupported HTTP method')
+        if method in ('GET', 'HEAD') and request_body:
+            raise ValueError('GET and HEAD requests cannot include a body')
+        headers = _http_request_headers(bytes(request_headers))
+    except (UnicodeError, ValueError, OverflowError):
+        return _http_failure(_HTTP_INVALID_REQUEST, errno.EINVAL)
+
+    trace_args = [
+        method,
+        url,
+        bytes(request_headers).hex(),
+        bytes(request_body).hex(),
+        timeout_ms,
+        max_response_bytes,
+    ]
+    if _active_trace is not None and _active_trace.is_replaying:
+        ok, payload = _active_trace.replay('host.http_request', trace_args)
+        if not ok:
+            if isinstance(payload, dict):
+                return _http_failure(
+                    int(payload.get('kind', _HTTP_TRANSPORT)),
+                    int(payload.get('error_code', errno.EIO)),
+                )
+            return _http_failure(_HTTP_TRANSPORT, errno.EIO)
+        response_headers[:] = bytes.fromhex(payload.get('headers_hex', ''))
+        response_body[:] = bytes.fromhex(payload.get('body_hex', ''))
+        return int(payload['status'])
+
+    status, h_out, b_out, err_kind, err_code = _execute_http_transfer(
+        url, method, headers, request_body, timeout_ms, max_response_bytes
+    )
+    if err_kind != 0:
+        return _http_failure(err_kind, err_code)
+    response_headers[:] = h_out
+    response_body[:] = b_out
+    if _active_trace is not None and _active_trace.is_recording:
+        _active_trace.record(
+            'host.http_request',
+            trace_args,
+            ok=True,
+            result={
+                'status': status,
+                'headers_hex': bytes(h_out).hex(),
+                'body_hex': bytes(b_out).hex(),
+            },
+        )
+    return status
 
 
 def process_run(executable_handle, arguments_handle, timeout_ms, *, cwd=None, env=None):
@@ -690,7 +1088,316 @@ def process_run(executable_handle, arguments_handle, timeout_ms, *, cwd=None, en
         return res
 
 
+def crypto_sha256(input_handle, output_handle):
+    import hashlib
+    inp = find(input_handle, 'buffer')
+    out = find(output_handle, 'buffer')
+    if inp is None or out is None:
+        return failure(ValueError("Invalid buffer handle"))
+    digest = hashlib.sha256(bytes(inp)).digest()
+    out.clear()
+    out.extend(digest)
+    return 0
+
+
+def crypto_hmac_sha256(key_handle, message_handle, output_handle):
+    import hmac, hashlib
+    k = find(key_handle, 'buffer')
+    m = find(message_handle, 'buffer')
+    out = find(output_handle, 'buffer')
+    if k is None or m is None or out is None:
+        return failure(ValueError("Invalid buffer handle"))
+    digest = hmac.new(bytes(k), bytes(m), hashlib.sha256).digest()
+    out.clear()
+    out.extend(digest)
+    return 0
+
+
+def crypto_sha512(input_handle, output_handle):
+    import hashlib
+    inp = find(input_handle, 'buffer')
+    out = find(output_handle, 'buffer')
+    if inp is None or out is None:
+        return failure(ValueError("Invalid buffer handle"))
+    digest = hashlib.sha512(bytes(inp)).digest()
+    out.clear()
+    out.extend(digest)
+    return 0
+
+
+def crypto_hmac_sha512(key_handle, message_handle, output_handle):
+    import hmac, hashlib
+    k = find(key_handle, 'buffer')
+    m = find(message_handle, 'buffer')
+    out = find(output_handle, 'buffer')
+    if k is None or m is None or out is None:
+        return failure(ValueError("Invalid buffer handle"))
+    digest = hmac.new(bytes(k), bytes(m), hashlib.sha512).digest()
+    out.clear()
+    out.extend(digest)
+    return 0
+
+
+def crypto_md5(input_handle, output_handle):
+    import hashlib
+    inp = find(input_handle, 'buffer')
+    out = find(output_handle, 'buffer')
+    if inp is None or out is None:
+        return failure(ValueError("Invalid buffer handle"))
+    digest = hashlib.md5(bytes(inp)).digest()
+    out.clear()
+    out.extend(digest)
+    return 0
+
+
+def crypto_random_bytes(output_handle, count):
+    import os
+    if count <= 0 or count > (1024 * 1024 * 64):
+        return failure(ValueError("Invalid count"))
+    out = find(output_handle, 'buffer')
+    if out is None:
+        return failure(ValueError("Invalid buffer handle"))
+    rnd = os.urandom(int(count))
+    out.clear()
+    out.extend(rnd)
+    return 0
+
+
+def crypto_constant_time_compare(a_handle, b_handle):
+    import hmac
+    a = find(a_handle, 'buffer')
+    b = find(b_handle, 'buffer')
+    if a is None or b is None:
+        return failure(ValueError("Invalid buffer handle"))
+    return 1 if hmac.compare_digest(bytes(a), bytes(b)) else 0
+
+
+def monotonic_ms():
+    return int(time.monotonic() * 1000)
+
+
+def wall_ms():
+    return int(time.time() * 1000)
+
+
+def sleep(duration_ms):
+    if duration_ms < 0:
+        return -1
+    time.sleep(duration_ms / 1000.0)
+    return 0
+
+
+def stdout_flush():
+    import sys
+    try:
+        sys.stdout.flush()
+    except (OSError, ValueError):
+        return -1
+    return 0
+
+
+def stdin_read_line(output_handle):
+    import sys
+    out = find(output_handle, 'buffer')
+    if out is None:
+        return failure(ValueError("Invalid buffer handle"))
+    out.clear()
+    stream = getattr(sys.stdin, 'buffer', None)
+    if stream is None:
+        return -1
+    line = stream.readline()
+    if not line:
+        return 0
+    if line.endswith(b'\n'):
+        line = line[:-1]
+    if line.endswith(b'\r'):
+        line = line[:-1]
+    out.extend(line)
+    return 1
+
+
+def stdin_read_all(output_handle):
+    import sys
+    out = find(output_handle, 'buffer')
+    if out is None:
+        return failure(ValueError("Invalid buffer handle"))
+    out.clear()
+    stream = getattr(sys.stdin, 'buffer', None)
+    if stream is None:
+        return -1
+    out.extend(stream.read())
+    return len(out)
+
+
+def getcwd(output_handle):
+    out = find(output_handle, 'buffer')
+    if out is None:
+        return failure(ValueError("Invalid buffer handle"))
+    data = os.getcwd().encode('utf-8')
+    out.clear()
+    out.extend(data)
+    return len(data)
+
+
+def stdin_read_exact(output_handle, count):
+    import sys
+    if count < 0 or count > 16777216:
+        return failure(ValueError("Invalid read byte count"))
+    out = find(output_handle, 'buffer')
+    if out is None:
+        return failure(ValueError("Invalid buffer handle"))
+    out.clear()
+    if count == 0:
+        return 0
+    stream = getattr(sys.stdin, 'buffer', None)
+    try:
+        chunk = stream.read(count) if stream is not None else sys.stdin.read(count).encode('utf-8')
+    except (OSError, ValueError) as error:
+        return failure(error)
+    if not chunk:
+        return 0
+    if len(chunk) < count:
+        return -1
+    out.extend(chunk)
+    return len(chunk)
+
+
+def stdout_write_raw(input_handle):
+    import sys
+    data = find(input_handle, 'buffer')
+    if data is None:
+        return failure(ValueError("Invalid buffer handle"))
+    stream = getattr(sys.stdout, 'buffer', None)
+    try:
+        if stream is not None:
+            stream.write(bytes(data))
+            stream.flush()
+        else:
+            sys.stdout.write(bytes(data).decode('utf-8', errors='replace'))
+            sys.stdout.flush()
+    except (OSError, ValueError) as error:
+        return failure(error)
+    return 0
+
+
+def self_executable(output_handle):
+    import sys
+    out = find(output_handle, 'buffer')
+    if out is None:
+        return failure(ValueError("Invalid buffer handle"))
+    out.clear()
+    raw = (sys.executable or "").encode('utf-8')
+    out.extend(raw)
+    return len(raw)
+
+
+def _rotl32(value, count):
+    return ((value << count) & 0xFFFFFFFF) | (value >> (32 - count))
+
+
+def _chacha20_block(key, counter, nonce):
+    import struct
+    constants = (0x61707865, 0x3320646E, 0x79622D32, 0x6B206574)
+    state = list(constants) + list(struct.unpack('<8I', key)) + [counter & 0xFFFFFFFF] + list(struct.unpack('<3I', nonce))
+    x = list(state)
+
+    def quarter(a, b, c, d):
+        x[a] = (x[a] + x[b]) & 0xFFFFFFFF; x[d] = _rotl32(x[d] ^ x[a], 16)
+        x[c] = (x[c] + x[d]) & 0xFFFFFFFF; x[b] = _rotl32(x[b] ^ x[c], 12)
+        x[a] = (x[a] + x[b]) & 0xFFFFFFFF; x[d] = _rotl32(x[d] ^ x[a], 8)
+        x[c] = (x[c] + x[d]) & 0xFFFFFFFF; x[b] = _rotl32(x[b] ^ x[c], 7)
+
+    for _ in range(10):
+        quarter(0, 4, 8, 12); quarter(1, 5, 9, 13); quarter(2, 6, 10, 14); quarter(3, 7, 11, 15)
+        quarter(0, 5, 10, 15); quarter(1, 6, 11, 12); quarter(2, 7, 8, 13); quarter(3, 4, 9, 14)
+    return struct.pack('<16I', *[(x[i] + state[i]) & 0xFFFFFFFF for i in range(16)])
+
+
+def _chacha20_xor(key, counter, nonce, data):
+    out = bytearray()
+    for offset in range(0, len(data), 64):
+        block = _chacha20_block(key, counter + offset // 64, nonce)
+        chunk = data[offset:offset + 64]
+        out.extend(byte ^ mask for byte, mask in zip(chunk, block))
+    return bytes(out)
+
+
+def _poly1305(key, message):
+    r = int.from_bytes(key[:16], 'little') & 0x0FFFFFFC0FFFFFFC0FFFFFFC0FFFFFFF
+    s = int.from_bytes(key[16:32], 'little')
+    modulus = (1 << 130) - 5
+    accumulator = 0
+    for offset in range(0, len(message), 16):
+        block = message[offset:offset + 16]
+        accumulator = ((accumulator + int.from_bytes(block + b'\x01', 'little')) * r) % modulus
+    return ((accumulator + s) & ((1 << 128) - 1)).to_bytes(16, 'little')
+
+
+def _aead_tag(otk, aad, ciphertext):
+    import struct
+    pad = lambda data: b'\x00' * (-len(data) % 16)
+    mac_data = aad + pad(aad) + ciphertext + pad(ciphertext) + struct.pack('<QQ', len(aad), len(ciphertext))
+    return _poly1305(otk, mac_data)
+
+
+def crypto_chacha20_poly1305_seal(key_handle, nonce_handle, aad_handle, plain_handle, output_handle):
+    key, nonce, aad = find(key_handle, 'buffer'), find(nonce_handle, 'buffer'), find(aad_handle, 'buffer')
+    plain, out = find(plain_handle, 'buffer'), find(output_handle, 'buffer')
+    if None in (key, nonce, aad, plain, out) or len(key) != 32 or len(nonce) != 12:
+        return -1
+    key, nonce = bytes(key), bytes(nonce)
+    otk = _chacha20_block(key, 0, nonce)[:32]
+    ciphertext = _chacha20_xor(key, 1, nonce, bytes(plain))
+    tag = _aead_tag(otk, bytes(aad), ciphertext)
+    out.clear()
+    out.extend(ciphertext + tag)
+    return 0
+
+
+def crypto_chacha20_poly1305_open(key_handle, nonce_handle, aad_handle, sealed_handle, output_handle):
+    import hmac
+    key, nonce, aad = find(key_handle, 'buffer'), find(nonce_handle, 'buffer'), find(aad_handle, 'buffer')
+    sealed, out = find(sealed_handle, 'buffer'), find(output_handle, 'buffer')
+    if None in (key, nonce, aad, sealed, out) or len(key) != 32 or len(nonce) != 12 or len(sealed) < 16:
+        return -1
+    key, nonce, sealed = bytes(key), bytes(nonce), bytes(sealed)
+    ciphertext, tag = sealed[:-16], sealed[-16:]
+    otk = _chacha20_block(key, 0, nonce)[:32]
+    if not hmac.compare_digest(_aead_tag(otk, bytes(aad), ciphertext), tag):
+        return -2
+    out.clear()
+    out.extend(_chacha20_xor(key, 1, nonce, ciphertext))
+    return 0
+
+
+def unicode_normalize(input_handle, form, output_handle):
+    import unicodedata
+    source = find(input_handle, 'buffer')
+    out = find(output_handle, 'buffer')
+    if source is None or out is None or form not in (0, 1):
+        return -1
+    try:
+        text = bytes(source).decode('utf-8')
+    except UnicodeDecodeError:
+        return -1
+    normalized = unicodedata.normalize('NFC' if form == 0 else 'NFD', text)
+    out.clear()
+    out.extend(normalized.encode('utf-8'))
+    return 0
+
+
 FUNCTIONS = {
+    'wysna_host_monotonic_ms': monotonic_ms,
+    'wysna_host_wall_ms': wall_ms,
+    'wysna_host_sleep': sleep,
+    'wysna_host_stdout_flush': stdout_flush,
+    'wysna_host_stdin_read_line': stdin_read_line,
+    'wysna_host_stdin_read_all': stdin_read_all,
+    'wysna_host_stdin_read_exact': stdin_read_exact,
+    'wysna_host_stdout_write_raw': stdout_write_raw,
+    'wysna_host_self_executable': self_executable,
+    'wysna_host_getcwd': getcwd,
+    'wysna_host_unicode_normalize': unicode_normalize,
     'wysna_host_last_error': lambda: _error_code,
     'wysna_host_last_error_domain': lambda: _error_domain,
     'wysna_host_borrow': lambda handle: handle,
@@ -711,4 +1418,18 @@ FUNCTIONS = {
     'wysna_host_fs_canonical': canonical_path,
     'wysna_host_process_run': process_run,
     'wysna_host_http_request': http_request,
+    'wysna_host_http_async_start': http_async_start,
+    'wysna_host_http_async_poll': http_async_poll,
+    'wysna_host_http_async_finish': http_async_finish,
+    'wysna_host_http_multi_poll': http_multi_poll,
+    'wysna_host_http_async_cancel': http_async_cancel,
+    'wysna_host_crypto_sha256': crypto_sha256,
+    'wysna_host_crypto_hmac_sha256': crypto_hmac_sha256,
+    'wysna_host_crypto_sha512': crypto_sha512,
+    'wysna_host_crypto_hmac_sha512': crypto_hmac_sha512,
+    'wysna_host_crypto_md5': crypto_md5,
+    'wysna_host_crypto_random_bytes': crypto_random_bytes,
+    'wysna_host_crypto_constant_time_compare': crypto_constant_time_compare,
+    'wysna_host_crypto_chacha20_poly1305_seal': crypto_chacha20_poly1305_seal,
+    'wysna_host_crypto_chacha20_poly1305_open': crypto_chacha20_poly1305_open,
 }

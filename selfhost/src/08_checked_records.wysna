@@ -18,36 +18,56 @@ fn checked_records(context: SemanticContext) -> list[CheckedRecord] {
             let mut methods: list[CheckedMethod] = []
             let mut interfaces: list[int] = []
             let mut parent = -1
-            let mut lineage: list[str] = [type_.name]
-            let mut current = type_.name
+            let mut lineage_types: list[int] = [id]
+            let mut current_type = id
             let mut visits = 0
-            while current != "" and visits <= len(context.classes) {
-                let mut next = ""
-                for class_ in context.classes { if class_.name == current { next = class_.parent if current == type_.name { for interface_ in class_.interfaces { interfaces.append(sem_named(context, interface_)) } } } }
-                if next != "" { if parent < 0 { parent = sem_named(context, next) } lineage.append(next) }
-                current = next visits = visits + 1
+            while current_type >= 0 and visits <= len(context.classes) {
+                let current_name = context.types[current_type].name
+                if current_type == id {
+                    for class_ in context.classes {
+                        if class_.name == current_name {
+                            for interface_ in class_.interfaces { interfaces.append(sem_named(context, interface_)) }
+                        }
+                    }
+                }
+                let next_type = if context.types[current_type].kind == "class" { sem_class_parent_type(context, current_type) } else { -1 }
+                if next_type >= 0 {
+                    if parent < 0 { parent = next_type }
+                    lineage_types.append(next_type)
+                }
+                current_type = next_type
+                visits = visits + 1
             }
-            let mut names: list[str] = []
             let generic = sem_generic_type(context, type_.name)
-            if generic >= 0 { sem_require_nominal_budget(context, id) names = context.generic_types[generic].params }
-            let mut owner_index = len(lineage) - 1
+            if generic >= 0 { sem_require_nominal_budget(context, id) }
+            let mut owner_index = len(lineage_types) - 1
             while owner_index >= 0 {
-                let owner_name = lineage[owner_index]
+                let owner_type_id = lineage_types[owner_index]
+                let owner_type = context.types[owner_type_id]
+                let owner_name = owner_type.name
+                let owner_generic = sem_generic_type(context, owner_name)
+                let mut owner_names: list[str] = []
+                if owner_generic >= 0 {
+                    sem_require_nominal_budget(context, owner_type_id)
+                    owner_names = context.generic_types[owner_generic].params
+                }
                 for field in context.fields {
-                    if field.owner == owner_name { fields.append(CheckedField { name: field.name, type_id: sem_substitute_type(context, field.type_id, names, type_.args), visible: field.visible }) }
+                    if field.owner == owner_name { fields.append(CheckedField { name: field.name, type_id: sem_substitute_type(context, field.type_id, owner_names, owner_type.args), visible: field.visible }) }
                 }
                 for i in 0..len(context.functions) {
                     let function = context.functions[i]
                     if function.owner == owner_name + "." and len(function.name) > len(function.owner) and slice(function.name, 0, len(function.owner)) == function.owner {
+                        # Independent generic methods are direct-called on specializations, never placed in class vtables.
+                        if len(function.type_params) > len(owner_names) { continue }
                         let method_name = slice(function.name, len(function.owner), len(function.name))
                         let mut target = i
                         let mut method_owner = sem_named(context, owner_name)
                         let mut method_type = function.type_id
-                        if generic >= 0 {
-                            method_owner = id
-                            method_type = sem_substitute_type(context, method_type, names, type_.args)
+                        if owner_generic >= 0 {
+                            method_owner = owner_type_id
+                            method_type = sem_substitute_type(context, method_type, owner_names, owner_type.args)
                             target = -1
-                            for specialization in context.specializations { if specialization.template == i and specialization.arguments == type_.args { target = specialization.function } }
+                            for specialization in context.specializations { if specialization.template == i and specialization.arguments == owner_type.args { target = specialization.function } }
                             if target < 0 { report_error_at("W9999", context.tokens[0], "missing specialized method") }
                         }
                         let method = CheckedMethod { name: method_name, type_id: method_type, target: target, owner: method_owner, visible: function.visible }
@@ -58,6 +78,8 @@ fn checked_records(context: SemanticContext) -> list[CheckedRecord] {
                 }
                 owner_index = owner_index - 1
             }
+            let mut names: list[str] = []
+            if generic >= 0 { names = context.generic_types[generic].params }
             for i in 0..len(context.variants) {
                 if context.types[context.variant_types[i]].name == type_.name {
                     let mut payloads: list[int] = []

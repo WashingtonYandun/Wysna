@@ -29,10 +29,10 @@ fn mir_c_externs(module: MirModule) -> str {
             let value = "v_" + str(i)
             wrapper = wrapper + "WVal " + value
             if abi == "int32" { call = call + "wysna_ffi_int32(" + value + ")" }
-            elif abi == "int" or abi == "int64" { call = call + value + ".as.i" }
-            elif abi == "float" or abi == "double" { call = call + value + ".as.f" }
-            elif abi == "bool" { call = call + value + ".as.b" }
-            else { call = call + value + ".as.pointer" }
+            elif abi == "int" or abi == "int64" { call = call + "wysna_as_int(" + value + ")" }
+            elif abi == "float" or abi == "double" { call = call + "wysna_as_float(" + value + ")" }
+            elif abi == "bool" { call = call + "wysna_as_bool(" + value + ")" }
+            else { call = call + "wysna_as_pointer(" + value + ")" }
         }
         if len(external.params) == 0 { prototype = prototype + "void" wrapper = wrapper + "void" }
         call = call + ")"
@@ -45,6 +45,11 @@ fn mir_c_externs(module: MirModule) -> str {
         } else {
             let constructor = if returned == "int" { "wysna_int" } elif returned == "float" { "wysna_float" } else { "wysna_bool" }
             body = "return " + constructor + "(" + call + ");"
+        }
+        if len(external.native) < 6 or slice(external.native, 0, 6) != "wysna_" {
+            let mut voids = ""
+            for i in 0..len(external.params) { voids = voids + "(void)v_" + str(i) + "; " }
+            body = "\n#ifdef WYSNA_DENY_CAP_NATIVE_FFI\n    " + voids + "wysna_sandbox_deny(\"native-ffi\");\n#endif\n    " + body
         }
         out = out + prototype + ");\n" + wrapper + ") { " + body + " }\n"
     }
