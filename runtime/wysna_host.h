@@ -9,6 +9,7 @@
 #include <string.h>
 #include <errno.h>
 #include <ctype.h>
+#include <fcntl.h>
 #include <sys/stat.h>
 
 #ifdef _WIN32
@@ -25,7 +26,6 @@
 #elif defined(__wasi__)
 #include <unistd.h>
 #else
-#include <fcntl.h>
 #include <pthread.h>
 #include <signal.h>
 #include <sys/select.h>
@@ -211,17 +211,49 @@ static void* wysna_host_file_open(void* path_handle, int64_t mode) {
     }
 #endif
     char* path = wysna_host_path(path_handle);
-    if (!path || mode < 0 || mode > 2) { free(path); wysna_host_errno(EINVAL); return NULL; }
-    const char* modes[] = { "rb", "wb", "ab" };
+    if (!path || mode < 0 || mode > 3) { free(path); wysna_host_errno(EINVAL); return NULL; }
+    FILE* file = NULL;
+    int open_error = 0;
 #ifdef _WIN32
     wchar_t* wide = wysna_host_wide(path);
-    const wchar_t* wide_modes[] = { L"rb", L"wb", L"ab" };
-    FILE* file = wide ? _wfopen(wide, wide_modes[mode]) : NULL;
+    if (!wide) {
+        open_error = errno ? errno : EINVAL;
+    } else if (mode == 3) {
+        int fd = _wopen(wide, _O_WRONLY | _O_CREAT | _O_EXCL | _O_BINARY, _S_IREAD | _S_IWRITE);
+        if (fd < 0) {
+            open_error = errno;
+        } else {
+            file = _fdopen(fd, "wb");
+            if (!file) {
+                open_error = errno ? errno : EIO;
+                _close(fd);
+            }
+        }
+    } else {
+        const wchar_t* wide_modes[] = { L"rb", L"wb", L"ab" };
+        file = _wfopen(wide, wide_modes[mode]);
+        if (!file) open_error = errno;
+    }
     free(wide);
 #else
-    FILE* file = fopen(path, modes[mode]);
+    if (mode == 3) {
+        int fd = open(path, O_WRONLY | O_CREAT | O_EXCL, 0666);
+        if (fd < 0) {
+            open_error = errno;
+        } else {
+            file = fdopen(fd, "wb");
+            if (!file) {
+                open_error = errno ? errno : EIO;
+                close(fd);
+            }
+        }
+    } else {
+        const char* modes[] = { "rb", "wb", "ab" };
+        file = fopen(path, modes[mode]);
+        if (!file) open_error = errno;
+    }
 #endif
-    if (!file) wysna_host_errno(errno);
+    if (!file) wysna_host_errno(open_error);
     free(path);
     return file ? wysna_host_new(2, file) : NULL;
 }

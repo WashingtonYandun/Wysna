@@ -1,6 +1,66 @@
 import "std/buffer"
+import "std/crypto"
+import "std/files"
+import "std/fs"
 import "std/http"
 import "std/json"
+import "std/path"
+
+struct PublishError {
+    message: str,
+}
+
+struct TempFile {
+    temp_path: str,
+    file: files.File,
+}
+
+fn cleanup_temp(temp_path: str) -> unit {
+    fs.remove(temp_path) else error { return }
+}
+
+fn create_temp_file(destination: str) -> TempFile ! PublishError {
+    let directory = path.dirname(destination)
+    let base = path.basename(destination)
+    if len(base) == 0 or base == "." or base == ".." {
+        return Err(PublishError { message: "output path must name a file" })
+    }
+    for attempt in 0..16 {
+        let token = crypto.random_hex(8) else error {
+            return Err(PublishError { message: error.message })
+        }
+        let candidate = path.join(directory, "." + base + ".tmp-" + token)
+        let file = files.create_exclusive(candidate) else error {
+            let already_exists = fs.exists(candidate) else { false }
+            if already_exists and attempt < 15 { continue }
+            return Err(PublishError { message: "output file unavailable" })
+        }
+        return TempFile { temp_path: candidate, file: file }
+    }
+    return Err(PublishError { message: "unable to allocate unique temporary file" })
+}
+
+fn write_atomic(destination: str, text: str) -> unit ! PublishError {
+    let created = create_temp_file(destination)?
+    let temp_path = created.temp_path
+    let file = created.file
+    let payload = buffer.from_text(text)
+    file.write(payload) else error {
+        payload.close()
+        let closed = file.close()
+        cleanup_temp(temp_path)
+        return Err(PublishError { message: "output file write failed" })
+    }
+    payload.close()
+    if file.close() != 0 {
+        cleanup_temp(temp_path)
+        return Err(PublishError { message: "output file close failed" })
+    }
+    fs.rename(temp_path, destination) else error {
+        cleanup_temp(temp_path)
+        return Err(PublishError { message: "output file publish failed" })
+    }
+}
 
 fn run() -> int {
     let arguments = args()
@@ -25,7 +85,7 @@ fn run() -> int {
     }
     let rows = json.as_array(document) else { eprint("HTTP body must be an array") return 4 }
     if len(rows) < 1 or len(rows) > 1000 { eprint("expected 1..1000 measurements") return 4 }
-    write_file(arguments[2], text) else error { eprint("output file unavailable", error) return 5 }
+    write_atomic(arguments[2], text) else error { eprint(error.message) return 5 }
     return 0
 }
 

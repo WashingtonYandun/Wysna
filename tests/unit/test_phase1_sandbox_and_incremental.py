@@ -101,6 +101,12 @@ def test_runtime_c_sandbox_denies_every_guarded_capability(tmp_path):
             "(void)wysna_host_fs(b, NULL, 2);\n",
         ),
         (
+            "filesystem.write",
+            "-DWYSNA_DENY_CAP_FILESYSTEM_WRITE=1",
+            "void* b = wysna_host_buffer_new();\n"
+            "(void)wysna_host_file_open(b, 3);\n",
+        ),
+        (
             "clock",
             "-DWYSNA_DENY_CAP_CLOCK=1",
             "(void)wysna_host_monotonic_ms();\n",

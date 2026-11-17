@@ -13,10 +13,11 @@ It does not need a host C compiler or an installed SQLite development package.
 
 `fetch.wysna` uses the standard HTTP client, a five-second request deadline and a
 65,536-byte response limit. It accepts status 200 and bounded JSON arrays before
-writing the destination file. It requires declared libcurl development inputs;
+writing a unique exclusive temporary file in the destination directory and atomically
+renaming it over the destination after closing, preserving any prior valid batch
+on write or publish failure. It requires declared libcurl development inputs;
 HTTP acceptance currently covers Linux and macOS. The local JSON/SQLite command
-is accepted on Windows as well. A write failure may leave a partial destination
-file; use a new download destination and ingest it only after a successful fetch.
+is accepted on Windows as well.
 
 The workflow after building the two commands is:
 

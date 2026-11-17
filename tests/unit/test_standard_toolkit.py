@@ -338,6 +338,48 @@ fs.rename(DESTINATION, DIRECTORY) else error { print(error.operation, error.code
             assert target_directory.is_dir()
 
 
+def test_exclusive_file_creation_fails_when_destination_exists_across_four_engines():
+    selfhost_bin = ensure_selfhost_compiler_binary(str(ROOT))
+    sanitize = os.environ.get('WYSNA_SANITIZE') == '1'
+    with tempfile.TemporaryDirectory(prefix='wysna exclusive é ') as temporary:
+        directory = Path(temporary)
+        for engine in ('interpreter', 'ast', 'hir', 'selfhost'):
+            target = directory / f'{engine}-target.txt'
+            missing = directory / 'missing-parent' / 'file.txt'
+            source = '''import "std/buffer"
+import "std/files"
+fn main() -> unit ! files.FileError {
+    let created = files.create_exclusive(TARGET_PATH)?
+    let data = buffer.from_text("first")
+    created.write(data)?
+    data.close()
+    print("CREATED", created.close())
+    files.create_exclusive(TARGET_PATH) else error {
+        print("EXISTS", error.operation, error.code > 0, error.domain > 0)
+        return
+    }
+    print("UNEXPECTED-OVERWRITE")
+}
+fn check_missing() -> unit {
+    files.open(MISSING_PATH, 3) else error {
+        print("MISSING", error.operation, error.code > 0, error.domain > 0)
+        return
+    }
+    print("UNEXPECTED-MISSING")
+}
+main() else error { print("ERR", error.operation) exit(1) }
+check_missing()
+'''.replace('TARGET_PATH', json.dumps(str(target), ensure_ascii=False)).replace('MISSING_PATH', json.dumps(str(missing), ensure_ascii=False))
+            result = run_engine(engine, source, 'exclusive_create', selfhost_bin, directory / engine,
+                                sanitize=sanitize)
+            assert (result.exit_code, result.stdout, result.stderr) == (
+                0,
+                'CREATED 0\nEXISTS open true true\nMISSING open true true\n',
+                '',
+            ), f'{engine} failed: {result.exit_code}, {result.stdout!r}, {result.stderr!r}'
+            assert target.read_text(encoding='utf-8') == 'first'
+
+
 def test_host_handles_reject_stale_wrong_kind_and_oversized_requests():
     buffer = HostAbi.FUNCTIONS['wysna_host_buffer_new']()
     assert HostAbi.buffer_append(buffer, 256) == -1
@@ -430,6 +472,7 @@ def run_toolkit_tests():
     test_streaming_files_and_filesystem_across_four_engines()
     test_filesystem_missing_size_replaces_previous_error_across_four_engines()
     test_filesystem_rename_replaces_existing_file_across_four_engines()
+    test_exclusive_file_creation_fails_when_destination_exists_across_four_engines()
     test_host_handles_reject_stale_wrong_kind_and_oversized_requests()
     test_large_file_processing_keeps_buffer_bounded()
     test_standard_file_cleanup_runs_on_runtime_panic()

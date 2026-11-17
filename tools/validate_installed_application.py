@@ -152,6 +152,11 @@ def validate(installation, report, *, http=False, archive=None):
                 for path, code in (('/unavailable',3),('/malformed',4),('/large',3)):
                     run('http-rejects' + path, [downloader, endpoint + path, input_path], code=code)
                     assert input_path.read_bytes() == payload and snapshot() == baseline
+                blocked_target = work / 'blocked-measurements'
+                blocked_target.mkdir()
+                run('http-publish-failure-cleans-temp', [downloader, endpoint + '/measurements', blocked_target], code=5)
+                assert not list(work.glob('*.tmp-*')) and not list(work.glob('.*.tmp-*'))
+                assert input_path.read_bytes() == payload and snapshot() == baseline
             finally:
                 server.shutdown()
                 server.server_close()

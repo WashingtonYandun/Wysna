@@ -13,7 +13,8 @@ Wysna distributes modules under `std/` imported via canonical paths such as `imp
   - `Bytes.size() -> int`: get buffer length in bytes.
   - `Bytes.close() -> int`: release buffer memory explicitly.
 - `std/files`: structured block and stream I/O operations returning `FileError`.
-  - `files.open(path, mode) -> File ! FileError`: open file with integer mode (`0` read, `1` truncate/write, `2` append).
+  - `files.open(path, mode) -> File ! FileError`: open file with integer mode (`0` read, `1` truncate/write, `2` append, `3` create exclusively and fail if present).
+  - `files.create_exclusive(path) -> File ! FileError`: create and open a new file exclusively (`mode = 3`), failing if the path already exists.
   - `File.read(max_bytes) -> Bytes ! FileError`: read up to `max_bytes`.
   - `File.write(Bytes) -> unit ! FileError`: write bytes to file.
   - `File.close() -> int`: close handle and release host descriptor.
