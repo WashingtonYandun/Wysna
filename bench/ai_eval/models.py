@@ -81,6 +81,9 @@ class Task:
         )
 
 
+SCHEMA_VERSION = "wysna.ai-eval/2"
+
+
 @dataclass
 class AttemptRecord:
     attempt_index: int
@@ -91,16 +94,24 @@ class AttemptRecord:
     run_passed: bool = False
     oracle_passed: bool = False
     oracle_failure_details: Optional[str] = None
-    error_category: Optional[str] = None  # syntax | type | api_hallucination | runtime | oracle_mismatch | none
+    error_category: Optional[str] = None  # syntax | type | api_hallucination | runtime | oracle_mismatch | unsafe_path | none
     latency_ms: float = 0.0
     prompt_tokens: int = 0
     completion_tokens: int = 0
+    raw_check_passed: bool = False
+    post_autofix_check_passed: bool = False
+    autofix_applied: bool = False
+    provider_latency_ms: float = 0.0
+    wall_time_ms: float = 0.0
 
     def to_dict(self) -> Dict[str, Any]:
         return {
             "attempt_index": self.attempt_index,
             "code": self.code,
             "check_passed": self.check_passed,
+            "raw_check_passed": self.raw_check_passed,
+            "post_autofix_check_passed": self.post_autofix_check_passed,
+            "autofix_applied": self.autofix_applied,
             "check_diagnostics": self.check_diagnostics,
             "raw_stderr": self.raw_stderr,
             "run_passed": self.run_passed,
@@ -108,6 +119,8 @@ class AttemptRecord:
             "oracle_failure_details": self.oracle_failure_details,
             "error_category": self.error_category,
             "latency_ms": round(self.latency_ms, 2),
+            "provider_latency_ms": round(self.provider_latency_ms, 2),
+            "wall_time_ms": round(self.wall_time_ms, 2),
             "prompt_tokens": self.prompt_tokens,
             "completion_tokens": self.completion_tokens,
         }
@@ -120,11 +133,19 @@ class TaskEvaluationResult:
     title: str
     status: str  # pass | fail | blocked
     blocked_reason: Optional[str] = None
-    pass_at_attempt: Optional[int] = None  # 1 (first try), 2 (first repair), 3 (second repair), 4 (third repair), None
+    pass_at_attempt: Optional[int] = None  # 1-based model submission index that passed oracle, or None
     attempts: List[AttemptRecord] = field(default_factory=list)
     total_latency_ms: float = 0.0
     total_tokens: int = 0
     final_error_category: Optional[str] = None
+    raw_first_check_passed: bool = False
+    post_autofix_first_check_passed: bool = False
+    first_attempt_autofix_applied: bool = False
+    first_attempt_oracle_passed: bool = False
+    raw_pass_at_1: bool = False
+    model_turns: int = 0
+    provider_latency_ms: float = 0.0
+    wall_time_ms: float = 0.0
 
     def to_dict(self) -> Dict[str, Any]:
         return {
@@ -134,8 +155,16 @@ class TaskEvaluationResult:
             "status": self.status,
             "blocked_reason": self.blocked_reason,
             "pass_at_attempt": self.pass_at_attempt,
+            "raw_first_check_passed": self.raw_first_check_passed,
+            "post_autofix_first_check_passed": self.post_autofix_first_check_passed,
+            "first_attempt_autofix_applied": self.first_attempt_autofix_applied,
+            "first_attempt_oracle_passed": self.first_attempt_oracle_passed,
+            "raw_pass_at_1": self.raw_pass_at_1,
+            "model_turns": self.model_turns,
             "attempts": [a.to_dict() for a in self.attempts],
             "total_latency_ms": round(self.total_latency_ms, 2),
+            "provider_latency_ms": round(self.provider_latency_ms, 2),
+            "wall_time_ms": round(self.wall_time_ms, 2),
             "total_tokens": self.total_tokens,
             "final_error_category": self.final_error_category,
         }
@@ -159,23 +188,65 @@ class EvaluationSummary:
     avg_latency_ms: float
     total_tokens: int
     results: List[TaskEvaluationResult] = field(default_factory=list)
+    schema_version: str = SCHEMA_VERSION
+    max_repair_cycles: int = 3
+    max_attempts: int = 4
+    raw_first_check_pass_count: int = 0
+    raw_first_check_pass_rate: float = 0.0
+    post_autofix_first_check_pass_count: int = 0
+    post_autofix_first_check_pass_rate: float = 0.0
+    raw_pass_at_1_count: int = 0
+    raw_pass_at_1_rate: float = 0.0
+    autofix_pass_at_1_count: int = 0
+    autofix_pass_at_1_rate: float = 0.0
+    resolved_count: int = 0
+    resolved_rate: float = 0.0
+    avg_provider_latency_ms: float = 0.0
+    avg_wall_time_ms: float = 0.0
+    total_provider_latency_ms: float = 0.0
+    total_wall_time_ms: float = 0.0
+    avg_model_turns: float = 0.0
+    total_model_turns: int = 0
+    token_counting_method: str = "unknown"
+    denominators: Dict[str, int] = field(default_factory=dict)
 
     def to_dict(self) -> Dict[str, Any]:
         return {
+            "schema_version": self.schema_version,
             "timestamp": self.timestamp,
             "compiler_version": self.compiler_version,
             "compiler_commit": self.compiler_commit,
             "provider_name": self.provider_name,
             "model_name": self.model_name,
+            "token_counting_method": self.token_counting_method,
+            "max_repair_cycles": self.max_repair_cycles,
+            "max_attempts": self.max_attempts,
             "total_tasks": self.total_tasks,
             "supported_tasks": self.supported_tasks,
             "blocked_tasks": self.blocked_tasks,
+            "denominators": self.denominators,
+            "raw_first_check_pass_count": self.raw_first_check_pass_count,
+            "raw_first_check_pass_rate": round(self.raw_first_check_pass_rate, 4),
+            "post_autofix_first_check_pass_count": self.post_autofix_first_check_pass_count,
+            "post_autofix_first_check_pass_rate": round(self.post_autofix_first_check_pass_rate, 4),
+            "raw_pass_at_1_count": self.raw_pass_at_1_count,
+            "raw_pass_at_1_rate": round(self.raw_pass_at_1_rate, 4),
+            "autofix_pass_at_1_count": self.autofix_pass_at_1_count,
+            "autofix_pass_at_1_rate": round(self.autofix_pass_at_1_rate, 4),
             "pass_at_1_count": self.pass_at_1_count,
             "pass_at_3_count": self.pass_at_3_count,
             "pass_at_1_rate": round(self.pass_at_1_rate, 4),
             "pass_at_3_rate": round(self.pass_at_3_rate, 4),
+            "resolved_count": self.resolved_count,
+            "resolved_rate": round(self.resolved_rate, 4),
             "error_distribution": self.error_distribution,
             "avg_latency_ms": round(self.avg_latency_ms, 2),
+            "avg_provider_latency_ms": round(self.avg_provider_latency_ms, 2),
+            "avg_wall_time_ms": round(self.avg_wall_time_ms, 2),
+            "total_provider_latency_ms": round(self.total_provider_latency_ms, 2),
+            "total_wall_time_ms": round(self.total_wall_time_ms, 2),
+            "avg_model_turns": round(self.avg_model_turns, 2),
+            "total_model_turns": self.total_model_turns,
             "total_tokens": self.total_tokens,
             "results": [r.to_dict() for r in self.results],
         }

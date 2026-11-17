@@ -20,15 +20,20 @@ from bench.ai_eval.providers import GeminiProvider, MockProvider, OpenAICompatib
 
 
 def format_markdown_table(summary: dict) -> str:
+    denom = summary["supported_tasks"]
     lines = [
         f"# Wysna AI Evaluation Report · {summary['model_name']} ({summary['provider_name']})",
         "",
+        f"- **Schema Version:** `{summary.get('schema_version', 'wysna.ai-eval/1')}`",
         f"- **Timestamp:** {summary['timestamp']}",
         f"- **Compiler Version:** {summary['compiler_version']} (commit `{summary['compiler_commit']}`)",
-        f"- **Total Tasks:** {summary['total_tasks']} (Supported: {summary['supported_tasks']}, Blocked: {summary['blocked_tasks']})",
-        f"- **Pass@1 (First Try):** {summary['pass_at_1_count']}/{summary['supported_tasks']} ({summary['pass_at_1_rate'] * 100:.1f}%)",
-        f"- **Pass@3 (Repair Gate):** {summary['pass_at_3_count']}/{summary['supported_tasks']} ({summary['pass_at_3_rate'] * 100:.1f}%)",
-        f"- **Avg Latency:** {summary['avg_latency_ms']:.1f} ms | **Total Tokens:** {summary['total_tokens']}",
+        f"- **Total Tasks:** {summary['total_tasks']} (Supported: {denom}, Blocked: {summary['blocked_tasks']})",
+        f"- **First Static Check (Raw -> Post-Autofix):** {summary.get('raw_first_check_pass_count', 0)}/{denom} -> {summary.get('post_autofix_first_check_pass_count', 0)}/{denom}",
+        f"- **Raw Pass@1 (No Autofix):** {summary.get('raw_pass_at_1_count', 0)}/{denom} ({summary.get('raw_pass_at_1_rate', 0.0) * 100:.1f}%)",
+        f"- **Pass@1 (Incl. Autofix):** {summary['pass_at_1_count']}/{denom} ({summary['pass_at_1_rate'] * 100:.1f}%)",
+        f"- **Pass@3 (<=3 Turns):** {summary['pass_at_3_count']}/{denom} ({summary['pass_at_3_rate'] * 100:.1f}%)",
+        f"- **Resolved (Within Budget <= {summary.get('max_attempts', 4)} Turns):** {summary.get('resolved_count', summary['pass_at_3_count'])}/{denom} ({summary.get('resolved_rate', summary['pass_at_3_rate']) * 100:.1f}%)",
+        f"- **Avg Wall Time:** {summary.get('avg_wall_time_ms', summary['avg_latency_ms']):.1f} ms | **Avg Provider Latency:** {summary.get('avg_provider_latency_ms', summary['avg_latency_ms']):.1f} ms | **Avg Turns:** {summary.get('avg_model_turns', 0.0):.2f} | **Total Tokens ({summary.get('token_counting_method', 'unknown')}):** {summary['total_tokens']}",
         "",
         "## Error Distribution",
         "",
@@ -45,16 +50,18 @@ def format_markdown_table(summary: dict) -> str:
         "",
         "## Detailed Task Breakdown",
         "",
-        "| Task ID | Domain | Title | Status | Attempt | Latency (ms) | Tokens | Error |",
-        "| :--- | :--- | :--- | :---: | :---: | :---: | :---: | :--- |",
+        "| Task ID | Domain | Title | Status | Attempt | Turns | Wall (ms) | Tokens | Error |",
+        "| :--- | :--- | :--- | :---: | :---: | :---: | :---: | :---: | :--- |",
     ])
 
     for res in summary["results"]:
         status_badge = "✅ PASS" if res["status"] == "pass" else ("⛔ BLOCKED" if res["status"] == "blocked" else "❌ FAIL")
         attempt_str = str(res["pass_at_attempt"]) if res["pass_at_attempt"] else "-"
+        turns_str = str(res.get("model_turns", len(res.get("attempts", []))))
+        wall_ms = res.get("wall_time_ms", res["total_latency_ms"])
         err_str = res["final_error_category"] or (res.get("blocked_reason", "-") if res["status"] == "blocked" else "-")
         lines.append(
-            f"| `{res['task_id']}` | {res['domain']} | {res['title']} | {status_badge} | {attempt_str} | {res['total_latency_ms']} | {res['total_tokens']} | {err_str} |"
+            f"| `{res['task_id']}` | {res['domain']} | {res['title']} | {status_badge} | {attempt_str} | {turns_str} | {wall_ms} | {res['total_tokens']} | {err_str} |"
         )
 
     return "\n".join(lines)
