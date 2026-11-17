@@ -1,5 +1,5 @@
 """The complete conformance runner must preserve failures and fixture counts."""
-from contextlib import ExitStack, redirect_stdout
+from contextlib import ExitStack, redirect_stderr, redirect_stdout
 import io
 import os
 from pathlib import Path
@@ -8,21 +8,35 @@ import tempfile
 from unittest.mock import patch
 
 
-def _run_fixture(*, native_failure=False, missing_expected=False, include_support=False, bootstrap_failure=False):
+def _run_fixture(
+    *,
+    native_failure=False,
+    missing_expected=False,
+    include_support=False,
+    bootstrap_failure=False,
+    seed_c99_failure=False,
+    missing_fixtures=False,
+):
     import run_conformance as runner
 
     with tempfile.TemporaryDirectory() as temporary, ExitStack() as stack:
         root = Path(temporary)
-        (root / 'selfhost').mkdir()
-        (root / 'selfhost/compiler.wysna').write_text('fn main() {}\n', encoding='utf-8')
-        (root / 'tests/types/valid').mkdir(parents=True)
-        (root / 'tests/types/valid/entry.wysna').write_text('fn main() {}\n', encoding='utf-8')
-        (root / 'examples').mkdir()
-        (root / 'examples/showcase.wysna').write_text('fn main() { print("ok") }\n', encoding='utf-8')
-        if not missing_expected:
-            (root / 'examples/showcase.expected').write_text('ok\n', encoding='utf-8')
-        if include_support:
-            (root / 'examples/http_json_client.wysna').write_text('fn main() {}\n', encoding='utf-8')
+        if not missing_fixtures:
+            (root / 'selfhost').mkdir()
+            (root / 'selfhost/compiler.wysna').write_text('fn main() {}\n', encoding='utf-8')
+            (root / 'tests/types/valid').mkdir(parents=True)
+            (root / 'tests/types/valid/entry.wysna').write_text('fn main() {}\n', encoding='utf-8')
+            if seed_c99_failure:
+                (root / 'tests/runtime').mkdir(parents=True)
+                for stem in ('alpha', 'beta'):
+                    (root / f'tests/runtime/{stem}.wysna').write_text('fn main() { print("ok") }\n', encoding='utf-8')
+                    (root / f'tests/runtime/{stem}.expected').write_text('ok\n', encoding='utf-8')
+            (root / 'examples').mkdir()
+            (root / 'examples/showcase.wysna').write_text('fn main() { print("ok") }\n', encoding='utf-8')
+            if not missing_expected:
+                (root / 'examples/showcase.expected').write_text('ok\n', encoding='utf-8')
+            if include_support:
+                (root / 'examples/http_json_client.wysna').write_text('fn main() {}\n', encoding='utf-8')
         stack.enter_context(patch.object(runner, '__file__', str(root / 'run_conformance.py')))
         stack.enter_context(patch('tests.formatter_contract.formatter_paths', return_value=[]))
         stack.enter_context(patch.object(runner, 'sha256_file', return_value='same-stage-hash'))
@@ -49,27 +63,48 @@ def _run_fixture(*, native_failure=False, missing_expected=False, include_suppor
             stack.enter_context(patch('tests.unit.' + module + '.' + name, return_value=True))
 
         def execute(command, **options):
+            cmd_text = ' '.join(str(part) for part in command)
+            if seed_c99_failure and 'beta.c' in cmd_text:
+                return SimpleNamespace(returncode=1, stdout='', stderr='synthetic c99 compile failure')
             if native_failure and command[0].endswith('ex_showcase'):
                 return SimpleNamespace(returncode=1, stdout='', stderr='synthetic native failure')
             return SimpleNamespace(returncode=0, stdout='ok\n', stderr='')
 
         stack.enter_context(patch.object(runner.subprocess, 'run', side_effect=execute))
         output = io.StringIO()
+        err_output = io.StringIO()
         original_directory = os.getcwd()
         try:
-            with redirect_stdout(output):
+            with redirect_stdout(output), redirect_stderr(err_output):
                 runner.run_suite()
         except SystemExit as result:
             assert os.getcwd() == original_directory, 'Runner did not restore its caller directory'
-            return result.code, output.getvalue()
+            return result.code, output.getvalue() + err_output.getvalue()
         raise AssertionError('Runner did not report an exit status')
 
 
 def test_conformance_runner_contracts():
+    import run_conformance as root_runner
+    import src.run_conformance as canonical_runner
+
+    assert root_runner is canonical_runner
+    canonical_file = Path(root_runner.__file__).resolve()
+    assert canonical_file.name == 'run_conformance.py' and canonical_file.parent.name == 'src'
+
     status, output = _run_fixture(include_support=True)
     assert status == 0, output
     assert 'Examples E2E Suite:  1/1' in output, output
     assert '[BOOTSTRAP/SELFHOST FAIL]' not in output, output
+
+    missing_status, missing_output = _run_fixture(missing_fixtures=True)
+    assert missing_status == 1 and 'requires a source checkout' in missing_output, missing_output
+
+    c99_fail_status, c99_fail_output = _run_fixture(seed_c99_failure=True)
+    assert c99_fail_status == 1, c99_fail_output
+    assert 'Seed C99 Native:     1/2' in c99_fail_output, c99_fail_output
+    assert 'Compiler Stage-2:    2/2' in c99_fail_output, c99_fail_output
+    assert 'FAILURES DETECTED.' in c99_fail_output, c99_fail_output
+
     failed, failure_output = _run_fixture(bootstrap_failure=True)
     assert failed == 1 and 'Bootstrap FixedPoint:0/1' in failure_output, failure_output
     assert 'synthetic bootstrap failure' in failure_output, failure_output
