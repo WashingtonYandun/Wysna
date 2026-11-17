@@ -59,12 +59,12 @@ static inline void wysna_format_push(WFormatTask** tasks, int32_t* count, int32_
                                  bool* heap_tasks, WFormatTask task) {
     if (*count == INT32_MAX) {
         fprintf(stderr, "[W4003] RuntimeError: Formatting work list is too large\n");
-        exit(1);
+        wysna_panic_exit(1);
     }
     if (*count == *capacity) {
         if (*capacity > INT32_MAX / 2) {
             fprintf(stderr, "[W4003] RuntimeError: Formatting work list is too large\n");
-            exit(1);
+            wysna_panic_exit(1);
         }
         int32_t new_capacity = *capacity * 2;
         WFormatTask* grown = (WFormatTask*)wysna_alloc_safe(
@@ -103,7 +103,7 @@ static inline void wysna_format_append(char** buffer, size_t* length, size_t* ca
                                    const char* data, size_t data_length) {
     if (data_length > SIZE_MAX - *length - 1) {
         fprintf(stderr, "[W4003] RuntimeError: Formatted value is too large\n");
-        exit(1);
+        wysna_panic_exit(1);
     }
     size_t needed = *length + data_length + 1;
     if (needed > *capacity) {

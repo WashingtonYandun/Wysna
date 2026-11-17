@@ -287,6 +287,37 @@ static inline void wysna_runtime_set_position(const char* file, int32_t line, in
     wysna_g_source_col = col;
 }
 
+#if defined(__SANITIZE_ADDRESS__)
+#define WYSNA_HAS_ASAN 1
+#elif defined(__has_feature)
+#if __has_feature(address_sanitizer)
+#define WYSNA_HAS_ASAN 1
+#endif
+#endif
+
+#if defined(_MSC_VER)
+#define WYSNA_NORETURN __declspec(noreturn)
+#elif defined(__GNUC__) || defined(__clang__)
+#define WYSNA_NORETURN __attribute__((noreturn))
+#elif defined(__STDC_VERSION__) && __STDC_VERSION__ >= 201112L
+#define WYSNA_NORETURN _Noreturn
+#else
+#define WYSNA_NORETURN
+#endif
+
+/* Abnormal termination exits before active C frames unwind, leaving NaN-boxed
+ * WVal roots in stack/BSS that LSan cannot trace as heap pointers. Skip the
+ * atexit leak scan only on those non-unwound exit paths under ASan while keeping
+ * full LSan and WYSNA_MEM_CHECK verification on normal main() completion. */
+static inline WYSNA_NORETURN void wysna_panic_exit(int status) {
+    fflush(NULL);
+#if defined(WYSNA_HAS_ASAN) && !defined(__EMSCRIPTEN__) && !defined(__wasi__)
+    _Exit(status);
+#else
+    exit(status);
+#endif
+}
+
 static inline void wysna_runtime_fail(const char* code, const char* format, ...) {
     if (wysna_g_source_file && wysna_g_source_file[0] != '\0' && wysna_g_source_line > 0) {
         fprintf(stderr, "[%s] %s:%" PRId32 ":%" PRId32 " - ",
@@ -299,7 +330,7 @@ static inline void wysna_runtime_fail(const char* code, const char* format, ...)
     vfprintf(stderr, format, args);
     va_end(args);
     fputc('\n', stderr);
-    exit(1);
+    wysna_panic_exit(1);
 }
 
 static inline void wysna_sandbox_deny(const char* capability) {
@@ -381,21 +412,21 @@ static inline void wysna_mem_on_free(void) {
     int64_t live = wysna_atomic_sub_i64(&wysna_g_live_objects, 1);
     if (live < 0) {
         fprintf(stderr, "[W4003] RuntimeError: Memory safety violation (live_object_count underflow: %" PRId64 ")\n", live);
-        exit(1);
+        wysna_panic_exit(1);
     }
 }
 
 static inline void wysna_check_refcount(int32_t rc, const char* op) {
     if (rc <= 0) {
         fprintf(stderr, "[W4003] RuntimeError: Memory safety violation (%s on object with refcount %" PRId32 ")\n", op, rc);
-        exit(1);
+        wysna_panic_exit(1);
     }
 }
 
 static inline void wysna_check_retain_count(int32_t rc, const char* op) {
     if (rc == INT32_MAX) {
         fprintf(stderr, "[W4003] RuntimeError: Memory safety violation (reference count overflow during %s)\n", op);
-        exit(1);
+        wysna_panic_exit(1);
     }
     wysna_check_refcount(rc, op);
 }
@@ -458,7 +489,7 @@ static inline void* wysna_alloc_safe(size_t size) {
     void* ptr = malloc(size);
     if (!ptr) {
         fprintf(stderr, "[W4003] RuntimeError: Out of memory (failed to allocate %zu bytes)\n", size);
-        exit(1);
+        wysna_panic_exit(1);
     }
     return ptr;
 }
@@ -472,7 +503,7 @@ static inline void* wysna_realloc_safe(void* old_ptr, size_t new_size) {
     void* ptr = realloc(old_ptr, new_size);
     if (!ptr) {
         fprintf(stderr, "[W4003] RuntimeError: Out of memory (failed to reallocate %zu bytes)\n", new_size);
-        exit(1);
+        wysna_panic_exit(1);
     }
     return ptr;
 }

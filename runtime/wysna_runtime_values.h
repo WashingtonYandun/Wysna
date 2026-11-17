@@ -257,18 +257,18 @@ static inline WVal wysna_virtual_call(WVal receiver, int32_t slot, int32_t argc,
     WStructBuf* st = wysna_hi(receiver) == WVAL_HI_OBJECT ? wysna_as_struct(receiver) : NULL;
     const WClassVTable* table = st ? st->vtable : NULL;
     if (!table || slot < 0 || slot >= table->count || !table->methods[slot]) {
-        fprintf(stderr, "[W4003] RuntimeError: Invalid virtual method dispatch\n"); exit(1);
+        fprintf(stderr, "[W4003] RuntimeError: Invalid virtual method dispatch\n"); wysna_panic_exit(1);
     }
     return table->methods[slot](receiver, argc, argv);
 }
 
 static inline int32_t wysna_ffi_int32(WVal value) {
     if (wysna_tag(value) != W_INT) {
-        fprintf(stderr, "[W4003] RuntimeError: int32 FFI argument out of range\n"); exit(1);
+        fprintf(stderr, "[W4003] RuntimeError: int32 FFI argument out of range\n"); wysna_panic_exit(1);
     }
     int64_t i = wysna_as_int(value);
     if (i < INT32_MIN || i > INT32_MAX) {
-        fprintf(stderr, "[W4003] RuntimeError: int32 FFI argument out of range\n"); exit(1);
+        fprintf(stderr, "[W4003] RuntimeError: int32 FFI argument out of range\n"); wysna_panic_exit(1);
     }
     return (int32_t)i;
 }

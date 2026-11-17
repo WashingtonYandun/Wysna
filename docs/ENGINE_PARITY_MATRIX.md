@@ -13,7 +13,7 @@ Wysna Compiler's `native-core-v1` profile uses verified MIR for its normal C99 r
 The table comes from an actual `tools/ci_conformance.py --profile=release` run. Its
 `summary.json` records the Git revision and hashes of the source, fixture and harness
 inputs; the measured input digest is
-`6ce6b2e91ab58cf2af6f27f0d722dcc3e60f2b9b44f73852891cbcafed3410bc`.
+`0fa53f77f1ea3c4252faa737dac05120c8c29cdc74d5879e90efb6d31d393b79`.
 Release CI uploads that evidence with the run. The matrix covers the public runtime
 examples and negative fixtures, with no unsupported exclusions. The separate sanitizer
 gate checks memory safety; neither gate establishes universal language parity or measures

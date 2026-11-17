@@ -91,7 +91,7 @@ static inline WVal wysna_builtin_exit(WVal code) {
 #endif
     int c = (wysna_tag(code) == W_INT) ? (int)wysna_as_int(code) : 0;
     wysna_runtime_cleanup_for_exit();
-    exit(c);
+    wysna_panic_exit(c);
     return wysna_unit();
 }
 
@@ -123,7 +123,7 @@ static inline WVal wysna_builtin_str(WVal v) {
 
 static inline void wysna_conversion_error(const char* kind) {
     fprintf(stderr, "[W4003] RuntimeError: Invalid %s conversion\n", kind);
-    exit(1);
+    wysna_panic_exit(1);
 }
 
 static inline const char* wysna_conversion_end(const char* end) {
@@ -216,14 +216,14 @@ static inline WVal wysna_builtin_float(WVal v) {
 static inline WVal wysna_builtin_ord(WVal v) {
     if (wysna_tag(v) != W_STR) {
         fprintf(stderr, "[W4003] RuntimeError: ord() expects non-empty str\n");
-        exit(1);
+        wysna_panic_exit(1);
     }
     char scratch[7];
     size_t slen = 0;
     const char* sdata = wysna_str_bytes(v, scratch, &slen);
     if (slen == 0) {
         fprintf(stderr, "[W4003] RuntimeError: ord() expects non-empty str\n");
-        exit(1);
+        wysna_panic_exit(1);
     }
     size_t cplen = 0;
     int64_t cp = 0;
@@ -236,12 +236,12 @@ static inline WVal wysna_builtin_ord(WVal v) {
 static inline WVal wysna_builtin_chr(WVal v) {
     if (wysna_tag(v) != W_INT) {
         fprintf(stderr, "[W4003] RuntimeError: chr() expects int\n");
-        exit(1);
+        wysna_panic_exit(1);
     }
     int64_t cp = wysna_as_int(v);
     if (cp < 0 || cp > 0x10FFFF || (cp >= 0xD800 && cp <= 0xDFFF)) {
         fprintf(stderr, "[W4003] RuntimeError: chr() arg not in valid Unicode scalar range: %" PRId64 "\n", cp);
-        exit(1);
+        wysna_panic_exit(1);
     }
     if (cp < 0x80) return wysna_ascii_string((uint8_t)cp);
     char small[4];
@@ -280,7 +280,7 @@ static inline WVal wysna_builtin_slice(WVal s, WVal start, WVal end) {
     }
     if (st_tag != W_STR) {
         fprintf(stderr, "[W4003] RuntimeError: slice() expects str or list\n");
-        exit(1);
+        wysna_panic_exit(1);
     }
     char scratch[7];
     size_t slen = 0;
@@ -360,7 +360,7 @@ static inline WVal wysna_builtin_join_strings(WVal parts, WVal separator) {
 static inline WVal wysna_builtin_bytes(WVal s) {
     if (wysna_tag(s) != W_STR) {
         fprintf(stderr, "[W4003] RuntimeError: bytes() expects str\n");
-        exit(1);
+        wysna_panic_exit(1);
     }
     char scratch[7];
     size_t slen = 0;
@@ -381,7 +381,7 @@ static inline WVal wysna_builtin_bytes(WVal s) {
 static inline WVal wysna_builtin_enumerate(WVal list_val) {
     if (wysna_tag(list_val) != W_LIST) {
         fprintf(stderr, "[W4003] RuntimeError: enumerate() expects list\n");
-        exit(1);
+        wysna_panic_exit(1);
     }
     WListBuf* src = wysna_as_list(list_val);
     WListBuf* b = (WListBuf*)wysna_alloc_safe(sizeof(WListBuf));
@@ -401,7 +401,7 @@ static inline WVal wysna_builtin_enumerate(WVal list_val) {
 static inline WVal wysna_builtin_dict_items(WVal dict_val) {
     if (wysna_tag(dict_val) != W_DICT) {
         fprintf(stderr, "[W4003] RuntimeError: dict_items() expects dict\n");
-        exit(1);
+        wysna_panic_exit(1);
     }
     WDictBuf* d = wysna_as_dict(dict_val);
     WListBuf* b = (WListBuf*)wysna_alloc_safe(sizeof(WListBuf));

@@ -5,6 +5,7 @@ import json
 import os
 from pathlib import Path
 import platform
+import shutil
 import subprocess
 import tempfile
 import uuid
@@ -116,6 +117,84 @@ def _cached_bootstrap_matches(directory, manifest, fingerprint):
                     _sha256(directory / executable_name("stage" + str(stage))) for stage in (1, 2)))
 
 
+def _bootstrap_cache_dir(root: Path) -> Path:
+    configured_cache = os.environ.get("WYSNA_CACHE_HOME")
+    cache_root = Path(configured_cache).expanduser() if configured_cache else root / ".wysna_cache"
+    cache = cache_root / "bootstrap"
+    cache.mkdir(parents=True, exist_ok=True)
+    return cache
+
+
+def _resolve_cached_destination(cache: Path, fingerprint: str) -> tuple[Path, Path]:
+    destination = cache / fingerprint
+    index_path = cache / (fingerprint + ".json")
+    if index_path.is_file():
+        try:
+            indexed = json.loads(index_path.read_text(encoding="utf-8"))["directory"]
+            if isinstance(indexed, str) and indexed not in ("", ".", "..") and Path(indexed).name == indexed:
+                destination = cache / indexed
+        except (ValueError, KeyError, OSError, TypeError):
+            pass
+    return destination, index_path
+
+
+def _has_valid_cache(destination: Path, fingerprint: str) -> Path | None:
+    binary = destination / executable_name("stage2")
+    manifest_path = destination / "bootstrap.json"
+    if binary.is_file() and manifest_path.is_file():
+        try:
+            manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+            if _cached_bootstrap_matches(destination, manifest, fingerprint):
+                return binary
+        except (ValueError, KeyError, OSError, TypeError):
+            pass
+    return None
+
+
+def _write_cache_index(cache: Path, index_path: Path, directory_name: str) -> None:
+    index_temporary = cache / ("index-" + uuid.uuid4().hex + ".json")
+    try:
+        index_temporary.write_text(json.dumps({"directory": directory_name}) + "\n", encoding="utf-8")
+        index_temporary.replace(index_path)
+    finally:
+        index_temporary.unlink(missing_ok=True)
+
+
+def publish_bootstrap_cache(repo_root: str, artifacts) -> str | None:
+    """Publish already-verified bootstrap artifacts into the cache when valid."""
+    source_dir = getattr(artifacts, "directory", None)
+    if not source_dir:
+        return None
+    source_path = Path(source_dir)
+    manifest_path = source_path / "bootstrap.json"
+    if not manifest_path.is_file():
+        return None
+    root = Path(repo_root).resolve()
+    cache = _bootstrap_cache_dir(root)
+    with cache_lock(str(cache / "bootstrap.lock")):
+        fingerprint, _ = bootstrap_fingerprint(root)
+        if getattr(artifacts, "fingerprint", None) != fingerprint:
+            return None
+        try:
+            manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+        except (ValueError, OSError, TypeError):
+            return None
+        if not _cached_bootstrap_matches(source_path, manifest, fingerprint):
+            return None
+        destination, index_path = _resolve_cached_destination(cache, fingerprint)
+        existing = _has_valid_cache(destination, fingerprint)
+        if existing is not None:
+            return str(existing)
+        if destination.exists():
+            destination = cache / (fingerprint + "-" + uuid.uuid4().hex)
+        with tempfile.TemporaryDirectory(prefix="pending-", dir=cache) as temporary:
+            temp_path = Path(temporary)
+            shutil.copytree(source_path, temp_path, dirs_exist_ok=True)
+            temp_path.rename(destination)
+        _write_cache_index(cache, index_path, destination.name)
+        return str(destination / executable_name("stage2"))
+
+
 def ensure_selfhost_compiler_binary(repo_root: str) -> str:
     """Publish a validated, versioned cache entry without replacing a running binary."""
     root = Path(repo_root).resolve()
@@ -123,30 +202,13 @@ def ensure_selfhost_compiler_binary(repo_root: str) -> str:
     if not source.is_file():
         from error.Error import TypeError as WysnaTypeError
         raise WysnaTypeError("Wysna Compiler bootstrap requires a source checkout", file=str(source), code="W2013")
-    configured_cache = os.environ.get("WYSNA_CACHE_HOME")
-    cache_root = Path(configured_cache).expanduser() if configured_cache else root / ".wysna_cache"
-    cache = cache_root / "bootstrap"
-    cache.mkdir(parents=True, exist_ok=True)
+    cache = _bootstrap_cache_dir(root)
     with cache_lock(str(cache / "bootstrap.lock")):
         fingerprint, _ = bootstrap_fingerprint(root)
-        destination = cache / fingerprint
-        index_path = cache / (fingerprint + ".json")
-        if index_path.is_file():
-            try:
-                indexed = json.loads(index_path.read_text(encoding="utf-8"))["directory"]
-                if isinstance(indexed, str) and indexed not in ("", ".", "..") and Path(indexed).name == indexed:
-                    destination = cache / indexed
-            except (ValueError, KeyError, OSError, TypeError):
-                pass
-        binary = destination / executable_name("stage2")
-        manifest_path = destination / "bootstrap.json"
-        if binary.is_file() and manifest_path.is_file():
-            try:
-                manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
-                if _cached_bootstrap_matches(destination, manifest, fingerprint):
-                    return str(binary)
-            except (ValueError, KeyError, OSError, TypeError):
-                pass
+        destination, index_path = _resolve_cached_destination(cache, fingerprint)
+        existing = _has_valid_cache(destination, fingerprint)
+        if existing is not None:
+            return str(existing)
         if destination.exists():
             # A damaged cache is never used or overwritten while a binary may be open.
             destination = cache / (fingerprint + "-" + uuid.uuid4().hex)
@@ -155,10 +217,5 @@ def ensure_selfhost_compiler_binary(repo_root: str) -> str:
             if artifacts.fingerprint != fingerprint:
                 raise RuntimeError("Compiler inputs changed before bootstrap started")
             Path(temporary).rename(destination)
-        index_temporary = cache / ("index-" + uuid.uuid4().hex + ".json")
-        try:
-            index_temporary.write_text(json.dumps({"directory": destination.name}) + "\n", encoding="utf-8")
-            index_temporary.replace(index_path)
-        finally:
-            index_temporary.unlink(missing_ok=True)
+        _write_cache_index(cache, index_path, destination.name)
         return str(destination / executable_name("stage2"))

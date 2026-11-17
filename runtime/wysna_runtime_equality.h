@@ -16,7 +16,7 @@ static inline void wysna_eq_push(WEqualityPair** items, int32_t* count, int32_t*
     if (*count == *capacity) {
         if (*capacity > INT32_MAX / 2) {
             fprintf(stderr, "[W4003] RuntimeError: Equality work list is too large\n");
-            exit(1);
+            wysna_panic_exit(1);
         }
         int32_t new_capacity = *capacity * 2;
         WEqualityPair* grown = (WEqualityPair*)wysna_alloc_safe(
