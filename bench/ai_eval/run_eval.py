@@ -132,4 +132,6 @@ def main() -> int:
 
 
 if __name__ == "__main__":
+    # Redirected Windows streams may not represent every character in a task report.
+    sys.stdout.reconfigure(errors="backslashreplace")
     sys.exit(main())
