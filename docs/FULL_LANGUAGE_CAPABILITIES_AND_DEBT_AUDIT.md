@@ -1,7 +1,7 @@
 # Wysna: Comprehensive End-to-End Capabilities & Technical Debt Audit
 
-**Status:** Canonical End-to-End Architecture, Feature Inventory & Deficit Audit  
-**Date:** 2026-11-01  
+**Status:** Canonical End-to-End Architecture, Feature Inventory & Deficit Audit
+**Updated:** 2026-11-17 (v0.7.0 Candidate · Frentes 0–5, ABI v3 & Fases 1–4)
 **Scope:** Complete Codebase (`src/`, `runtime/`, `stdlib/`, `selfhost/`, `tools/`, `packaging/`, `tests/`)  
 **Engines Analyzed:** Wysna Seed (Python Reference Engine) & Wysna Compiler (Stage-2 Self-Hosted Native Engine)  
 **Backends Analyzed:** C99 Native Backend, LLVM Native Backend (`llvm-native-v1`), WASI Target, and AST/Interpreter Execution Oracles  
@@ -292,7 +292,7 @@ Despite the architectural achievements of v0.6.0, an exhaustive audit reveals cl
 | **Immutable Snapshot Closures** | Lambdas capture outer variables by **immutable snapshot only**. Captured mutable variables cannot be modified inside a closure, and mutations outside after capture are not observed. | `src/checker/ClosureConversion.py`<br>`docs/KNOWN_LIMITS.md §1` | Intentional design contract unless opt-in mutable cells are decided. Workaround: Use a `class` with fields. |
 | **Expanded Error Unions (Closed v0.7.0)** | `T ! E1 \| E2` supports scalars, non-generic & concrete generic `struct`/`enum`, and `class` error alternatives across Seed & LLVM (`Selfhost` supports scalars, non-generic ADTs, and non-generic `class`). Collections, tuples, and functions remain excluded. | `src/checker/TypeChecker.py`<br>`runtime/wysna_runtime_core.h`<br>`selfhost/src/08_semantics.wysna` | Rich OOP and generic ADT error types work directly in error unions without manual wrapping. |
 | **Tuple Dictionary Keys (Closed v0.7.0)** | `dict[K, V]` accepts `int`, `str`, `bool`, `enum`, and hashable `tuple` composites across all 5 engines; `float` and composites containing `float`/collections/classes remain rejected (`W2010`). | `src/checker/TypeInterner.py`<br>`runtime/wysna_runtime_memory.h`<br>`selfhost/src/08_semantics.wysna` | Composite tuple keys (`dict[tuple[int, str], V]`) hash and compare structurally without workarounds. |
-| **Independent Generic Class Methods & Parameterized Interfaces (Closed v0.7.0 across Seed, Selfhost & LLVM)** | Both Seed/LLVM and Selfhost (`native-core-v1`) support constrained parameterized classes, independent generic methods (`Box[T].transform[R]`), parameterized class inheritance, and parameterized interfaces. | `src/checker/OopGenerics.py`<br>`selfhost/src/08_semantics.wysna`<br>`selfhost/src/08_generics.wysna` | Full generic OOP hierarchies compile uniformly without Python fallback. |
+| **Independent Generic Class Methods & Cross-Module Generic Classes (Closed v0.7.0 across Seed, Selfhost & LLVM)** | Both Seed/LLVM and Selfhost (`native-core-v1`) support constrained parameterized classes (`class Box[T: Show]`), independent generic methods (`Box[T].transform[R]`), parameterized class inheritance, and `from ... use` imports. Parameterized interfaces (`interface Container[T]`) remain supported in Seed/LLVM and bounded with `W2013` in Selfhost. | `src/checker/OopGenerics.py`<br>`selfhost/src/08_semantics.wysna`<br>`selfhost/src/08_generics.wysna` | Constrained generic class hierarchies and generic methods compile uniformly without Python fallback. |
 | **No Complex Trait / Typeclass System** | Interfaces are strictly nominal and apply only to classes (`class A implements Interface`). Structural typing, duck typing, and retroactive trait implementations for primitives/structs do not exist. | `src/checker/TypeRelations.py` | Code cannot define interfaces that apply retroactively to built-in types like `int` or `str`. |
 
 ---
@@ -468,8 +468,8 @@ Operating two compilers in parallel introduces permanent risk of **semantic drif
 
 ```mermaid
 flowchart LR
-    STAGE1["Stage 1 (v0.6.1)<br/>Native std/crypto +<br/>NIST Validation<br/>(DELIVERED)"] --> STAGE2["Stage 2 (v0.7.0)<br/>Port 'wysna test' &<br/>'wysna fmt' to Selfhost"]
-    STAGE2 --> STAGE3["Stage 3 (v0.8.0)<br/>Full Selfhost LSP +<br/>Zero Python Dependency"]
+    STAGE1["Stage 1 (v0.6.1)<br/>Native std/crypto +<br/>NIST Validation<br/>(DELIVERED)"] --> STAGE2["Stage 2 (v0.7.0)<br/>Native CLI, OOP Generics,<br/>CPS Async & MIR Opts<br/>(DELIVERED)"]
+    STAGE2 --> STAGE3["Stage 3 (v0.7.0)<br/>Native LSP 3.17 Over<br/>Stdio + driver.c<br/>(DELIVERED)"]
 ```
 
 1. **Stage 1 (v0.6.1 - Delivered in PR #146):**
@@ -477,14 +477,14 @@ flowchart LR
    - Implemented `async fn` / `await`, `std/async`, and non-blocking `curl_multi` HTTP dispatch across Seed, LLVM, and Selfhost (`native-core-v1`), hardened against format-string bugs and `handle == 0` pending deadlocks, with explicit MIR verification rules (`Verifier.py`).
    - Implemented compile-time Semantic Relationship Graph (`wysna graph`), surgical slicing (`wysna inspect`), hash-guarded checked patching (`wysna patch` with `W5005`), versioned skills (`wysna skills`), diagnostic code guides (`wysna explain --code`), and LSP `textDocument/implementation` + hover relationships (`wysna.graph/1`).
    - Delivered Principal Audit Hardenings (`AUD-01..AUD-10`): deferred Bacon-Rajan cycle collector (`wysna_collect_cycles`, `WYSNA_COLLECT_CYCLES=1`, quota reclamation), atomic runtime refcount/alloc primitives + string-literal spinlock, incremental per-module AST caching (`CompilationSession._ast_cache`), module-qualified `extends`/`implements` resolution, eliminated redundant primitive `[T]` parser backtracking, and Selfhost CLI `0.6.0` version parity.
-2. **Stage 2 (Wysna v0.7.0 Partial Delivery + Open Target):**
-   - **Delivered (`v0.7.0` Increment in PR #146):**
-     - **Native `--fmt` / `--fmt-write` in Selfhost:** Deterministically formats verified source lines directly inside `selfhost/src/09_main.wysna`, wired into `packaging/native/driver.c` and `NativeToolchain.format_compiler`.
-     - **Option B + Native ABI v3 Unified 8-Byte `WVal`:** Unified `WVal == WVal64` (`sizeof(WVal) == 8`, 48-bit signed ints + `WIntBox` full-64-bit fallback, `0..6B` SSO inline strings, $O(1)$ `WStringBuf.hash_cache`, inline doubles/booleans/sentinels, direct `WEnumBuf.payload`) across C99 (AST, MIR Seed, Selfhost) and `llvm-native-v1` (`W_RUNTIME_ABI_VERSION = 3`, `ABI_VERSION = 3`, `RUNTIME_ABI_VERSION = 3`), gaining 4× cache density with portable `i64` GPR callback adapters.
-     - **Option A Lock-Free Concurrency & Async Multiplexing:** Added lock-free atomic ARC + spinlock cycle buffer + copy-first thread-safe CoW detach, real OS-thread worker pool (`pthread` / `CreateThread`) for `std/algorithms.parallel_*` across Interpreter/AST/MIR/Selfhost, and cooperative monotonic timers (`std/async.sleep_ms`, `spawn`, `all`, `race`), plus fixed cross-module generic deduplication (`CompilationSession.link`) and `wysna_await` borrowed-field double-free.
-   - **Open Stage 2 Target:** Port multi-file `wysna test` discovery/TAP reporting into native binary and implement full CPS state-machine lowering for suspendable `async fn`.
-3. **Stage 3 (Wysna v0.8.0 Target):**
-   - Port the JSON-RPC Language Server (`src/tooling/LanguageServer.py`) into native Wysna, completing Stage-3 self-hosting and decommissioning the Python Seed compiler for standard user workflows.
+2. **Stage 2 (Wysna v0.7.0 — Delivered on `feat/close-language-gaps-v0.7`):**
+   - **Native ABI v3 Unified 8-Byte `WVal` (`f440e14`):** Unified `WVal == WVal64` (`sizeof(WVal) == 8`, 48-bit signed ints + `WIntBox` full-64-bit fallback, `0..6B` SSO inline strings, $O(1)$ `WStringBuf.hash_cache`, inline doubles/booleans/sentinels, direct `WEnumBuf.payload`) across C99 (AST, MIR Seed, Selfhost) and `llvm-native-v1` (`W_RUNTIME_ABI_VERSION = 3`, `RUNTIME_ABI_VERSION = 3`), with portable `i64` GPR callback adapters.
+   - **OS Concurrency, Cooperative CPS `async fn`, & MIR Optimizations (`6e88cc5`, `08afac4`):** Lock-free atomic ARC + thread-safe CoW detach, OS-thread `std/algorithms.parallel_*` and `std/async.spawn`, stackless CPS state-machine lowering (`AsyncLowering.py` + Seed/LLVM/Selfhost) with lazy deferred start, unboxed C99 paths (`wysna_range_count_i64`, `wysna_div_i64_at`, `wysna_div_f64_at`, `wysna_mod_i64_at`), and idempotent MIR optimization passes (`Optimizer.py`).
+   - **C99 Capability Sandbox & Incremental Early Cutoff (`8f48afc`):** Compile-time `#define WYSNA_DENY_CAP_*` runtime guards tripping `[W5006]` via `--sandbox`, plus `CompilationSession` `interface_digest` and `nominal_signature` early-cutoff module caching.
+   - **Selfhost OOP Generics & Native Agent-First CLI (`bd36a1d`, `2fff46b`):** Constrained generic classes, generic class methods, parameterized class inheritance, `from ... use` imports (`interface Foo[T]` still bounded at `W2013`), plus native `fmt`, `test`, `graph`, `inspect`, `patch` (`W5005`), `explain`, and `json-v1` directly in Selfhost + `driver.c`.
+3. **Stage 3 (Wysna v0.7.0 — Delivered in `5c002e7`):**
+   - Native Stage-3 LSP 3.17 server (`selfhost/src/09_lsp.wysna`) over stdio JSON-RPC 2.0 routed directly by `packaging/native/driver.c` (`wysna lsp`, without Python or 600s compile cap), featuring UTF-16 incremental `didChange`, session-local `--overlay`/`--diag-out`, cross-file `definition`/`implementation`/`references`, graph-enriched `hover`, resilient fallback `completion`, `formatting`, and `semanticTokens/full`.
+   - **Remaining Bounded Frontiers for v0.8+:** Remote dependency resolution / external package registries on `wysna.toml`, WASM/WASI codegen inside Selfhost, `interface Foo[T]` parameterization in Selfhost, and migrating `wysna mcp`/`schema`/`fix`/`project` out of Python Seed.
 
 ---
 
@@ -505,21 +505,21 @@ quadrantChart
     "Agent-First Quotas & Cassettes": [0.12, 0.88]
     "Structured Diagnostics (json-v1)": [0.08, 0.96]
     "Type Interner & Exhaustiveness": [0.18, 0.85]
-    "LLVM Native Backend": [0.55, 0.80]
-    "Self-Hosted Compiler (Stage-2)": [0.65, 0.72]
-    "Standard Library Scope": [0.60, 0.60]
-    "LSP & IDE Services": [0.70, 0.50]
-    "Class Reference Cycle Handling": [0.85, 0.45]
-    "Async I/O & Concurrency": [0.90, 0.35]
+    "LLVM Native Backend": [0.45, 0.85]
+    "Self-Hosted Compiler (Stage-2/3)": [0.22, 0.90]
+    "Standard Library Scope": [0.25, 0.86]
+    "LSP & IDE Services": [0.20, 0.90]
+    "Class Reference Cycle Handling": [0.30, 0.82]
+    "Async I/O & CPS Concurrency": [0.22, 0.88]
 ```
 
 ---
 
 ## Conclusion & Strategic Roadmap
 
-Wysna v0.6.0 provides a production-grade foundation for **deterministic, native, agent-first execution**. Its core type system, ARC/CoW memory semantics, and dual native backends are verified across extensive multi-platform CI matrices.
+Wysna v0.7.0-candidate (`feat/close-language-gaps-v0.7`) completes the transition from a Python-assisted dual prototype into a **deterministic, native, self-hosted agent-first toolchain**: 8-byte unified `WVal` (ABI v3), atomic ARC + deferred Bacon-Rajan cycle collection, stackless CPS `async fn`, C99 capability sandbox (`W5006`), incremental `CompilationSession` early cutoff, OOP generic parity in Selfhost, native Agent-First CLI (`graph`/`inspect`/`patch`/`explain`), and Stage-3 native LSP (`selfhost/src/09_lsp.wysna`).
 
-To transition into a mature, general-purpose enterprise ecosystem, subsequent engineering iterations must systematically target the deficits cataloged above:
-1. **Short-Term (v0.6.1 - v0.7.0):** Expand `stdlib/time` and `stdlib/text`, implement document-wide LSP semantic tokens, and provide cryptographic primitives (`std/crypto`).
-2. **Medium-Term (v0.7.0 - v0.8.0):** Bridge the gap between Wysna Seed and Wysna Compiler to achieve full Stage-3 self-hosting independence from Python.
-3. **Long-Term (v0.9.0 - v1.0.0):** Implement native structured asynchronous I/O (`async`/`await`) and nan-boxed value representations ($16\text{B} \rightarrow 8\text{B}$).
+Subsequent v0.8+ iterations can focus purely on bounded product expansion:
+1. **Package Ecosystem (`v0.8`):** Remote dependency acquisition and verified registry resolution layered on top of local `wysna.toml` manifests and lockfiles.
+2. **Complete Selfhost Target & Tooling Independence:** Native WASI/WASM emission and parameterized interfaces (`interface Foo[T]`) inside Selfhost, plus migrating remaining Seed-only commands (`wysna project`, `wysna fix`, `wysna schema`, `wysna mcp`).
+3. **Distribution Hardening:** Code signing and OS notarization for macOS/Windows installers alongside LLVM backend size/compile-latency optimization.

@@ -100,7 +100,7 @@ the bundled toolchain.
   The private Python does not bundle PycURL: use native HTTP builds for this
   distribution. Interpreter HTTP extras described elsewhere apply to source/wheel
   environments and are not installed by the graphical package.
-- Project, formatter and LSP commands come from the bundled Seed wheel.
+- Project (`wysna project`), repair (`wysna fix`), contract export (`wysna schema`), and `wysna mcp` commands come from the bundled Seed wheel; core `fmt`, `test`, `graph`, `inspect`, `patch`, `explain`, and Stage-3 `lsp` are also available natively without Python in the [Native SDK](NATIVE_SDK.md).
 - WASI execution still needs the documented Wasmtime dependency and wasi-sdk;
   browser-library builds need Emscripten. These optional target toolchains are not
   bundled with the native installation. LLVM also requires its separate optional

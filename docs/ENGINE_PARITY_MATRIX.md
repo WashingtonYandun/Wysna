@@ -13,7 +13,7 @@ Wysna Compiler's `native-core-v1` profile uses verified MIR for its normal C99 r
 The table comes from an actual `tools/ci_conformance.py --profile=release` run. Its
 `summary.json` records the Git revision and hashes of the source, fixture and harness
 inputs; the measured input digest is
-`2c6102a3e1521cb2ac5801d3cdfc0c3ae34202eea434494885e45bf13003b2c8`.
+`6ce6b2e91ab58cf2af6f27f0d722dcc3e60f2b9b44f73852891cbcafed3410bc`.
 Release CI uploads that evidence with the run. The matrix covers the public runtime
 examples and negative fixtures, with no unsupported exclusions. The separate sanitizer
 gate checks memory safety; neither gate establishes universal language parity or measures
@@ -53,8 +53,8 @@ nominal error identity, exhaustive handlers and managed payload cleanup.
 Function values, captures, FFI, the standard library and LSP have separate
 contracts in `tests/unit/test_expansion_contracts.py` (with Stage-3 native LSP covered in `tests/unit/test_phase4_native_lsp.py`). A green core corpus does not
 imply Wysna Compiler support for every expansion combination. Constrained parameterized classes,
-independent generic class methods, parameterized inheritance, parameterized interfaces, and stackless CPS `async fn`
-coroutines are now implemented in both Seed and Selfhost (`native-core-v1`); unresolved generic nominal values, `wysna.toml` manifests, library-mode exports, and WASM remain outside `native-core-v1`. Scoped
+independent generic class methods, parameterized inheritance, `from ... use` imports, and stackless CPS `async fn`
+coroutines are now implemented in both Seed and Selfhost (`native-core-v1`); parameterized interfaces (`interface Container[T]`), unresolved generic nominal values, `wysna.toml` manifests, library-mode exports, and WASM remain outside `native-core-v1`. Scoped
 resources have a separate
 four-engine gate in `tests/unit/test_audit_readiness.py`. The SQLite adapter/application
 also has dedicated checks; see [C interoperability](FFI_VALIDATION.md).

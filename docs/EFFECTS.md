@@ -6,8 +6,7 @@ and computes a conservative overapproximation of direct and transitive effects. 
 does not interpret source, load FFI libraries, invoke a C/LLVM toolchain, or run the
 program.
 
-The native SDK and the Seed LLVM SDK expose a restricted command set and do not
-provide `explain`.
+`wysna explain` runs in both Wysna Seed and natively without Python in the standalone Stage-2 native SDK (supporting both file analysis and `--code`). The restricted Seed LLVM SDK omits `explain`.
 
 ## Command
 
@@ -50,9 +49,12 @@ The gate is conservative: it refuses any program whose report is not
 pre-execution gate over modeled source effects. It also rejects untrusted external
 declarations even when they are not called, because the interpreter binds them
 before running the program. Explicit `--link-lib` is not accepted with a policy.
-The gate is not an operating-system sandbox, does not constrain native builds or
-`wysna project run`, and cannot prove
-that trusted runtime or FFI code remains inside the policy.
+For compiled C99 artifacts, Seed `wysna build --sandbox` / `wysna emit-c --sandbox`
+(with optional `--allow=CAP,...` or `--deny=CAP,...`) compiles `WYSNA_DENY_CAP_*`
+guards into the C99 runtime ABI so disallowed host operations trap with `[W5006]`.
+Neither mode is an operating-system kernel sandbox (`seccomp`/`pledge`), does not constrain
+`wysna project run`, and cannot prove that trusted runtime or external FFI code remains
+inside the policy.
 
 ## Model
 

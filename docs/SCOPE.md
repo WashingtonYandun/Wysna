@@ -60,7 +60,7 @@ WASI has a Wasmtime host boundary, declared preopens, fuel and linear-memory lim
 The current host's complete permissions must be inspected; a fuel budget is not
 five seconds of CPU, and a linear-memory limit is not total process RSS.
 
-`explain` reports conservative effects and unknowns. It does not prove purity or replace an OS kernel sandbox for arbitrary native C extensions. `wysna run --allow=...` and `--deny=...` enforce static capability gates before Seed interpretation (`W5006`), while `wysna build --allow=...` / `--deny=...` compile `#define WYSNA_DENY_CAP_*` runtime guards directly into generated C99 host adapters (`W4006`). External native FFI libraries linked via `--link`/`--library` still operate with the host process's OS authority.
+`explain` reports conservative effects and unknowns. It does not prove purity or replace an OS kernel sandbox for arbitrary native C extensions. `wysna run --allow=...` and `--deny=...` enforce static capability gates before Seed interpretation (`W5006`), while `wysna build --sandbox` / `wysna emit-c --sandbox` (with optional `--allow=...` or `--deny=...`) compile `#define WYSNA_DENY_CAP_*` runtime guards directly into generated C99 host adapters (`W5006`). External native FFI libraries linked via `--link`/`--library` still operate with the host process's OS authority (and `--link-lib` cannot be combined with `--sandbox`).
 
 A fully restricted execution profile still requires enforcement at every host
 boundary, negative escape tests, bounded resource controls and audit semantics

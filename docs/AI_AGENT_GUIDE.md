@@ -2,9 +2,10 @@
 
 Use the installed Seed CLI as the project workflow. It provides deterministic
 project checks, builds, tests, API discovery and versioned machine output. The
-native `native-core-v1` SDK is a separate file-oriented compiler profile; it does
-not provide Seed's project manifest, lockfile, test runner, formatter, LSP or
-WebAssembly targets.
+standalone `native-core-v1` SDK provides `check`, `fmt`, `test`, `build`, `run`, `graph`,
+`inspect`, `patch`, `explain`, and Stage-3 native `lsp` without Python, while Seed
+continues to own project manifests (`wysna.toml`), lockfiles, `fix`, `schema`, `mcp`,
+and WebAssembly targets.
 
 ## Discover the installed toolchain
 
@@ -82,6 +83,20 @@ wysna mcp --root .
 The MCP server exposes `wysna_check`, `wysna_fix`, `wysna_fmt`, `wysna_explain`,
 `wysna_schema`, `wysna_api`, and `wysna_capabilities` confined to `--root`.
 
+For zero-Python native semantic inspection, checked edits, and editor integration in
+the standalone SDK / Selfhost Stage-2+ toolchain:
+
+```sh
+wysna graph src/main.wysna --output-format=json-v1
+wysna graph src/main.wysna --symbol Service --rel impact --output-format=json-v1
+wysna inspect src/main.wysna --symbol run_pipeline --with-deps --output-format=json-v1
+wysna patch src/main.wysna --symbol Service.run --expect-graph-hash graph:... --with "..." --apply --output-format=json-v1
+wysna lsp
+```
+
+`wysna patch` rejects stale `graph:...` hashes with `W5005` and verifies types in
+memory before mutating disk.
+
 ## Agent-First Imports & Token Optimization
 
 When generating Wysna code, agents should prefer the selective `from ... use { ... }` syntax over namespace qualification:
@@ -97,7 +112,7 @@ from std.text use {
 - **Token Economy:** Direct symbol importing avoids repetitive `module.` qualifiers, saving ~13%–22% BPE tokens in dense multi-step logic.
 - **Canonical Formatting:** Multiple symbols must be enclosed in braces `{ ... }` with trailing commas; single symbols can be unbraced (`from std.math use sqrt`).
 - **Disambiguation:** If symbol names clash across imported modules, assign local aliases using `as` (`User as DomainUser`).
-- **Bootstrap Namespace Parity:** When targeting the minimal `native-core-v1` self-hosted compiler profile, use whole-module namespace imports (`import "std/json"`).
+- **Bootstrap Namespace Parity:** Selective `from ... use { ... }` imports (including aliases) and whole-module namespace imports (`import "std/json"`) are both supported across Seed and the self-hosted `native-core-v1` compiler.
 
 ## Execution Quotas, Effect Cassettes, and First-Class Contracts
 
@@ -113,10 +128,8 @@ To safeguard agent loops against runaway execution and unrepeatable I/O side-eff
   commands, and `browser-library` for the generated browser ABI. The capability
   response states the toolchain and runtime each one needs.
 - The native SDK currently implements `native-core-v1` source checking, MIR/C99
-  emission, native build and run. Do not assume Seed project commands, WASI or
-  browser targets are available through that SDK.
-- Effect reports and capability declarations help review programs; they are not
-  operating-system sandboxes.
+  emission, native build/run/test/fmt, Agent-First tools (`graph`, `inspect`, `patch`, `explain`), and Stage-3 native `lsp` without Python. Do not assume Seed project manifests, `fix`, `schema`, `mcp`, WASI or browser targets are available through that SDK.
+- Effect reports and capability declarations help review programs; `wysna run --allow/--deny` enforces static pre-execution gates (`W5006`) and Seed `wysna build --sandbox` (with `--allow/--deny`) compiles `WYSNA_DENY_CAP_*` runtime checks (`W5006`), though neither replaces an OS kernel sandbox for arbitrary native C extensions.
 - AI authoring and self-healing repair benchmarks live in `bench/ai_eval/`
   (`harness.py` and `token_audit.py`); outside this evaluation suite, Wysna
   has not been measured against other languages for general AI-authored

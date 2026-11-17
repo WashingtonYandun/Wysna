@@ -400,8 +400,10 @@ universal parity.
   It provides the complete project and editor tooling, the C99 backend, JSON Schema extraction,
   and the independent interpreter and AST oracles.
 - **Wysna Compiler** is the self-hosted implementation in Wysna. It ships as a bounded
-  native SDK for the `native-core-v1` profile, features CLI parity (`--check`, `--check-json`),
-  and lowers first-class function contracts (`requires`/`ensures`) through verified MIR.
+  Python-free native SDK for the `native-core-v1` profile, supports native `check`, `fmt`,
+  `test`, `build`, `run`, Agent-First tools (`graph`, `inspect`, `patch`, `explain`),
+  Stage-3 native `lsp`, constrained generic OOP classes/methods, `from ... use` imports,
+  and lowers contracts (`requires`/`ensures`) and stackless CPS `async fn` through verified MIR.
 
 Both use verified MIR and C99. See [compiler architecture](docs/COMPILER_ARCHITECTURE.md)
 and [engine parity](docs/ENGINE_PARITY_MATRIX.md).
@@ -411,8 +413,10 @@ and [engine parity](docs/ENGINE_PARITY_MATRIX.md).
 Native programs and the reference runtime execute with the user's OS authority.
 Process isolation alone does not restrict filesystem, network or FFI access. The WASI
 profile has a Wasmtime boundary with declared preopens, fuel and linear-memory limits.
-`wysna run --allow=...` and `--deny=...` gate modeled effects for interpreted Seed
-programs, but they are not an OS sandbox or a guarantee about native children.
+`wysna run --allow=...` and `--deny=...` enforce static capability gates before Seed
+interpretation (`W5006`), while Seed `wysna build --sandbox` (with `--allow`/`--deny`)
+compiles `WYSNA_DENY_CAP_*` runtime guards directly into C99 host adapters (`W5006`);
+neither replaces an OS kernel sandbox for external native C libraries.
 
 Do not run untrusted native code based on effect reports. See [SECURITY.md](SECURITY.md)
 and [scope](docs/SCOPE.md) for the full boundary.
