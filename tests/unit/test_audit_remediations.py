@@ -8,6 +8,7 @@ from unittest.mock import patch
 
 import pytest
 
+from common.Version import WYSNA_VERSION
 from compiler.CompilerService import CompilerService
 from compiler.NativeToolchain import NativeToolchain
 from error.Error import WysnaError
@@ -295,7 +296,7 @@ def test_aud07_qualified_implements_extends_and_no_redundant_index_backtrack(tmp
 
 
 def test_aud10_selfhost_cli_version_matches_release(tmp_path):
-    """AUD-10: Selfhost compiler reports version 0.6.0 in --version and --check-json."""
+    """AUD-10: Selfhost compiler matches WYSNA_VERSION in --version and --check-json."""
     from tooling.CLI import main as cli_main
     import io
     import json
@@ -306,7 +307,7 @@ def test_aud10_selfhost_cli_version_matches_release(tmp_path):
         with pytest.raises(SystemExit) as exc1:
             cli_main(["run", "selfhost/compiler.wysna", "--", "--version"])
     assert exc1.value.code == 0
-    assert buf.getvalue().strip() == "wysna 0.6.0"
+    assert buf.getvalue().strip() == f"wysna {WYSNA_VERSION}"
 
     sample = tmp_path / "sample.wysna"
     sample.write_text("fn main() -> unit { print(1) }\n", encoding="utf-8")
@@ -316,4 +317,4 @@ def test_aud10_selfhost_cli_version_matches_release(tmp_path):
             cli_main(["run", "selfhost/compiler.wysna", "--", "--check-json", str(sample)])
     assert exc2.value.code == 0
     payload = json.loads(json_buf.getvalue().strip())
-    assert payload["compiler_version"] == "0.6.0"
+    assert payload["compiler_version"] == WYSNA_VERSION

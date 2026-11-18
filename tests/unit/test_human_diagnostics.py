@@ -6,6 +6,7 @@ from pathlib import Path
 import subprocess
 import sys
 
+from common.Version import WYSNA_VERSION
 from error.Error import WysnaError
 from tooling.DiagnosticRender import render_diagnostic
 from tooling.LanguageServer import LanguageServer
@@ -202,9 +203,10 @@ def test_editor_range_counts_utf16_code_units(tmp_path):
 def test_project_check_reports_imported_source_excerpt(tmp_path):
     source_dir = tmp_path / "src"
     source_dir.mkdir()
+    language = '.'.join(WYSNA_VERSION.split('.')[:2])
     (tmp_path / "wysna.toml").write_text(
-        'manifest_version = 1\n[package]\nname = "example"\nversion = "0.1.0"\n'
-        'language = "0.6"\n[toolchain]\ncompiler = "0.6.0"\nstdlib = "bundled"\n'
+        f'manifest_version = 1\n[package]\nname = "example"\nversion = "0.1.0"\n'
+        f'language = "{language}"\n[toolchain]\ncompiler = "{WYSNA_VERSION}"\nstdlib = "bundled"\n'
         '[sources]\nroot = "src"\n[targets.app]\nentry = "src/main.wysna"\n'
         'profile = "native-cli"\n', encoding="utf-8")
     (source_dir / "main.wysna").write_text('import "bad.wysna"\n', encoding="utf-8")

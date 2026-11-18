@@ -9,6 +9,7 @@ import subprocess
 
 from compiler.Bootstrap import ensure_selfhost_compiler_binary
 from common.Platform import executable_name
+from common.Version import WYSNA_VERSION
 
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -258,7 +259,7 @@ def test_selfhost_cross_module_graph_and_native_driver_c_passthrough(tmp_path):
     cc = subprocess.run(
         [
             "cc", "-std=c99", "-Wall", "-Wextra", "-Werror", "-Wno-unused-function",
-            '-DWYSNA_NATIVE_VERSION="0.6.0"',
+            f'-DWYSNA_NATIVE_VERSION="{WYSNA_VERSION}"',
             '-DWYSNA_NATIVE_TARGET="native-host"',
             f"-I{ROOT}",
             str(ROOT / "packaging/native/driver.c"),

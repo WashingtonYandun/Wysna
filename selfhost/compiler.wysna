@@ -181,7 +181,7 @@ fn diag_tool_envelope_json(command: str, status: str, exit_code: int, diagnostic
     parts.append(",\"tool_exit_code\":" + str(exit_code))
     parts.append(",\"process_exit_code\":" + str(exit_code))
     parts.append(",\"execution\":null")
-    parts.append(",\"toolchain\":{\"compiler\":\"0.6.0\"}")
+    parts.append(",\"toolchain\":{\"compiler\":\"0.7.0\"}")
     parts.append(",\"target\":{\"profile\":\"native-cli\",\"triple\":null}")
     parts.append(",\"diagnostics\":" + diagnostics_json)
     parts.append(",\"artifacts\":" + artifacts_json)
@@ -282,7 +282,7 @@ fn diag_emit_and_exit(file: str, code: str, line: int, col: int, msg: str) -> un
     let stage = diag_stage_for_code(code)
     let diag_json = diag_record_json(code, stage, "error", msg, file, line, col, src)
     if mode == "check-json" {
-        diag_write_output("{\"schema_version\":\"wysna.cli.result/1\",\"compiler_version\":\"0.6.0\",\"command\":\"check\",\"ok\":false,\"exit_code\":1,\"diagnostics\":[" + diag_json + "],\"data\":null}")
+        diag_write_output("{\"schema_version\":\"wysna.cli.result/1\",\"compiler_version\":\"0.7.0\",\"command\":\"check\",\"ok\":false,\"exit_code\":1,\"diagnostics\":[" + diag_json + "],\"data\":null}")
         exit(1)
     }
     let cmd = diag_cli_command()
@@ -9101,7 +9101,7 @@ fn tool_handle_check_v1(file: str, legacy_json: bool, json_v1: bool) -> unit {
         let artifacts_json = "[{\"kind\":\"checked_program\",\"media_type\":\"application/json\",\"file\":" + diag_json_quote(file) + ",\"functions\":" + fn_count + "}]"
         diag_write_output(diag_tool_envelope_json("check", "ok", 0, "[]", "", "", artifacts_json))
     } elif legacy_json {
-        diag_write_output("{\"schema_version\":\"wysna.cli.result/1\",\"compiler_version\":\"0.6.0\",\"command\":\"check\",\"ok\":true,\"exit_code\":0,\"diagnostics\":[],\"data\":{\"file\":" + diag_json_quote(file) + ",\"functions\":" + fn_count + "}}")
+        diag_write_output("{\"schema_version\":\"wysna.cli.result/1\",\"compiler_version\":\"0.7.0\",\"command\":\"check\",\"ok\":true,\"exit_code\":0,\"diagnostics\":[],\"data\":{\"file\":" + diag_json_quote(file) + ",\"functions\":" + fn_count + "}}")
     } else {
         print("[Wysna Compiler] Checked " + file + " (" + fn_count + " functions, MIR verified)")
     }
@@ -10309,7 +10309,7 @@ fn lsp_dispatch_message(state: LspServerState, msg: LspJson) -> bool {
     if method == "initialize" {
         let legend = "\"tokenTypes\":[\"keyword\",\"type\",\"class\",\"interface\",\"enum\",\"struct\",\"function\",\"method\",\"property\",\"variable\",\"parameter\",\"string\",\"number\",\"operator\",\"comment\"],\"tokenModifiers\":[]"
         let caps = "\"positionEncoding\":\"utf-16\",\"textDocumentSync\":{\"openClose\":true,\"change\":2},\"definitionProvider\":true,\"implementationProvider\":true,\"hoverProvider\":true,\"referencesProvider\":true,\"documentFormattingProvider\":true,\"completionProvider\":{\"triggerCharacters\":[\".\"]},\"semanticTokensProvider\":{\"legend\":{" + legend + "},\"full\":true,\"range\":false}"
-        let res = "{\"capabilities\":{" + caps + "},\"serverInfo\":{\"name\":\"wysna-native\",\"version\":\"0.6.0\"}}"
+        let res = "{\"capabilities\":{" + caps + "},\"serverInfo\":{\"name\":\"wysna-native\",\"version\":\"0.7.0\"}}"
         if has_id { lsp_send_message("{\"jsonrpc\":\"2.0\",\"id\":" + req_id_raw + ",\"result\":" + res + "}") }
         return true
     }
@@ -10448,7 +10448,7 @@ fn run_compiler() -> unit ! IoError {
     let cmd = clean[0]
     if cmd == "--version" or cmd == "-v" {
         if len(clean) != 1 { eprint("[W5002] Usage: Wysna Compiler --version") exit(2) }
-        print("wysna 0.6.0")
+        print("wysna 0.7.0")
         return
     }
     if cmd == "graph" {

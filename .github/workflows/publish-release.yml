@@ -1,0 +1,132 @@
+name: Publish Wysna release
+
+on:
+  push:
+    tags:
+      - "v*.*.*"
+
+permissions: {}
+
+concurrency:
+  group: publish-wysna-${{ github.ref_name }}
+  cancel-in-progress: false
+
+jobs:
+  publish:
+    name: Publish accepted installers
+    if: github.ref_name != 'v0.5.0'
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    permissions:
+      actions: read
+      contents: write
+    steps:
+      - name: Check out the exact release tag
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.sha }}
+          fetch-depth: 0
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Require tagged commit on main with successful main CI and version parity
+        id: source-ci
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          tag="${GITHUB_REF_NAME}"
+          if [[ ! "$tag" =~ ^v([0-9]+\.[0-9]+\.[0-9]+)$ ]]; then
+            echo "Release tag must match vX.Y.Z: $tag" >&2
+            exit 1
+          fi
+          version="${BASH_REMATCH[1]}"
+          declared_version="$(PYTHONPATH=src python3 -c 'from common.Version import WYSNA_VERSION; print(WYSNA_VERSION)')"
+          if [ "$declared_version" != "$version" ]; then
+            echo "Tag version $version does not match WYSNA_VERSION ($declared_version)" >&2
+            exit 1
+          fi
+          release_notes="docs/release-notes/${tag}.md"
+          if [ ! -f "$release_notes" ]; then
+            echo "Missing release notes file: $release_notes" >&2
+            exit 1
+          fi
+          git fetch --no-tags origin main
+          git merge-base --is-ancestor "$GITHUB_SHA" origin/main
+          run_id=$(gh api "repos/${GITHUB_REPOSITORY}/actions/workflows/ci.yml/runs?head_sha=${GITHUB_SHA}&per_page=100" \
+            --jq '[.workflow_runs[] | select(.event == "push" and .head_branch == "main" and .status == "completed" and .conclusion == "success")][0].id // empty')
+          if [ -z "$run_id" ]; then
+            echo "No successful main CI run exists for tagged source $GITHUB_SHA" >&2
+            exit 1
+          fi
+          echo "tag=$tag" >> "$GITHUB_OUTPUT"
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+          echo "release_notes=$release_notes" >> "$GITHUB_OUTPUT"
+          echo "run_id=$run_id" >> "$GITHUB_OUTPUT"
+          echo "Source commit $GITHUB_SHA passed main CI run $run_id for $tag"
+
+      - name: Download the accepted Windows installer artifacts
+        uses: actions/download-artifact@v4
+        with:
+          name: wysna-windows-x64-installer
+          path: artifacts/windows
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          repository: ${{ github.repository }}
+          run-id: ${{ steps.source-ci.outputs.run_id }}
+
+      - name: Download the accepted macOS installer artifacts
+        uses: actions/download-artifact@v4
+        with:
+          name: wysna-seed-installers-macOS-ARM64
+          path: artifacts/macos
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          repository: ${{ github.repository }}
+          run-id: ${{ steps.source-ci.outputs.run_id }}
+
+      - name: Download the accepted Linux installer artifacts
+        uses: actions/download-artifact@v4
+        with:
+          name: wysna-seed-installers-Linux-X64
+          path: artifacts/linux
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          repository: ${{ github.repository }}
+          run-id: ${{ steps.source-ci.outputs.run_id }}
+
+      - name: Validate source, installer manifests and checksums
+        run: |
+          python3 tools/prepare_release_assets.py \
+            --version "${{ steps.source-ci.outputs.version }}" \
+            --source-commit "$GITHUB_SHA" \
+            --ci-run-id "${{ steps.source-ci.outputs.run_id }}" \
+            --windows-artifact artifacts/windows \
+            --macos-artifact artifacts/macos \
+            --linux-artifact artifacts/linux \
+            --release-notes "${{ steps.source-ci.outputs.release_notes }}" \
+            --output dist/release-assets
+
+      - name: Publish and verify the stable GitHub release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG: ${{ steps.source-ci.outputs.tag }}
+          VERSION: ${{ steps.source-ci.outputs.version }}
+        run: |
+          set -euo pipefail
+          gh release create "$TAG" dist/release-assets/* \
+            --title "Wysna ${VERSION}" \
+            --notes-file dist/release-notes.md \
+            --target "$GITHUB_SHA" \
+            --verify-tag
+          gh release view "$TAG" --json isDraft,isPrerelease,tagName,assets | python3 -c '
+          import json, os, sys
+          data = json.load(sys.stdin)
+          tag = os.environ["TAG"]
+          ver = os.environ["VERSION"]
+          assert data.get("tagName") == tag, data
+          assert not data.get("isDraft"), data
+          assert not data.get("isPrerelease"), data
+          assets = data.get("assets") or []
+          assert len(assets) >= 16, f"Expected >= 16 verified assets, got {len(assets)}"
+          print(f"Published stable Wysna {ver} with {len(assets)} verified assets")
+          '

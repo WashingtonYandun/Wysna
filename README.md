@@ -11,13 +11,10 @@
 
 <p align="center">
   <a href="https://github.com/WashingtonYandun/Wysna/actions/workflows/ci.yml">
-    <img src="https://github.com/WashingtonYandun/Wysna/actions/workflows/ci.yml/badge.svg?branch=develop" alt="CI status on develop" />
+    <img src="https://github.com/WashingtonYandun/Wysna/actions/workflows/ci.yml/badge.svg?branch=main" alt="CI status on main" />
   </a>
-  <a href="https://github.com/WashingtonYandun/Wysna/releases/tag/v0.6.0">
-    <img src="https://img.shields.io/badge/release-v0.6.0-blue?style=flat-square" alt="Latest release v0.6.0" />
-  </a>
-  <a href="CHANGELOG.md">
-    <img src="https://img.shields.io/badge/mainline-0.7.0--candidate-0ea5e9?style=flat-square" alt="Mainline 0.7.0 Candidate" />
+  <a href="https://github.com/WashingtonYandun/Wysna/releases/tag/v0.7.0">
+    <img src="https://img.shields.io/badge/release-v0.7.0-blue?style=flat-square" alt="Latest release v0.7.0" />
   </a>
   <a href="docs/ENGINE_PARITY_MATRIX.md">
     <img src="https://img.shields.io/badge/corpus_parity-209%2F209_(100%25)-22c55e?style=flat-square" alt="4-Engine Corpus Parity 209/209" />
@@ -49,7 +46,7 @@
 Wysna is an independent, statically typed programming language built from first principles for **deterministic systems engineering** and **autonomous AI code generation**. It compiles through a verified intermediate representation (HIR/MIR) to portable native C99 (default) and experimental LLVM IR, pairing predictable memory ownership with machine-verifiable tooling.
 
 > [!NOTE]
-> **Release & Line Status:** The latest tagged installer release is [**v0.6.0**](https://github.com/WashingtonYandun/Wysna/releases/tag/v0.6.0) (pre-1.0, unsigned desktop installers). The active **0.7.0 Candidate** branch (see [CHANGELOG.md](CHANGELOG.md)) delivers the unified 8-byte `WVal` ABI v3, lock-free atomic ARC, stackless CPS `async fn`, compiled C99 capability sandbox (`--sandbox`), constrained OOP generics in Selfhost, native Agent-First CLI tools, and a Python-free Stage-3 LSP (`wysna lsp`). Review [scope and limits](docs/SCOPE.md) before relying on Wysna in production.
+> **Release & Line Status:** The current tagged installer release is [**v0.7.0**](https://github.com/WashingtonYandun/Wysna/releases/tag/v0.7.0) (pre-1.0, unsigned desktop installers). It delivers the unified 8-byte `WVal` ABI v3, lock-free atomic ARC, stackless CPS `async fn`, compiled C99 capability sandbox (`--sandbox`), constrained OOP generics in Selfhost, native Agent-First CLI tools, and a Python-free Stage-3 LSP (`wysna lsp`) — see [CHANGELOG.md](CHANGELOG.md). Review [scope and limits](docs/SCOPE.md) before relying on Wysna in production.
 
 | Architectural Pillar | What It Delivers |
 | :--- | :--- |
@@ -93,7 +90,7 @@ flowchart LR
 
 ### 1. Install the Seed Distribution
 
-Download the installer for your host from the [**v0.6.0 release**](https://github.com/WashingtonYandun/Wysna/releases/tag/v0.6.0) (includes SHA-256 manifests and private CPython/Zig so core workflows require zero host setup; see [Seed distribution](docs/SEED_DISTRIBUTION.md)):
+Download the installer for your host from the [**v0.7.0 release**](https://github.com/WashingtonYandun/Wysna/releases/tag/v0.7.0) (includes SHA-256 manifests and private CPython/Zig so core workflows require zero host setup; see [Seed distribution](docs/SEED_DISTRIBUTION.md)):
 
 | Host | Package | Default Launcher |
 | :--- | :--- | :--- |
@@ -283,7 +280,7 @@ See [engine parity matrix](docs/ENGINE_PARITY_MATRIX.md) for the SHA-pinned evid
 | Surface | Status | Details |
 | :--- | :--- | :--- |
 | Core language, contracts, ABI v3, CPS `async fn`, C99 builds, Stage-3 LSP | **Supported** | Bounded by [docs/SCOPE.md](docs/SCOPE.md) and [docs/KNOWN_LIMITS.md](docs/KNOWN_LIMITS.md). |
-| Seed distribution (private CPython + Zig) | **v0.6.0 Release** | Unsigned installers per platform (`.exe`, `.pkg`, `.deb`, `.rpm`). |
+| Seed distribution (private CPython + Zig) | **v0.7.0 Release** | Unsigned installers per platform (`.exe`, `.pkg`, `.deb`, `.rpm`). |
 | Native SDK (`wysna` Python-free Stage-2/3 binary) | **Supported (`native-core-v1`)** | Supports native compilation, Agent CLI (`graph`/`inspect`/`patch`/`explain`), `test`, and `lsp`; `interface Foo[T]` stays Seed-only (`W2013`). |
 | WASI (`wasi-command`) | **Declared target** | Wasmtime boundary with preopens, fuel, and linear-memory limits. |
 | LLVM backend & Browser WASM library | **Experimental** | Opt-in via `--backend=llvm-experimental` or Emscripten workflow. |

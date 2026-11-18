@@ -8,6 +8,7 @@ import tempfile
 import unittest
 
 from common.Paths import get_repo_root
+from common.Version import WYSNA_VERSION
 
 
 class NativeToolingTests(unittest.TestCase):
@@ -72,7 +73,7 @@ class NativeToolingTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmpdir:
             obj_path = Path(tmpdir) / "driver.o"
             driver_src = self.repo_root / "packaging/native/driver.c"
-            cmd = ["cc", "-std=c99", '-DWYSNA_NATIVE_VERSION="0.6.0"', '-DWYSNA_NATIVE_TARGET="aarch64-macos"',
+            cmd = ["cc", "-std=c99", f'-DWYSNA_NATIVE_VERSION="{WYSNA_VERSION}"', '-DWYSNA_NATIVE_TARGET="aarch64-macos"',
                    f"-I{self.repo_root}", "-c", str(driver_src), "-o", str(obj_path)]
             res = subprocess.run(cmd, capture_output=True, text=True, timeout=30)
             self.assertEqual(res.returncode, 0, res.stderr)
