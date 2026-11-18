@@ -38,3 +38,40 @@ export function evaluateQuote(exportsObject, quantity, unitPriceCents) {
   }
   return result;
 }
+
+export function parseQuoteQueryId(searchString) {
+  const params = new URLSearchParams(searchString || "");
+  const raw = params.get("quote");
+  if (!raw || !/^[1-9]\d*$/.test(raw)) {
+    return null;
+  }
+  return raw;
+}
+
+export async function saveQuoteToServer(fetchFn, quantity, unitPriceCents) {
+  if (!fitsSignedInt64(quantity) || !fitsSignedInt64(unitPriceCents)) {
+    throw new Error("Quote values exceed signed 64-bit integer bounds.");
+  }
+  const response = await fetchFn("/quotes", {
+    method: "POST",
+    headers: { "Content-Type": "application/json", "Accept": "application/json" },
+    body: `{"quantity":${quantity.toString()},"unit_price_cents":${unitPriceCents.toString()}}`,
+  });
+  const payload = await response.json();
+  if (!response.ok) {
+    throw new Error(payload?.error || `Failed to save quote (${response.status})`);
+  }
+  return payload;
+}
+
+export async function loadQuoteFromServer(fetchFn, quoteId) {
+  const response = await fetchFn(`/quotes/${quoteId}`, {
+    method: "GET",
+    headers: { "Accept": "application/json" },
+  });
+  const payload = await response.json();
+  if (!response.ok) {
+    throw new Error(payload?.error || `Failed to load quote #${quoteId} (${response.status})`);
+  }
+  return payload;
+}

@@ -489,12 +489,35 @@ def test_shared_quotes_api_validates_with_pricing_module_and_persists_across_res
             _stop_service(restarted)
 
 
+def test_shared_browser_app_e2e_persistence_and_telemetry():
+    if os.name == "nt":
+        return
+    try:
+        import aiohttp  # noqa: F401
+    except ImportError as error:
+        raise AssertionError("service integration requires the wysna[service] extra") from error
+
+    import importlib.util
+
+    spec = importlib.util.spec_from_file_location(
+        "wysna_shared_e2e",
+        ROOT / "examples/shared-browser-app/tests/e2e_persistence_smoke.py",
+    )
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    metrics = module.run_persistence_and_load_check(ROOT / "examples/shared-browser-app", iterations=10)
+    assert metrics["passed"] is True
+    assert metrics["write_p95_ms"] > 0 and metrics["read_p95_ms"] > 0 and metrics["host_max_rss_kb"] > 0
+    assert "web/app.js" in metrics["assets"] and "web/quote.js" in metrics["assets"]
+
+
 def test_service_pilot_contract():
     test_service_config_and_worker_response_contract()
     test_worker_supervisor_has_a_bounded_queue()
     test_worker_supervisor_kills_failed_timed_out_and_oversized_workers()
     test_sqlite_worker_runs_through_the_bounded_http_host()
     test_shared_quotes_api_validates_with_pricing_module_and_persists_across_restart()
+    test_shared_browser_app_e2e_persistence_and_telemetry()
     test_http_host_maps_invalid_worker_responses_to_json_errors()
     test_http_host_returns_service_busy_when_worker_queue_is_full()
 
