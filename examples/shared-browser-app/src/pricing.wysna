@@ -1,3 +1,23 @@
+# Validation codes: 0 valid, 1 invalid quantity ([1, 1000]), 2 invalid price ([0, 100000000]).
+pub fn quote_validation_code(quantity: int, unit_price_cents: int) -> int {
+    if quantity < 1 or quantity > 1000 {
+        return 1
+    }
+    if unit_price_cents < 0 or unit_price_cents > 100000000 {
+        return 2
+    }
+    return 0
+}
+
+# Return non-negative total cents when valid, or -1 (quantity) / -2 (unit price).
+pub fn calculate_validated_total_cents(quantity: int, unit_price_cents: int) -> int {
+    let status = quote_validation_code(quantity, unit_price_cents)
+    if status != 0 {
+        return -status
+    }
+    return calculate_total_cents(quantity, unit_price_cents)
+}
+
 pub fn calculate_total_cents(quantity: int, unit_price_cents: int) -> int {
     return quantity * unit_price_cents
 }

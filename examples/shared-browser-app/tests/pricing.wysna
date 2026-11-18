@@ -1,17 +1,17 @@
 import "std/test"
-import "pricing.wysna" as pricing
+import "pricing.wysna"
 
 fn main() -> unit {
-    test.expect_equal_int(
-        pricing.calculate_total_cents(3, 1299),
-        3897,
-        "shared pricing calculation",
-    )
-    test.expect_equal_int(
-        pricing.calculate_total_cents(10, 0),
-        0,
-        "zero-price calculation",
-    )
+    test.expect_equal_int(pricing.calculate_total_cents(3, 1299), 3897, "shared pricing calculation")
+    test.expect_equal_int(pricing.calculate_total_cents(10, 0), 0, "zero-price calculation")
+    test.expect_equal_int(pricing.calculate_validated_total_cents(3, 1299), 3897, "validated nominal quote")
+    test.expect_equal_int(pricing.calculate_validated_total_cents(1, 0), 0, "minimum valid boundary")
+    test.expect_equal_int(pricing.calculate_validated_total_cents(1000, 100000000), 100000000000, "maximum valid boundary")
+    test.expect_equal_int(pricing.calculate_validated_total_cents(0, 100), -1, "quantity below minimum")
+    test.expect_equal_int(pricing.calculate_validated_total_cents(1001, 100), -1, "quantity above maximum")
+    test.expect_equal_int(pricing.calculate_validated_total_cents(1, -1), -2, "price below minimum")
+    test.expect_equal_int(pricing.calculate_validated_total_cents(1, 100000001), -2, "price above maximum")
+    test.expect_equal_int(pricing.calculate_validated_total_cents(0, -1), -1, "quantity checked before price")
 }
 
 main()

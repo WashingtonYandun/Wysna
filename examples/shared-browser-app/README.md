@@ -1,10 +1,10 @@
 # Shared browser application
 
-This project uses one Wysna pricing function from two entry points:
+This project shares pure Wysna validation and pricing functions from two entry points:
 
-- The native command validates process arguments and prints the total in cents.
-- The browser page validates form input and formats the result for display.
-- Both hosts call the function in src/pricing.wysna.
+- The native command parses CLI arguments and translates validation status into exit/error output.
+- The browser page validates signed 64-bit integer bounds, calls Wysna for domain rules/total calculation, and formats the result.
+- Both hosts rely on the pure validation and calculation rules in `src/pricing.wysna`.
 
 Build both targets from the repository root:
 
