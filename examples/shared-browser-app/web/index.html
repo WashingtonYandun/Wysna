@@ -3,7 +3,7 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <meta name="description" content="One Wysna pricing function shared by a native CLI and WebAssembly.">
+  <meta name="description" content="One Wysna pricing module shared across native CLI, SQLite API service, and WebAssembly.">
   <title>Wysna shared pricing example</title>
   <style>
     :root { color-scheme: light dark; font: 16px/1.5 system-ui, sans-serif; }
@@ -12,22 +12,28 @@
     form { display: grid; gap: 1rem; }
     label { display: grid; gap: .35rem; }
     input, button { font: inherit; padding: .65rem; }
+    .actions { display: flex; gap: .75rem; flex-wrap: wrap; }
     output { display: block; min-height: 1.5em; font-size: 1.4rem; font-weight: 650; }
+    #saved-status { min-height: 1.4em; font-size: .95rem; opacity: .9; }
     #error { min-height: 1.5em; color: #b42318; }
   </style>
 </head>
 <body>
   <main>
     <h1>Shared Wysna pricing</h1>
-    <p>The native command and this page call the same Wysna function.</p>
+    <p>The native command, SQLite service, and this page share the same Wysna module.</p>
     <form id="quote-form">
       <label for="quantity">Quantity (1–1000)</label>
       <input id="quantity" name="quantity" type="number" min="1" max="1000" step="1" value="3" required>
       <label for="unit-price-cents">Unit price in cents (0–100000000)</label>
       <input id="unit-price-cents" name="unitPriceCents" type="number" min="0" max="100000000" step="1" value="1299" required>
-      <button id="calculate" type="submit" disabled>Loading Wysna…</button>
+      <div class="actions">
+        <button id="calculate" type="submit" disabled>Loading Wysna…</button>
+        <button id="save-quote" type="button" disabled>Save quote</button>
+      </div>
     </form>
     <p id="result" aria-live="polite">Loading the WebAssembly module…</p>
+    <p id="saved-status" aria-live="polite"></p>
     <p id="error" role="alert"></p>
   </main>
   <script type="module" src="./app.js"></script>
