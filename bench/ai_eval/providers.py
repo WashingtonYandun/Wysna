@@ -19,6 +19,8 @@ from typing import Any, Dict, List, Optional, Tuple
 class LlmProvider(ABC):
     """Abstract interface for LLM completion providers."""
 
+    token_counting_method: str = "unknown"
+
     @abstractmethod
     def generate(
         self,
@@ -36,6 +38,8 @@ class LlmProvider(ABC):
 
 class MockProvider(LlmProvider):
     """Deterministic mock provider for CI, verification, and regression testing."""
+
+    token_counting_method: str = "estimated_whitespace"
 
     def __init__(self, canned_responses: Optional[Dict[str, List[str]]] = None):
         # canned_responses: {task_id_or_keyword: [response_attempt_0, response_attempt_1, ...]}
@@ -83,6 +87,8 @@ class MockProvider(LlmProvider):
 
 class GeminiProvider(LlmProvider):
     """Google Gemini API provider using urllib with SSL support and backoff."""
+
+    token_counting_method: str = "provider_usage"
 
     def __init__(
         self,
@@ -215,6 +221,8 @@ class GeminiProvider(LlmProvider):
 
 class OpenAICompatibleProvider(LlmProvider):
     """Generic OpenAI-compatible provider (Ollama, LM Studio, vLLM, OpenAI)."""
+
+    token_counting_method: str = "provider_usage"
 
     def __init__(
         self,

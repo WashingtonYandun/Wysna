@@ -97,7 +97,17 @@ def test_task_pass_at_first_attempt():
     res = harness.evaluate_task(task, mock)
     assert res.status == "pass"
     assert res.pass_at_attempt == 1
+    assert res.raw_pass_at_1 is True
+    assert res.raw_first_check_passed is True
+    assert res.post_autofix_first_check_passed is True
+    assert res.first_attempt_autofix_applied is False
+    assert res.first_attempt_oracle_passed is True
+    assert res.model_turns == 1
+    assert res.wall_time_ms >= res.provider_latency_ms >= 0.0
     assert len(res.attempts) == 1
+    assert res.attempts[0].raw_check_passed is True
+    assert res.attempts[0].post_autofix_check_passed is True
+    assert res.attempts[0].autofix_applied is False
     assert res.attempts[0].check_passed is True
     assert res.attempts[0].oracle_passed is True
 
@@ -184,7 +194,131 @@ def test_auto_fix_heals_typo_without_spending_llm_turn():
     res = harness.evaluate_task(task, mock)
     assert res.status == "pass"
     assert res.pass_at_attempt == 1
+    assert res.raw_first_check_passed is False
+    assert res.post_autofix_first_check_passed is True
+    assert res.first_attempt_autofix_applied is True
+    assert res.first_attempt_oracle_passed is True
+    assert res.raw_pass_at_1 is False
+    assert res.model_turns == 1
+    assert res.attempts[0].raw_check_passed is False
+    assert res.attempts[0].post_autofix_check_passed is True
+    assert res.attempts[0].autofix_applied is True
     assert len(mock.call_history) == 1
+
+
+def test_attributable_metrics_separate_raw_autofix_repair_limits_and_wrong_oracle():
+    harness = EvaluationHarness(repo_root=REPO_ROOT, max_repair_cycles=3)
+
+    def _task(task_id: str, expected_stdout: str = "ok\n", status: str = "supported") -> Task:
+        return Task(
+            id=task_id,
+            domain="cli_scripting",
+            title=task_id,
+            status=status,
+            blocked_reason="excluded" if status == "blocked" else None,
+            instruction=f"Solve {task_id}",
+            test_cases=[
+                TaskTestCase(name="check", expected_stdout=expected_stdout, expected_exit=0)
+            ] if status == "supported" else [],
+        )
+
+    good = "```wysna\nfn main() -> unit {\n    print(\"ok\")\n}\n```"
+    bad_syntax = "```wysna\nfn main( -> unit {}\n```"
+    wrong_output = "```wysna\nfn main() -> unit {\n    print(\"wrong\")\n}\n```"
+    autofix_code = (
+        "```wysna\nstruct User { name: str }\n"
+        "fn main() -> unit {\n    let u = User { name: \"ok\" }\n    print(u.nme)\n}\n```"
+    )
+
+    mock = MockProvider({
+        "TASK-DIRECT": [good],
+        "TASK-AUTOFIX": [autofix_code],
+        # Succeeds only on the 4th submission (3rd repair): must count in resolved, NOT pass_at_3.
+        "TASK-FOURTH": [bad_syntax, bad_syntax, wrong_output, good],
+        # Compiles cleanly on turn 1, but output stays wrong across all 4 submissions.
+        "TASK-WRONG-OUT": [wrong_output, wrong_output, wrong_output, wrong_output],
+    })
+
+    tasks = [
+        _task("TASK-DIRECT"),
+        _task("TASK-AUTOFIX"),
+        _task("TASK-FOURTH"),
+        _task("TASK-WRONG-OUT"),
+        _task("TASK-BLOCKED", status="blocked"),
+    ]
+    summary = harness.run_benchmark(tasks, mock, provider_name="mock", model_name="mock-v2")
+    payload = summary.to_dict()
+
+    assert payload["schema_version"] == "wysna.ai-eval/2"
+    assert payload["token_counting_method"] == "estimated_whitespace"
+    assert payload["total_tasks"] == 5
+    assert payload["supported_tasks"] == 4
+    assert payload["blocked_tasks"] == 1
+    assert payload["denominators"] == {
+        "total_tasks": 5,
+        "supported_tasks": 4,
+        "blocked_tasks": 1,
+        "pass_at_1_max_attempts": 1,
+        "pass_at_3_max_attempts": 3,
+        "budget_max_attempts": 4,
+    }
+    assert payload["raw_first_check_pass_count"] == 2  # DIRECT + WRONG-OUT
+    assert payload["post_autofix_first_check_pass_count"] == 3  # DIRECT + AUTOFIX + WRONG-OUT
+    assert payload["raw_pass_at_1_count"] == 1  # DIRECT only
+    assert payload["autofix_pass_at_1_count"] == 1  # AUTOFIX only
+    assert payload["pass_at_1_count"] == 2
+    assert payload["pass_at_3_count"] == 2  # TASK-FOURTH passed on turn 4, excluded from pass_at_3
+    assert payload["resolved_count"] == 3
+    assert payload["error_distribution"] == {"oracle_mismatch": 1}
+    assert payload["avg_wall_time_ms"] >= payload["avg_provider_latency_ms"] >= 0.0
+    assert payload["total_model_turns"] == 10  # 1 + 1 + 4 + 4
+
+    fourth = next(r for r in payload["results"] if r["task_id"] == "TASK-FOURTH")
+    assert fourth["status"] == "pass"
+    assert fourth["pass_at_attempt"] == 4
+    assert fourth["model_turns"] == 4
+    assert fourth["final_error_category"] is None
+
+    wrong = next(r for r in payload["results"] if r["task_id"] == "TASK-WRONG-OUT")
+    assert wrong["status"] == "fail"
+    assert wrong["raw_first_check_passed"] is True
+    assert wrong["first_attempt_oracle_passed"] is False
+    assert wrong["final_error_category"] == "oracle_mismatch"
+
+
+def test_harness_rejects_path_traversal_and_symlink_escape(tmp_path):
+    outside_target = tmp_path / "escaped.wysna"
+    harness = EvaluationHarness(repo_root=REPO_ROOT, max_repair_cycles=0)
+    task = Task(
+        id="TASK-ESCAPE",
+        domain="cli_scripting",
+        title="Path Escape Prevention",
+        status="supported",
+        instruction="Output only files inside workspace",
+        test_cases=[TaskTestCase(name="ok", expected_stdout="ok\n", expected_exit=0)],
+    )
+
+    mock = MockProvider({
+        "TASK-ESCAPE": [
+            f"### ../escaped.wysna\n```wysna\nfn main() -> unit {{}}\n```\n"
+            f"### {outside_target.as_posix()}\n```wysna\nfn main() -> unit {{}}\n```"
+        ]
+    })
+    res = harness.evaluate_task(task, mock)
+    assert res.status == "fail"
+    assert res.final_error_category == "unsafe_path"
+    assert not outside_target.exists()
+
+    with pytest.raises(ValueError, match="escapes workspace"):
+        harness._resolve_confined_path(str(tmp_path), "/etc/passwd")
+    link_parent = tmp_path / "outside_dir"
+    link_parent.mkdir()
+    ws = tmp_path / "ws"
+    ws.mkdir()
+    if os.name != "nt":
+        (ws / "link").symlink_to(link_parent, target_is_directory=True)
+        with pytest.raises(ValueError, match="escapes workspace"):
+            harness._resolve_confined_path(str(ws), "link/pwn.wysna")
 
 
 def test_token_density_and_self_healing_audit(tmp_path):

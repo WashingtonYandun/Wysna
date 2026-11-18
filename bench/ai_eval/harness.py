@@ -7,7 +7,9 @@ verification, and multi-turn diagnostic feedback repair loops (up to 3 repairs).
 from __future__ import annotations
 
 import json
+import ntpath
 import os
+from pathlib import Path
 import re
 import subprocess
 import sys
@@ -16,6 +18,7 @@ import time
 from typing import Any, Dict, List, Optional, Tuple
 
 from bench.ai_eval.models import (
+    SCHEMA_VERSION,
     AttemptRecord,
     EvaluationSummary,
     Task,
@@ -96,6 +99,24 @@ class EvaluationHarness:
         self.compiler_cmd = compiler_cmd or [sys.executable, os.path.join(self.repo_root, "main.py")]
         self.max_repair_cycles = max_repair_cycles
         self.timeout_seconds = timeout_seconds
+
+    @staticmethod
+    def _resolve_confined_path(workspace_dir: str, relative_path: str) -> Path:
+        """Resolve a workspace-relative path and reject any directory traversal or symlink escape."""
+        if not relative_path or "\x00" in relative_path:
+            raise ValueError(f"Invalid empty or NUL path: {relative_path!r}")
+        normalized = relative_path.replace("\\", "/")
+        drive, _ = ntpath.splitdrive(normalized)
+        if drive or normalized.startswith("/"):
+            raise ValueError(f"Absolute path escapes workspace: {relative_path!r}")
+        rel_obj = Path(normalized)
+        if rel_obj.is_absolute() or ".." in rel_obj.parts:
+            raise ValueError(f"Relative path escapes workspace: {relative_path!r}")
+        root_resolved = Path(workspace_dir).resolve()
+        candidate = (root_resolved / rel_obj).resolve()
+        if candidate == root_resolved or not candidate.is_relative_to(root_resolved):
+            raise ValueError(f"Resolved path escapes workspace: {relative_path!r}")
+        return candidate
 
     def extract_code_blocks(self, text: str) -> Dict[str, str]:
         """Extracts file contents from markdown code blocks or file markers."""
@@ -182,16 +203,17 @@ class EvaluationHarness:
         from tooling.FixCLI import fix_source
         changed_any = False
         for fname in list(files.keys()):
-            target_path = os.path.join(workspace_dir, fname)
-            if not os.path.isfile(target_path):
+            try:
+                target_path = self._resolve_confined_path(workspace_dir, fname)
+            except ValueError:
+                continue
+            if not target_path.is_file():
                 continue
             try:
-                with open(target_path, "r", encoding="utf-8") as handle:
-                    src = handle.read()
-                fixed = fix_source(target_path, src)
+                src = target_path.read_text(encoding="utf-8")
+                fixed = fix_source(str(target_path), src)
                 if fixed.get("changed"):
-                    with open(target_path, "w", encoding="utf-8") as handle:
-                        handle.write(fixed["fixed_source"])
+                    target_path.write_text(fixed["fixed_source"], encoding="utf-8")
                     files[fname] = fixed["fixed_source"]
                     changed_any = True
             except Exception:
@@ -269,11 +291,13 @@ class EvaluationHarness:
 
             # Check file assertions if any
             for rel_path, expected_content in tc.file_assertions.items():
-                full_path = os.path.join(workspace_dir, rel_path)
-                if not os.path.exists(full_path):
+                try:
+                    full_path = self._resolve_confined_path(workspace_dir, rel_path)
+                except ValueError:
+                    return False, f"Test '{tc.name}' output path '{rel_path}' escapes workspace."
+                if not full_path.exists():
                     return False, f"Test '{tc.name}' expected output file '{rel_path}' was not created."
-                with open(full_path, "r", encoding="utf-8") as f:
-                    actual_file_content = f.read()
+                actual_file_content = full_path.read_text(encoding="utf-8")
                 if actual_file_content.strip() != expected_content.strip():
                     return (
                         False,
@@ -293,7 +317,8 @@ class EvaluationHarness:
                 blocked_reason=task.blocked_reason,
             )
 
-        total_latency_ms = 0.0
+        task_wall_start = time.perf_counter()
+        total_provider_latency_ms = 0.0
         total_tokens = 0
         attempts: List[AttemptRecord] = []
         pass_at_attempt: Optional[int] = None
@@ -302,10 +327,9 @@ class EvaluationHarness:
         with tempfile.TemporaryDirectory() as tmpdir:
             # 1. Setup fixtures in workspace
             for rel_path, content in task.fixtures.items():
-                dest = os.path.join(tmpdir, rel_path)
-                os.makedirs(os.path.dirname(dest), exist_ok=True)
-                with open(dest, "w", encoding="utf-8") as f:
-                    f.write(content)
+                dest = self._resolve_confined_path(tmpdir, rel_path)
+                dest.parent.mkdir(parents=True, exist_ok=True)
+                dest.write_text(content, encoding="utf-8")
 
             conversation_history: List[Dict[str, str]] = []
             user_prompt = (
@@ -319,57 +343,101 @@ class EvaluationHarness:
                     user_prompt += f"### {fname}\n```wysna\n{fcontent}\n```\n"
 
             for cycle in range(self.max_repair_cycles + 1):
+                attempt_wall_start = time.perf_counter()
                 completion, tokens, lat_ms = provider.generate(
                     system_prompt=SYSTEM_PROMPT,
                     user_prompt=user_prompt,
                     conversation_history=conversation_history,
                 )
-                total_latency_ms += lat_ms
-                total_tokens += tokens.get("prompt_tokens", 0) + tokens.get("completion_tokens", 0)
+                total_provider_latency_ms += lat_ms
+                prompt_tok = tokens.get("prompt_tokens", 0)
+                comp_tok = tokens.get("completion_tokens", 0)
+                total_tokens += prompt_tok + comp_tok
 
                 extracted_files = self.extract_code_blocks(completion)
                 if not extracted_files:
                     extracted_files = {task.entrypoint: completion}
 
-                # Write files to workspace
-                for fname, fcontent in extracted_files.items():
-                    target_path = os.path.join(tmpdir, fname)
-                    os.makedirs(os.path.dirname(target_path), exist_ok=True)
-                    with open(target_path, "w", encoding="utf-8") as f:
-                        f.write(fcontent)
-
                 entrypoint_code = extracted_files.get(task.entrypoint, completion)
+                try:
+                    resolved_targets = [
+                        (self._resolve_confined_path(tmpdir, fname), fcontent)
+                        for fname, fcontent in extracted_files.items()
+                    ]
+                except ValueError as path_err:
+                    err_msg = str(path_err)
+                    record = AttemptRecord(
+                        attempt_index=cycle,
+                        code=entrypoint_code,
+                        check_passed=False,
+                        raw_check_passed=False,
+                        post_autofix_check_passed=False,
+                        autofix_applied=False,
+                        check_diagnostics=[{"code": "W5002", "message": err_msg}],
+                        raw_stderr=err_msg,
+                        error_category="unsafe_path",
+                        latency_ms=lat_ms,
+                        provider_latency_ms=lat_ms,
+                        wall_time_ms=(time.perf_counter() - attempt_wall_start) * 1000.0,
+                        prompt_tokens=prompt_tok,
+                        completion_tokens=comp_tok,
+                    )
+                    final_error = "unsafe_path"
+                    attempts.append(record)
+                    if cycle < self.max_repair_cycles:
+                        conversation_history.append({"role": "user", "content": user_prompt})
+                        conversation_history.append({"role": "assistant", "content": completion})
+                        user_prompt = (
+                            f"[Task: {task.id}] Rejected unsafe output path outside workspace:\n"
+                            f"{err_msg}\n\n"
+                            f"Output relative workspace paths only in ```wysna code blocks."
+                        )
+                    continue
 
-                # Run static typecheck (with zero-turn compiler auto-fix if machine fixes exist)
-                check_passed, diagnostics, raw_stderr = self.run_check(tmpdir, task.entrypoint)
-                if not check_passed and any(
+                # Write confined files to workspace
+                for target_path, fcontent in resolved_targets:
+                    target_path.parent.mkdir(parents=True, exist_ok=True)
+                    target_path.write_text(fcontent, encoding="utf-8")
+
+                # Run raw static typecheck before any compiler autofix, then post-autofix check
+                raw_check_passed, raw_diagnostics, raw_stderr = self.run_check(tmpdir, task.entrypoint)
+                post_autofix_check_passed = raw_check_passed
+                diagnostics = raw_diagnostics
+                autofix_applied = False
+                if not raw_check_passed and any(
                     fix.get("applicability") == "machine"
-                    for d in diagnostics
+                    for d in raw_diagnostics
                     for fix in d.get("fixes", ())
                 ):
                     if self.run_auto_fix(tmpdir, extracted_files):
+                        autofix_applied = True
                         entrypoint_code = extracted_files.get(task.entrypoint, entrypoint_code)
-                        check_passed, diagnostics, raw_stderr = self.run_check(tmpdir, task.entrypoint)
+                        post_autofix_check_passed, diagnostics, raw_stderr = self.run_check(tmpdir, task.entrypoint)
 
+                check_passed = post_autofix_check_passed
                 record = AttemptRecord(
                     attempt_index=cycle,
                     code=entrypoint_code,
                     check_passed=check_passed,
+                    raw_check_passed=raw_check_passed,
+                    post_autofix_check_passed=post_autofix_check_passed,
+                    autofix_applied=autofix_applied,
                     check_diagnostics=diagnostics,
                     raw_stderr=raw_stderr,
                     latency_ms=lat_ms,
-                    prompt_tokens=tokens.get("prompt_tokens", 0),
-                    completion_tokens=tokens.get("completion_tokens", 0),
+                    provider_latency_ms=lat_ms,
+                    prompt_tokens=prompt_tok,
+                    completion_tokens=comp_tok,
                 )
 
                 if not check_passed:
                     err_cat = self.classify_error(raw_stderr, diagnostics)
                     record.error_category = err_cat
+                    record.wall_time_ms = (time.perf_counter() - attempt_wall_start) * 1000.0
                     final_error = err_cat
                     attempts.append(record)
 
                     if cycle < self.max_repair_cycles:
-                        # Prepare repair prompt
                         diag_summary = "\n".join(
                             self.format_diagnostic_for_prompt(d)
                             for d in diagnostics
@@ -393,10 +461,12 @@ class EvaluationHarness:
                 )
                 record.oracle_passed = oracle_passed
                 record.oracle_failure_details = oracle_failure
+                record.wall_time_ms = (time.perf_counter() - attempt_wall_start) * 1000.0
 
                 if oracle_passed:
                     record.error_category = "none"
                     pass_at_attempt = cycle + 1
+                    final_error = None
                     attempts.append(record)
                     break
                 else:
@@ -414,6 +484,18 @@ class EvaluationHarness:
                             f"Please fix the logic and output the revised code in a ```wysna code block."
                         )
 
+            task_wall_ms = (time.perf_counter() - task_wall_start) * 1000.0
+            first_attempt = attempts[0] if attempts else None
+            raw_first_check = bool(first_attempt and first_attempt.raw_check_passed)
+            post_autofix_first_check = bool(first_attempt and first_attempt.post_autofix_check_passed)
+            first_autofix = bool(first_attempt and first_attempt.autofix_applied)
+            first_oracle = bool(first_attempt and first_attempt.oracle_passed)
+            raw_pass_at_1 = bool(
+                pass_at_attempt == 1
+                and raw_first_check
+                and not first_autofix
+                and first_oracle
+            )
             status = "pass" if pass_at_attempt is not None else "fail"
             return TaskEvaluationResult(
                 task_id=task.id,
@@ -421,8 +503,16 @@ class EvaluationHarness:
                 title=task.title,
                 status=status,
                 pass_at_attempt=pass_at_attempt,
+                raw_first_check_passed=raw_first_check,
+                post_autofix_first_check_passed=post_autofix_first_check,
+                first_attempt_autofix_applied=first_autofix,
+                first_attempt_oracle_passed=first_oracle,
+                raw_pass_at_1=raw_pass_at_1,
+                model_turns=len(attempts),
                 attempts=attempts,
-                total_latency_ms=total_latency_ms,
+                total_latency_ms=total_provider_latency_ms,
+                provider_latency_ms=total_provider_latency_ms,
+                wall_time_ms=task_wall_ms,
                 total_tokens=total_tokens,
                 final_error_category=final_error,
             )
@@ -442,11 +532,18 @@ class EvaluationHarness:
 
         results: List[TaskEvaluationResult] = []
         error_dist: Dict[str, int] = {}
+        raw_first_check_pass_count = 0
+        post_autofix_first_check_pass_count = 0
+        raw_pass_at_1 = 0
+        autofix_pass_at_1 = 0
         pass_at_1 = 0
         pass_at_3 = 0
+        resolved_count = 0
         supported_count = 0
         blocked_count = 0
-        total_lat = 0.0
+        total_provider_lat = 0.0
+        total_wall_ms = 0.0
+        total_turns = 0
         total_tok = 0
 
         # Retrieve compiler git commit
@@ -466,33 +563,75 @@ class EvaluationHarness:
                 blocked_count += 1
             else:
                 supported_count += 1
-                total_lat += res.total_latency_ms
+                total_provider_lat += res.provider_latency_ms
+                total_wall_ms += res.wall_time_ms
+                total_turns += res.model_turns
                 total_tok += res.total_tokens
 
+                if res.raw_first_check_passed:
+                    raw_first_check_pass_count += 1
+                if res.post_autofix_first_check_passed:
+                    post_autofix_first_check_pass_count += 1
+                if res.raw_pass_at_1:
+                    raw_pass_at_1 += 1
                 if res.pass_at_attempt == 1:
                     pass_at_1 += 1
-                if res.pass_at_attempt is not None and res.pass_at_attempt <= 4:
+                    if res.first_attempt_autofix_applied:
+                        autofix_pass_at_1 += 1
+                if res.pass_at_attempt is not None and res.pass_at_attempt <= 3:
                     pass_at_3 += 1
+                if res.status == "pass":
+                    resolved_count += 1
 
                 if res.final_error_category:
                     error_dist[res.final_error_category] = error_dist.get(res.final_error_category, 0) + 1
 
         denom = supported_count if supported_count > 0 else 1
+        max_attempts = self.max_repair_cycles + 1
+        denominators = {
+            "total_tasks": len(selected_tasks),
+            "supported_tasks": supported_count,
+            "blocked_tasks": blocked_count,
+            "pass_at_1_max_attempts": 1,
+            "pass_at_3_max_attempts": min(3, max_attempts),
+            "budget_max_attempts": max_attempts,
+        }
         return EvaluationSummary(
+            schema_version=SCHEMA_VERSION,
             timestamp=time.strftime("%Y-%m-%d %H:%M:%S UTC", time.gmtime()),
             compiler_version=WYSNA_VERSION,
             compiler_commit=git_commit,
             provider_name=provider_name,
             model_name=model_name,
+            token_counting_method=getattr(provider, "token_counting_method", "unknown"),
+            max_repair_cycles=self.max_repair_cycles,
+            max_attempts=max_attempts,
             total_tasks=len(selected_tasks),
             supported_tasks=supported_count,
             blocked_tasks=blocked_count,
+            denominators=denominators,
+            raw_first_check_pass_count=raw_first_check_pass_count,
+            raw_first_check_pass_rate=raw_first_check_pass_count / denom,
+            post_autofix_first_check_pass_count=post_autofix_first_check_pass_count,
+            post_autofix_first_check_pass_rate=post_autofix_first_check_pass_count / denom,
+            raw_pass_at_1_count=raw_pass_at_1,
+            raw_pass_at_1_rate=raw_pass_at_1 / denom,
+            autofix_pass_at_1_count=autofix_pass_at_1,
+            autofix_pass_at_1_rate=autofix_pass_at_1 / denom,
             pass_at_1_count=pass_at_1,
             pass_at_3_count=pass_at_3,
             pass_at_1_rate=pass_at_1 / denom,
             pass_at_3_rate=pass_at_3 / denom,
+            resolved_count=resolved_count,
+            resolved_rate=resolved_count / denom,
             error_distribution=error_dist,
-            avg_latency_ms=total_lat / denom if denom > 0 else 0.0,
+            avg_latency_ms=total_provider_lat / denom,
+            avg_provider_latency_ms=total_provider_lat / denom,
+            avg_wall_time_ms=total_wall_ms / denom,
+            total_provider_latency_ms=total_provider_lat,
+            total_wall_time_ms=total_wall_ms,
+            avg_model_turns=total_turns / denom,
+            total_model_turns=total_turns,
             total_tokens=total_tok,
             results=results,
         )
