@@ -19,6 +19,7 @@ if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
 from common.Platform import executable_name
+from common.Version import WYSNA_VERSION
 from main import ensure_selfhost_compiler_binary
 
 
@@ -319,7 +320,7 @@ class Phase4NativeLspTests(unittest.TestCase):
             cc = subprocess.run(
                 [
                     "cc", "-std=c99", "-Wall", "-Wextra", "-Werror", "-Wno-unused-function",
-                    '-DWYSNA_NATIVE_VERSION="0.6.0"',
+                    f'-DWYSNA_NATIVE_VERSION="{WYSNA_VERSION}"',
                     '-DWYSNA_NATIVE_TARGET="native-host"',
                     f"-I{ROOT}",
                     str(ROOT / "packaging/native/driver.c"),

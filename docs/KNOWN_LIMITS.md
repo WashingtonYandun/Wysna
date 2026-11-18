@@ -112,7 +112,7 @@ macOS arm64, Linux x64 and Windows x64; it needs no virtual environment or host 
 Its launcher verifies the required components before importing Seed, and
 `wysna doctor` verifies the complete installed file index. External FFI libraries are
 not included. CI validates the Windows, macOS and Linux installer lifecycles on their
-respective hosts, including installation and removal. The published 0.6.0 installers
+respective hosts, including installation and removal. The published 0.7.0 installers
 are unsigned; CI acceptance does not establish manual acceptance on every machine.
 Missing Wysna Compiler sources produce `W2013` before any bootstrap-cache write. Wysna
 Seed native builds require a host C99 toolchain; an unavailable or invalid compiler command produces

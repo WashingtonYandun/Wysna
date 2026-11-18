@@ -27,10 +27,10 @@ manifest_version = 1
 [package]
 name = "example-tool"
 version = "0.1.0"
-language = "0.6"
+language = "0.7"
 
 [toolchain]
-compiler = "0.6.0"
+compiler = "0.7.0"
 stdlib = "bundled"
 
 [sources]

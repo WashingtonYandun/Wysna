@@ -6,6 +6,7 @@ import subprocess
 import sys
 import tempfile
 
+from common.Version import WYSNA_VERSION
 from common.WasmModule import inspect_wasm, validate_wasi_command
 
 
@@ -19,15 +20,16 @@ def _invoke(project_root, *arguments):
 
 
 def _manifest():
-    return '''manifest_version = 1
+    language = ".".join(WYSNA_VERSION.split(".")[:2])
+    return f'''manifest_version = 1
 
 [package]
 name = "wasi-smoke"
 version = "0.1.0"
-language = "0.6"
+language = "{language}"
 
 [toolchain]
-compiler = "0.6.0"
+compiler = "{WYSNA_VERSION}"
 stdlib = "bundled"
 
 [sources]

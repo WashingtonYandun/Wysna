@@ -6,6 +6,7 @@ from pathlib import Path
 import tempfile
 import unittest
 from unittest.mock import patch
+from common.Version import WYSNA_VERSION
 from compiler.CompilerService import CompilerService
 from compiler.EffectAnalysis import analyze_effects
 from compiler.EffectModel import OPERATION_EFFECTS, RUNTIME_EFFECTS
@@ -135,8 +136,9 @@ class EffectAnalysisTests(unittest.TestCase):
             source = root/'src/main.wysna'
             source.write_text('print(1)\n')
             manifest = root/'wysna.toml'
-            manifest.write_text('manifest_version = 1\n[package]\nname = "effects-test"\nversion = "0.1.0"\n'
-                'language = "0.6"\n[toolchain]\ncompiler = "0.6.0"\nstdlib = "bundled"\n'
+            language = '.'.join(WYSNA_VERSION.split('.')[:2])
+            manifest.write_text(f'manifest_version = 1\n[package]\nname = "effects-test"\nversion = "0.1.0"\n'
+                f'language = "{language}"\n[toolchain]\ncompiler = "{WYSNA_VERSION}"\nstdlib = "bundled"\n'
                 '[sources]\nroot = "src"\n[targets.app]\nentry = "src/main.wysna"\nprofile = "native-cli"\n')
             ProjectResolver.load(manifest).write_lock()
             output = io.StringIO()

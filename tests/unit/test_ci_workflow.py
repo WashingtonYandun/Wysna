@@ -174,6 +174,20 @@ def test_ci_workflow_contracts():
             env=dict(os.environ, **dict(zip(variables,results))), timeout=10)
         assert (result.returncode == 0) == all(status == 'success' for status in results), (results, result)
 
+    from common.Version import WYSNA_VERSION
+    publish_release = (ROOT / '.github/workflows/publish-release.yml').read_text(encoding='utf-8')
+    assert '- "v*.*.*"' in publish_release
+    assert "if: github.ref_name != 'v0.5.0'" in publish_release
+    assert 'WYSNA_VERSION' in publish_release
+    assert 'origin/main' in publish_release
+    assert 'tools/prepare_release_assets.py' in publish_release
+    assert '--verify-tag' in publish_release
+    release_notes = ROOT / f'docs/release-notes/v{WYSNA_VERSION}.md'
+    assert release_notes.is_file(), f'Missing release notes template for {WYSNA_VERSION}: {release_notes}'
+    notes_text = release_notes.read_text(encoding='utf-8')
+    assert '{{SOURCE_COMMIT}}' in notes_text and '{{CI_RUN_ID}}' in notes_text
+    assert notes_text.replace('{{SOURCE_COMMIT}}', '').replace('{{CI_RUN_ID}}', '').count('{{') == 0
+
 
 
 

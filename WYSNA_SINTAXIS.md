@@ -1,4 +1,4 @@
-# Manual de Sintaxis y Referencia del Lenguaje Wysna (v0.6.0)
+# Manual de Sintaxis y Referencia del Lenguaje Wysna (v0.7.0)
 
 Este documento constituye la referencia técnica canónica, completa y exhaustiva de la sintaxis, el modelo semántico, el sistema de tipos y las primitivas de tiempo de ejecución del lenguaje **Wysna**, derivada directamente de la implementación de referencia del compilador (**Wysna Seed**), el compilador auto-hospedado (**Wysna Compiler**) y la especificación formal normativa.
 
