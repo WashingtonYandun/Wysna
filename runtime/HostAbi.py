@@ -103,7 +103,7 @@ def path_text(handle):
 def file_open(handle, mode):
     global _error_code, _error_domain
     path = path_text(handle)
-    if path is None or mode not in (0, 1, 2):
+    if path is None or mode not in (0, 1, 2, 3):
         failure(OSError(errno.EINVAL, 'invalid path or mode'))
         return 0
     if _active_trace is not None and _active_trace.is_replaying:
@@ -117,7 +117,7 @@ def file_open(handle, mode):
             return 0
         return allocate('file', {'replayed_path': path, 'mode': mode})
     try:
-        opened = open(path, ('rb', 'wb', 'ab')[mode])
+        opened = open(path, ('rb', 'wb', 'ab', 'xb')[mode])
         if _active_trace is not None and _active_trace.is_recording:
             _active_trace.record('host.file_open', [path, mode], ok=True, result={'status': 'opened'})
         return allocate('file', opened)

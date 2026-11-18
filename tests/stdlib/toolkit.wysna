@@ -1,7 +1,8 @@
 import "std/buffer"
+from "std/buffer" use { DecodeErrorKind }
 import "std/parse"
 import "std/text"
-fn main() -> unit ! parse.ParseError | buffer.BufferError {
+fn main() -> unit ! parse.ParseError | buffer.BufferError | buffer.DecodeError {
     print(parse.parse_int(" -9223372036854775808 ")?, parse.parse_int("+9223372036854775807")?)
     for invalid in ["", "+", "9223372036854775808", "-9223372036854775809", "12x", "１２"] {
         parse.parse_int(invalid) else error { print("invalid integer", error.offset) continue }
@@ -22,4 +23,23 @@ fn main() -> unit ! parse.ParseError | buffer.BufferError {
         0 }
     data.append(1) else error { print(error.message) }
     print(copy.close())
+    let empty = new buffer.Bytes()
+    print("empty", len(buffer.decode_utf8(empty)?))
+    empty.append(65)?
+    print("ascii", buffer.decode_utf8(empty)?)
+    empty.append(226)?
+    empty.append(40)?
+    empty.append(172)?
+    buffer.decode_utf8(empty) else error {
+        print("invalid", error.kind == DecodeErrorKind.InvalidUtf8, error.offset, empty.get(2)?)
+        ""
+    }
+    empty.close()
+    buffer.decode_utf8(empty) else error {
+        print("closed", error.kind == DecodeErrorKind.Unavailable, error.offset)
+        ""
+    }
+    let unicode = buffer.from_text("é🙂")
+    print(buffer.decode_utf8(unicode)?, unicode.size())
+    unicode.close()
 }

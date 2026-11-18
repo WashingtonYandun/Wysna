@@ -37,11 +37,15 @@ pub class File {
     public fn close() -> int { return wysna_host_close(this.handle) }
 }
 
-# Modes: 0 read, 1 truncate/write, 2 append. EOF is an empty Bytes buffer.
+# Modes: 0 read, 1 truncate/write, 2 append, 3 create exclusively (fail if present). EOF is an empty Bytes buffer.
 pub fn open(path: str, mode: int) -> File ! FileError {
     let file = File(path, mode)
     if not file.is_open() { return Err(FileError { operation: "open", path: path, code: wysna_host_last_error(), domain: wysna_host_last_error_domain() }) }
     return file
+}
+
+pub fn create_exclusive(path: str) -> File ! FileError {
+    return open(path, 3)
 }
 
 pub fn scope[T, E](file: File, body: fn(File) -> T ! E) -> tuple[T ! E, int] {

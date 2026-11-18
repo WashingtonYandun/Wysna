@@ -1,5 +1,5 @@
 import "std/buffer"
-import "std/bytes" as utf8
+from "std/buffer" use { DecodeErrorKind }
 
 extern "C" fn wysna_host_stdin_read_line(output: opaque) -> int
 extern "C" fn wysna_host_stdin_read_all(output: opaque) -> int
@@ -8,18 +8,12 @@ extern "C" fn wysna_host_stdout_flush() -> int
 # std/io: standard streams plus the convenience file helpers that used to live here.
 
 fn collect(data: buffer.Bytes) -> str ! IoError {
-    let mut octets: list[int] = []
-    for index in 0..data.size() {
-        let value = data.get(index) else err {
-            data.close()
-            return Err(IoError { message: "stdin buffer became invalid" })
-        }
-        octets.append(value)
-    }
-    data.close()
-    let decoded = utf8.decode(octets) else err {
+    let decoded = buffer.decode_utf8(data) else error {
+        data.close()
+        if error.kind == DecodeErrorKind.Unavailable { return Err(IoError { message: "stdin buffer became invalid" }) }
         return Err(IoError { message: "stdin is not valid UTF-8" })
     }
+    data.close()
     return decoded
 }
 
