@@ -1,5 +1,6 @@
 {"items":[true,false,null],"name":"Wysna","number":-12.5e+2,"text":"line\nnext\t\"","unicode":"😀"}
 name Wysna
+array size 3 -1
 items true true
 {"a":"line\nnext\t\"","control":"\u0001","z":1e3}
 invalid 3 expected JSON value
