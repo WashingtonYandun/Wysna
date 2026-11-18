@@ -41,7 +41,9 @@ python tools/validate_installed_application.py \
 
 The validator copies inputs outside the checkout, uses the installed compiler and
 private C toolchain, verifies persisted rows/journal with Python's independent
-SQLite reader, tests errors and rollback, and uses a local HTTP fixture. Omit
-`--http` to qualify only ingestion on a host without libcurl development inputs.
-It also verifies that `explain` retains unknown native FFI effects. This is trusted
-native automation with the user's OS authority, not an untrusted-code sandbox.
+SQLite reader, tests rollback on invalid and duplicate batches followed by a
+corrected HTTP retry imported once, and cleans temporary files on publish errors.
+Omit `--http` to qualify only ingestion on a host without libcurl development
+inputs. It also verifies that `explain` retains unknown native FFI effects. This
+is trusted native automation with the user's OS authority, not an untrusted-code
+sandbox.

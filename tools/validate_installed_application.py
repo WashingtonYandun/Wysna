@@ -74,11 +74,12 @@ def validate(installation, report, *, http=False, archive=None):
                 journal = connection.execute('SELECT row_count,input_bytes FROM imports ORDER BY id').fetchall()
                 return rows, journal
 
-        input_path.write_text('[{"id":1,"value":7,"label":"café"},{"id":2,"value":42}]', encoding='utf-8')
+        initial_bytes = '[{"id":1,"value":7,"label":"café"},{"id":2,"value":42}]'.encode('utf-8')
+        input_path.write_bytes(initial_bytes)
         result = run('atomic-json-ingestion', [binary, input_path])
         assert json.loads(result.stdout) == {'imported':2, 'count':2, 'total':49, 'imports':1, 'live_resources':0}
         baseline = snapshot()
-        assert baseline == ([(1, 7), (2, 42)], [(2, input_path.stat().st_size)]), baseline
+        assert baseline == ([(1, 7), (2, 42)], [(2, len(initial_bytes))]), baseline
         for name, source, code in (
             ('duplicate-rollback', '[{"id":3,"value":5},{"id":1,"value":9}]', 3),
             ('invalid-row-rollback', '[{"id":3,"value":5},{"id":4,"value":-1}]', 3),
@@ -119,6 +120,9 @@ def validate(installation, report, *, http=False, archive=None):
             downloader = work / 'measurement-fetch'
             run('build-installed-http-client', [cli, 'build', work / 'fetch.wysna', '-o', downloader])
             payload = b'[{"id":3,"value":5}]'
+            invalid_row_batch = b'[{"id":4,"value":9},{"id":5,"value":-1}]'
+            duplicate_batch = b'[{"id":4,"value":9},{"id":3,"value":10}]'
+            retry_payload = b'[{"id":4,"value":9}]'
 
             class Handler(BaseHTTPRequestHandler):
                 def log_message(self, *args):
@@ -128,8 +132,14 @@ def validate(installation, report, *, http=False, archive=None):
                     status, body = (503, b'[]') if self.path == '/unavailable' else (200, payload)
                     if self.path == '/malformed':
                         body = b'{'
-                    if self.path == '/large':
+                    elif self.path == '/large':
                         body = b' ' * 65537
+                    elif self.path == '/batch-invalid-row':
+                        body = invalid_row_batch
+                    elif self.path == '/batch-duplicate-row':
+                        body = duplicate_batch
+                    elif self.path == '/batch-retry':
+                        body = retry_payload
                     self.send_response(status)
                     self.send_header('Content-Type', 'application/json')
                     self.send_header('Content-Length', str(len(body)))
@@ -149,14 +159,36 @@ def validate(installation, report, *, http=False, archive=None):
                 result = run('http-json-sqlite-workflow', [binary, input_path])
                 assert json.loads(result.stdout) == {'imported':1,'count':3,'total':54,'imports':2,'live_resources':0}
                 baseline = snapshot()
+                expected_after_first = ([(1, 7), (2, 42), (3, 5)], [(2, len(initial_bytes)), (1, len(payload))])
+                assert baseline == expected_after_first, baseline
                 for path, code in (('/unavailable',3),('/malformed',4),('/large',3)):
                     run('http-rejects' + path, [downloader, endpoint + path, input_path], code=code)
                     assert input_path.read_bytes() == payload and snapshot() == baseline
+                for step_name, path, expected_bytes in (
+                    ('http-second-batch-invalid-row-rollback', '/batch-invalid-row', invalid_row_batch),
+                    ('http-second-batch-duplicate-rollback', '/batch-duplicate-row', duplicate_batch),
+                ):
+                    run('fetch-' + step_name, [downloader, endpoint + path, input_path])
+                    assert input_path.read_bytes() == expected_bytes
+                    run(step_name, [binary, input_path], code=3)
+                    assert snapshot() == baseline, step_name + ' mutated persisted rows or journal'
+                run('http-retry-corrected-download', [downloader, endpoint + '/batch-retry', input_path])
+                assert input_path.read_bytes() == retry_payload
+                retry_result = run('http-retry-corrected-import', [binary, input_path])
+                assert json.loads(retry_result.stdout) == {'imported':1,'count':4,'total':63,'imports':3,'live_resources':0}
+                final_snapshot = snapshot()
+                expected_final = (
+                    [(1, 7), (2, 42), (3, 5), (4, 9)],
+                    [(2, len(initial_bytes)), (1, len(payload)), (1, len(retry_payload))],
+                )
+                assert final_snapshot == expected_final, final_snapshot
+                run('http-retry-duplicate-rejected-once', [binary, input_path], code=3)
+                assert snapshot() == final_snapshot
                 blocked_target = work / 'blocked-measurements'
                 blocked_target.mkdir()
                 run('http-publish-failure-cleans-temp', [downloader, endpoint + '/measurements', blocked_target], code=5)
                 assert not list(work.glob('*.tmp-*')) and not list(work.glob('.*.tmp-*'))
-                assert input_path.read_bytes() == payload and snapshot() == baseline
+                assert input_path.read_bytes() == retry_payload and snapshot() == final_snapshot
             finally:
                 server.shutdown()
                 server.server_close()
