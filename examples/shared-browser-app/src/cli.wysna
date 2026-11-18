@@ -1,6 +1,6 @@
-import "std/environment" as environment
-import "std/parse" as parse
-import "pricing.wysna" as pricing
+import "std/environment"
+import "std/parse"
+import "pricing.wysna"
 
 fn main() -> unit {
     let arguments = environment.arguments()
@@ -9,7 +9,6 @@ fn main() -> unit {
         exit(2)
         return
     }
-
     let quantity = parse.parse_int(arguments[1]) else error {
         eprint("quantity must be an integer")
         exit(2)
@@ -20,18 +19,23 @@ fn main() -> unit {
         exit(2)
         return
     }
-    if quantity < 1 or quantity > 1000 {
+    let result = pricing.calculate_validated_total_cents(quantity, unit_price_cents)
+    if result == -1 {
         eprint("quantity must be between 1 and 1000")
         exit(2)
         return
     }
-    if unit_price_cents < 0 or unit_price_cents > 100000000 {
+    if result == -2 {
         eprint("unit price must be between 0 and 100000000 cents")
         exit(2)
         return
     }
-
-    print(pricing.calculate_total_cents(quantity, unit_price_cents))
+    if result < 0 {
+        eprint("invalid quote inputs")
+        exit(2)
+        return
+    }
+    print(result)
 }
 
 main()
