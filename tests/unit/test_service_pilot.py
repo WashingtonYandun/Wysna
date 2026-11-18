@@ -422,11 +422,79 @@ def test_http_host_returns_service_busy_when_worker_queue_is_full():
             _stop_service(server)
 
 
+def test_shared_quotes_api_validates_with_pricing_module_and_persists_across_restart():
+    if os.name == "nt":
+        return
+    try:
+        import aiohttp  # noqa: F401
+        import sqlite3
+        from contextlib import closing
+    except ImportError as error:
+        raise AssertionError("service integration requires wysna[service] and sqlite3") from error
+
+    source_path = ROOT / "examples/shared-browser-app/src/service_worker.wysna"
+    adapter_path = ROOT / "examples/shared-browser-app/service/quotes_adapter.c"
+    compiler_service = CompilerService(project_root=ROOT)
+    checked = compiler_service.check_file(source_path)
+    c_source = compiler_service.emit_c(checked).source
+
+    with tempfile.TemporaryDirectory(prefix="wysna-quotes-service-") as directory:
+        worker = Path(directory) / "quotes_worker"
+        database = Path(directory) / "quotes.sqlite"
+        NativeToolchain(ROOT).build(
+            c_source,
+            worker,
+            link_libraries=(adapter_path, "sqlite3"),
+        )
+        server, endpoint = _start_service(worker, database)
+        try:
+            assert _http_request(endpoint + "/health") == (200, {"ok": True, "runtime": "wysna"})
+
+            status, body = _http_request(
+                endpoint + "/quotes",
+                method="POST",
+                body=b'{"quantity":3,"unit_price_cents":1299}',
+            )
+            assert (status, body) == (201, {"id": 1, "quantity": 3, "unit_price_cents": 1299, "total_cents": 3897})
+
+            for bad_body, expected_error in (
+                (b'{"quantity":0,"unit_price_cents":100}', "quantity_out_of_range"),
+                (b'{"quantity":1001,"unit_price_cents":100}', "quantity_out_of_range"),
+                (b'{"quantity":1,"unit_price_cents":-1}', "unit_price_out_of_range"),
+                (b'{"quantity":1,"unit_price_cents":100000001}', "unit_price_out_of_range"),
+                (b'{"quantity":"3","unit_price_cents":100}', "invalid_quote_fields"),
+                (b'{', "invalid_json_body"),
+            ):
+                bad_status, bad_resp = _http_request(endpoint + "/quotes", method="POST", body=bad_body)
+                assert (bad_status, bad_resp) == (400, {"error": expected_error}), (bad_body, bad_status, bad_resp)
+
+            assert _http_request(endpoint + "/quotes") == (200, {"count": 1})
+            with closing(sqlite3.connect(database)) as conn:
+                rows = conn.execute("SELECT id, quantity, unit_price_cents, total_cents FROM quotes ORDER BY id").fetchall()
+            assert rows == [(1, 3, 1299, 3897)]
+        finally:
+            _stop_service(server)
+
+        # Restart server pointing to the same SQLite database and verify GET /quotes/{id} durability.
+        restarted, endpoint2 = _start_service(worker, database)
+        try:
+            assert _http_request(endpoint2 + "/quotes/1") == (
+                200,
+                {"id": 1, "quantity": 3, "unit_price_cents": 1299, "total_cents": 3897},
+            )
+            assert _http_request(endpoint2 + "/quotes/999") == (404, {"error": "quote_not_found"})
+            assert _http_request(endpoint2 + "/quotes/abc") == (400, {"error": "invalid_quote_id"})
+            assert _http_request(endpoint2 + "/quotes/0") == (400, {"error": "invalid_quote_id"})
+        finally:
+            _stop_service(restarted)
+
+
 def test_service_pilot_contract():
     test_service_config_and_worker_response_contract()
     test_worker_supervisor_has_a_bounded_queue()
     test_worker_supervisor_kills_failed_timed_out_and_oversized_workers()
     test_sqlite_worker_runs_through_the_bounded_http_host()
+    test_shared_quotes_api_validates_with_pricing_module_and_persists_across_restart()
     test_http_host_maps_invalid_worker_responses_to_json_errors()
     test_http_host_returns_service_busy_when_worker_queue_is_full()
 
