@@ -1,0 +1,163 @@
+import "std/json"
+import "std/parse"
+import "pricing.wysna"
+
+extern "C" fn quotes_db_open() -> opaque
+
+extern "C" fn quotes_db_is_open(handle: opaque) -> bool
+
+extern "C" fn quotes_db_insert(handle: opaque, quantity: int64, unit_price_cents: int64, total_cents: int64) -> int64
+
+extern "C" fn quotes_db_get(handle: opaque, id: int64) -> int32
+
+extern "C" fn quotes_db_fetched_quantity(handle: opaque) -> int64
+
+extern "C" fn quotes_db_fetched_unit_price(handle: opaque) -> int64
+
+extern "C" fn quotes_db_fetched_total(handle: opaque) -> int64
+
+extern "C" fn quotes_db_count(handle: opaque) -> int64
+
+extern "C" fn quotes_db_close(handle: opaque) -> int32
+
+fn number_value(value: int) -> json.Value {
+    let result = json.number(str(value)) else error {
+        return json.null()
+    }
+    return result
+}
+
+fn emit(status: int, body: json.Value) -> unit {
+    let response: dict[str, json.Value] = {"status": number_value(status), "body": body}
+    let encoded = json.stringify(json.object(response)) else error {
+        print("{\"status\":500,\"body\":{\"error\":\"response_encoding_failed\"}}")
+        return
+    }
+    print(encoded)
+}
+
+fn error_body(code: str) -> json.Value {
+    let fields: dict[str, json.Value] = {"error": json.string(code)}
+    return json.object(fields)
+}
+
+fn quote_body(quote_id: int, quantity: int, unit_price_cents: int, total_cents: int) -> json.Value {
+    let fields: dict[str, json.Value] = {"id": number_value(quote_id), "quantity": number_value(quantity), "unit_price_cents": number_value(unit_price_cents), "total_cents": number_value(total_cents)}
+    return json.object(fields)
+}
+
+fn main() -> unit {
+    let arguments = args()
+    if len(arguments) != 2 {
+        emit(400, error_body("expected_request_file"))
+        return
+    }
+    let raw_request = read_file(arguments[1]) else error {
+        emit(400, error_body("request_file_unavailable"))
+        return
+    }
+    let request = json.parse_with_limits(raw_request, 1146880, 32, 100000) else error {
+        emit(400, error_body("invalid_request_envelope"))
+        return
+    }
+    let method = json.as_string(json.get(request, "method") ?? json.null()) ?? ""
+    let path = json.as_string(json.get(request, "path") ?? json.null()) ?? ""
+    if method == "GET" and path == "/health" {
+        let fields: dict[str, json.Value] = {"ok": json.boolean(true), "runtime": json.string("wysna")}
+        emit(200, json.object(fields))
+        return
+    }
+    if method == "GET" and path == "/quotes" {
+        let database = quotes_db_open()
+        if not quotes_db_is_open(database) {
+            emit(500, error_body("database_unavailable"))
+            return
+        }
+        let count = quotes_db_count(database)
+        let closed = quotes_db_close(database)
+        if count < 0 or closed != 0 {
+            emit(500, error_body("database_read_failed"))
+            return
+        }
+        let fields: dict[str, json.Value] = {"count": number_value(count)}
+        emit(200, json.object(fields))
+        return
+    }
+    if method == "GET" and len(path) > 8 and slice(path, 0, 8) == "/quotes/" {
+        let raw_id = slice(path, 8, len(path))
+        let quote_id = parse.parse_int(raw_id) else error {
+            emit(400, error_body("invalid_quote_id"))
+            return
+        }
+        if quote_id < 1 {
+            emit(400, error_body("invalid_quote_id"))
+            return
+        }
+        let database = quotes_db_open()
+        if not quotes_db_is_open(database) {
+            emit(500, error_body("database_unavailable"))
+            return
+        }
+        let found = quotes_db_get(database, quote_id)
+        let quantity = quotes_db_fetched_quantity(database)
+        let unit_price_cents = quotes_db_fetched_unit_price(database)
+        let total_cents = quotes_db_fetched_total(database)
+        let closed = quotes_db_close(database)
+        if found < 0 or closed != 0 {
+            emit(500, error_body("database_read_failed"))
+            return
+        }
+        if found == 0 {
+            emit(404, error_body("quote_not_found"))
+            return
+        }
+        emit(200, quote_body(quote_id, quantity, unit_price_cents, total_cents))
+        return
+    }
+    if method == "POST" and path == "/quotes" {
+        let request_body = json.as_string(json.get(request, "body") ?? json.null()) ?? ""
+        let payload = json.parse_with_limits(request_body, 65536, 16, 10000) else error {
+            emit(400, error_body("invalid_json_body"))
+            return
+        }
+        let qty_text = json.as_number(json.get(payload, "quantity") ?? json.null()) ?? ""
+        let price_text = json.as_number(json.get(payload, "unit_price_cents") ?? json.null()) ?? ""
+        let quantity = parse.parse_int(qty_text) else error {
+            emit(400, error_body("invalid_quote_fields"))
+            return
+        }
+        let unit_price_cents = parse.parse_int(price_text) else error {
+            emit(400, error_body("invalid_quote_fields"))
+            return
+        }
+        let total_cents = pricing.calculate_validated_total_cents(quantity, unit_price_cents)
+        if total_cents == -1 {
+            emit(400, error_body("quantity_out_of_range"))
+            return
+        }
+        if total_cents == -2 {
+            emit(400, error_body("unit_price_out_of_range"))
+            return
+        }
+        if total_cents < 0 {
+            emit(400, error_body("invalid_quote_fields"))
+            return
+        }
+        let database = quotes_db_open()
+        if not quotes_db_is_open(database) {
+            emit(500, error_body("database_unavailable"))
+            return
+        }
+        let quote_id = quotes_db_insert(database, quantity, unit_price_cents, total_cents)
+        let closed = quotes_db_close(database)
+        if quote_id < 1 or closed != 0 {
+            emit(500, error_body("database_write_failed"))
+            return
+        }
+        emit(201, quote_body(quote_id, quantity, unit_price_cents, total_cents))
+        return
+    }
+    emit(404, error_body("route_not_found"))
+}
+
+main()
