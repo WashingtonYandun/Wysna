@@ -26,7 +26,11 @@ from bench.ai_eval.providers import LlmProvider
 from common.Version import WYSNA_VERSION
 
 
-SYSTEM_PROMPT = f"""You are an expert programmer writing software in Wysna v{WYSNA_VERSION}, a statically-typed systems programming language with value semantics and copy-on-write collections.
+SYSTEM_PROMPT = (
+    f"You are an expert programmer writing software in Wysna v{WYSNA_VERSION}, "
+    "a statically-typed systems programming language with value semantics and "
+    "copy-on-write collections."
+    """
 
 Key Wysna Grammar and Rules:
 1. Entrypoint: `fn main() -> unit { ... }`
@@ -59,13 +63,13 @@ Key Wysna Grammar and Rules:
 8. Error Handling:
    - `let content = read_file(path)?` (postfix propagation)
    - `let content = read_file(path) else err { return "fallback" }`
-   - `let host = env.get("HOST") ?? "localhost"` (coalescing)
+   - `let host = env("HOST") ?? "localhost"` (coalescing)
 9. Structs:
    - `struct Name { field: type }`
    - Instantiation requires named fields: `Name { field: value }`
 10. Imports and Standard Library:
    - `import "other_module.wysna" as alias` or selective `from "other_module.wysna" use { symbol }`
-   - `from "std/iter" use { map, filter, fold, any, all }`
+   - `from "std/algorithms" use { map, filter, fold, any, all }`
    - `from "std/text" use { starts_with, ends_with, trim, to_lower, to_upper, split, contains }`
 11. Comments:
    - Line comments begin with `#` and documentation comments begin with `##`. Never use `//`.
@@ -73,6 +77,7 @@ Key Wysna Grammar and Rules:
 Always output valid Wysna code enclosed in a ```wysna ... ``` code block.
 If multiple files are required, prefix each file with `### filename.wysna`.
 """
+)
 
 
 class EvaluationHarness:
