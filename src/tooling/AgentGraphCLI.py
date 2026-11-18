@@ -14,6 +14,7 @@ from compiler.SemanticGraph import (
     query_semantic_graph,
 )
 from error.Error import WysnaError
+from tooling.SourceWrite import read_source_snapshot, write_verified_source
 from tooling.ToolResult import diagnostic_from_error, diagnostic_record, tool_result, write_tool_result
 
 
@@ -282,10 +283,10 @@ def patch_source(
     expect_graph_hash: str | None = None,
     apply: bool = False,
     service: CompilerService | None = None,
+    before_write_hook=None,
 ) -> dict:
     """Semantically replace one declaration in memory, check it, and optionally write to disk."""
-    target_path = Path(path).resolve()
-    original_text = target_path.read_text(encoding='utf-8')
+    target_path, original_text, before_sha256 = read_source_snapshot(path)
     active_service = service or CompilerService()
 
     # Overlay ensures we inspect/check against exact caller text consistently.
@@ -341,7 +342,13 @@ def patch_source(
     changed = patched_text != original_text
     written = False
     if apply and changed:
-        target_path.write_text(patched_text, encoding='utf-8')
+        write_verified_source(
+            target_path,
+            patched_text,
+            expected_sha256=before_sha256,
+            stage='patch',
+            before_lock_hook=before_write_hook,
+        )
         written = True
 
     return {
@@ -375,7 +382,7 @@ def run_patch_command(argv) -> int:
         if (options.replacement_inline is None) == (options.replacement_file is None):
             raise ValueError('Provide exactly one of --with or --with-file')
         replacement = (
-            options.replacement_file.read_text(encoding='utf-8')
+            options.replacement_file.read_bytes().decode('utf-8')
             if options.replacement_file is not None
             else options.replacement_inline
         )

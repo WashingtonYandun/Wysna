@@ -95,7 +95,13 @@ wysna lsp
 ```
 
 `wysna patch` rejects stale `graph:...` hashes with `W5005` and verifies types in
-memory before mutating disk.
+memory before mutating disk. When applying edits via Seed CLI or MCP (`wysna patch --apply`
+and `wysna fix --apply`), cooperating Wysna writers serialize per file with a cooperative
+lock, re-verify the exact source SHA-256 inside the critical section (failing with `W5005`
+on concurrent modification), and publish atomically while preserving UTF-8 line endings
+and file permissions. External editors that write directly without using Wysna tooling do
+not hold the cooperative lock; optimistic revision verification still rejects stale snapshots
+detected before replacement.
 
 ## Agent-First Imports & Token Optimization
 
