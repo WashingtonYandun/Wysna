@@ -534,7 +534,11 @@ class NativeMirPipelineTests(unittest.TestCase):
             ('interface Show { fn show() -> str }\nclass Box[T: Show] { value: T\n    fn init(v: T) { this.value = v } }\nlet b = new Box[int](1)', 'W2001'),
             ('interface Show { fn show() -> str }\nclass Box[T] { value: T\n    fn init(v: T) { this.value = v }\n    fn render[U: Show](x: U) -> str { x.show() } }\nlet b = new Box[int](1)\nprint(b.render(42))', 'W2001'),
             ('class Base { value: int }\nclass Box[T] extends Base { value: T }', 'W3003'),
-            ('interface Action[T] { fn apply(value: T) -> T }', 'W2013'),
+            ('interface Reader[T] { fn get() -> T }\nclass Bad implements Reader { public fn get() -> int { 1 } }', 'W2001'),
+            ('interface Reader[T] { fn get() -> T }\nclass Bad implements Reader[int, str] { public fn get() -> int { 1 } }', 'W2001'),
+            ('interface Reader[T] { fn get() -> T }\nclass Bad implements Reader[int] { public fn get() -> str { "x" } }', 'W3003'),
+            ('interface Reader[T] { fn get() -> T }\nclass Box[T] implements Reader[T] { value: T\nfn init(v: T) { this.value = v }\npublic fn get() -> T { this.value } }\nlet r: Reader[int] = new Box[str]("x")', 'W2001'),
+            ('interface Show { fn show() -> str }\ninterface ShowReader[T: Show] { fn get() -> T }\nclass Bad implements ShowReader[int] { public fn get() -> int { 1 } }', 'W2001'),
             ('enum Maybe[T] { None, Value(T) }\nprint(Maybe.None)', 'W2013'),
             ('enum Maybe[T] { None, Value(T) }\nprint(Maybe.None == Maybe.None)', 'W2013'),
             ('class Box[T] { value: T }\nlet value: Box[int] = new Box[str]()', 'W2001'),
@@ -618,6 +622,68 @@ class NativeMirPipelineTests(unittest.TestCase):
             self.assertEqual(expected[1], b"[ok] tag:[sub] [[ok]!]\n")
             self.assertEqual(self.execute(CCodeGen(arena).generate(module), directory, "exchange"), expected)
             self.assertEqual(self.execute(self.invoke("--emit-c-mir", source), directory, "native"), expected)
+
+    def test_native_parameterized_interfaces_and_cross_module_dispatch(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            directory = Path(temporary).resolve()
+            source = directory / "generic_ifaces.wysna"
+            source.write_text(
+                'interface Show { fn show() -> str }\n'
+                'interface Collection[U] { fn get() -> U }\n'
+                'interface ShowBox[T: Show] { fn label() -> str }\n'
+                'class Tag implements Show {\n'
+                '    text: str\n'
+                '    fn init(t: str) { this.text = t }\n'
+                '    public fn show() -> str { return "[" + this.text + "]" }\n'
+                '}\n'
+                'class IntHolder implements Collection[int] {\n'
+                '    n: int\n'
+                '    fn init(n: int) { this.n = n }\n'
+                '    public fn get() -> int { return this.n }\n'
+                '}\n'
+                'class Box[T] {\n'
+                '    value: T\n'
+                '    fn init(v: T) { this.value = v }\n'
+                '    public fn get() -> T { return this.value }\n'
+                '}\n'
+                'class Child extends Box[int] implements Collection[int] {\n'
+                '    fn init(n: int) { super.init(n) }\n'
+                '}\n'
+                'class Repository[T] implements Collection[T] {\n'
+                '    private value: T\n'
+                '    fn init(value: T) { this.value = value }\n'
+                '    public fn get() -> T { return this.value }\n'
+                '}\n'
+                'class StyledBox[T: Show] implements ShowBox[T], Collection[T] {\n'
+                '    item: T\n'
+                '    fn init(item: T) { this.item = item }\n'
+                '    public fn label() -> str { return this.item.show() }\n'
+                '    public fn get() -> T { return this.item }\n'
+                '}\n'
+                'fn read_val[T](c: Collection[T]) -> T { return c.get() }\n'
+                'let a: Collection[int] = new IntHolder(7)\n'
+                'let b: Collection[int] = new Child(19)\n'
+                'let col_int: Collection[int] = new Repository[int](42)\n'
+                'let repo = new Repository[str]("ok")\n'
+                'let sb: ShowBox[Tag] = new StyledBox[Tag](new Tag("hi"))\n'
+                'print(a.get(), b.get(), read_val(col_int), read_val[str](repo), sb.label())\n',
+                encoding="utf-8",
+            )
+            module, arena = import_module(self.invoke("--emit-mir", source))
+            service = CompilerService()
+            checked = service.check_file(source)
+            expected = self.execute(service.emit_c(checked).source, directory, "seed")
+            self.assertEqual(expected[0], 0, expected[2].decode("utf-8", errors="replace"))
+            self.assertEqual(expected[1], b"7 19 42 ok [hi]\n")
+            self.assertEqual(self.execute(CCodeGen(arena).generate(module), directory, "exchange"), expected)
+            self.assertEqual(self.execute(self.invoke("--emit-c-mir", source), directory, "native"), expected)
+
+        for fixture in (ROOT / "tests/generic_oop/repository.wysna", ROOT / "tests/generic_oop/modules/main.wysna"):
+            with self.subTest(fixture=fixture.name), tempfile.TemporaryDirectory() as temporary:
+                directory = Path(temporary).resolve()
+                status, output, error = self.execute(self.invoke("--emit-c-mir", fixture), directory, "native")
+                self.assertEqual(status, 0, error.decode("utf-8", errors="replace"))
+                self.assertEqual(output, b"42 hello\n")
 
 
 if __name__ == "__main__":

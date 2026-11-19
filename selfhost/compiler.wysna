@@ -12,7 +12,8 @@ struct SemGenericType { name: str, kind: str, params: list[str], constraints: li
 struct SemVar { name: str, type_id: int, mutable: bool, depth: int, binding: int }
 struct SemFunction { abi_params: list[str], abi_return: str, name: str, params: list[str], type_params: list[str], constraints: list[str], type_id: int, body: int, end: int, owner: str, visible: bool, contract_start: int, is_async: bool }
 struct SemField { owner: str, name: str, type_id: int, visible: bool }
-struct SemClass { name: str, parent: str, parent_args: list[int], interfaces: list[str] }
+struct SemInterfaceRef { name: str, args: list[int] }
+struct SemClass { name: str, parent: str, parent_args: list[int], interfaces: list[SemInterfaceRef] }
 struct SemValue { type_id: int, root: str, writable: int, terminates: bool, node: int }
 struct SemFlow { type_id: int, terminates: bool, node: int }
 
@@ -1459,11 +1460,7 @@ fn checked_records(context: SemanticContext) -> list[CheckedRecord] {
             while current_type >= 0 and visits <= len(context.classes) {
                 let current_name = context.types[current_type].name
                 if current_type == id {
-                    for class_ in context.classes {
-                        if class_.name == current_name {
-                            for interface_ in class_.interfaces { interfaces.append(sem_named(context, interface_)) }
-                        }
-                    }
+                    for iface_id in sem_class_interface_types(context, current_type) { interfaces.append(iface_id) }
                 }
                 let next_type = if context.types[current_type].kind == "class" { sem_class_parent_type(context, current_type) } else { -1 }
                 if next_type >= 0 {
@@ -1894,6 +1891,31 @@ fn sem_class_parent_type(context: SemanticContext, type_id: int) -> int {
     }
     return -1
 }
+fn sem_class_interface_types(context: SemanticContext, type_id: int) -> list[int] {
+    let mut result: list[int] = []
+    if type_id < 0 { return result }
+    let type_ = context.types[type_id]
+    if type_.kind != "class" { return result }
+    for class_ in context.classes {
+        if class_.name == type_.name {
+            let mut names: list[str] = []
+            let generic = sem_generic_type(context, type_.name)
+            if generic >= 0 { names = context.generic_types[generic].params }
+            for iface_ref in class_.interfaces {
+                let mut resolved_args: list[int] = []
+                for arg_id in iface_ref.args {
+                    resolved_args.append(sem_substitute_type(context, arg_id, names, type_.args))
+                }
+                if len(resolved_args) > 0 {
+                    sem_check_nominal_constraints(context, iface_ref.name, resolved_args, context.tokens[0])
+                }
+                result.append(sem_intern(context, "interface", iface_ref.name, resolved_args))
+            }
+            return result
+        }
+    }
+    return result
+}
 fn sem_resolve_member_owner(context: SemanticContext, receiver_type_id: int, owner_name: str) -> int {
     let mut current = receiver_type_id
     let mut visits = 0
@@ -2023,9 +2045,9 @@ fn sem_assignable(context: SemanticContext, source: int, target: int) -> bool {
             if t.kind == "class" and current_type.name == t.name {
                 return current_id == target
             }
-            for class_ in context.classes {
-                if class_.name == current_type.name {
-                    for interface_ in class_.interfaces { if interface_ == t.name { return true } }
+            if t.kind == "interface" {
+                for iface_id in sem_class_interface_types(context, current_id) {
+                    if iface_id == target { return true }
                 }
             }
             current_id = sem_class_parent_type(context, current_id)
@@ -2367,7 +2389,6 @@ fn sem_collect_record(context: SemanticContext, kind: str) {
     let generic = sem_generic_type(context, name)
     let generic_class = generic >= 0 and kind == "class"
     if generic >= 0 {
-        if kind == "interface" { report_error_at("W2013", name_token, "Compiler native-core-v1 does not support parameterized interfaces") }
         type_params = context.generic_types[generic].params
     }
     context.type_params = type_params
@@ -2379,7 +2400,7 @@ fn sem_collect_record(context: SemanticContext, kind: str) {
             if parameter_index >= len(type_params) or type_params[parameter_index] != parameter.val { report_error_at("W0006", parameter, "generic parameter list changed during collection") }
             if sem_match(context, "COLON") {
                 let constraint = sem_expect(context, "IDENT")
-                if kind == "class" {
+                if kind == "class" or kind == "interface" {
                     let mut declared_interface = false
                     for candidate in context.types { if candidate.name == constraint.val and candidate.kind == "interface" { declared_interface = true } }
                     if not declared_interface { report_error_at("W2012", constraint, "generic constraint is not a declared interface") }
@@ -2393,7 +2414,7 @@ fn sem_collect_record(context: SemanticContext, kind: str) {
     let type_id = sem_named(context, name)
     let mut parent = ""
     let mut parent_args: list[int] = []
-    let mut interfaces: list[str] = []
+    let mut interfaces: list[SemInterfaceRef] = []
     if sem_match(context, "EXTENDS") {
         let parent_token = sem_expect(context, "IDENT")
         parent = parent_token.val
@@ -2410,8 +2431,24 @@ fn sem_collect_record(context: SemanticContext, kind: str) {
         }
     }
     if sem_match(context, "IMPLEMENTS") {
-        interfaces.append(sem_expect(context, "IDENT").val)
-        while sem_match(context, "COMMA") { interfaces.append(sem_expect(context, "IDENT").val) }
+        while true {
+            let iface_token = sem_expect(context, "IDENT")
+            let iface_name = iface_token.val
+            let iface_generic = sem_generic_type(context, iface_name)
+            let mut iface_args: list[int] = []
+            if sem_match(context, "LBRACKET") {
+                if iface_generic < 0 { report_error_at("W2001", iface_token, "interface is not generic: " + iface_name) }
+                iface_args.append(sem_type(context))
+                while sem_match(context, "COMMA") { iface_args.append(sem_type(context)) }
+                sem_expect(context, "RBRACKET")
+                if len(iface_args) != len(context.generic_types[iface_generic].params) { report_error_at("W2001", iface_token, "generic type arity: " + iface_name) }
+                sem_check_nominal_constraints(context, iface_name, iface_args, iface_token)
+            } elif iface_generic >= 0 {
+                report_error_at("W2001", iface_token, "generic type arguments required: " + iface_name)
+            }
+            interfaces.append(SemInterfaceRef { name: iface_name, args: iface_args })
+            if not sem_match(context, "COMMA") { break }
+        }
     }
     if kind == "class" { context.classes.append(SemClass { name: name, parent: parent, parent_args: parent_args, interfaces: interfaces }) }
     sem_expect(context, "LBRACE")
@@ -2710,6 +2747,36 @@ fn sem_unify_type(context: SemanticContext, unification: SemUnification, pattern
         return true
     }
     let actual_type = context.types[actual]
+    if actual_type.kind == "class" and (expected.kind == "interface" or (expected.kind == "class" and expected.name != actual_type.name)) {
+        let mut cur = actual
+        let mut visits = 0
+        while cur >= 0 and visits <= len(context.classes) {
+            let ct = context.types[cur]
+            if expected.kind == "class" and ct.name == expected.name {
+                if len(expected.args) != len(ct.args) { return false }
+                for i in 0..len(expected.args) {
+                    if not sem_unify_type(context, unification, expected.args[i], ct.args[i]) { return false }
+                }
+                return true
+            }
+            if expected.kind == "interface" {
+                for iface_id in sem_class_interface_types(context, cur) {
+                    let it = context.types[iface_id]
+                    if it.name == expected.name and len(expected.args) == len(it.args) {
+                        let mut ok = true
+                        for i in 0..len(expected.args) {
+                            if not sem_unify_type(context, unification, expected.args[i], it.args[i]) { ok = false break }
+                        }
+                        if ok { return true }
+                        return false
+                    }
+                }
+            }
+            cur = sem_class_parent_type(context, cur)
+            visits = visits + 1
+        }
+        return false
+    }
     if expected.kind != actual_type.kind or expected.name != actual_type.name or len(expected.args) != len(actual_type.args) { return false }
     for i in 0..len(expected.args) {
         if not sem_unify_type(context, unification, expected.args[i], actual_type.args[i]) { return false }
@@ -4525,15 +4592,39 @@ fn sem_validate_inheritance(context: SemanticContext) {
                 }
             }
         }
-        for interface_ in class_.interfaces {
-            if sem_kind(context, sem_named(context, interface_)) != "interface" { sem_error(context, "W3003", "implements requires interface") }
+        let class_generic = sem_generic_type(context, class_.name)
+        let mut class_self_args: list[int] = []
+        if class_generic >= 0 {
+            let empty_tp_args: list[int] = []
+            for p_name in context.generic_types[class_generic].params {
+                class_self_args.append(sem_intern(context, "typeparam", p_name, empty_tp_args))
+            }
+        }
+        let class_self_type = sem_intern(context, "class", class_.name, class_self_args)
+        for iface_ref in class_.interfaces {
+            if sem_kind(context, sem_named(context, iface_ref.name)) != "interface" { sem_error(context, "W3003", "implements requires interface") }
+            let i_gen = sem_generic_type(context, iface_ref.name)
             for requirement in context.functions {
-                if requirement.owner == interface_ + "." {
+                if requirement.owner == iface_ref.name + "." {
                     let name = slice(requirement.name, len(requirement.owner), len(requirement.name))
+                    let mut req_sig = requirement.type_id
+                    if i_gen >= 0 and len(iface_ref.args) > 0 {
+                        req_sig = sem_substitute_type(context, req_sig, context.generic_types[i_gen].params, iface_ref.args)
+                    }
                     let implementation = sem_method(context, class_.name, name)
                     if implementation < 0 { sem_error(context, "W3003", "missing interface method") }
                     let method = context.functions[implementation]
-                    if not method.visible or not sem_compatible_override(context, method.type_id, requirement.type_id) { sem_error(context, "W3003", "incompatible interface implementation") }
+                    let mut impl_sig = method.type_id
+                    if method.owner != class_.name + "." and len(method.owner) > 0 {
+                        let method_owner_name = slice(method.owner, 0, len(method.owner) - 1)
+                        let owner_type_id = sem_resolve_member_owner(context, class_self_type, method_owner_name)
+                        let owner_type = context.types[owner_type_id]
+                        let o_gen = sem_generic_type(context, method_owner_name)
+                        if o_gen >= 0 and len(owner_type.args) == len(context.generic_types[o_gen].params) {
+                            impl_sig = sem_substitute_type(context, impl_sig, context.generic_types[o_gen].params, owner_type.args)
+                        }
+                    }
+                    if not method.visible or not sem_compatible_override(context, impl_sig, req_sig) { sem_error(context, "W3003", "incompatible interface implementation") }
                 }
             }
         }
@@ -4680,9 +4771,13 @@ fn sem_complete_specializations(context: SemanticContext) {
             let function_count = len(context.functions)
             let type_ = context.types[type_id]
             let generic = sem_generic_type(context, type_.name)
-            if type_.kind == "class" and generic >= 0 and len(type_.args) == len(context.generic_types[generic].params) and not sem_symbolic(context, type_id) {
+            if type_.kind == "class" and not sem_symbolic(context, type_id) and (generic < 0 or len(type_.args) == len(context.generic_types[generic].params)) {
                 let parent_type = sem_class_parent_type(context, type_id)
                 if parent_type >= 0 { let _ = parent_type }
+                let iface_types = sem_class_interface_types(context, type_id)
+                if len(iface_types) > 0 { let _ = iface_types }
+            }
+            if (type_.kind == "class" or type_.kind == "interface") and generic >= 0 and len(type_.args) == len(context.generic_types[generic].params) and not sem_symbolic(context, type_id) {
                 for id in 0..function_count {
                     let function = context.functions[id]
                     if function.owner == type_.name + "." and len(function.type_params) == len(type_.args) and len(function.name) > len(function.owner) and slice(function.name, 0, len(function.owner)) == function.owner {
@@ -4697,7 +4792,9 @@ fn sem_complete_specializations(context: SemanticContext) {
         context.substitution_names = template.type_params
         context.substitution_types = item.arguments
         context.specialization_ancestry = item.ancestry
-        sem_check_function(context, context.functions[item.function])
+        if context.functions[item.function].body >= 0 {
+            sem_check_function(context, context.functions[item.function])
+        }
         cursor = cursor + 1
     }
     let names: list[str] = []

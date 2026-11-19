@@ -17,7 +17,7 @@ selects an output target. These are independent choices, exposed as
 `--engine=seed|compiler` and `--backend=c99|llvm-experimental`.
 
 - **Seed** is the full-language Python reference engine with `CompilationSession` incremental interface-digest module caching, workspace-wide LSP rename/codeActions, project manifests (`wysna.toml`), LLVM, and browser/WASM targets.
-- **Compiler (Selfhost)** is a standalone Python-free native engine implementing the `native-core-v1` profile (including constrained generic classes, generic class methods, parameterized class inheritance, `from ... use` imports, stackless CPS `async fn`, Agent-First CLI tools `graph`/`inspect`/`patch`/`explain`, and Stage-3 native LSP `wysna lsp`; parameterized `interface Foo[T]` declarations stay in Seed with `W2013`). From the Seed CLI, `--engine=compiler` is supported for file-based `check`, `fmt`, `run`, `emit-c`, and `build`.
+- **Compiler (Selfhost)** is a standalone Python-free native engine implementing the `native-core-v1` profile (including constrained generic classes and interfaces, generic class methods, parameterized class inheritance, `from ... use` imports, stackless CPS `async fn`, Agent-First CLI tools `graph`/`inspect`/`patch`/`explain`, and Stage-3 native LSP `wysna lsp`). From the Seed CLI, `--engine=compiler` is supported for file-based `check`, `fmt`, `run`, `emit-c`, and `build`.
 - **C99** is the supported default output backend for both engines. Wysna emits C99;
   GCC, Clang, Zig, or the bundled toolchain then produces machine code. C is an
   intermediate representation here, not the runtime execution model.

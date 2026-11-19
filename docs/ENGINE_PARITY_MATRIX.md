@@ -52,9 +52,9 @@ nominal error identity, exhaustive handlers and managed payload cleanup.
 
 Function values, captures, FFI, the standard library and LSP have separate
 contracts in `tests/unit/test_expansion_contracts.py` (with Stage-3 native LSP covered in `tests/unit/test_phase4_native_lsp.py`). A green core corpus does not
-imply Wysna Compiler support for every expansion combination. Constrained parameterized classes,
+imply Wysna Compiler support for every expansion combination. Constrained parameterized classes and interfaces,
 independent generic class methods, parameterized inheritance, `from ... use` imports, and stackless CPS `async fn`
-coroutines are now implemented in both Seed and Selfhost (`native-core-v1`); parameterized interfaces (`interface Container[T]`), unresolved generic nominal values, `wysna.toml` manifests, library-mode exports, and WASM remain outside `native-core-v1`. Scoped
+coroutines are now implemented in both Seed and Selfhost (`native-core-v1`); unresolved generic nominal values, `wysna.toml` manifests, library-mode exports, and WASM remain outside `native-core-v1`. Scoped
 resources have a separate
 four-engine gate in `tests/unit/test_audit_readiness.py`. The SQLite adapter/application
 also has dedicated checks; see [C interoperability](FFI_VALIDATION.md).

@@ -101,9 +101,13 @@ fn sem_complete_specializations(context: SemanticContext) {
             let function_count = len(context.functions)
             let type_ = context.types[type_id]
             let generic = sem_generic_type(context, type_.name)
-            if type_.kind == "class" and generic >= 0 and len(type_.args) == len(context.generic_types[generic].params) and not sem_symbolic(context, type_id) {
+            if type_.kind == "class" and not sem_symbolic(context, type_id) and (generic < 0 or len(type_.args) == len(context.generic_types[generic].params)) {
                 let parent_type = sem_class_parent_type(context, type_id)
                 if parent_type >= 0 { let _ = parent_type }
+                let iface_types = sem_class_interface_types(context, type_id)
+                if len(iface_types) > 0 { let _ = iface_types }
+            }
+            if (type_.kind == "class" or type_.kind == "interface") and generic >= 0 and len(type_.args) == len(context.generic_types[generic].params) and not sem_symbolic(context, type_id) {
                 for id in 0..function_count {
                     let function = context.functions[id]
                     if function.owner == type_.name + "." and len(function.type_params) == len(type_.args) and len(function.name) > len(function.owner) and slice(function.name, 0, len(function.owner)) == function.owner {
@@ -118,7 +122,9 @@ fn sem_complete_specializations(context: SemanticContext) {
         context.substitution_names = template.type_params
         context.substitution_types = item.arguments
         context.specialization_ancestry = item.ancestry
-        sem_check_function(context, context.functions[item.function])
+        if context.functions[item.function].body >= 0 {
+            sem_check_function(context, context.functions[item.function])
+        }
         cursor = cursor + 1
     }
     let names: list[str] = []
