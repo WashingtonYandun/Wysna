@@ -24,11 +24,7 @@ fn checked_records(context: SemanticContext) -> list[CheckedRecord] {
             while current_type >= 0 and visits <= len(context.classes) {
                 let current_name = context.types[current_type].name
                 if current_type == id {
-                    for class_ in context.classes {
-                        if class_.name == current_name {
-                            for interface_ in class_.interfaces { interfaces.append(sem_named(context, interface_)) }
-                        }
-                    }
+                    for iface_id in sem_class_interface_types(context, current_type) { interfaces.append(iface_id) }
                 }
                 let next_type = if context.types[current_type].kind == "class" { sem_class_parent_type(context, current_type) } else { -1 }
                 if next_type >= 0 {

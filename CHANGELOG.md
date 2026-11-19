@@ -1,5 +1,9 @@
 # Changelog
 
+## Unreleased
+
+- Adds parameterized interface declarations (`interface Foo[T]`, constrained `interface Foo[T: Show]`) and parameterized `implements` clauses across Selfhost (`native-core-v1`), supporting cross-module generic interfaces, generic call unification against `Collection[T]`, inherited generic implementations, and checked MIR virtual dispatch parity with Seed.
+
 ## 0.7.0 — 2026-11-17
 
 ### Runtime, ABI & Concurrency

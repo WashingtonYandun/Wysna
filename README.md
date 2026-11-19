@@ -281,7 +281,7 @@ See [engine parity matrix](docs/ENGINE_PARITY_MATRIX.md) for the SHA-pinned evid
 | :--- | :--- | :--- |
 | Core language, contracts, ABI v3, CPS `async fn`, C99 builds, Stage-3 LSP | **Supported** | Bounded by [docs/SCOPE.md](docs/SCOPE.md) and [docs/KNOWN_LIMITS.md](docs/KNOWN_LIMITS.md). |
 | Seed distribution (private CPython + Zig) | **v0.7.0 Release** | Unsigned installers per platform (`.exe`, `.pkg`, `.deb`, `.rpm`). |
-| Native SDK (`wysna` Python-free Stage-2/3 binary) | **Supported (`native-core-v1`)** | Supports native compilation, Agent CLI (`graph`/`inspect`/`patch`/`explain`), `test`, and `lsp`; `interface Foo[T]` stays Seed-only (`W2013`). |
+| Native SDK (`wysna` Python-free Stage-2/3 binary) | **Supported (`native-core-v1`)** | Supports native compilation, parameterized classes and interfaces, Agent CLI (`graph`/`inspect`/`patch`/`explain`), `test`, and `lsp`. |
 | WASI (`wasi-command`) | **Declared target** | Wasmtime boundary with preopens, fuel, and linear-memory limits. |
 | LLVM backend & Browser WASM library | **Experimental** | Opt-in via `--backend=llvm-experimental` or Emscripten workflow. |
 | Remote package registry, preemptive cross-thread shared graphs, OS kernel sandbox | **Not implemented** | Local/vendor `wysna.toml` manifests and snapshot closures are documented in [KNOWN_LIMITS.md](docs/KNOWN_LIMITS.md). |
