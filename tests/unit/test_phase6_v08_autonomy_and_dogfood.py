@@ -143,6 +143,26 @@ class Phase6V08AutonomyAndDogfoodTests(unittest.TestCase):
             timeout=timeout,
         )
 
+    def test_native_project_refuses_frozen_without_lock_verification(self):
+        with tempfile.TemporaryDirectory(prefix="wysna_p6_frozen_") as tmp:
+            work = Path(tmp).resolve()
+            scratch = work / "_scratch"
+            scratch.mkdir()
+            project = work / "project"
+            shutil.copytree(ROOT / "examples/wysofia-ops", project)
+            manifest = project / "wysna.toml"
+            (project / "wysna.lock").write_text("{}\n", encoding="utf-8")
+
+            result = self._run_sdk(
+                ["project", "check", "--manifest", str(manifest), "--frozen", "--output-format=json-v1"],
+                work,
+                scratch,
+            )
+            self.assertEqual(result.returncode, 2, result.stderr + result.stdout)
+            diagnostics = json.loads(result.stdout)["diagnostics"]
+            self.assertEqual(diagnostics[0]["code"], "W5002")
+            self.assertIn("lockfile verification", diagnostics[0]["message"])
+
     def test_native_api_cli_stdlib_and_manifest(self):
         with tempfile.TemporaryDirectory(prefix="wysna_p6_api_") as tmp:
             scratch = Path(tmp).resolve() / "_scratch"

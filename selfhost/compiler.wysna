@@ -14008,8 +14008,8 @@ fn tool_handle_project(args: list[str], json_mode_in: bool) -> unit {
     if not m.ok {
         proj_emit_error_and_exit(subcmd, json_mode, m.err_code, m.err_msg)
     }
-    if frozen and not proj_is_readable_file(m.root + "/wysna.lock") {
-        proj_emit_error_and_exit(subcmd, json_mode, "W5002", "--frozen requires an existing wysna.lock beside wysna.toml")
+    if frozen {
+        proj_emit_error_and_exit(subcmd, json_mode, "W5002", "--frozen requires lockfile verification; use Wysna Seed for this option")
     }
 
     let mut dep_aliases: list[str] = []
