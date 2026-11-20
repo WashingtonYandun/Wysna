@@ -25,7 +25,7 @@ fn run_compiler() -> unit ! IoError {
     let cmd = clean[0]
     if cmd == "--version" or cmd == "-v" {
         if len(clean) != 1 { eprint("[W5002] Usage: Wysna Compiler --version") exit(2) }
-        print("wysna 0.7.0")
+        print("wysna 0.8.0")
         return
     }
     if cmd == "graph" {
@@ -50,6 +50,14 @@ fn run_compiler() -> unit ! IoError {
     }
     if cmd == "capabilities" {
         tool_handle_capabilities(clean, json_v1)
+        return
+    }
+    if cmd == "api" {
+        tool_handle_api(clean, json_v1)
+        return
+    }
+    if cmd == "project" {
+        tool_handle_project(clean, json_v1)
         return
     }
     if cmd == "schema" {

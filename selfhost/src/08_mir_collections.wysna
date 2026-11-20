@@ -45,16 +45,23 @@ fn mir_for(context: MirBuilder, node: CheckedNode) {
     let mut bound = -1
     let mut element_type = 3
     if direct_range {
+        mir_push_scope(context)
         iterable = mir_expression(context, sequence.children[0])
         let last = mir_expression(context, sequence.children[1])
-        bound = mir_op(context, "range_count", 3, [iterable, last], "", mir_literal_bool(sequence.text == "DOT_DOT_EQ"), source)
-        context.slots[bound].counter = true
+        if context.current >= 0 {
+            bound = mir_op(context, "range_count", 3, [iterable, last], "", mir_literal_bool(sequence.text == "DOT_DOT_EQ"), source)
+            context.slots[bound].counter = true
+            mir_cleanup(context, len(context.scopes) - 1, source)
+        }
+        context.scopes.pop()
     } else {
         iterable = mir_expression(context, node.children[0])
-        element_type = context.types[context.slots[iterable].type_id].args[0]
-        bound = iterable
+        if context.current >= 0 {
+            element_type = context.types[context.slots[iterable].type_id].args[0]
+            bound = iterable
+        }
     }
-    if context.current < 0 { return }
+    if context.current < 0 { context.scopes.pop() context.bindings = bindings return }
     let counter = mir_op(context, "counter", 3, [], "", mir_literal_unit(), source)
     context.slots[counter].counter = true
     let header = mir_new_block(context, source)

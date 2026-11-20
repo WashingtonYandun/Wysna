@@ -1,0 +1,147 @@
+import "std/json"
+
+## Operational severity tier computed from HTTP status and latency bounds.
+pub enum Severity { Info, Warning, Critical }
+
+## Single service telemetry event ingested for compliance scoring.
+pub struct AuditEvent {
+    service: str,
+    status_code: int requires status_code >= 100 and status_code <= 599,
+    latency_ms: int requires latency_ms >= 0,
+    token_cost: int requires token_cost >= 0,
+}
+
+## Aggregated service health report emitted as canonical JSON.
+pub struct AuditSummary {
+    total_events: int,
+    critical_events: int,
+    warning_events: int,
+    total_tokens: int,
+    health_score: int,
+}
+
+## Structured parsing or domain validation error.
+pub struct AuditError { reason: str }
+
+## Classifies an operational event severity deterministically.
+pub fn classify_severity(status_code: int, latency_ms: int) -> Severity
+    requires status_code >= 100 and latency_ms >= 0
+{
+    if status_code >= 500 or latency_ms >= 1500 {
+        return Severity.Critical
+    }
+    if status_code >= 400 or latency_ms >= 400 {
+        return Severity.Warning
+    }
+    return Severity.Info
+}
+
+## Formats Severity variants cleanly for JSON reporting.
+pub fn severity_label(level: Severity) -> str {
+    return match level {
+        Severity.Info => "info",
+        Severity.Warning => "warning",
+        Severity.Critical => "critical",
+    }
+}
+
+## Computes non-negative operational penalty points for one event.
+pub fn compute_risk_points(status_code: int, latency_ms: int) -> int
+    requires status_code >= 100 and latency_ms >= 0
+    ensures result >= 0
+{
+    let mut points = 0
+    if status_code >= 500 {
+        points = points + 30
+    } elif status_code >= 400 {
+        points = points + 10
+    }
+    if latency_ms >= 1500 {
+        points = points + 20
+    } elif latency_ms >= 400 {
+        points = points + 5
+    }
+    return points
+}
+
+## Evaluates a slice of events into a bounded [0, 100] service health summary.
+pub fn evaluate_batch(events: list[AuditEvent]) -> AuditSummary
+    ensures result.health_score >= 0 and result.health_score <= 100
+{
+    let mut critical = 0
+    let mut warning = 0
+    let mut total_tokens = 0
+    let mut penalty = 0
+    for ev in events {
+        total_tokens = total_tokens + ev.token_cost
+        let sev = classify_severity(ev.status_code, ev.latency_ms)
+        let _branch = match sev {
+            Severity.Critical => {
+                critical = critical + 1
+                1
+            },
+            Severity.Warning => {
+                warning = warning + 1
+                1
+            },
+            Severity.Info => 0,
+        }
+        penalty = penalty + compute_risk_points(ev.status_code, ev.latency_ms)
+    }
+    let raw_score = 100 - penalty
+    let bounded_score = if raw_score < 0 { 0 } elif raw_score > 100 { 100 } else { raw_score }
+    return AuditSummary {
+        total_events: len(events),
+        critical_events: critical,
+        warning_events: warning,
+        total_tokens: total_tokens,
+        health_score: bounded_score,
+    }
+}
+
+## Parses a JSON array of telemetry objects using std/json.
+pub fn parse_events_json(raw: str) -> list[AuditEvent] ! AuditError {
+    let parsed = json.parse(raw) else err {
+        return Err(AuditError { reason: err.message })
+    }
+    let items: list[json.Value] = match parsed {
+        json.Value.Array(arr) => arr,
+        else => {
+            return Err(AuditError { reason: "expected top-level JSON array of events" })
+        },
+    }
+    let mut out: list[AuditEvent] = []
+    for entry in items {
+        let svc = json.get_str(entry, "service") else err { return Err(AuditError { reason: err.message }) }
+        let status = json.get_int(entry, "status_code") else err { return Err(AuditError { reason: err.message }) }
+        let lat = json.get_int(entry, "latency_ms") else err { return Err(AuditError { reason: err.message }) }
+        let cost = json.get_int(entry, "token_cost") else err { return Err(AuditError { reason: err.message }) }
+        if status < 100 or status > 599 or lat < 0 or cost < 0 {
+            return Err(AuditError { reason: "event fields out of valid operational bounds" })
+        }
+        out.append(AuditEvent { service: svc, status_code: status, latency_ms: lat, token_cost: cost })
+    }
+    return Ok(out)
+}
+
+fn json_int_val(n: int) -> json.Value {
+    let res = json.number(str(n)) else _err {
+        return json.null()
+    }
+    return res
+}
+
+## Renders an AuditSummary as compact deterministic JSON.
+pub fn render_summary_json(summary: AuditSummary) -> str {
+    let payload: dict[str, json.Value] = {
+        "total_events": json_int_val(summary.total_events),
+        "critical_events": json_int_val(summary.critical_events),
+        "warning_events": json_int_val(summary.warning_events),
+        "total_tokens": json_int_val(summary.total_tokens),
+        "health_score": json_int_val(summary.health_score),
+    }
+    let text = json.stringify(json.object(payload)) else _err {
+        return "{}"
+    }
+    return text
+}

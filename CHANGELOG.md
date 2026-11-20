@@ -1,9 +1,15 @@
 # Changelog
 
-## Unreleased
+## 0.8.0 — 2026-11-20
 
+### Native SDK Autonomy, Parameterized Interfaces & 11/11 MCP
 - Adds parameterized interface declarations (`interface Foo[T]`, constrained `interface Foo[T: Show]`) and parameterized `implements` clauses across Selfhost (`native-core-v1`), supporting cross-module generic interfaces, generic call unification against `Collection[T]`, inherited generic implementations, and checked MIR virtual dispatch parity with Seed.
-- Completes standalone Python-free Agent-First autonomy in `selfhost/` and `packaging/native/driver.c`: adds native `wysna schema` (`--all`, `--function`, `--emit-codecs`, Draft 2020-12 contract bounds), `wysna fix` (`W3001`/`W1001`, `--apply`, `--include-maybe`, non-overlapping byte-span verification), `wysna skills`, `wysna capabilities`, stdio JSON-RPC 2.0 MCP server (`wysna mcp --root` with 10 static tools and canonical path confinement), and SHA-256 atomic exclusive writes in `patch`/`fix`.
+- Completes full Python-free Agent-First and project autonomy in `selfhost/` (33 modules, 15,795 bundled lines) and `packaging/native/driver.c`: adds native `wysna schema` (`--all`, `--function`, `--emit-codecs`, Draft 2020-12 contract bounds), `wysna fix` (`W3001`/`W1001`, `--apply`, `--include-maybe`, non-overlapping byte-span verification), `wysna skills`, `wysna capabilities`, native `wysna api` (`wysna.api-index/1`, stdlib and `--manifest` project symbols), native `wysna.toml` v1 `wysna project check|build|run|test` (including explicit C FFI flags `--include-dir`/`--link`/`--library`), and 11/11 static tools in the stdio JSON-RPC 2.0 MCP server (`wysna mcp --root` with canonical path confinement including `wysna_api`).
+
+### Compiler Performance, Multi-OS LLVM CI & Dogfooding
+- Tightens MIR temporary-scope cleanup around `if` conditions, `let` initializers, non-tail expression statements, `and`/`or` RHS branches, and `for` direct ranges in both `src/mir/Lowering.py` and `selfhost/src/{08_mir_lowering,08_mir_collections}.wysna`, eliminating quadratic CoW buffer detaches in loops (`O(N^2)` -> `O(N)`, keeping 33-module Stage-2 `--check` at ~5.51s on Apple Silicon).
+- Expands `llvm-smoke` CI in `.github/workflows/ci.yml` across both `ubuntu-latest` and `macos-latest` (`fail-fast: false`), and records verified Darwin arm64 C99 vs LLVM (`release` profile) benchmark measurements in `docs/LLVM_EXPERIMENTAL.md`.
+- Ships `examples/wysofia-ops/`: a real operational JSON & SQLite audit CLI built with contracts (`requires`/`ensures`), `from ... use`, `T ! E`, and C FFI, verified end-to-end with the Python-free native SDK.
 
 ## 0.7.0 — 2026-11-17
 

@@ -23,6 +23,11 @@ wysna skills overview --output-format=json-v1
 wysna capabilities --output-format=json-v1
 wysna mcp --root .
 wysna lsp
+wysna api std/json --output-format=json-v1
+wysna project check
+wysna project build --profile release
+wysna project run -- --demo
+wysna project test
 wysna emit-mir program.wysna -o program.mir.json
 wysna emit-c program.wysna -o program.c
 wysna build program.wysna -o program --profile release
@@ -37,7 +42,7 @@ The `dev`, `release` and `size` profiles select `-O0 -g`, `-O2` and `-Os`. All p
 
 The native pipeline covers scalars, UTF-8 strings and paths, globals, collections, CoW mutation, direct ranges and nested tuple loop bindings, optional and Result channels, closed error unions, structs/enums, classes/inheritance/interfaces, pattern matching with guards, closures by snapshot, function values, concrete generic functions/structs/enums and the scalar/opaque C ABI. The profile and independent-verifier contracts are described in [MIR design](MIR_DESIGN.md).
 
-Parameterized classes and interfaces (including constrained type parameters, independent generic methods `Box[T].transform[R]`, and parameterized class inheritance) as well as stackless CPS `async fn` coroutines and `from ... use` imports are supported in the native profile. `std/environment.arguments()`, `std/environment.get(name)` and `std/time.unix_seconds()` remain supported; C99 builds generated via Seed `wysna build --sandbox` (with optional `--allow`/`--deny`) enforce `WYSNA_DENY_CAP_*` capability sandbox guards (`W5006`) at runtime host boundaries. The native SDK includes `fmt`, `test`, `graph`, `inspect`, `patch`, `explain`, `schema` (`--emit-codecs`), `fix` (`--apply`, `--include-maybe`), `skills`, `capabilities`, `wysna mcp` (newline-delimited JSON-RPC 2.0 stdio server with `--root` confinement), and `wysna lsp` (Stage-3 native LSP) without Python; project manifests (`wysna.toml`), library-mode exports, `api`, and WebAssembly targets stay in Seed. Native profile exclusions report `W2013`; unsupported commands report `W5002`.
+Parameterized classes and interfaces (including constrained type parameters, independent generic methods `Box[T].transform[R]`, and parameterized class inheritance) as well as stackless CPS `async fn` coroutines and `from ... use` imports are supported in the native profile. `std/environment.arguments()`, `std/environment.get(name)` and `std/time.unix_seconds()` remain supported; C99 builds generated via Seed `wysna build --sandbox` (with optional `--allow`/`--deny`) enforce `WYSNA_DENY_CAP_*` capability sandbox guards (`W5006`) at runtime host boundaries. The native SDK includes `fmt`, `test`, `graph`, `inspect`, `patch`, `explain`, `schema` (`--emit-codecs`), `fix` (`--apply`, `--include-maybe`), `skills`, `capabilities`, `api` (`wysna.api-index/1`, stdlib and `--manifest`), `project check|build|run|test` (`wysna.toml` v1, native C FFI flags `--include-dir`/`--link`/`--library`), `wysna mcp` (11 static tools over newline-delimited JSON-RPC 2.0 stdio with `--root` confinement), and `wysna lsp` (Stage-3 native LSP) without Python; `wysna.toml` lockfile generation (`wysna project lock` / `wysna.lock`), `project new`, library-mode exports, and WebAssembly targets stay in Seed. Native profile exclusions report `W2013`; unsupported commands report `W5002`.
 
 For a small CLI, read user arguments and environment configuration through the standard module:
 

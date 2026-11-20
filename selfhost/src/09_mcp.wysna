@@ -543,6 +543,28 @@ fn mcp_tool_skills(arguments: LspJson) -> list[str] {
     return ["0", diag_tool_envelope_json("skills", "ok", 0, "[]", "result", payload, "[]")]
 }
 
+fn mcp_tool_api(state: McpServerState, arguments: LspJson) -> list[str] {
+    let mod_v = lsp_json_get(arguments, "module")
+    let man_v = lsp_json_get(arguments, "manifest")
+    let has_mod = lsp_json_has(arguments, "module") and mod_v.kind != "null"
+    let has_man = lsp_json_has(arguments, "manifest") and man_v.kind != "null"
+    if has_mod and mod_v.kind != "str" { return mcp_tool_err("'module' must be a string") }
+    if has_man and man_v.kind != "str" { return mcp_tool_err("'manifest' must be a string") }
+    let mut argv: list[str] = ["api", "--output-format=json-v1"]
+    if has_mod and lsp_trim(mod_v.str_val) != "" {
+        argv.append(mod_v.str_val)
+    }
+    if has_man and lsp_trim(man_v.str_val) != "" {
+        let confined = mcp_confine_path(state.root, man_v.str_val)
+        if confined[0] != "1" { return mcp_tool_err(confined[1]) }
+        argv.append("--manifest")
+        argv.append(confined[1])
+    }
+    let sub = mcp_run_subcommand(state, argv)
+    if sub[1] == "" { return mcp_tool_err("tool produced no JSON (exit " + sub[0] + ")") }
+    return ["0", sub[1]]
+}
+
 fn mcp_tools_list_json() -> str {
     let src_or_path = "\"path\":{\"type\":\"string\",\"description\":\"Path to a .wysna file inside the server root.\"},\"source\":{\"type\":\"string\",\"description\":\"Inline Wysna source text (alternative to path).\"}"
     let mut ts: list[str] = []
@@ -551,6 +573,7 @@ fn mcp_tools_list_json() -> str {
     ts.append("{\"name\":\"wysna_fmt\",\"description\":\"Return the canonical formatting of Wysna code.\",\"inputSchema\":{\"type\":\"object\",\"properties\":{" + src_or_path + "}}}")
     ts.append("{\"name\":\"wysna_explain\",\"description\":\"Static effect and capability report for a program.\",\"inputSchema\":{\"type\":\"object\",\"properties\":{" + src_or_path + "}}}")
     ts.append("{\"name\":\"wysna_schema\",\"description\":\"Emit JSON Schema (Draft 2020-12) for structs/enums and LLM tool definitions with static effect/idempotency metadata for functions.\",\"inputSchema\":{\"type\":\"object\",\"properties\":{" + src_or_path + ",\"all\":{\"type\":\"boolean\",\"description\":\"Include private top-level functions.\"},\"function\":{\"type\":\"string\",\"description\":\"Emit tool schema for a single function.\"},\"emit_codecs\":{\"type\":\"boolean\",\"description\":\"Generate Wysna JSON encoder/decoder functions.\"}}}}")
+    ts.append("{\"name\":\"wysna_api\",\"description\":\"Discover standard-library modules and public symbols.\",\"inputSchema\":{\"type\":\"object\",\"properties\":{\"module\":{\"type\":\"string\",\"description\":\"Optional module such as std/json.\"},\"manifest\":{\"type\":\"string\",\"description\":\"Optional path to a wysna.toml manifest inside the server root.\"}}}}")
     ts.append("{\"name\":\"wysna_capabilities\",\"description\":\"Installed commands, targets and their capability contracts.\",\"inputSchema\":{\"type\":\"object\",\"properties\":{}}}")
     ts.append("{\"name\":\"wysna_graph\",\"description\":\"Compile-time semantic relationship graph (interfaces, classes, usages, calls, blast radius).\",\"inputSchema\":{\"type\":\"object\",\"properties\":{" + src_or_path + ",\"symbol\":{\"type\":\"string\",\"description\":\"Optional symbol name or node ID filter.\"},\"relation\":{\"type\":\"string\",\"description\":\"Optional relation filter: implements|hierarchy|usages|callers|callees|impact.\"}}}}")
     ts.append("{\"name\":\"wysna_inspect\",\"description\":\"Surgical, token-efficient symbol source slice, contract, effects, and dependency signatures.\",\"inputSchema\":{\"type\":\"object\",\"properties\":{" + src_or_path + ",\"symbol\":{\"type\":\"string\",\"description\":\"Symbol name to extract (omit for compact index).\"},\"with_deps\":{\"type\":\"boolean\",\"description\":\"Include signatures of referenced types and callees.\"}}}}")
@@ -561,7 +584,7 @@ fn mcp_tools_list_json() -> str {
 
 fn mcp_handle_tool_call(state: McpServerState, id_raw: str, params: LspJson) -> str {
     let name = lsp_json_str(params, "name", "")
-    let known = name == "wysna_check" or name == "wysna_fix" or name == "wysna_fmt" or name == "wysna_explain" or name == "wysna_schema" or name == "wysna_capabilities" or name == "wysna_graph" or name == "wysna_inspect" or name == "wysna_patch" or name == "wysna_skills"
+    let known = name == "wysna_check" or name == "wysna_fix" or name == "wysna_fmt" or name == "wysna_explain" or name == "wysna_schema" or name == "wysna_api" or name == "wysna_capabilities" or name == "wysna_graph" or name == "wysna_inspect" or name == "wysna_patch" or name == "wysna_skills"
     if not known {
         return mcp_rpc_error(id_raw, -32602, "unknown tool: " + name)
     }
@@ -584,6 +607,8 @@ fn mcp_handle_tool_call(state: McpServerState, id_raw: str, params: LspJson) -> 
         res = mcp_exec_simple_source_tool(state, "explain", arguments, [])
     } elif name == "wysna_schema" {
         res = mcp_tool_schema(state, arguments)
+    } elif name == "wysna_api" {
+        res = mcp_tool_api(state, arguments)
     } elif name == "wysna_capabilities" {
         res = ["0", diag_tool_envelope_json("capabilities", "ok", 0, "[]", "result", tool_capabilities_payload_json(), "[]")]
     } elif name == "wysna_graph" {
@@ -616,7 +641,7 @@ fn mcp_handle_message(state: McpServerState, msg: LspJson) -> str {
     let params = lsp_json_get(msg, "params")
     if method == "initialize" {
         let pv = lsp_json_str(params, "protocolVersion", "2025-06-18")
-        return mcp_rpc_result(id_raw, "{\"protocolVersion\":" + diag_json_quote(pv) + ",\"capabilities\":{\"tools\":{}},\"serverInfo\":{\"name\":\"wysna\",\"version\":\"0.7.0\"}}")
+        return mcp_rpc_result(id_raw, "{\"protocolVersion\":" + diag_json_quote(pv) + ",\"capabilities\":{\"tools\":{}},\"serverInfo\":{\"name\":\"wysna\",\"version\":\"0.8.0\"}}")
     }
     if method == "ping" {
         return mcp_rpc_result(id_raw, "{}")

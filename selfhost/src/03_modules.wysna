@@ -72,6 +72,9 @@ class ModuleLoader {
     output: list[Token]
     ov_paths: list[str]
     ov_texts: list[str]
+    project_sources_root: str
+    dep_aliases: list[str]
+    dep_roots: list[str]
     fn init() {
         let initial_paths: list[str] = []
         this.paths = initial_paths
@@ -95,6 +98,11 @@ class ModuleLoader {
         this.ov_paths = initial_ov_paths
         let initial_ov_texts: list[str] = []
         this.ov_texts = initial_ov_texts
+        this.project_sources_root = ""
+        let initial_dep_aliases: list[str] = []
+        this.dep_aliases = initial_dep_aliases
+        let initial_dep_roots: list[str] = []
+        this.dep_roots = initial_dep_roots
     }
 }
 
@@ -184,6 +192,62 @@ fn module_stdlib_path(requested: str) -> str {
     }
     return relative
 }
+fn module_project_sources_root() -> str {
+    let arguments = args()
+    let mut i = 1
+    while i < len(arguments) {
+        if arguments[i] == "--project-sources-root" and i + 1 < len(arguments) { return arguments[i + 1] }
+        i = i + 1
+    }
+    return ""
+}
+
+fn module_project_dep_root(alias: str) -> str {
+    let arguments = args()
+    let mut i = 1
+    while i < len(arguments) {
+        if arguments[i] == "--project-dep" and i + 2 < len(arguments) and arguments[i + 1] == alias {
+            return arguments[i + 2]
+        }
+        i = i + 1
+    }
+    return ""
+}
+
+fn module_safe_pkg_rel(path: str) -> bool {
+    if path == "" or path[0] == "/" { return false }
+    let mut segment = ""
+    for index in 0..len(path) {
+        let ch = path[index]
+        if ch == "\\" or ch == ":" { return false }
+        if ch == "/" {
+            if segment == "" or segment == "." or segment == ".." { return false }
+            segment = ""
+        } else { segment = segment + ch }
+    }
+    return segment != "" and segment != "." and segment != ".."
+}
+
+fn module_resolve_dep_root(context: ModuleLoader, alias: str) -> str {
+    for k in 0..len(context.dep_aliases) {
+        if context.dep_aliases[k] == alias { return context.dep_roots[k] }
+    }
+    return module_project_dep_root(alias)
+}
+
+fn module_resolve_proj_src_root(context: ModuleLoader) -> str {
+    if context.project_sources_root != "" { return context.project_sources_root }
+    return module_project_sources_root()
+}
+
+fn module_is_confined_under(candidate: str, root: str) -> bool {
+    let can_root = module_canonical_resolved(root)
+    let can_file = module_canonical_resolved(candidate)
+    if can_root == "" or can_file == "" { return false }
+    let prefix = if can_root == "/" { "/" } else { can_root + "/" }
+    return len(can_file) > len(prefix) and slice(can_file, 0, len(prefix)) == prefix
+}
+
 fn module_load_source(context: ModuleLoader, canonical: str, requested: str, token: Token) -> int {
     let mut resolved = module_normalize(module_directory(canonical) + requested)
     let standard = len(requested) >= 4 and slice(requested, 0, 4) == "std/"
@@ -192,18 +256,45 @@ fn module_load_source(context: ModuleLoader, canonical: str, requested: str, tok
         resolved = module_stdlib_path(requested)
         if not module_file_readable(resolved) { report_error_at("W1003", token, "module not found: " + requested) }
         if not module_stdlib_confined(requested, resolved) { report_error_at("W1003", token, "cannot resolve standard module within its root: " + requested) }
+    } elif len(requested) >= 4 and slice(requested, 0, 4) == "pkg/" {
+        let rest = slice(requested, 4, len(requested))
+        let mut slash = -1
+        for k in 0..len(rest) {
+            if rest[k] == "/" { slash = k break }
+        }
+        if slash <= 0 or slash + 1 >= len(rest) { report_error_at("W1003", token, "invalid package import: " + requested) }
+        let dep_alias = slice(rest, 0, slash)
+        let dep_mod = slice(rest, slash + 1, len(rest))
+        if not module_safe_pkg_rel(dep_mod) { report_error_at("W1003", token, "invalid package import path: " + requested) }
+        let dep_root = module_resolve_dep_root(context, dep_alias)
+        if dep_root == "" { report_error_at("W1003", token, "unknown project dependency: " + dep_alias) }
+        let need_ext = len(dep_mod) < 6 or slice(dep_mod, len(dep_mod) - 6, len(dep_mod)) != ".wysna"
+        let cand = module_normalize(dep_root + "/" + (if need_ext { dep_mod + ".wysna" } else { dep_mod }))
+        if not module_loader_file_readable(context, cand) or not module_is_confined_under(cand, dep_root) {
+            report_error_at("W1003", token, "module not found: " + requested)
+        }
+        resolved = cand
     } else {
         let base_dir = module_directory(canonical)
         let need_ext = len(requested) < 6 or slice(requested, len(requested) - 6, len(requested)) != ".wysna"
         let rel_ext = if need_ext { module_normalize(base_dir + requested + ".wysna") } else { "" }
+        let proj_src = module_resolve_proj_src_root(context)
         let cwd_ext = if need_ext { module_normalize(requested + ".wysna") } else { "" }
         if module_loader_file_readable(context, resolved) {
             resolved = resolved
         } elif rel_ext != "" and module_loader_file_readable(context, rel_ext) {
             resolved = rel_ext
-        } elif module_loader_file_readable(context, module_normalize(requested)) {
+        } elif proj_src != "" and module_safe_pkg_rel(requested) {
+            let proj_raw = module_normalize(proj_src + "/" + requested)
+            let proj_ext = if need_ext { module_normalize(proj_src + "/" + requested + ".wysna") } else { "" }
+            if module_loader_file_readable(context, proj_raw) and module_is_confined_under(proj_raw, proj_src) {
+                resolved = proj_raw
+            } elif proj_ext != "" and module_loader_file_readable(context, proj_ext) and module_is_confined_under(proj_ext, proj_src) {
+                resolved = proj_ext
+            }
+        } elif proj_src == "" and module_loader_file_readable(context, module_normalize(requested)) {
             resolved = module_normalize(requested)
-        } elif cwd_ext != "" and module_loader_file_readable(context, cwd_ext) {
+        } elif proj_src == "" and cwd_ext != "" and module_loader_file_readable(context, cwd_ext) {
             resolved = cwd_ext
         }
     }
@@ -376,6 +467,16 @@ fn module_tokens_with_overlays(src: str, path: str, ov_paths: list[str], ov_text
     let context = new ModuleLoader()
     context.ov_paths = ov_paths
     context.ov_texts = ov_texts
+    module_expand(context, src, path, true)
+    context.output.append(Token { kind: "EOF", val: "", line: 1, col: 1, file: module_normalize(path) })
+    return context.output
+}
+
+fn module_tokens_with_project(src: str, path: str, proj_src_root: str, dep_aliases: list[str], dep_roots: list[str]) -> list[Token] {
+    let context = new ModuleLoader()
+    context.project_sources_root = proj_src_root
+    context.dep_aliases = dep_aliases
+    context.dep_roots = dep_roots
     module_expand(context, src, path, true)
     context.output.append(Token { kind: "EOF", val: "", line: 1, col: 1, file: module_normalize(path) })
     return context.output

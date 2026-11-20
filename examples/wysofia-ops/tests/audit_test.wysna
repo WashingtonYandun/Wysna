@@ -1,0 +1,37 @@
+import "audit.wysna" as audit
+
+fn main() -> unit {
+    let batch_json = (
+        "[" +
+        "{\"service\":\"maby-router\",\"status_code\":200,\"latency_ms\":90,\"token_cost\":100}," +
+        "{\"service\":\"wyedge-live\",\"status_code\":404,\"latency_ms\":420,\"token_cost\":200}," +
+        "{\"service\":\"core-api\",\"status_code\":500,\"latency_ms\":1900,\"token_cost\":300}" +
+        "]"
+    )
+    let fallback: list[audit.AuditEvent] = []
+    let events = audit.parse_events_json(batch_json) else err {
+        eprint("unexpected parse error: " + err.reason)
+        exit(1)
+        fallback
+    }
+    let summary = audit.evaluate_batch(events)
+    if summary.total_events != 3 or summary.critical_events != 1 or summary.warning_events != 1 {
+        eprint("unexpected event counts")
+        exit(1)
+    }
+    if summary.total_tokens != 600 or summary.health_score != 35 {
+        eprint("unexpected aggregate metrics")
+        exit(1)
+    }
+    let bad = audit.parse_events_json("[{\"service\":\"x\"}]")
+    match bad {
+        Ok(_v) => {
+            eprint("expected validation error on incomplete object")
+            exit(1)
+        },
+        Err(_e) => {},
+    }
+    print("audit_ok score=" + str(summary.health_score) + " severity=" + audit.severity_label(audit.classify_severity(503, 1600)))
+}
+
+main()

@@ -154,7 +154,7 @@ fn diag_tool_envelope_json(command: str, status: str, exit_code: int, diagnostic
     parts.append(",\"tool_exit_code\":" + str(exit_code))
     parts.append(",\"process_exit_code\":" + str(exit_code))
     parts.append(",\"execution\":null")
-    parts.append(",\"toolchain\":{\"compiler\":\"0.7.0\"}")
+    parts.append(",\"toolchain\":{\"compiler\":\"0.8.0\"}")
     parts.append(",\"target\":{\"profile\":\"native-cli\",\"triple\":null}")
     parts.append(",\"diagnostics\":" + diagnostics_json)
     parts.append(",\"artifacts\":" + artifacts_json)
@@ -171,9 +171,9 @@ fn diag_clean_cli_args() -> list[str] {
     let mut clean: list[str] = []
     let mut i = 1
     while i < len(raw) {
-        if (raw[i] == "--stdlib-root" or raw[i] == "--diag-out") and i + 1 < len(raw) {
+        if (raw[i] == "--stdlib-root" or raw[i] == "--diag-out" or raw[i] == "--project-sources-root") and i + 1 < len(raw) {
             i = i + 2
-        } elif raw[i] == "--overlay" and i + 2 < len(raw) {
+        } elif (raw[i] == "--overlay" or raw[i] == "--project-dep") and i + 2 < len(raw) {
             i = i + 3
         } else {
             clean.append(raw[i])
@@ -223,6 +223,7 @@ fn diag_read_snippet_source(file: str) -> str {
 
 fn diag_cli_json_mode() -> str {
     let clean = diag_clean_cli_args()
+    if len(clean) > 0 and clean[0] == "api" { return "json-v1" }
     for i in 0..len(clean) {
         if clean[i] == "--check-json" { return "check-json" }
         if clean[i] == "--output-format=json-v1" { return "json-v1" }
@@ -238,6 +239,15 @@ fn diag_cli_command() -> str {
     let first = clean[0]
     if first == "check" or first == "--check" or first == "--check-json" { return "check" }
     if first == "fmt" or first == "--fmt" or first == "--fmt-write" { return "fmt" }
+    if first == "api" { return "api" }
+    if first == "project" {
+        if len(clean) > 1 {
+            if clean[1] == "check" or clean[1] == "build" or clean[1] == "run" or clean[1] == "test" {
+                return "project." + clean[1]
+            }
+        }
+        return "project"
+    }
     if first == "graph" or first == "inspect" or first == "patch" or first == "explain" or first == "lsp" or first == "schema" or first == "fix" or first == "skills" or first == "capabilities" or first == "mcp" { return first }
     if first == "--emit-c-mir" or first == "--emit-mir" or first == "--check-mir" { return "build" }
     return "check"
@@ -256,7 +266,7 @@ fn diag_emit_and_exit(file: str, code: str, line: int, col: int, msg: str) -> un
     let stage = diag_stage_for_code(code)
     let diag_json = diag_record_json(code, stage, "error", msg, file, line, col, src)
     if mode == "check-json" {
-        diag_write_output("{\"schema_version\":\"wysna.cli.result/1\",\"compiler_version\":\"0.7.0\",\"command\":\"check\",\"ok\":false,\"exit_code\":1,\"diagnostics\":[" + diag_json + "],\"data\":null}")
+        diag_write_output("{\"schema_version\":\"wysna.cli.result/1\",\"compiler_version\":\"0.8.0\",\"command\":\"check\",\"ok\":false,\"exit_code\":1,\"diagnostics\":[" + diag_json + "],\"data\":null}")
         exit(1)
     }
     let cmd = diag_cli_command()

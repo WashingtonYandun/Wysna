@@ -34,8 +34,11 @@
 
 typedef struct {
     const char *command, *source, *output, *profile;
-    int arguments, include_count, link_count, library_count, library_dir_count, profile_set, timeout_set;
+    const char *project_subcmd, *project_src_root;
+    int arguments, include_count, link_count, library_count, library_dir_count, dep_count;
+    int profile_set, timeout_set, project_json_v1;
     const char *includes[SDK_LINK_LIMIT], *links[SDK_LINK_LIMIT], *libraries[SDK_LINK_LIMIT], *library_dirs[SDK_LINK_LIMIT];
+    const char *dep_aliases[SDK_LINK_LIMIT], *dep_roots[SDK_LINK_LIMIT];
     int64_t timeout;
 } SdkOptions;
 typedef struct {
@@ -77,6 +80,8 @@ static void sdk_help(void) {
          "       wysna fix SOURCE [--apply] [--include-maybe] [--output-format=json-v1]\n"
          "       wysna skills [TOPIC] [--output-format=json-v1]\n"
          "       wysna capabilities [--output-format=json-v1]\n"
+         "       wysna api [MODULE] [--manifest PATH] [--output-format=json-v1]\n"
+         "       wysna project <check|build|run|test> [--manifest PATH] [--target NAME] [--profile dev|release|size] [-o OUTPUT] [--filter NAME] [-- ARGUMENTS]\n"
          "       wysna mcp [--root DIR]\n"
          "       wysna lsp\n"
          "Build and run accept --include-dir DIR, --link FILE, --library-dir DIR and --library NAME.\n"
@@ -94,16 +99,77 @@ static int sdk_is_agent_passthrough(const char* cmd) {
            strcmp(cmd, "patch") == 0 || strcmp(cmd, "explain") == 0 ||
            strcmp(cmd, "schema") == 0 || strcmp(cmd, "fix") == 0 ||
            strcmp(cmd, "skills") == 0 || strcmp(cmd, "capabilities") == 0 ||
-           strcmp(cmd, "mcp") == 0 || strcmp(cmd, "lsp") == 0;
+           strcmp(cmd, "api") == 0 || strcmp(cmd, "mcp") == 0 || strcmp(cmd, "lsp") == 0;
+}
+static int sdk_parse_timeout_ms(const char* argument, int64_t* out) {
+    char* end = NULL; errno = 0; long parsed = strtol(argument, &end, 10);
+    if (errno || !end || *end || end == argument || parsed < 1 || parsed > 600000) return 0;
+    *out = (int64_t)parsed;
+    return 1;
+}
+static int sdk_valid_library_name(const char* argument) {
+    if (!argument[0]) return 0;
+    for (const char* current = argument; *current; current++)
+        if (!isalnum((unsigned char)*current) && *current != '_' && *current != '-' && *current != '.') return 0;
+    return 1;
 }
 static int sdk_parse(SdkOptions* options, int argc, char** argv) {
     if (argc >= 2 && argc <= SDK_ARGUMENT_LIMIT &&
         (strcmp(argv[1], "lsp") == 0 || strcmp(argv[1], "mcp") == 0 ||
-         strcmp(argv[1], "skills") == 0 || strcmp(argv[1], "capabilities") == 0)) {
+         strcmp(argv[1], "skills") == 0 || strcmp(argv[1], "capabilities") == 0 ||
+         strcmp(argv[1], "api") == 0)) {
         options->command = argv[1];
         options->profile = "dev";
         options->timeout = (strcmp(argv[1], "lsp") == 0 || strcmp(argv[1], "mcp") == 0) ? 0 : 600000;
         options->source = "";
+        return 1;
+    }
+    if (argc >= 2 && argc <= SDK_ARGUMENT_LIMIT && strcmp(argv[1], "project") == 0) {
+        options->command = "project";
+        options->profile = "dev";
+        options->timeout = 600000;
+        options->source = "";
+        options->project_subcmd = argc >= 3 ? argv[2] : "";
+        if (strcmp(options->project_subcmd, "build") != 0 &&
+            strcmp(options->project_subcmd, "run") != 0 &&
+            strcmp(options->project_subcmd, "test") != 0) {
+            return 1;
+        }
+        for (int index = 3; index < argc; index++) {
+            const char* value = argv[index];
+            if (strcmp(value, "--") == 0 && strcmp(options->project_subcmd, "run") == 0) {
+                options->arguments = index + 1;
+                break;
+            }
+            if (strcmp(value, "--output-format=json-v1") == 0) { options->project_json_v1 = 1; continue; }
+            if (strcmp(value, "--output-format") == 0 && index + 1 < argc) {
+                if (strcmp(argv[index + 1], "json-v1") == 0) options->project_json_v1 = 1;
+                index++;
+                continue;
+            }
+            if (strcmp(value, "--profile") == 0) {
+                if (++index >= argc || options->profile_set++) return 0;
+                options->profile = argv[index];
+            } else if (strcmp(value, "--timeout-ms") == 0) {
+                if (++index >= argc || options->timeout_set++) return 0;
+                if (!sdk_parse_timeout_ms(argv[index], &options->timeout)) return 0;
+            } else if (strcmp(value, "--include-dir") == 0) {
+                if (++index >= argc || options->include_count >= SDK_LINK_LIMIT) return 0;
+                options->includes[options->include_count++] = argv[index];
+            } else if (strcmp(value, "--link") == 0) {
+                if (++index >= argc || options->link_count >= SDK_LINK_LIMIT) return 0;
+                options->links[options->link_count++] = argv[index];
+            } else if (strcmp(value, "--library-dir") == 0) {
+                if (++index >= argc || options->library_dir_count >= SDK_LINK_LIMIT) return 0;
+                options->library_dirs[options->library_dir_count++] = argv[index];
+            } else if (strcmp(value, "--library") == 0) {
+                if (++index >= argc || options->library_count >= SDK_LINK_LIMIT) return 0;
+                if (!sdk_valid_library_name(argv[index])) return 0;
+                options->libraries[options->library_count++] = argv[index];
+            }
+        }
+        if (strcmp(options->profile, "dev") && strcmp(options->profile, "release") && strcmp(options->profile, "size")) return 0;
+        if (options->timeout_set && strcmp(options->project_subcmd, "build") == 0) return 0;
         return 1;
     }
     if (argc < 3 || argc > SDK_ARGUMENT_LIMIT) return 0;
@@ -132,17 +198,12 @@ static int sdk_parse(SdkOptions* options, int argc, char** argv) {
         }
         else if (strcmp(value, "--profile") == 0) { if (options->profile_set++) return 0; options->profile = argument; }
         else if (strcmp(value, "--timeout-ms") == 0) {
-            if (options->timeout_set++) return 0;
-            char* end = NULL; errno = 0; long parsed = strtol(argument, &end, 10);
-            if (errno || !end || *end || end == argument || parsed < 1 || parsed > 600000) return 0;
-            options->timeout = parsed;
+            if (options->timeout_set++ || !sdk_parse_timeout_ms(argument, &options->timeout)) return 0;
         } else if (strcmp(value, "--include-dir") == 0 && options->include_count < SDK_LINK_LIMIT) options->includes[options->include_count++] = argument;
         else if (strcmp(value, "--link") == 0 && options->link_count < SDK_LINK_LIMIT) options->links[options->link_count++] = argument;
         else if (strcmp(value, "--library-dir") == 0 && options->library_dir_count < SDK_LINK_LIMIT) options->library_dirs[options->library_dir_count++] = argument;
         else if (strcmp(value, "--library") == 0 && options->library_count < SDK_LINK_LIMIT) {
-            if (!argument[0]) return 0;
-            for (const char* current = argument; *current; current++)
-                if (!isalnum((unsigned char)*current) && *current != '_' && *current != '-' && *current != '.') return 0;
+            if (!sdk_valid_library_name(argument)) return 0;
             options->libraries[options->library_count++] = argument;
         } else return 0;
     }
@@ -349,9 +410,18 @@ static int sdk_parse_panic_expectation(const char* expected, char* panic_buf, si
 static int sdk_compile_source(SdkInvocation* invocation, const SdkOptions* options, const char* command_mode, const char* source_path, int need_product_dir) {
     if (!sdk_join(invocation->generated, invocation->workspace, "program.c") ||
         !sdk_join(invocation->product, invocation->workspace, SDK_PROGRAM)) return sdk_error("W5002", "Staging path is too long", NULL);
-    const char* engine_arguments[6]; int engine_count = 0;
+    const char* engine_arguments[SDK_ARGUMENT_LIMIT]; int engine_count = 0;
     engine_arguments[engine_count++] = "--stdlib-root";
     engine_arguments[engine_count++] = invocation->stdlib;
+    if (options->project_src_root && options->project_src_root[0]) {
+        engine_arguments[engine_count++] = "--project-sources-root";
+        engine_arguments[engine_count++] = options->project_src_root;
+    }
+    for (int d = 0; d < options->dep_count && engine_count + 3 < SDK_ARGUMENT_LIMIT; d++) {
+        engine_arguments[engine_count++] = "--project-dep";
+        engine_arguments[engine_count++] = options->dep_aliases[d];
+        engine_arguments[engine_count++] = options->dep_roots[d];
+    }
     engine_arguments[engine_count++] = command_mode;
     engine_arguments[engine_count++] = source_path;
     if (need_product_dir || options->output) engine_arguments[engine_count++] = invocation->generated;
@@ -441,8 +511,182 @@ cleanup:
     return status;
 }
 
+static void sdk_print_json_quoted(const char* text) {
+    putchar('"');
+    for (const unsigned char* p = (const unsigned char*)text; *p; p++) {
+        if (*p == '"' || *p == '\\') printf("\\%c", *p);
+        else if (*p == '\n') fputs("\\n", stdout);
+        else if (*p == '\r') fputs("\\r", stdout);
+        else if (*p == '\t') fputs("\\t", stdout);
+        else putchar(*p);
+    }
+    putchar('"');
+}
+
+static int sdk_execute_project(SdkInvocation* invocation, const SdkOptions* options, int argc, char** argv) {
+    if (strcmp(options->project_subcmd, "build") != 0 &&
+        strcmp(options->project_subcmd, "run") != 0 &&
+        strcmp(options->project_subcmd, "test") != 0) {
+        const char* engine_arguments[SDK_ARGUMENT_LIMIT + 3];
+        engine_arguments[0] = "--stdlib-root";
+        engine_arguments[1] = invocation->stdlib;
+        int out_count = 2;
+        for (int i = 1; i < argc && out_count < SDK_ARGUMENT_LIMIT + 2; i++) {
+            engine_arguments[out_count++] = argv[i];
+        }
+        return sdk_child(invocation->engine, out_count, engine_arguments, options->timeout);
+    }
+
+    char plan_dir[SDK_PATH_CAP], plan_path[SDK_PATH_CAP];
+    if (!sdk_temp(plan_dir, NULL) || !sdk_join(plan_path, plan_dir, "plan.txt")) {
+        return sdk_error("W5001", "Cannot create temporary project plan staging directory", NULL);
+    }
+    const char* plan_argv[SDK_ARGUMENT_LIMIT];
+    int pcount = 0;
+    plan_argv[pcount++] = "--stdlib-root";
+    plan_argv[pcount++] = invocation->stdlib;
+    plan_argv[pcount++] = "project";
+    plan_argv[pcount++] = "--resolve-plan";
+    plan_argv[pcount++] = plan_path;
+    plan_argv[pcount++] = options->project_subcmd;
+    for (int i = 3; i < argc && pcount < SDK_ARGUMENT_LIMIT - 1; i++) {
+        const char* v = argv[i];
+        if (strcmp(v, "--") == 0) break;
+        if (strcmp(v, "--profile") == 0 || strcmp(v, "--timeout-ms") == 0 ||
+            strcmp(v, "--include-dir") == 0 || strcmp(v, "--link") == 0 ||
+            strcmp(v, "--library-dir") == 0 || strcmp(v, "--library") == 0) {
+            i++;
+            continue;
+        }
+        plan_argv[pcount++] = v;
+    }
+    int plan_rc = sdk_child(invocation->engine, pcount, plan_argv, SDK_COMPILE_TIMEOUT_MS);
+    char* plan_buf = NULL;
+    size_t plan_len = 0;
+    int read_ok = (plan_rc == 0) && sdk_read_file(plan_path, &plan_buf, &plan_len);
+    sdk_remove_tree(plan_dir);
+    if (plan_rc != 0) { free(plan_buf); return plan_rc; }
+    if (!read_ok) { free(plan_buf); return sdk_error("W5001", "Failed reading resolved project plan", NULL); }
+
+    const char *pkg_name = "", *target_entry = NULL, *target_output = NULL;
+    const char *test_names[SDK_ARGUMENT_LIMIT], *test_entries[SDK_ARGUMENT_LIMIT];
+    int64_t test_timeouts[SDK_ARGUMENT_LIMIT];
+    int test_count = 0;
+    SdkOptions run_opts = *options;
+    run_opts.output = NULL;
+
+    char* cursor = plan_buf;
+    while (*cursor) {
+        char* line = cursor;
+        char* nl = strchr(cursor, '\n');
+        if (nl) { *nl = 0; cursor = nl + 1; }
+        else { cursor += strlen(cursor); }
+        size_t llen = strlen(line);
+        if (llen > 0 && line[llen - 1] == '\r') line[--llen] = 0;
+        if (llen == 0) continue;
+        if (strncmp(line, "NAME=", 5) == 0) pkg_name = line + 5;
+        else if (strncmp(line, "SRC_ROOT=", 9) == 0) run_opts.project_src_root = line + 9;
+        else if (strncmp(line, "ENTRY=", 6) == 0) target_entry = line + 6;
+        else if (strncmp(line, "OUTPUT=", 7) == 0) target_output = line + 7;
+        else if (strncmp(line, "DEP=", 4) == 0 && run_opts.dep_count < SDK_LINK_LIMIT) {
+            char* tab = strchr(line + 4, '\t');
+            if (tab) {
+                *tab = 0;
+                run_opts.dep_aliases[run_opts.dep_count] = line + 4;
+                run_opts.dep_roots[run_opts.dep_count] = tab + 1;
+                run_opts.dep_count++;
+            }
+        } else if (strncmp(line, "TEST=", 5) == 0 && test_count < SDK_ARGUMENT_LIMIT) {
+            char* t1 = strchr(line + 5, '\t');
+            char* t2 = t1 ? strchr(t1 + 1, '\t') : NULL;
+            if (t1 && t2) {
+                *t1 = 0; *t2 = 0;
+                int64_t t_ms = 10000;
+                sdk_parse_timeout_ms(t1 + 1, &t_ms);
+                test_names[test_count] = line + 5;
+                test_timeouts[test_count] = t_ms;
+                test_entries[test_count] = t2 + 1;
+                test_count++;
+            }
+        }
+    }
+
+    int status = 0;
+    if (strcmp(options->project_subcmd, "test") == 0) {
+        int passed = 0, failed = 0;
+        for (int idx = 0; idx < test_count; idx++) {
+            SdkOptions case_opts = run_opts;
+            if (!options->timeout_set) case_opts.timeout = test_timeouts[idx];
+            int rc = sdk_run_test_case(invocation, &case_opts, test_entries[idx], test_names[idx], argc, argv);
+            if (rc == 0) passed++;
+            else failed++;
+        }
+        printf("Ran %d test(s): %d passed, %d failed.\n", test_count, passed, failed);
+        status = failed == 0 ? 0 : 1;
+        free(plan_buf);
+        return status;
+    }
+
+    if (!target_entry || !sdk_absolute(invocation->source, target_entry, 1) || !sdk_is_file(invocation->source)) {
+        free(plan_buf);
+        return sdk_error("W5001", "Project target entry is not an accessible regular file", target_entry ? target_entry : "");
+    }
+    if (strcmp(options->project_subcmd, "build") == 0) {
+        if (!target_output || !sdk_absolute(invocation->output, target_output, 0)) {
+            free(plan_buf);
+            return sdk_error("W5002", "Invalid project build output path", target_output ? target_output : "");
+        }
+#ifdef _WIN32
+        size_t osize = strlen(invocation->output);
+        if (osize < 4 || _stricmp(invocation->output + osize - 4, ".exe") != 0) {
+            if (osize + 4 >= SDK_PATH_CAP) { free(plan_buf); return sdk_error("W5002", "Output path is too long", NULL); }
+            memcpy(invocation->output + osize, ".exe", 5);
+        }
+#endif
+        if (!sdk_parent(invocation->parent, invocation->output) || !sdk_mkdir_p(invocation->parent) ||
+            !sdk_temp(invocation->workspace, invocation->parent)) {
+            free(plan_buf);
+            return sdk_error("W5001", "Cannot create build staging directory beside output", invocation->output);
+        }
+        run_opts.output = invocation->output;
+        status = sdk_compile_source(invocation, &run_opts, "--emit-c-mir", invocation->source, 1);
+        if (!status) status = sdk_build(invocation, &run_opts);
+        if (!status && !sdk_publish(invocation->product, invocation->output)) {
+            status = sdk_error("W5001", "Cannot publish completed project binary", invocation->output);
+        }
+        if (!status) {
+            if (options->project_json_v1) {
+                printf("{\"schema_version\":\"wysna.tool-result/1\",\"command\":\"project.build\",\"status\":\"ok\",\"invocation_id\":\"native\",\"tool_exit_code\":0,\"process_exit_code\":0,\"execution\":null,\"toolchain\":{\"compiler\":\"" WYSNA_NATIVE_VERSION "\"},\"target\":{\"profile\":\"native-cli\",\"triple\":null},\"diagnostics\":[],\"artifacts\":[{\"kind\":\"native_executable\",\"media_type\":\"application/octet-stream\",\"path\":");
+                sdk_print_json_quoted(invocation->output);
+                puts("}],\"telemetry\":null}");
+            } else {
+                printf("[OK] Built %s -> %s\n", pkg_name, invocation->output);
+            }
+        }
+        free(plan_buf);
+        return status;
+    }
+
+    if (!sdk_temp(invocation->workspace, NULL)) {
+        free(plan_buf);
+        return sdk_error("W5001", "Cannot create a private staging directory", NULL);
+    }
+    status = sdk_compile_source(invocation, &run_opts, "--emit-c-mir", invocation->source, 1);
+    if (!status) status = sdk_build(invocation, &run_opts);
+    if (!status) {
+        int arg_count = options->arguments ? argc - options->arguments : 0;
+        status = sdk_child(invocation->product, arg_count,
+                           options->arguments ? (const char**)(argv + options->arguments) : NULL, options->timeout);
+    }
+    free(plan_buf);
+    return status;
+}
+
 static int sdk_execute(SdkInvocation* invocation, const SdkOptions* options, int argc, char** argv) {
     if (!sdk_component_paths(invocation)) return sdk_error("W5001", "Cannot locate the native compiler beside this SDK", NULL);
+    if (strcmp(options->command, "project") == 0) {
+        return sdk_execute_project(invocation, options, argc, argv);
+    }
     if (strcmp(options->command, "lsp") == 0 || strcmp(options->command, "mcp") == 0) {
         const char* engine_arguments[SDK_ARGUMENT_LIMIT + 4];
         engine_arguments[0] = invocation->engine;

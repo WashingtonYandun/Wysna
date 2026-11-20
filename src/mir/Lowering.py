@@ -203,6 +203,14 @@ class Lowering:
         if self.debug is not None:
             self.debug_scopes.pop()
 
+    def push_temp(self):
+        self.scopes.append([])
+
+    def pop_temp(self):
+        if self.current is not None:
+            self.cleanup(len(self.scopes) - 1)
+        self.scopes.pop()
+
     def bind(self, node, slot):
         self.bindings[-1][self.key(node)] = self.slot_by_id[slot]
         # Synthetic handlers have no SymbolId in older checked HIR.
@@ -332,18 +340,26 @@ class Lowering:
         if self.current is None:
             return
         if isinstance(node, H.HirExprStmt):
+            self.push_temp()
             self.expr(node.expr)
+            self.pop_temp()
         elif isinstance(node, (H.HirLet, H.HirBindTemp)):
+            self.push_temp()
             value = self.expr(node.init_expr)
             if top:
                 slot = self.global_bindings[self.key(node)].id
                 if self.debug is not None:
                     from mir.Debug import DebugBinding
                     self.debug.globals.append(DebugBinding(slot, node.name, 0, self.source(node)))
+                self.store(slot, value, node)
+                self.pop_temp()
             else:
-                slot = self.slot(node.type_id, getattr(node, 'name', getattr(node, 'temp_name', 'local')))
+                slot = self.slot(node.type_id, getattr(node, 'name', getattr(node, 'temp_name', 'local')), tracked=False)
+                self.store(slot, value, node)
+                self.pop_temp()
+                if self.slot_by_id[slot].storage == 'value' and self.slot_by_id[slot].ownership == 'owned':
+                    self.scopes[-1].append(slot)
                 self.bind(node, slot)
-            self.store(slot, value, node)
         elif isinstance(node, H.HirAssign):
             place = self.place(node.target)
             value = self.expr(node.value)
@@ -368,9 +384,11 @@ class Lowering:
             counter = self.slot(TYPE_INT, storage='counter')
             self.op('counter', counter)
             if direct_range:
+                self.push_temp()
                 first, last = self.expr(node.list_expr.start), self.expr(node.list_expr.end)
                 count = self.slot(TYPE_INT, storage='counter')
                 self.op('range_count', count, [first, last], {'inclusive': node.list_expr.inclusive}, node=node)
+                self.pop_temp()
                 iterable = first
             else:
                 iterable = self.expr(node.list_expr)
@@ -594,8 +612,17 @@ class Lowering:
         done = self.new_block()
         for condition, block in [(node.cond, node.then_block)] + node.elifs:
             yes, no = self.new_block(), self.new_block()
-            value = self.expr(condition)
-            self.branch(value, yes, no)
+            self.push_temp()
+            cond_val = self.expr(condition)
+            if self.current is not None and self.slot_by_id[cond_val].storage == 'value':
+                predicate = self.slot(TYPE_BOOL, storage='predicate')
+                self.op('test', predicate, [cond_val], {'kind': 'truth'})
+            else:
+                predicate = cond_val
+            if cond_val in self.constants:
+                self.constants[predicate] = self.constants[cond_val]
+            self.pop_temp()
+            self.branch(predicate, yes, no)
             self.current = yes
             self.push()
             value = self.block(block)

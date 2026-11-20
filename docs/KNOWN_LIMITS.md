@@ -99,9 +99,8 @@ are supported in both Seed and Selfhost (`native-core-v1`). The native SDK drive
 (`packaging/native/driver.c`) supports `check` (including `--output-format=json-v1`),
 `fmt` (`--write`, `--output-format=json-v1`), `test`, `graph`, `inspect`, `patch` (`W5005`),
 `explain`, `schema` (`--emit-codecs`), `fix` (`--apply`, `--include-maybe`), `skills`, `capabilities`,
-stdio MCP (`wysna mcp --root`), and Stage-3 native LSP (`wysna lsp`, backed by `selfhost/src/09_lsp.wysna`)
-without Python. Unresolved generic nominal values, library-mode exports, `wysna api`, `wysna.toml`
-project manifests/lockfiles, and WASM targets remain outside `native-core-v1`; see [MIR design](MIR_DESIGN.md). Compiler does not share Seed's compilation session or type arena, though Seed compiles use an interface-digest incremental module cache. Deterministic bootstrap and corpus tests are evidence for their measured inputs, not universal semantic equivalence.
+`api` (`wysna.api-index/1`), `project check|build|run|test` (`wysna.toml` v1), stdio MCP (`wysna mcp --root`, 11 static tools), and Stage-3 native LSP (`wysna lsp`, backed by `selfhost/src/09_lsp.wysna`)
+without Python. Unresolved generic nominal values, `wysna project lock` / `wysna.lock` dependency locking, `project new`, library-mode exports, and WASM targets remain outside `native-core-v1`; see [MIR design](MIR_DESIGN.md). Compiler does not share Seed's compilation session or type arena, though Seed compiles use an interface-digest incremental module cache. Deterministic bootstrap and corpus tests are evidence for their measured inputs, not universal semantic equivalence.
 
 The [native SDK](NATIVE_SDK.md) packages the native engine, runtime, stdlib and pinned C toolchain. Its commands run without Python. The SDK is a portable development artifact; platform acceptance, signing and release publication are distinct gates. HTTP and other external C dependencies are not included in the offline core.
 
@@ -224,13 +223,13 @@ networking require the acceptance contracts in [Service foundations](SERVICE_FOU
 
 ---
 
-## 8. Audit Status and Open Scope in 0.7.0
+## 8. Audit Status and Open Scope in 0.8.0
 
-Closed items on `feat/close-language-gaps-v0.7` vs remaining open architectural work:
+Closed items through `0.8.0` vs remaining open architectural work:
 
 | Finding | Current State | Remaining work |
 | :--- | :--- | :--- |
-| W01 · Compiler architecture | Seed supports nested `/* ... */` comments, independent generic class methods (`Box[T].transform[R]`), parameterized interfaces, class/generic error unions, tuple dict keys, and incremental module/interface-digest caching; Selfhost (`native-core-v1`) closes constrained generic classes and interfaces (`interface Foo[T]`), generic class methods, parameterized class inheritance, `from ... use` imports, Agent-First CLI (`graph`, `inspect`, `patch`, `explain`, `schema`, `fix`, `skills`, `capabilities`, `check/fmt --output-format=json-v1`), stdio MCP server (`wysna mcp`), and Stage-3 native LSP (`wysna lsp`) via `driver.c` without Python. | Extend Selfhost (`selfhost/`) to `wysna api`, `wysna.toml` manifests/lockfiles, library-mode exports, and WASM targets if full Seed replacement is targeted. |
+| W01 · Compiler architecture | Seed supports nested `/* ... */` comments, independent generic class methods (`Box[T].transform[R]`), parameterized interfaces, class/generic error unions, tuple dict keys, and incremental module/interface-digest caching; Selfhost (`native-core-v1`, 33 modules / 15,795 bundled lines) closes constrained generic classes and interfaces (`interface Foo[T]`), generic class methods, parameterized class inheritance, `from ... use` imports, Agent-First CLI (`graph`, `inspect`, `patch`, `explain`, `schema`, `fix`, `skills`, `capabilities`, `api`, `project check\|build\|run\|test`, `check/fmt --output-format=json-v1`), 11-tool stdio MCP server (`wysna mcp`), and Stage-3 native LSP (`wysna lsp`) via `driver.c` without Python. | Extend Selfhost (`selfhost/`) to `wysna.lock` dependency locking, `project new`, library-mode exports, and WASM targets if full Seed replacement is targeted. |
 | W03 · Value size | **Resolved in ABI v3 (`v0.7.0`):** `WVal` is natively unified with 8-byte NaN-boxed `WVal64` (`W_RUNTIME_ABI_VERSION = 3`, `ABI_VERSION = 3`, `RUNTIME_ABI_VERSION = 3`, `sizeof(WVal) == 8`) across runtime, AST/MIR C99 Seed, Selfhost, and `llvm-native-v1` (4× density, 8 slots/cache line, 0..6B inline SSO, inline 48-bit ints + `WIntBox` full-64-bit fallback, direct `WEnumBuf` payload). Scalar list buffers also use unboxed MIR access. | Expand cross-OS CI matrix verification (`x86_64-pc-windows-msvc` & `x86_64-unknown-linux-gnu`) for native LLVM ABI v3 `i64` callback adapters. |
 | W04 · CoW cost | `optimize_local_cow_uniqueness`, interprocedural `optimize_interprocedural_cow`, `fold_scalar_constants`, `coalesce_temporary_stores`, `eliminate_dead_pure_ops`, and unboxed `range_count_i64`/`div_i64_at`/`mod_i64_at` elide redundant clones, temporaries, and boxing across loops. | Cross-translation-unit link-time CoW summaries for separately compiled libraries. |
 | W05 · Generics | Generic templates, constrained parameterized classes and interfaces (`interface Foo[T]`), independent generic methods in classes, and cross-module generic inheritance are monomorphized uniformly across Seed, Selfhost, and LLVM. | Explicit opt-in trait/typeclass system for built-in types only if language scope changes (currently nominal class interfaces by design). |

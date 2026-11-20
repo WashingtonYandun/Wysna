@@ -10,6 +10,7 @@ import unittest
 
 from bench.run_bench import run_extended_benchmarks
 from common.Platform import compiler_command, executable_name
+from common.Version import WYSNA_VERSION
 from compiler.CompilerService import CompilerService
 from compiler.LlvmToolchain import LlvmToolchain
 from main import ensure_selfhost_compiler_binary
@@ -237,7 +238,7 @@ raise SystemExit(subprocess.run([{cc_cmd!r}] + out).returncode)
             subprocess.run(
                 compiler_command() + [
                     "-std=c99", "-O1",
-                    '-DWYSNA_NATIVE_VERSION="0.7.0"',
+                    f'-DWYSNA_NATIVE_VERSION="{WYSNA_VERSION}"',
                     '-DWYSNA_NATIVE_TARGET="host"',
                     f"-I{ROOT}",
                     str(ROOT / "packaging/native/driver.c"),

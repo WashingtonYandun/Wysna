@@ -1315,7 +1315,7 @@ fn tool_handle_check_v1(file: str, legacy_json: bool, json_v1: bool) -> unit {
         let artifacts_json = "[{\"kind\":\"checked_program\",\"media_type\":\"application/json\",\"file\":" + diag_json_quote(file) + ",\"functions\":" + fn_count + "}]"
         diag_write_output(diag_tool_envelope_json("check", "ok", 0, "[]", "", "", artifacts_json))
     } elif legacy_json {
-        diag_write_output("{\"schema_version\":\"wysna.cli.result/1\",\"compiler_version\":\"0.7.0\",\"command\":\"check\",\"ok\":true,\"exit_code\":0,\"diagnostics\":[],\"data\":{\"file\":" + diag_json_quote(file) + ",\"functions\":" + fn_count + "}}")
+        diag_write_output("{\"schema_version\":\"wysna.cli.result/1\",\"compiler_version\":\"0.8.0\",\"command\":\"check\",\"ok\":true,\"exit_code\":0,\"diagnostics\":[],\"data\":{\"file\":" + diag_json_quote(file) + ",\"functions\":" + fn_count + "}}")
     } else {
         print("[Wysna Compiler] Checked " + file + " (" + fn_count + " functions, MIR verified)")
     }
@@ -1538,7 +1538,7 @@ fn tool_write_atomic_verified(path: str, expected_sha256: str, content: str) -> 
 
 fn tool_skills_topic_content(topic: str) -> str {
     if topic == "overview" {
-        return "# Wysna v0.7.0 — Agent-First Native Language & Toolchain\n- Default workflow uses checked static inspection before execution.\n- Memory model: Single-threaded ARC + Copy-on-Write (`Weak[C]` breaks strong cycles).\n- Error channel: Typed values `T ! E`, unwrap with `?` or `else err { fallback }`.\n- Core agent loop: `wysna skills` -> `wysna graph` -> `wysna inspect` -> `wysna patch` -> `wysna fix` -> `wysna check`.\n- Topics available: overview, agent-loop, syntax, graph, patch, contracts, stdlib."
+        return "# Wysna v0.8.0 — Agent-First Native Language & Toolchain\n- Default workflow uses checked static inspection before execution.\n- Memory model: Single-threaded ARC + Copy-on-Write (`Weak[C]` breaks strong cycles).\n- Error channel: Typed values `T ! E`, unwrap with `?` or `else err { fallback }`.\n- Core agent loop: `wysna skills` -> `wysna graph` -> `wysna inspect` -> `wysna patch` -> `wysna fix` -> `wysna check`.\n- Topics available: overview, agent-loop, syntax, graph, patch, contracts, stdlib."
     }
     if topic == "agent-loop" {
         return "# Agent Coding Loop (Token-Efficient, Hash-Guarded)\n1. Discover relationships: `wysna graph <file.wysna> --output-format=json-v1`\n2. Inspect one symbol instead of reading whole files: `wysna inspect <file.wysna> --symbol <name> --with-deps --output-format=json-v1`\n3. Submit checked edits guarded by graph hash: `wysna patch <file.wysna> --symbol <name> --expect-graph-hash <hash> --with <code> --apply`\n4. Auto-repair mechanical diagnostics: `wysna fix --apply --output-format=json-v1 <file.wysna>`\n5. Decode any Wxxxx error: `wysna explain --code W2001 --output-format=json-v1`\n6. Verify & bound runtime: `wysna run --max-steps=100000 --max-heap-mb=64 <file.wysna>`"
@@ -1565,7 +1565,7 @@ fn tool_skills_payload_json(topic: str) -> str {
     let content = tool_skills_topic_content(topic)
     if content == "" { return "" }
     let topics_json = "[\"agent-loop\",\"contracts\",\"graph\",\"overview\",\"patch\",\"stdlib\",\"syntax\"]"
-    return "{\"schema_version\":\"wysna.skills/1\",\"compiler_version\":\"0.7.0\",\"topic\":" + diag_json_quote(topic) + ",\"available_topics\":" + topics_json + ",\"content\":" + diag_json_quote(content) + "}"
+    return "{\"schema_version\":\"wysna.skills/1\",\"compiler_version\":\"0.8.0\",\"topic\":" + diag_json_quote(topic) + ",\"available_topics\":" + topics_json + ",\"content\":" + diag_json_quote(content) + "}"
 }
 
 fn tool_handle_skills(args: list[str], json_mode: bool) -> unit {
@@ -1607,8 +1607,8 @@ fn tool_handle_skills(args: list[str], json_mode: bool) -> unit {
 }
 
 fn tool_capabilities_payload_json() -> str {
-    let cmds = "[\"run\",\"check\",\"fmt\",\"ast\",\"mir\",\"tokens\",\"emit-c\",\"emit-mir\",\"build\",\"test\",\"capabilities\",\"explain\",\"graph\",\"inspect\",\"patch\",\"skills\",\"fix\",\"schema\",\"mcp\",\"lsp\"]"
-    let mcmds = "[\"check\",\"fmt\",\"capabilities\",\"explain\",\"graph\",\"inspect\",\"patch\",\"skills\",\"fix\",\"schema\"]"
+    let cmds = "[\"run\",\"check\",\"fmt\",\"ast\",\"mir\",\"tokens\",\"emit-c\",\"emit-mir\",\"build\",\"test\",\"project.check\",\"project.build\",\"project.run\",\"project.test\",\"api\",\"capabilities\",\"explain\",\"graph\",\"inspect\",\"patch\",\"skills\",\"fix\",\"schema\",\"mcp\",\"lsp\"]"
+    let mcmds = "[\"check\",\"fmt\",\"project.check\",\"api\",\"capabilities\",\"explain\",\"graph\",\"inspect\",\"patch\",\"skills\",\"fix\",\"schema\"]"
     let profs = "[\"native-cli\",\"wasi-command\",\"browser-library\",\"c99-source\"]"
     let targs = "[\"native\",\"wasm32-wasip1\",\"wasm32-unknown-emscripten\"]"
     let runtimes = "{\"wasi-command\":\"wasmtime-python==50.0.1\",\"browser-library\":\"browser or Node.js\"}"
@@ -1622,7 +1622,7 @@ fn tool_capabilities_payload_json() -> str {
     let tprofiles = "[" + p_native + "," + p_wasi + "," + p_browser + "]"
     let reqs = "{\"std/http\":{\"interpreter\":\"install wysna[http] with libcurl 8.3.0 or newer\",\"native\":\"install libcurl 8.3.0 or newer development files and expose curl-config on PATH\",\"wasi-command\":\"unavailable\",\"browser-library\":\"unavailable\"}}"
     let limits = "[\"native-cli capabilities describe host access and are not a sandbox\",\"WASI Preview 1 does not provide networking, child processes, or native FFI\",\"browser-library exposes only generated scalar and UTF-8 exports; WVal and pointers remain internal\",\"project dependencies are local paths only\",\"project lockfiles do not claim bit-for-bit binary reproducibility\"]"
-    return "{\"schema_version\":\"wysna.capabilities/1\",\"compiler_version\":\"0.7.0\",\"commands\":" + cmds + ",\"machine_output\":{\"format\":\"json-v1\",\"commands\":" + mcmds + "},\"profiles\":" + profs + ",\"targets\":" + targs + ",\"runtimes\":" + runtimes + ",\"capabilities\":" + caps + ",\"target_profiles\":" + tprofiles + ",\"requirements\":" + reqs + ",\"limitations\":" + limits + "}"
+    return "{\"schema_version\":\"wysna.capabilities/1\",\"compiler_version\":\"0.8.0\",\"commands\":" + cmds + ",\"machine_output\":{\"format\":\"json-v1\",\"commands\":" + mcmds + "},\"profiles\":" + profs + ",\"targets\":" + targs + ",\"runtimes\":" + runtimes + ",\"capabilities\":" + caps + ",\"target_profiles\":" + tprofiles + ",\"requirements\":" + reqs + ",\"limitations\":" + limits + "}"
 }
 
 fn tool_handle_capabilities(args: list[str], json_mode: bool) -> unit {
@@ -1641,8 +1641,8 @@ fn tool_handle_capabilities(args: list[str], json_mode: bool) -> unit {
     if json_mode {
         diag_write_output(diag_tool_envelope_json("capabilities", "ok", 0, "[]", "result", payload, "[]"))
     } else {
-        print("Wysna 0.7.0 capabilities: native-cli, wasi-command, browser-library")
-        print("Machine-readable tools: check, fmt, capabilities, explain, graph, inspect, patch, skills, fix, schema, mcp, lsp")
+        print("Wysna 0.8.0 capabilities: native-cli, wasi-command, browser-library")
+        print("Machine-readable tools: check, fmt, project.check, api, capabilities, explain, graph, inspect, patch, skills, fix, schema, mcp, lsp")
     }
     exit(0)
 }

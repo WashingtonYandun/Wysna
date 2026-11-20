@@ -132,8 +132,14 @@ fn mir_expression(context: MirBuilder, id: int) -> int {
             let join = mir_new_block(context, source)
             mir_terminate(context, "branch", if node.text == "AND" { [right_block, join] } else { [join, right_block] }, result, source)
             context.current = right_block
+            mir_push_scope(context)
             let right = mir_expression(context, node.children[1])
-            if context.current >= 0 { mir_store(context, result, right, source) mir_jump(context, join, source) }
+            if context.current >= 0 {
+                mir_store(context, result, right, source)
+                mir_cleanup(context, len(context.scopes) - 1, source)
+                mir_jump(context, join, source)
+            }
+            context.scopes.pop()
             context.current = join
             return result
         }
@@ -163,7 +169,21 @@ fn mir_block(context: MirBuilder, id: int) -> int {
     let bindings = context.bindings
     mir_push_scope(context)
     let mut tail = -1
-    for statement in node.children { tail = mir_statement(context, statement) }
+    let count = len(node.children)
+    for idx in 0..count {
+        let statement = node.children[idx]
+        let stmt_node = context.program.nodes[statement]
+        let is_expr_stmt = idx + 1 < count and stmt_node.kind != "let" and stmt_node.kind != "return" and stmt_node.kind != "for" and stmt_node.kind != "while" and stmt_node.kind != "break" and stmt_node.kind != "continue"
+        if is_expr_stmt {
+            mir_push_scope(context)
+            let _discarded = mir_statement(context, statement)
+            if context.current >= 0 { mir_cleanup(context, len(context.scopes) - 1, stmt_node.source) }
+            context.scopes.pop()
+            tail = -1
+        } else {
+            tail = mir_statement(context, statement)
+        }
+    }
     let mut escaped = -1
     if context.current >= 0 {
         if tail < 0 { tail = mir_constant(context, mir_literal_unit(), 1, node.source) }
@@ -179,8 +199,14 @@ fn mir_block(context: MirBuilder, id: int) -> int {
 
 fn mir_if(context: MirBuilder, node: CheckedNode) -> int {
     let source = node.source
+    mir_push_scope(context)
     let condition = mir_expression(context, node.children[0])
-    if context.current < 0 { return -1 }
+    if context.current < 0 {
+        context.scopes.pop()
+        return -1
+    }
+    mir_cleanup(context, len(context.scopes) - 1, source)
+    context.scopes.pop()
     let yes = mir_new_block(context, source)
     let no = mir_new_block(context, source)
     let join = mir_new_block(context, source)
@@ -225,18 +251,28 @@ fn mir_statement(context: MirBuilder, id: int) -> int {
     if node.kind == "let" {
         let binding = context.program.bindings[node.binding]
         let type_id = mir_type(context, binding.type_id, source)
+        mir_push_scope(context)
         let value = mir_expression(context, node.children[0])
-        if context.current >= 0 {
-            if binding.global {
-                for i in 0..len(context.globals) {
-                    if context.globals[i].symbol == node.binding { mir_append(context, MirOperation { owner_type: 0, labels: mir_empty_labels(), place: mir_empty_place(), opcode: "global_store", result: -1, args: [mir_coerce(context, value, type_id, false, source)], name: "", value: mir_literal_int(i), source: source }) }
-                }
-                return -1
-            }
-            let slot = mir_slot(context, type_id, "", false)
-            mir_store(context, slot, mir_coerce(context, value, type_id, false, source), source)
-            context.bindings.append(MirBinding { symbol: node.binding, slot: slot })
+        if context.current < 0 {
+            context.scopes.pop()
+            return -1
         }
+        if binding.global {
+            let coerced = mir_coerce(context, value, type_id, false, source)
+            for i in 0..len(context.globals) {
+                if context.globals[i].symbol == node.binding { mir_append(context, MirOperation { owner_type: 0, labels: mir_empty_labels(), place: mir_empty_place(), opcode: "global_store", result: -1, args: [coerced], name: "", value: mir_literal_int(i), source: source }) }
+            }
+            mir_cleanup(context, len(context.scopes) - 1, source)
+            context.scopes.pop()
+            return -1
+        }
+        let coerced = mir_coerce(context, value, type_id, false, source)
+        let slot = mir_raw_slot(context, type_id, "", false)
+        mir_store(context, slot, coerced, source)
+        mir_cleanup(context, len(context.scopes) - 1, source)
+        context.scopes.pop()
+        mir_track(context, slot)
+        context.bindings.append(MirBinding { symbol: node.binding, slot: slot })
         return -1
     }
     if node.kind == "return" {

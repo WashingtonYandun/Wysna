@@ -1045,7 +1045,7 @@ fn lsp_dispatch_message(state: LspServerState, msg: LspJson) -> bool {
     if method == "initialize" {
         let legend = "\"tokenTypes\":[\"keyword\",\"type\",\"class\",\"interface\",\"enum\",\"struct\",\"function\",\"method\",\"property\",\"variable\",\"parameter\",\"string\",\"number\",\"operator\",\"comment\"],\"tokenModifiers\":[]"
         let caps = "\"positionEncoding\":\"utf-16\",\"textDocumentSync\":{\"openClose\":true,\"change\":2},\"definitionProvider\":true,\"implementationProvider\":true,\"hoverProvider\":true,\"referencesProvider\":true,\"documentFormattingProvider\":true,\"completionProvider\":{\"triggerCharacters\":[\".\"]},\"semanticTokensProvider\":{\"legend\":{" + legend + "},\"full\":true,\"range\":false}"
-        let res = "{\"capabilities\":{" + caps + "},\"serverInfo\":{\"name\":\"wysna-native\",\"version\":\"0.7.0\"}}"
+        let res = "{\"capabilities\":{" + caps + "},\"serverInfo\":{\"name\":\"wysna-native\",\"version\":\"0.8.0\"}}"
         if has_id { lsp_send_message("{\"jsonrpc\":\"2.0\",\"id\":" + req_id_raw + ",\"result\":" + res + "}") }
         return true
     }
