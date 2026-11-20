@@ -16,6 +16,7 @@ from node.NodeType import (
 from checker.WysnaType import (
     WysnaType,
     IntType,
+    BoolType,
     StrType,
     UnitType,
     NoneType,
@@ -452,6 +453,10 @@ def resolve_member_with_receiver_type(checker: "TypeChecker", expr: MemberExpr, 
             return FunctionType([], obj_t.element, is_mutating=True)
         if expr.property == "clear":
             return FunctionType([], UnitType, is_mutating=True)
+        if expr.property == "contains":
+            return FunctionType([obj_t.element], BoolType)
+        if expr.property == "is_empty":
+            return FunctionType([], BoolType)
 
     if isinstance(obj_t, DictType):
         if expr.property == "get":
@@ -462,6 +467,28 @@ def resolve_member_with_receiver_type(checker: "TypeChecker", expr: MemberExpr, 
             return FunctionType([], ListType(obj_t.value))
         if expr.property == "items":
             return FunctionType([], ListType(TupleType([obj_t.key, obj_t.value])))
+        if expr.property == "contains":
+            return FunctionType([obj_t.key], BoolType)
+        if expr.property == "is_empty":
+            return FunctionType([], BoolType)
+
+    if obj_t == StrType:
+        if expr.property == "contains":
+            return FunctionType([StrType], BoolType)
+        if expr.property == "is_empty":
+            return FunctionType([], BoolType)
+
+    if isinstance(obj_t, TupleType) and expr.property.isdigit():
+        idx = int(expr.property)
+        if idx < 0 or idx >= len(obj_t.elements):
+            raise TypeError(
+                message=f"Tuple index {idx} out of range for '{obj_t}'",
+                line=expr.line,
+                col=expr.col,
+                file=checker.file,
+                code="W3002"
+            )
+        return obj_t.elements[idx]
 
     if isinstance(obj_t, ModuleType):
         sym = obj_t.scope.lookup_symbol(expr.property)

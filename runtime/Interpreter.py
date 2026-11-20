@@ -673,6 +673,12 @@ class Interpreter:
             if method == "clear":
                 receiver.clear()
                 return WysnaUnit()
+            if method == "contains":
+                if len(args) != 1:
+                    raise WysnaRuntimeError("contains() takes 1 argument", file=self.file)
+                return WysnaBool(any(elem == args[0] for elem in receiver.storage.data))
+            if method == "is_empty":
+                return WysnaBool(len(receiver.storage.data) == 0)
 
         if isinstance(receiver, WysnaDict):
             if method == "get":
@@ -687,6 +693,20 @@ class Interpreter:
                 return WysnaList(elements=receiver.values())
             if method == "items":
                 return WysnaList(elements=[WysnaTuple([k.clone_value(), v]) for k, v in receiver.storage.data.items()])
+            if method == "contains":
+                if len(args) != 1:
+                    raise WysnaRuntimeError("contains() takes 1 argument", file=self.file)
+                return WysnaBool(receiver.get(args[0]) is not None)
+            if method == "is_empty":
+                return WysnaBool(len(receiver.storage.data) == 0)
+
+        if isinstance(receiver, WysnaStr):
+            if method == "contains":
+                if len(args) != 1 or not isinstance(args[0], WysnaStr):
+                    raise WysnaRuntimeError("str.contains() takes 1 str argument", file=self.file)
+                return WysnaBool(args[0].value in receiver.value)
+            if method == "is_empty":
+                return WysnaBool(len(receiver.value) == 0)
 
         raise WysnaRuntimeError(f"Method '{method}' not found on '{receiver}'", file=self.file)
 

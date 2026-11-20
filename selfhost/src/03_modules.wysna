@@ -416,10 +416,27 @@ fn module_expand(context: ModuleLoader, src: str, path: str, entry: bool) -> int
             elif kind == "FN" or kind == "STRUCT" or kind == "ENUM" or kind == "CLASS" or kind == "INTERFACE" or kind == "LET" {
                 let mut offset = 1
                 if kind == "LET" and tokens[i + 1].kind == "MUT" { offset = 2 }
-                let name = tokens[i + offset].val
-                names.append(name)
-                if exported { exports.append(name) }
-                exported = false
+                if kind == "LET" and tokens[i + offset].kind == "LPAREN" {
+                    let mut pd = 0
+                    let mut p = i + offset
+                    while p < len(tokens) - 1 {
+                        if tokens[p].kind == "LPAREN" { pd = pd + 1 }
+                        elif tokens[p].kind == "RPAREN" {
+                            pd = pd - 1
+                            if pd <= 0 { break }
+                        } elif tokens[p].kind == "IDENT" and tokens[p].val != "_" {
+                            names.append(tokens[p].val)
+                            if exported { exports.append(tokens[p].val) }
+                        }
+                        p = p + 1
+                    }
+                    exported = false
+                } else {
+                    let name = tokens[i + offset].val
+                    names.append(name)
+                    if exported { exports.append(name) }
+                    exported = false
+                }
             }
         }
         if kind == "LBRACE" { depth = depth + 1 }

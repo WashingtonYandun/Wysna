@@ -834,14 +834,30 @@ class HirBuilder:
             return HirConstructObject(expr.class_name, args_hir, tid, span)
         elif isinstance(expr, StructInitExpr):
             s_name = getattr(expr, "struct_name", getattr(expr, "name", "Struct"))
-            fields_hir = [(f.name, self._lower_expr(f.value)) for f in expr.fields]
+            spread_once = getattr(expr, "_spread_once_expr", None)
+            spread_name = getattr(expr, "_spread_once_name", None)
+            sp_let = None
+            if spread_once is not None and spread_name:
+                self._push_scope()
+                sp_hir = self._lower_expr(spread_once)
+                sp_sym = self._declare_symbol(spread_name)
+                sp_let = HirBindTemp(spread_name, sp_hir.type_id, sp_hir, sp_hir.span, symbol_id=sp_sym)
+            try:
+                fields_hir = [(f.name, self._lower_expr(f.value)) for f in expr.fields]
+            finally:
+                if sp_let is not None:
+                    self._pop_scope()
             if s_name in self.structs_with_contracts and not self._in_struct_contract_helper:
                 s_decl = self.struct_decls_by_name.get(s_name)
                 fields_by_name = dict(fields_hir)
                 ordered_args = [fields_by_name[f.name] for f in s_decl.fields] if s_decl else [v for _, v in fields_hir]
                 fn_name = f"__wysna_struct_init_{s_name}"
-                return HirDirectCall(fn_name, ordered_args, tid or self.interner.mk_struct(s_name), span, target=DirectCallTarget(fn_name))
-            return HirConstructStruct(s_name, fields_hir, tid, span)
+                constructed = HirDirectCall(fn_name, ordered_args, tid or self.interner.mk_struct(s_name), span, target=DirectCallTarget(fn_name))
+            else:
+                constructed = HirConstructStruct(s_name, fields_hir, tid, span)
+            if sp_let is not None:
+                return HirSequence([sp_let], constructed, constructed.type_id, span)
+            return constructed
         elif isinstance(expr, ListExpr):
             elems_hir = [self._lower_expr(e) for e in expr.elements]
             entry = self.interner.get_entry(tid)
@@ -930,6 +946,8 @@ class HirBuilder:
                         target_cls = rec_entry.data
                 if rec_entry.tag in ("list", "dict"):
                     target = CollectionCallTarget(rec_entry.tag, expr.callee.property)
+                elif rec_hir.type_id == TYPE_STR and expr.callee.property in ("contains", "is_empty"):
+                    target = CollectionCallTarget("str", expr.callee.property)
                 else:
                     target = VirtualCallTarget(expr.callee.property, slot=slot, target_class=target_cls)
                 return HirMethodCall(rec_hir, expr.callee.property, args_hir, tid, span, slot=slot, target=target)
@@ -964,6 +982,8 @@ class HirBuilder:
                 cdef = self.interner.class_defs.get(entry.data)
                 if cdef and expr.property in cdef.fields:
                     field_idx = list(cdef.fields.keys()).index(expr.property)
+            elif entry and entry.tag == "tuple" and expr.property.isdigit():
+                field_idx = int(expr.property)
             field_id = FieldId(field_idx, expr.property) if field_idx >= 0 else None
             return HirFieldRead(obj_hir, expr.property, tid, span, field_idx=field_idx, field_id=field_id)
         elif isinstance(expr, IndexExpr):

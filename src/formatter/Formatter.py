@@ -232,9 +232,10 @@ class Formatter:
 
         if isinstance(stmt, LetDecl):
             mut_str = "mut " if stmt.is_mut else ""
+            target_str = self.format_pattern(stmt.pattern) if getattr(stmt, "pattern", None) is not None else stmt.name
             type_str = f": {self.format_type(stmt.type_ann)}" if stmt.type_ann is not None else ""
             val_str = self.format_expr(stmt.initializer, level)
-            return f"{ind}let {mut_str}{stmt.name}{type_str} = {val_str}"
+            return f"{ind}let {mut_str}{target_str}{type_str} = {val_str}"
 
         if isinstance(stmt, WhileStmt):
             cond_str = self.format_expr(stmt.condition, level)
@@ -307,6 +308,8 @@ class Formatter:
             return PRECEDENCE_MAP.get(expr.op, 10)
         if isinstance(expr, RangeExpr):
             return 7
+        if isinstance(expr, CallExpr) and getattr(expr, "is_in_operator", False):
+            return 6
         if isinstance(expr, UnaryExpr):
             return 10
         return 20
@@ -400,6 +403,12 @@ class Formatter:
             return f"{op_str} else{err_part} {blk_str}"
 
         if isinstance(expr, CallExpr):
+            if getattr(expr, "is_in_operator", False):
+                my_prec = 6
+                left_str = self.format_expr(expr.args[0], level, parent_prec=my_prec)
+                right_str = self.format_expr(expr.callee.object, level, parent_prec=my_prec + 1)
+                res = f"{left_str} in {right_str}"
+                return f"({res})" if my_prec < parent_prec else res
             callee_str = self.format_expr(expr.callee, level, parent_prec=15)
             targs = f"[{', '.join([self.format_type(a) for a in expr.type_args])}]" if getattr(expr, "type_args", None) else ""
             args_str = ", ".join([self.format_expr(a, level) for a in expr.args])

@@ -14,17 +14,37 @@ def pattern_names(pattern):
     return set().union(*(pattern_names(child) for child in children)) if children else set()
 
 
+def _rename_pattern_idents(pattern, mapping):
+    if isinstance(pattern, A.IdentifierPattern):
+        if pattern.name in mapping:
+            pattern.name = mapping[pattern.name]
+        return
+    children = getattr(pattern, 'elements', getattr(pattern, 'args', []))
+    for child in children:
+        _rename_pattern_idents(child, mapping)
+
+
 class ModuleNames:
     def __init__(self, program, module_id):
         prefix = PREFIX + str(module_id).encode('utf-8').hex() + '__'
-        self.names = {node.name: prefix + node.name for node in program.body if isinstance(node, DECLARATIONS)}
+        self.names = {}
+        for node in program.body:
+            if not isinstance(node, DECLARATIONS):
+                continue
+            if isinstance(node, A.LetDecl) and getattr(node, 'pattern', None) is not None:
+                for pname in pattern_names(node.pattern):
+                    self.names[pname] = prefix + pname
+            else:
+                self.names[node.name] = prefix + node.name
         self.nominal_types = {node.name for node in program.body if isinstance(node, (A.StructDecl, A.EnumDecl, A.ClassDecl))}
         self.variants = {variant.name: declaration.name for declaration in program.body
                          if isinstance(declaration, A.EnumDecl) for variant in declaration.variants}
 
     def qualify(self, program):
         for declaration in program.body:
-            if isinstance(declaration, DECLARATIONS):
+            if isinstance(declaration, A.LetDecl) and getattr(declaration, 'pattern', None) is not None:
+                _rename_pattern_idents(declaration.pattern, self.names)
+            elif isinstance(declaration, DECLARATIONS):
                 declaration.source_name = declaration.name
                 declaration.name = self.names[declaration.name]
             self.visit(declaration, set(), set())
@@ -77,7 +97,10 @@ class ModuleNames:
             for statement in node.statements:
                 self.visit(statement, local, types)
                 if isinstance(statement, A.LetDecl):
-                    local.add(statement.name)
+                    if getattr(statement, 'pattern', None) is not None:
+                        local.update(pattern_names(statement.pattern))
+                    else:
+                        local.add(statement.name)
             node.tail_expr = self.visit(node.tail_expr, local, types)
             return node
         if isinstance(node, A.ForStmt):

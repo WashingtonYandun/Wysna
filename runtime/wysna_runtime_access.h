@@ -310,4 +310,34 @@ static inline WVal wysna_dict_values(WVal dict_val) {
     return wysna_make_list(d->len, d->vals);
 }
 
+static inline WVal wysna_contains(WVal container, WVal item) {
+    uint32_t hi = wysna_hi(container);
+    if (hi == WVAL_HI_LIST) {
+        WListBuf* b = wysna_as_list(container);
+        if (!b || b->len == 0) return wysna_bool(false);
+        for (int32_t i = 0; i < b->len; i++) {
+            if (wysna_eq(b->data[i], item)) return wysna_bool(true);
+        }
+        return wysna_bool(false);
+    }
+    if (hi == WVAL_HI_DICT) {
+        WDictBuf* d = wysna_as_dict(container);
+        if (!d || d->len == 0) return wysna_bool(false);
+        return wysna_bool(wysna_dict_find(d, item) >= 0);
+    }
+    if (wysna_tag(container) == W_STR && wysna_tag(item) == W_STR) {
+        char sbh[7], sbn[7];
+        size_t hlen = 0, nlen = 0;
+        const char* hay = wysna_str_bytes(container, sbh, &hlen);
+        const char* needle = wysna_str_bytes(item, sbn, &nlen);
+        if (nlen == 0) return wysna_bool(true);
+        if (nlen > hlen) return wysna_bool(false);
+        for (size_t i = 0; i <= hlen - nlen; i++) {
+            if (memcmp(hay + i, needle, nlen) == 0) return wysna_bool(true);
+        }
+        return wysna_bool(false);
+    }
+    return wysna_bool(false);
+}
+
 #endif /* WYSNA_RUNTIME_ACCESS_H */

@@ -455,6 +455,20 @@ fn fix_plan_w1001(src: str, tokens: list[Token], start_byte: int, end_byte: int,
     return out
 }
 
+fn fix_plan_w3004(src: str, tokens: list[Token], start_byte: int, end_byte: int, msg: str) -> list[FixEdit] {
+    let mut out: list[FixEdit] = []
+    if not proj_str_contains_substr(msg, "must be named 'init', found 'fn ") { return out }
+    let start_char = lsp_char_offset_from_utf8_byte(src, start_byte)
+    let end_char = lsp_char_offset_from_utf8_byte(src, end_byte)
+    if start_char < 0 or end_char <= start_char or end_char > len(src) { return out }
+    let lc = fix_line_col_from_char(src, start_char)
+    let tok_idx = fix_tok_index_at(tokens, lc[0], lc[1])
+    if tok_idx < 0 or tok_idx >= len(tokens) or tokens[tok_idx].kind != "IDENT" { return out }
+    let orig = slice(src, start_char, end_char)
+    out.append(new FixEdit("W3004", "rename constructor 'fn " + orig + "' to 'fn init'", "machine", start_byte, end_byte, "init"))
+    return out
+}
+
 fn fix_apply_non_overlapping(src: str, edits: list[FixEdit]) -> str {
     # Sort descending by start_byte
     let mut sorted: list[FixEdit] = []
@@ -564,6 +578,8 @@ fn tool_handle_fix(args: list[str], json_mode_in: bool) -> unit {
                 gen = fix_plan_w2001(current_src, tokens, sb, msg)
             } elif code == "W1001" {
                 gen = fix_plan_w1001(current_src, tokens, sb, eb, msg)
+            } elif code == "W3004" {
+                gen = fix_plan_w3004(current_src, tokens, sb, eb, msg)
             }
             for g in gen {
                 if g.applicability == "machine" or (include_maybe and g.applicability == "maybe") {

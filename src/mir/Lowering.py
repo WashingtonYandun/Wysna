@@ -537,6 +537,9 @@ class Lowering:
             return result
         if isinstance(node, H.HirFieldRead):
             value = self.expr(node.object)
+            entry = self.interner.get_entry(node.object.type_id)
+            if entry is not None and entry.tag == 'tuple' and node.field_name.isdigit():
+                return self.op('tuple_get', self.slot(type_id), [value], {'index': int(node.field_name)}, node=node)
             index, _ = self.field_index(node.object.type_id, node.field_name, node)
             return self.op('load_field', self.slot(type_id), [value], {'index': index, 'layout': node.object.type_id}, node=node)
         if isinstance(node, H.HirIndexRead):
@@ -557,6 +560,12 @@ class Lowering:
                     values = [self.expr(arg) for arg in node.args]
                     return self.op('mutate', self.slot(type_id), values, {'place': place, 'method': method}, node=node)
                 values = [self.expr(node.receiver)] + [self.expr(arg) for arg in node.args]
+                if method == 'contains':
+                    return self.runtime('wysna_contains', values, type_id, node)
+                if method == 'is_empty':
+                    length = self.runtime('wysna_builtin_len', [values[0]], TYPE_INT, node)
+                    zero = self.constant(0, TYPE_INT, node)
+                    return self.runtime('wysna_equal', [length, zero], type_id, node)
                 runtime_fn = 'wysna_builtin_dict_items' if method == 'items' else 'wysna_dict_' + method
                 return self.runtime(runtime_fn, values, type_id, node)
             if isinstance(node.receiver, H.HirSuperRef):

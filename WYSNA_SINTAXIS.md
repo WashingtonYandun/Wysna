@@ -167,7 +167,7 @@ graph TD
 * **`list[T]`:** Lista dinámica redimensionable.
   * **Optimización Escalar:** `list[int]`, `list[bool]` y `list[float]` son automáticamente asignadas como búferes contiguos C sin encajonar (`unboxed scalar buffers`), con desprendimiento $O(1)$ vía `memcpy`.
 * **`dict[K, V]`:** Tabla hash asociativa. Las claves (`K`) deben ser tipos comparables (`int`, `str`, `bool`, `enum` o tuplas hashables).
-* **`tuple[T1, T2, ...]`:** Producto heterogéneo inmutable de tamaño fijo (su tipo se anota con `tuple[...]`, su literal es `(v1, v2)` y se desestructura con `match` o `for a, b in ...`).
+* **`tuple[T1, T2, ...]` (atajo `(T1, T2, ...)`):** Producto heterogéneo inmutable de tamaño fijo (su tipo se anota como `tuple[int, str]` o `(int, str)`, sus elementos se leen posicionalmente con `pair.0`, `nested.0.1`, y se desestructura directamente en `let (a, b) = pair`, `match` o `for a, b in ...`).
 
 ### 3.3 Tipos Opcionales (`T?`)
 Cualquier tipo puede marcarse como opcional agregando el sufijo `?`. Su valor puede ser una instancia de `T` o `none`:
@@ -426,7 +426,7 @@ print(user2.username)
 ```
 
 ### 8.2 Clases (Semántica de Referencia con ARC)
-Las clases se utilizan para modelar entidades con identidad compartida, estado mutable y métodos de instancia. El constructor de una clase se declara siempre como `fn init(...)`:
+Las clases se utilizan para modelar entidades con identidad compartida, estado mutable y métodos de instancia. El constructor de una clase se declara siempre como `fn init(...)` (si se escribe `fn NombreClase(...)`, el compilador emite `W3004` y `wysna fix --apply` lo renombra automáticamente a `fn init`):
 
 ```wysna
 class BankAccount {
@@ -622,14 +622,18 @@ let rev = alg.reverse([1, 2, 3])
 | `weak(object)` | `(class) -> Weak[T]` | Crea una referencia débil que no incrementa el contador fuerte de ARC. |
 | `upgrade(weak_ref)` | `(Weak[T]) -> T?` | Intenta resolver la referencia débil (`none` si el objeto ya fue destruido). |
 
-### 11.2 Métodos de Colecciones y Cadenas
+### 11.2 Métodos de Colecciones y Cadenas (y operador `in`)
+
+Tanto `list[T]`, `dict[K, V]` como `str` implementan `.contains(...) -> bool`, `.is_empty() -> bool` y el operador booleano `x in contenedor`:
 
 ```wysna
 # Listas
 let mut lst = [1, 2]
-lst.append(3)           # [1, 2, 3]
-let last = lst.pop()     # Retorna 3, lista queda [1, 2]
-lst.clear()             # []
+lst.append(3)               # [1, 2, 3]
+let has_two = 2 in lst      # true (equivalente a lst.contains(2))
+let empty_l = lst.is_empty() # false
+let last = lst.pop()        # Retorna 3, lista queda [1, 2]
+lst.clear()                 # []
 
 # Cadenas
 let text = "  Wysna Lang  "
@@ -637,10 +641,12 @@ let clean = text.trim()             # "Wysna Lang"
 let parts = clean.split(" ")        # ["Wysna", "Lang"]
 let upper = clean.to_upper()        # "WYSNA LANG"
 let has = clean.starts_with("Wys")  # true
+let sub = "Lang" in clean           # true (clean.contains("Lang"))
 
 # Diccionarios
 let mut dict_val = {"a": 1, "b": 2}
-let has_key = dict_val.contains("a")  # true
+let has_key = "a" in dict_val         # true (dict_val.contains("a"))
+let empty_d = dict_val.is_empty()     # false
 let keys = dict_val.keys()            # ["a", "b"]
 let values = dict_val.values()        # [1, 2]
 let pairs = dict_val.items()          # [("a", 1), ("b", 2)]

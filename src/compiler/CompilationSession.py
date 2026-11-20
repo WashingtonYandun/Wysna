@@ -10,7 +10,7 @@ from checker.SymbolTable import Scope
 from checker.WysnaType import ModuleType
 from error.Error import TypeError, WysnaError
 from node import NodeType as A
-from compiler.ModuleNames import DECLARATIONS, ModuleNames, PREFIX
+from compiler.ModuleNames import DECLARATIONS, ModuleNames, PREFIX, pattern_names
 
 
 class ModuleId(str):
@@ -112,6 +112,7 @@ def _compute_interface_and_nominals(program, is_entry=False):
             item = {
                 '$node': 'LetSig',
                 'name': stmt.name,
+                'pattern': _syntax_digest_payload(getattr(stmt, 'pattern', None)),
                 'is_mut': bool(getattr(stmt, 'is_mut', False)),
                 'type_ann': _syntax_digest_payload(getattr(stmt, 'type_ann', None)),
             }
@@ -433,8 +434,18 @@ class CompilationSession:
             if isinstance(node, DECLARATIONS) and node.name.startswith((PREFIX, '_WYSNA_', '__wysna_internal_')):
                 raise TypeError('The Wysna compiler namespace is reserved for internal identities',
                                 file=path, line=node.line, col=node.col, code='W1002')
-        names = ModuleNames(program, module_id).qualify(program) if imported else {
-            node.name: node.name for node in program.body if isinstance(node, DECLARATIONS)}
+        if imported:
+            names = ModuleNames(program, module_id).qualify(program)
+        else:
+            names = {}
+            for node in program.body:
+                if not isinstance(node, DECLARATIONS):
+                    continue
+                if isinstance(node, A.LetDecl) and getattr(node, 'pattern', None) is not None:
+                    for pname in pattern_names(node.pattern):
+                        names[pname] = pname
+                else:
+                    names[node.name] = node.name
         for node in program.body:
             if isinstance(node, A.UseDecl):
                 for sym in node.symbols:
@@ -479,9 +490,12 @@ class CompilationSession:
                     for sym in node.symbols:
                         public_names.add(sym.bound_name)
                 else:
-                    name = getattr(node, "source_name", getattr(node, "name", getattr(node, "namespace", None)))
-                    if name:
-                        public_names.add(name)
+                    if isinstance(node, A.LetDecl) and getattr(node, 'pattern', None) is not None:
+                        public_names.update(pattern_names(node.pattern))
+                    else:
+                        name = getattr(node, "source_name", getattr(node, "name", getattr(node, "namespace", None)))
+                        if name:
+                            public_names.add(name)
         for name, emitted in names.items():
             if imported and name not in public_names:
                 continue

@@ -132,19 +132,26 @@ class Lexer:
             start_line = self.line
             start_col = self.col
 
-            # Reject leading dot float, e.g. '.5'
+            # Reject leading dot float, e.g. '.5', unless this is tuple positional indexing (.0, .1, ...)
             if ch == '.' and self.peek(1) is not None and self.peek(1).isascii() and self.peek(1).isdigit():
-                raise LexerError(
-                    message="Float literals must have leading digits before decimal point",
-                    line=start_line,
-                    col=start_col,
-                    file=self.file,
-                    code="W0002"
+                prev_allows_tuple_index = bool(
+                    tokens and (
+                        tokens[-1].type in (TokenType.IDENTIFIER, TokenType.RPAREN, TokenType.RBRACKET, TokenType.THIS)
+                        or (tokens[-1].type == TokenType.INT and len(tokens) >= 2 and tokens[-2].type == TokenType.DOT)
+                    )
                 )
+                if not prev_allows_tuple_index:
+                    raise LexerError(
+                        message="Float literals must have leading digits before decimal point",
+                        line=start_line,
+                        col=start_col,
+                        file=self.file,
+                        code="W0002"
+                    )
 
             # Numbers (Integers & Floats)
             if ch.isascii() and ch.isdigit():
-                tokens.append(self._lex_number(start_line, start_col))
+                tokens.append(self._lex_number(start_line, start_col, after_dot=bool(tokens and tokens[-1].type == TokenType.DOT)))
                 self._stamp(tokens[-1], token_start)
                 continue
 
@@ -258,7 +265,7 @@ class Lexer:
             )
         return Token(value=ival, type=TokenType.INT, line=start_line, col=start_col)
 
-    def _lex_number(self, start_line: int, start_col: int) -> Token:
+    def _lex_number(self, start_line: int, start_col: int, after_dot: bool = False) -> Token:
         if self.peek() == '0' and self.peek(1) in ('x', 'X', 'b', 'B'):
             return self._lex_prefixed_int(start_line, start_col)
 
@@ -299,7 +306,7 @@ class Lexer:
 
             elif c == '.':
                 # Range check: if '..' or '..=', this is a range operator, not a float point
-                if self.peek(1) == '.':
+                if self.peek(1) == '.' or after_dot:
                     break
 
                 # If we already have a decimal point, stop or error

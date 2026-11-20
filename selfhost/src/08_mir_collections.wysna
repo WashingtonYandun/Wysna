@@ -28,6 +28,14 @@ fn mir_collection_call(context: MirBuilder, node: CheckedNode) -> int {
     let mut args_: list[int] = [receiver]
     for i in 1..len(node.children) { args_.append(mir_expression(context, node.children[i])) }
     if context.current < 0 { return -1 }
+    if node.text == "contains" {
+        return mir_op(context, "runtime", mir_type(context, node.type_id, source), args_, "wysna_contains", mir_literal_unit(), source)
+    }
+    if node.text == "is_empty" {
+        let length = mir_op(context, "runtime", 3, args_, "wysna_builtin_len", mir_literal_unit(), source)
+        let zero = mir_constant(context, mir_literal_int(0), 3, source)
+        return mir_op(context, "runtime", mir_type(context, node.type_id, source), [length, zero], "wysna_equal", mir_literal_unit(), source)
+    }
     if node.text == "items" {
         return mir_op(context, "runtime", mir_type(context, node.type_id, source), args_, "wysna_builtin_dict_items", mir_literal_unit(), source)
     }

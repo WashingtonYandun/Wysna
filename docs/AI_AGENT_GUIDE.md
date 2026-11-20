@@ -119,6 +119,7 @@ from std.text use {
 - **Canonical Formatting:** Multiple symbols must be enclosed in braces `{ ... }` with trailing commas; single symbols can be unbraced (`from std.math use sqrt`).
 - **Disambiguation:** If symbol names clash across imported modules, assign local aliases using `as` (`User as DomainUser`).
 - **Bootstrap Namespace Parity:** Selective `from ... use { ... }` imports (including aliases) and whole-module namespace imports (`import "std/json"`) are both supported across Seed and the self-hosted `native-core-v1` compiler.
+- **Self-Healing Autofix (`wysna fix`):** Automatically repairs immutable assignment targets (`W3001`: `let` -> `let mut`), misnamed class constructors (`W3004`: `fn ClassName` -> `fn init`), scalar string concatenations (`W2001`: `+ scalar` -> `+ str(scalar)`), and high-confidence identifier typos (`W1001`).
 
 ## Execution Quotas, Effect Cassettes, and First-Class Contracts
 

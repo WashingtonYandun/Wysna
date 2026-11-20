@@ -143,6 +143,8 @@ line returns that expression, and the value may span lines.
     optional form is `d.get(k)`, which returns `V?` and never panics. Wysna has no
     auto-narrowing, so a single optional-deducing operator for the common case would
     force every dictionary read through unwrapping ceremony.
+* `tuple[T1, T2, ...]` / `(T1, T2, ...)`: Fixed-size heterogeneous immutable product type. Tuple type annotations accept both `tuple[int, str]` and shorthand `(int, str)` (and `()` / `tuple[]` for empty tuples). Elements are accessed positionally (`pair.0`, `nested.0.1`) or destructured irrefutably with `let (a, b) = pair`, `match`, or `for`.
+* **Membership (`in` / `.contains` / `.is_empty`):** `item in xs`, `key in d`, and `sub in s` evaluate to `bool` using `xs.contains(item)`, `d.contains(key)`, and `s.contains(sub)`. All three also provide `.is_empty() -> bool`.
   - **Key Domain & `float` Restriction (`W2010`):** Dictionary keys `K` must belong to Wysna's predictable key domain (`int`, `str`, `bool`, or `enum`). While some languages permit floating-point dictionary keys by defining custom canonicalization rules for `NaN` bit patterns and signed zeros (`+0.0` vs `-0.0`), Wysna deliberately restricts the dictionary key model for predictability and rejects `float` (and any composite type containing `float`) as a key type `K` at compile time with diagnostic `W2010` (`INVALID_DICT_KEY_TYPE`).
 * `tuple[T1, T2, ...]`: Fixed-size heterogeneous immutable product type (`(1, "ok", true)`).
 
@@ -243,7 +245,7 @@ Evaluation follows an explicit 12-level precedence hierarchy:
 | **4** | `*` `/` `%` | Multiplicative | Left |
 | **5** | `+` `-` | Additive, string concatenation | Left |
 | **6** | `..` `..=` | Exclusive range, inclusive range | Left (chained ranges are accepted; a range is a value, not a comparator) |
-| **7** | `<` `<=` `>` `>=` | Relational comparisons | Left |
+| **7** | `<` `<=` `>` `>=` `in` | Relational comparisons & membership (`x in container`) | Left |
 | **8** | `==` `!=` | Equality comparisons | Left |
 | **9** | `and` | Short-circuit logical AND | Left |
 | **10** | `or` | Short-circuit logical OR | Left |
@@ -741,16 +743,23 @@ and `write_file` are resolved from the process working directory that launched W
 Native binaries receive the operating system's argument vector, including its executable
 name in `args()[0]`.
 
-### 11.2 Built-in Collection Methods
+### 11.2 Built-in Collection & String Methods
 * **`list[T]`:**
   - `xs.append(item: T) -> unit` (mutating; triggers CoW detach if shared)
   - `xs.pop() -> T` (mutating; removes and returns last element)
   - `xs.clear() -> unit` (mutating; removes all elements)
+  - `xs.contains(item: T) -> bool` (alias: `item in xs`)
+  - `xs.is_empty() -> bool`
 * **`dict[K, V]`:**
   - `d.get(key: K) -> V?` (returns `Some(V)` if present, or `none`)
+  - `d.contains(key: K) -> bool` (alias: `key in d`)
+  - `d.is_empty() -> bool`
   - `d.keys() -> list[K]` (returns list of keys in insertion order)
   - `d.values() -> list[V]` (returns list of values in insertion order)
   - `d.items() -> list[tuple[K, V]]` (returns list of `(key, value)` pairs in insertion order)
+* **`str`:**
+  - `s.contains(sub: str) -> bool` (alias: `sub in s`)
+  - `s.is_empty() -> bool`
 
 ---
 

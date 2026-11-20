@@ -130,8 +130,7 @@ def check_else_err_expr(checker: "TypeChecker", expr: ElseErrExpr, is_statement_
     checker.current_scope = handler_scope
     try:
         checker.expected_type = None
-        for s in expr.handler.statements:
-            checker._check_stmt(s)
+        checker._check_statement_sequence(expr.handler.statements, recovering=False)
         checker.expected_type = unwrapped_t
         tail_t = checker._check_expr(expr.handler.tail_expr) if expr.handler.tail_expr else None
     finally:

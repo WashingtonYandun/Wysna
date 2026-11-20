@@ -608,6 +608,7 @@ fn tokenize_at(src: str, file: str, init_line: int, init_col: int) -> list[Token
             tokens.append(Token { kind: "INT", val: dec_val, line: line, col: start_col, file: file })
         } elif is_digit(code) {
             let start_col = col
+            let after_dot = len(tokens) > 0 and tokens[len(tokens) - 1].kind == "DOT"
             let mut is_flt = false
             let mut clean_num = ""
             let mut last_was_under = false
@@ -628,7 +629,7 @@ fn tokenize_at(src: str, file: str, init_line: int, init_col: int) -> list[Token
             if last_was_under or sep_err {
                 report_error(file, "W0002", line, start_col, "malformed numeric separator")
             }
-            if i + 1 < n and src[i] == "." and is_digit(ord(src[i + 1])) {
+            if not after_dot and i + 1 < n and src[i] == "." and is_digit(ord(src[i + 1])) {
                 is_flt = true
                 clean_num = clean_num + "."
                 i = i + 1
@@ -649,7 +650,7 @@ fn tokenize_at(src: str, file: str, init_line: int, init_col: int) -> list[Token
                 if last_was_under or sep_err {
                     report_error(file, "W0002", line, start_col, "malformed numeric separator")
                 }
-            } elif i < n and src[i] == "." and not (i + 1 < n and src[i + 1] == ".") {
+            } elif not after_dot and i < n and src[i] == "." and not (i + 1 < n and src[i + 1] == ".") {
                 report_error(file, "W0002", line, start_col, "malformed float literal: trailing dot")
             }
             if i < n and (is_alnum(ord(src[i])) or src[i] == "_") {
@@ -661,7 +662,14 @@ fn tokenize_at(src: str, file: str, init_line: int, init_col: int) -> list[Token
                 tokens.append(Token { kind: "INT", val: clean_num, line: line, col: start_col, file: file })
             }
         } elif ch == "." and i + 1 < n and is_digit(ord(src[i + 1])) {
-            report_error(file, "W0002", line, col, "malformed float literal: leading dot")
+            let prev_ok = len(tokens) > 0 and (tokens[len(tokens) - 1].kind == "IDENT" or tokens[len(tokens) - 1].kind == "RPAREN" or tokens[len(tokens) - 1].kind == "RBRACKET" or tokens[len(tokens) - 1].kind == "THIS" or (tokens[len(tokens) - 1].kind == "INT" and len(tokens) >= 2 and tokens[len(tokens) - 2].kind == "DOT"))
+            if prev_ok {
+                tokens.append(Token { kind: "DOT", val: ".", line: line, col: col, file: file })
+                i = i + 1
+                col = col + 1
+            } else {
+                report_error(file, "W0002", line, col, "malformed float literal: leading dot")
+            }
         } elif ch == "\"" {
             let start_col = col
             let start_line = line

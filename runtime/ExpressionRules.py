@@ -410,7 +410,12 @@ def evaluate_member_expr(interpreter: "Interpreter", expr: MemberExpr, env: Envi
         return WysnaBoundMethod(receiver=obj, method_name=expr.property, target_class_name=obj.class_name)
     if isinstance(obj, WysnaStructInstance):
         return obj.get_field(expr.property)
-    if isinstance(obj, (WysnaList, WysnaDict)):
+    if isinstance(obj, WysnaTuple) and expr.property.isdigit():
+        idx = int(expr.property)
+        if idx < 0 or idx >= len(obj.elements):
+            raise WysnaRuntimeError(f"Tuple index out of bounds: {idx}", line=expr.line, col=expr.col, file=interpreter.file)
+        return obj.elements[idx].clone_value()
+    if isinstance(obj, (WysnaList, WysnaDict, WysnaStr)):
         return WysnaBoundMethod(receiver=obj, method_name=expr.property)
     if isinstance(obj, WysnaModule):
         return obj.get_member(expr.property)
@@ -534,9 +539,16 @@ def evaluate_call_expr(interpreter: "Interpreter", expr: CallExpr, env: Environm
 
 
 def evaluate_struct_init_expr(interpreter: "Interpreter", expr: StructInitExpr, env: Environment) -> WysnaValue:
+    spread_once = getattr(expr, "_spread_once_expr", None)
+    spread_name = getattr(expr, "_spread_once_name", None)
+    eval_env = env
+    if spread_once is not None and spread_name:
+        sp_val = interpreter.eval_value(spread_once, env)
+        eval_env = Environment(parent=env)
+        eval_env.declare(spread_name, sp_val, is_mut=False)
     field_dict = {}
     for f in expr.fields:
-        field_dict[f.name] = interpreter.eval_value(f.value, env)
+        field_dict[f.name] = interpreter.eval_value(f.value, eval_env)
     definition = getattr(expr, "inferred_type", None)
     field_order = getattr(definition, "fields", field_dict)
     ordered = {name: field_dict[name] for name in field_order}

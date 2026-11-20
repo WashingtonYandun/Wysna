@@ -440,6 +440,219 @@ main()
             self.assertEqual(single_res.returncode, 0, single_res.stderr)
             self.assertEqual(single_res.stdout, "wysna\n")
 
+    def test_w2_phase1_tuple_shorthand_indexing_and_destructuring(self):
+        fmt_src = "fn split_pair(p: (int, str)) -> (int, (str, bool)) {\n    let (a, b) = p\n    return (a, (b, true))\n}\n"
+        formatted = verify_formatting(fmt_src)
+        self.assertIn("tuple[int, str]", formatted)
+        self.assertIn("let (a, b) = p", formatted)
+
+        source = '''
+fn make_nested(n: int) -> (int, (str, bool)) {
+    return (n + 1, ("wysna", true))
+}
+
+fn empty_tuple_len(u: ()) -> int {
+    return len(u)
+}
+
+let (g_id, (g_tag, _)) = make_nested(9)
+
+fn main() -> unit {
+    let pair: (int, str) = (7, "ok")
+    let nested: (int, (str, bool)) = make_nested(40)
+    let pairs = [(1, "a"), (2, "b")]
+    let mut (x, y): (int, int) = (10, 20)
+    x += 5
+    y *= 2
+    let (a, (lbl, flag)) = nested
+    print(
+        g_id,
+        g_tag,
+        pair.0,
+        pair.1,
+        nested.1.0,
+        nested.1.1,
+        make_nested(3).0,
+        pairs[1].1,
+        x,
+        y,
+        a,
+        lbl,
+        flag,
+        empty_tuple_len(()),
+    )
+}
+main()
+'''
+        self._assert_all_engines(
+            source,
+            "10 wysna 7 ok wysna true 4 b 15 40 41 wysna true 0\n",
+            "w2_tuple_ergonomics",
+        )
+
+        # Negative diagnostics in both Seed and Selfhost
+        neg_cases = [
+            ("let p = (1, 2)\nprint(p.2)\n", "W3002"),
+            ("let (dup, dup) = (1, 2)\n", "W1002"),
+            ("let (a, b, c) = (1, 2)\n", "W2001"),
+        ]
+        for bad_src, expected_code in neg_cases:
+            with self.assertRaises(WysnaError) as ctx:
+                self.service.check(bad_src, file="bad_tup.wysna")
+            self.assertEqual(ctx.exception.code, expected_code)
+            with tempfile.TemporaryDirectory(prefix="wysna-badtup-") as tmpdir:
+                res = run_engine("selfhost", bad_src, "bad_tup", selfhost_bin=self.selfhost_bin, directory=Path(tmpdir))
+                self.assertNotEqual(res.exit_code, 0)
+                self.assertIn(expected_code, res.stderr)
+
+    def test_w2_phase2_single_eval_struct_spread_all_engines(self):
+        source = '''
+struct Pair3 {
+    a: int,
+    b: int,
+    c: int,
+}
+
+let mut calls = 0
+
+fn make_pair() -> Pair3 {
+    calls += 1
+    return Pair3 { a: 10, b: 20, c: 30 }
+}
+
+fn main() -> unit {
+    let p1 = Pair3 { ..make_pair(), c: 99 }
+    let p2 = Pair3 { ..make_pair(), b: 55 }
+    print(calls, p1.a, p1.b, p1.c, p2.a, p2.b, p2.c)
+}
+main()
+'''
+        self._assert_all_engines(source, "2 10 20 99 10 55 30\n", "w2_spread_single_eval")
+
+    def test_w2_phase3_star_wildcard_match_parity(self):
+        star_fmt = "fn classify(n: int) -> str {\n    return match n {\n        1 => \"one\",\n        * => \"other\",\n    }\n}\n"
+        formatted = format_source(star_fmt, "star_wild.wysna")
+        self.assertIn("_ => \"other\"", formatted)
+        self.assertNotIn("* =>", formatted)
+        self.assertEqual(format_source(formatted, "star_wild.wysna"), formatted)
+
+        source = '''
+fn classify(n: int) -> str {
+    return match n {
+        1 => "one",
+        * => "other",
+    }
+}
+fn main() -> unit {
+    print(classify(1), classify(99))
+}
+main()
+'''
+        self._assert_all_engines(source, "one other\n", "w2_star_wildcard")
+
+    def test_w2_phase4_contains_is_empty_and_in_operator(self):
+        fmt_src = "let ok = x in xs and not (y in xs)\n"
+        self.assertEqual(verify_formatting(fmt_src), fmt_src)
+
+        source = '''
+fn main() -> unit {
+    let xs = [10, 20, 30]
+    let empty_l: list[int] = []
+    let names = ["ada", "grace"]
+    let d = {"host": 8080, "tls": 443}
+    let empty_d: dict[str, int] = {}
+    let s = "hello wysna"
+    let empty_s = ""
+
+    print(
+        xs.contains(20),
+        20 in xs,
+        not (99 in xs),
+        xs.is_empty(),
+        empty_l.is_empty(),
+        "grace" in names,
+        d.contains("host"),
+        "tls" in d,
+        "missing" in d,
+        d.is_empty(),
+        empty_d.is_empty(),
+        s.contains("wysna"),
+        "hello" in s,
+        "rust" in s,
+        "" in s,
+        s.is_empty(),
+        empty_s.is_empty(),
+    )
+}
+main()
+'''
+        self._assert_all_engines(
+            source,
+            "true true true false true true true true false false true true true false true false true\n",
+            "w2_contains_in",
+        )
+
+        for bad_in in ('let a = 42 in ["x"]\n', 'let b = 123 in "abc"\n'):
+            with self.assertRaises(WysnaError) as ctx:
+                self.service.check(bad_in, file="bad_in.wysna")
+            self.assertEqual(ctx.exception.code, "W2001")
+            with tempfile.TemporaryDirectory(prefix="wysna-badin-") as tmpdir:
+                res = run_engine("selfhost", bad_in, "bad_in", selfhost_bin=self.selfhost_bin, directory=Path(tmpdir))
+                self.assertNotEqual(res.exit_code, 0)
+                self.assertIn("W2001", res.stderr)
+
+    def test_w2_phase5_constructor_w3004_diagnostic_and_autofix(self):
+        bad_cls = '''
+class BankAccount {
+    public owner: str
+
+    fn BankAccount(owner: str) {
+        this.owner = owner
+    }
+}
+
+fn main() -> unit {
+    let acc = BankAccount("Washo")
+    print(acc.owner)
+}
+main()
+'''
+        with self.assertRaises(WysnaError) as ctx:
+            self.service.check(bad_cls, file="bank.wysna")
+        self.assertEqual(ctx.exception.code, "W3004")
+
+        with tempfile.TemporaryDirectory(prefix="wysna-w3004-") as tmpdir:
+            tmp = Path(tmpdir)
+            seed_file = tmp / "seed_bank.wysna"
+            seed_file.write_text(bad_cls, encoding="utf-8")
+            result, _ = apply_fix_to_file(str(seed_file), apply=True)
+            self.assertTrue(result["changed"])
+            seed_fixed = seed_file.read_text(encoding="utf-8")
+            self.assertIn("fn init(owner: str)", seed_fixed)
+            self.service.check(seed_fixed, file=str(seed_file))
+
+            sh_file = tmp / "sh_bank.wysna"
+            sh_file.write_text(bad_cls, encoding="utf-8")
+            sh_check = run_engine("selfhost", bad_cls, "sh_bank_bad", selfhost_bin=self.selfhost_bin, directory=tmp / "chk")
+            self.assertNotEqual(sh_check.exit_code, 0)
+            self.assertIn("W3004", sh_check.stderr)
+
+            sh_fix = subprocess.run(
+                [self.selfhost_bin, "fix", "--apply", "--output-format=json-v1", str(sh_file)],
+                cwd=ROOT,
+                capture_output=True,
+                text=True,
+                timeout=30,
+            )
+            self.assertEqual(sh_fix.returncode, 0, sh_fix.stdout + sh_fix.stderr)
+            sh_fixed = sh_file.read_text(encoding="utf-8")
+            self.assertIn("fn init(owner: str)", sh_fixed)
+            sh_run_dir = tmp / "sh_run"
+            sh_run_dir.mkdir(exist_ok=True)
+            sh_run = _run_selfhost_cli(self.selfhost_bin, sh_file, sh_run_dir)
+            self.assertEqual(sh_run.returncode, 0, sh_run.stderr)
+            self.assertEqual(sh_run.stdout, "Washo\n")
+
 
 if __name__ == "__main__":
     unittest.main()
