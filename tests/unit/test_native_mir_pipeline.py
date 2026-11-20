@@ -561,7 +561,7 @@ class NativeMirPipelineTests(unittest.TestCase):
             ('let callback = || { if true { return 1 } "bad" }', "W2004"),
             ('let values: list[int] = []\nvalues.append(1)', "W3001"),
             ('fn value() -> str? { none }\nprint(value() else error { "bad" })', "W2006"),
-            ('fn value() -> list[int] ! str { Ok([1]) }\nprint(value() else { [] })', "W2001"),
+            ('fn value() -> int ! str { Ok(1) }\nprint(value() else { [] })', "W2001"),
         ]
         with tempfile.TemporaryDirectory() as temporary:
             source = Path(temporary).resolve() / "invalid.wysna"

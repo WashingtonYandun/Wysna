@@ -730,7 +730,7 @@ Wysna provee una suite completa de herramientas para desarrolladores y agentes:
 | Comando | Sintaxis Canónica | Propósito |
 | :--- | :--- | :--- |
 | `check` | `wysna check src/main.wysna [--output-format=json-v1]` | Verificación estática de tipos sin emitir código. |
-| `fix` | `wysna fix --apply src/main.wysna` | Auto-reparación determinista de errores con SHA-256 verificado. |
+| `fix` | `wysna fix --apply src/main.wysna [--include-maybe]` | Auto-reparación determinista de errores con SHA-256 verificado (`--include-maybe` habilita fixes tentativos como `?` en `W2001`). |
 | `run` | `wysna run src/main.wysna [--max-steps=N]` | Ejecución directa mediante el intérprete de referencia. |
 | `build` | `wysna build src/main.wysna -o bin/app` | Compilación nativa a código máquina vía MIR y C99/LLVM. |
 | `fmt` | `wysna fmt src/main.wysna` | Formateo canónico e idempotente del código fuente. |

@@ -893,6 +893,8 @@ class TypeChecker:
                     line=pat.line,
                     col=pat.col,
                 )
+                if hasattr(pat, "source_name"):
+                    leaf.source_name = pat.source_name
                 if hasattr(stmt, "is_exported"):
                     leaf.is_exported = stmt.is_exported
                 if hasattr(stmt, "source_file"):

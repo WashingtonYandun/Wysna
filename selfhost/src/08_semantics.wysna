@@ -3077,7 +3077,11 @@ fn sem_tail_expression(context: SemanticContext) -> bool {
             if depth == 0 { return true }
             depth = depth - 1
             if depth == 0 {
-                let next = context.tokens[position + 1].kind
+                let mut next_pos = position + 1
+                while next_pos < len(context.tokens) and (context.tokens[next_pos].kind == "NEWLINE" or context.tokens[next_pos].kind == "SEMICOLON") {
+                    next_pos = next_pos + 1
+                }
+                let next = if next_pos < len(context.tokens) { context.tokens[next_pos].kind } else { "EOF" }
                 if next != "ELSE" and next != "ELIF" { return next == "RBRACE" }
             }
         }

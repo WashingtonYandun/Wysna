@@ -15,7 +15,7 @@ from formatter.Formatter import format_source
 from main import ensure_selfhost_compiler_binary
 from tests.engine_harness import ENGINES, run_engine
 from tests.formatter_contract import verify_formatting
-from tooling.FixCLI import apply_fix_to_file
+from tooling.FixCLI import apply_fix_to_file, fix_source
 
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -652,6 +652,118 @@ main()
             sh_run = _run_selfhost_cli(self.selfhost_bin, sh_file, sh_run_dir)
             self.assertEqual(sh_run.returncode, 0, sh_run.stderr)
             self.assertEqual(sh_run.stdout, "Washo\n")
+
+    def test_w2_phase6_cross_module_pub_let_tuple_destructuring(self):
+        module_src = '''
+pub let (base_x, (base_y, _)) = (10, (32, 99))
+let (secret_a, secret_b) = (1, 2)
+'''
+        entry_src = '''
+from .pair_mod use { base_x, base_y }
+import "pair_mod" as pm
+
+fn main() -> unit {
+    print(base_x, base_y, pm.base_x, pm.base_y, base_x + base_y)
+}
+main()
+'''
+        private_entry = '''
+from .pair_mod use secret_a
+
+fn main() -> unit {
+    print(secret_a)
+}
+main()
+'''
+        expected = "10 32 10 32 42\n"
+        with tempfile.TemporaryDirectory(prefix="wysna-pub-tuple-") as tmpdir:
+            root_tmp = Path(tmpdir).resolve()
+            for engine in ENGINES:
+                eng_dir = root_tmp / engine
+                eng_dir.mkdir(parents=True, exist_ok=True)
+                (eng_dir / "pair_mod.wysna").write_text(module_src, encoding="utf-8")
+                res = run_engine(engine, entry_src, "pub_tuple", selfhost_bin=self.selfhost_bin, directory=root_tmp)
+                self.assertEqual(res.exit_code, 0, f"{engine} failed: {res.stderr}")
+                self.assertEqual(res.stdout, expected, f"{engine} stdout mismatch")
+
+            if HAS_LLVM:
+                llvm_dir = root_tmp / "llvm"
+                llvm_dir.mkdir(parents=True, exist_ok=True)
+                (llvm_dir / "pair_mod.wysna").write_text(module_src, encoding="utf-8")
+                llvm_res = _run_llvm(entry_src, llvm_dir, name="main.wysna")
+                self.assertEqual(llvm_res.returncode, 0, f"llvm failed: {llvm_res.stderr}")
+                self.assertEqual(llvm_res.stdout, expected, "llvm stdout mismatch")
+
+            neg_dir = root_tmp / "neg"
+            neg_dir.mkdir(parents=True, exist_ok=True)
+            (neg_dir / "pair_mod.wysna").write_text(module_src, encoding="utf-8")
+            with self.assertRaises(WysnaError):
+                CompilerService(project_root=ROOT).check(private_entry, file=str(neg_dir / "bad.wysna"))
+            bad_res = run_engine("selfhost", private_entry, "pub_tuple_bad", selfhost_bin=self.selfhost_bin, directory=root_tmp / "neg_sh")
+            self.assertNotEqual(bad_res.exit_code, 0)
+
+    def test_w2_phase6_w2001_unwrap_maybe_autofix(self):
+        broken_src = '''
+fn maybe_num() -> int? {
+    return 40
+}
+
+fn fallible_delta() -> int ! str {
+    return Ok(2)
+}
+
+fn compute() -> int? {
+    let a: int = maybe_num()
+    return a + 2
+}
+
+fn compute_res() -> int ! str {
+    let b: int = fallible_delta()
+    return Ok(b + 40)
+}
+'''
+        with tempfile.TemporaryDirectory(prefix="wysna-w2001-unwrap-") as tmpdir:
+            tmp = Path(tmpdir).resolve()
+            seed_path = tmp / "seed_unwrap.wysna"
+            seed_path.write_text(broken_src, encoding="utf-8")
+
+            seed_default = fix_source(str(seed_path), broken_src, include_maybe=False)
+            self.assertFalse(seed_default["changed"])
+            self.assertEqual(len(seed_default["remaining_diagnostics"]), 2)
+
+            seed_maybe = fix_source(str(seed_path), broken_src, include_maybe=True)
+            self.assertTrue(seed_maybe["changed"])
+            self.assertEqual(seed_maybe["remaining_diagnostics"], [])
+            self.assertIn("let a: int = maybe_num()?", seed_maybe["fixed_source"])
+            self.assertIn("let b: int = fallible_delta()?", seed_maybe["fixed_source"])
+
+            sh_file = tmp / "sh_unwrap.wysna"
+            sh_file.write_text(broken_src, encoding="utf-8")
+
+            sh_default = subprocess.run(
+                [self.selfhost_bin, "fix", "--apply", "--output-format=json-v1", str(sh_file)],
+                cwd=ROOT,
+                capture_output=True,
+                text=True,
+                timeout=30,
+            )
+            self.assertNotEqual(sh_default.returncode, 0)
+            self.assertEqual(sh_file.read_text(encoding="utf-8"), broken_src)
+
+            sh_maybe = subprocess.run(
+                [self.selfhost_bin, "fix", "--apply", "--include-maybe", "--output-format=json-v1", str(sh_file)],
+                cwd=ROOT,
+                capture_output=True,
+                text=True,
+                timeout=30,
+            )
+            self.assertEqual(sh_maybe.returncode, 0, sh_maybe.stdout + sh_maybe.stderr)
+            sh_payload = json.loads(sh_maybe.stdout)
+            self.assertEqual(sh_payload["status"], "ok")
+            self.assertEqual(sh_payload["result"]["remaining_diagnostics"], [])
+            fixed_text = sh_file.read_text(encoding="utf-8")
+            self.assertIn("let a: int = maybe_num()?", fixed_text)
+            self.assertIn("let b: int = fallible_delta()?", fixed_text)
 
 
 if __name__ == "__main__":

@@ -17,6 +17,7 @@ def pattern_names(pattern):
 def _rename_pattern_idents(pattern, mapping):
     if isinstance(pattern, A.IdentifierPattern):
         if pattern.name in mapping:
+            pattern.source_name = pattern.name
             pattern.name = mapping[pattern.name]
         return
     children = getattr(pattern, 'elements', getattr(pattern, 'args', []))
@@ -43,6 +44,7 @@ class ModuleNames:
     def qualify(self, program):
         for declaration in program.body:
             if isinstance(declaration, A.LetDecl) and getattr(declaration, 'pattern', None) is not None:
+                declaration.source_pattern_names = sorted(pattern_names(declaration.pattern))
                 _rename_pattern_idents(declaration.pattern, self.names)
             elif isinstance(declaration, DECLARATIONS):
                 declaration.source_name = declaration.name

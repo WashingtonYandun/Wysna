@@ -431,7 +431,12 @@ class CompilationSession:
                     node.name in ('Option', 'Result', 'Weak') or node.name.startswith(('Option__', 'Result__'))):
                 raise TypeError('Builtin Option/Result/Weak identities are reserved',
                                 file=path, line=node.line, col=node.col, code='W1002')
-            if isinstance(node, DECLARATIONS) and node.name.startswith((PREFIX, '_WYSNA_', '__wysna_internal_')):
+            if isinstance(node, A.LetDecl) and getattr(node, 'pattern', None) is not None:
+                for pname in pattern_names(node.pattern):
+                    if pname.startswith((PREFIX, '_WYSNA_', '__wysna_internal_')):
+                        raise TypeError('The Wysna compiler namespace is reserved for internal identities',
+                                        file=path, line=node.line, col=node.col, code='W1002')
+            elif isinstance(node, DECLARATIONS) and node.name.startswith((PREFIX, '_WYSNA_', '__wysna_internal_')):
                 raise TypeError('The Wysna compiler namespace is reserved for internal identities',
                                 file=path, line=node.line, col=node.col, code='W1002')
         if imported:
@@ -491,7 +496,7 @@ class CompilationSession:
                         public_names.add(sym.bound_name)
                 else:
                     if isinstance(node, A.LetDecl) and getattr(node, 'pattern', None) is not None:
-                        public_names.update(pattern_names(node.pattern))
+                        public_names.update(getattr(node, 'source_pattern_names', None) or pattern_names(node.pattern))
                     else:
                         name = getattr(node, "source_name", getattr(node, "name", getattr(node, "namespace", None)))
                         if name:
