@@ -44,6 +44,26 @@ fn run_compiler() -> unit ! IoError {
         tool_handle_explain(clean, json_v1)
         return
     }
+    if cmd == "skills" {
+        tool_handle_skills(clean, json_v1)
+        return
+    }
+    if cmd == "capabilities" {
+        tool_handle_capabilities(clean, json_v1)
+        return
+    }
+    if cmd == "schema" {
+        tool_handle_schema(clean, json_v1)
+        return
+    }
+    if cmd == "fix" {
+        tool_handle_fix(clean, json_v1)
+        return
+    }
+    if cmd == "mcp" {
+        mcp_serve(clean)
+        return
+    }
     if cmd == "lsp" {
         lsp_serve()
         return
@@ -77,10 +97,11 @@ fn run_compiler() -> unit ! IoError {
             else { report_error("<cli>", "W5002", 1, 1, "unknown option for fmt: " + a) }
         }
         if target == "" { report_error("<cli>", "W5002", 1, 1, "fmt requires a source file path") }
-        let source = read_file(target) else err {
+        let loaded = module_read_text_or_overlay(target)
+        if loaded[0] != "1" {
             report_error(target, "W5003", 1, 1, "cannot read input file: " + target)
-            ""
         }
+        let source = loaded[1]
         let body = selfhost_format_body(source, target)
         let formatted = if len(body) > 0 { body + "\n" } else { "" }
         if write_in_place { write_file(target, formatted)? }

@@ -1,0 +1,609 @@
+# Native `wysna fix`: automated mechanical diagnostic repair with byte-span overlap rejection and atomic writes.
+
+class FixEdit {
+    code: str
+    description: str
+    applicability: str
+    start_byte: int
+    end_byte: int
+    replacement: str
+
+    fn init(code: str, description: str, applicability: str, start_byte: int, end_byte: int, replacement: str) {
+        this.code = code
+        this.description = description
+        this.applicability = applicability
+        this.start_byte = start_byte
+        this.end_byte = end_byte
+        this.replacement = replacement
+    }
+}
+
+class FixSkipped {
+    code: str
+    description: str
+    reason: str
+
+    fn init(code: str, description: str, reason: str) {
+        this.code = code
+        this.description = description
+        this.reason = reason
+    }
+}
+
+fn fix_run_check_subprocess(canonical_file: str, candidate_src: str, pass_idx: int) -> str {
+    let exe = lsp_self_exe_path()
+    let stdlib_root = lsp_stdlib_root_arg()
+    let tdir = lsp_tmp_dir()
+    let stamp = str(unix_time()) + "_" + str(pass_idx)
+    let tmp_src = tdir + "/wysna_fix_src_" + stamp + ".wysna"
+    let tmp_diag = tdir + "/wysna_fix_diag_" + stamp + ".json"
+    write_file(tmp_src, candidate_src) else _err {
+        return ""
+    }
+    let mut argv: list[str] = []
+    if stdlib_root != "" {
+        argv.append("--stdlib-root")
+        argv.append(stdlib_root)
+    }
+    argv.append("check")
+    argv.append(canonical_file)
+    argv.append("--output-format=json-v1")
+    argv.append("--diag-out")
+    argv.append(tmp_diag)
+    argv.append("--overlay")
+    argv.append(canonical_file)
+    argv.append(tmp_src)
+    let exe_buf = lsp_buf_from_str(exe)
+    let args_buf = lsp_pack_argv_buf(argv)
+    let _rc = wysna_host_process_run(exe_buf, args_buf, 30000)
+    wysna_host_close(exe_buf)
+    wysna_host_close(args_buf)
+    let diag_raw = read_file(tmp_diag) else err { "" }
+    lsp_remove_file(tmp_src)
+    lsp_remove_file(tmp_diag)
+    return diag_raw
+}
+
+fn fix_extract_json_delimited_field(raw: str, field_key: str, open_ch: str, close_ch: str, fallback: str) -> str {
+    let needle = "\"" + field_key + "\""
+    let n = len(raw)
+    let klen = len(needle)
+    let mut i = 0
+    let mut in_str = false
+    let mut depth = 0
+    while i < n {
+        let ch = raw[i]
+        if in_str {
+            if ch == "\\" and i + 1 < n {
+                i = i + 2
+                continue
+            }
+            if ch == "\"" { in_str = false }
+            i = i + 1
+        } else {
+            if ch == "\"" {
+                if depth == 1 and i + klen <= n and slice(raw, i, i + klen) == needle {
+                    let mut p = i + klen
+                    while p < n and (raw[p] == " " or raw[p] == "\t" or raw[p] == "\r" or raw[p] == "\n") { p = p + 1 }
+                    if p < n and raw[p] == ":" {
+                        p = p + 1
+                        while p < n and (raw[p] == " " or raw[p] == "\t" or raw[p] == "\r" or raw[p] == "\n") { p = p + 1 }
+                        if p < n and raw[p] == open_ch {
+                            let start = p
+                            let mut bdepth = 0
+                            let mut instr2 = false
+                            while p < n {
+                                let c2 = raw[p]
+                                if instr2 {
+                                    if c2 == "\\" and p + 1 < n { p = p + 2 continue }
+                                    if c2 == "\"" { instr2 = false }
+                                    p = p + 1
+                                } else {
+                                    if c2 == "\"" { instr2 = true }
+                                    elif c2 == open_ch { bdepth = bdepth + 1 }
+                                    elif c2 == close_ch {
+                                        bdepth = bdepth - 1
+                                        if bdepth == 0 { return slice(raw, start, p + 1) }
+                                    }
+                                    p = p + 1
+                                }
+                            }
+                        }
+                    }
+                }
+                in_str = true
+            } elif ch == "{" or ch == "[" {
+                depth = depth + 1
+            } elif ch == "}" or ch == "]" {
+                if depth > 0 { depth = depth - 1 }
+            }
+            i = i + 1
+        }
+    }
+    return fallback
+}
+
+fn fix_extract_json_array_field(raw: str, field_key: str) -> str {
+    return fix_extract_json_delimited_field(raw, field_key, "[", "]", "[]")
+}
+
+fn fix_extract_json_object_field(raw: str, field_key: str) -> str {
+    return fix_extract_json_delimited_field(raw, field_key, "{", "}", "")
+}
+
+fn fix_line_col_from_char(src: str, target_char: int) -> list[int] {
+    let mut line = 1
+    let mut col = 1
+    let limit = if target_char < len(src) { target_char } else { len(src) }
+    for i in 0..limit {
+        if src[i] == "\n" {
+            line = line + 1
+            col = 1
+        } else {
+            col = col + 1
+        }
+    }
+    return [line, col]
+}
+
+fn fix_tok_index_at(tokens: list[Token], target_line: int, target_col: int) -> int {
+    for i in 0..len(tokens) {
+        let t = tokens[i]
+        if t.line == target_line and t.col == target_col { return i }
+    }
+    let mut best = -1
+    for i in 0..len(tokens) {
+        let t = tokens[i]
+        if t.kind == "EOF" { break }
+        if t.line < target_line or (t.line == target_line and t.col <= target_col) {
+            best = i
+        }
+    }
+    return best
+}
+
+fn fix_resolve_mut_root_name(tokens: list[Token], tok_idx: int) -> str {
+    if tok_idx < 0 or tok_idx >= len(tokens) { return "" }
+    let t = tokens[tok_idx]
+    if t.kind == "IDENT" {
+        if tok_idx > 0 and tokens[tok_idx - 1].kind == "DOT" {
+            let mut p = tok_idx - 2
+            while p >= 0 and (tokens[p].kind == "DOT" or tokens[p].kind == "RBRACKET") {
+                if tokens[p].kind == "RBRACKET" {
+                    let mut bd = 1
+                    p = p - 1
+                    while p >= 0 and bd > 0 {
+                        if tokens[p].kind == "RBRACKET" { bd = bd + 1 }
+                        elif tokens[p].kind == "LBRACKET" { bd = bd - 1 }
+                        p = p - 1
+                    }
+                } else {
+                    p = p - 1
+                }
+            }
+            if p >= 0 and tokens[p].kind == "IDENT" { return tokens[p].val }
+        }
+        return t.val
+    }
+    if t.kind == "ASSIGN" and tok_idx > 0 {
+        let mut p = tok_idx - 1
+        while p >= 0 {
+            if tokens[p].kind == "RBRACKET" {
+                let mut bd = 1
+                p = p - 1
+                while p >= 0 and bd > 0 {
+                    if tokens[p].kind == "RBRACKET" { bd = bd + 1 }
+                    elif tokens[p].kind == "LBRACKET" { bd = bd - 1 }
+                    p = p - 1
+                }
+            } elif tokens[p].kind == "IDENT" and p > 0 and tokens[p - 1].kind == "DOT" {
+                p = p - 2
+            } else {
+                break
+            }
+        }
+        if p >= 0 and tokens[p].kind == "IDENT" { return tokens[p].val }
+    }
+    return ""
+}
+
+fn fix_plan_w3001(src: str, tokens: list[Token], start_byte: int, msg: str) -> list[FixEdit] {
+    let mut out: list[FixEdit] = []
+    if len(msg) >= 18 and slice(msg, 0, 18) == "captured snapshots" { return out }
+    let start_char = lsp_char_offset_from_utf8_byte(src, start_byte)
+    let lc = fix_line_col_from_char(src, start_char)
+    let tok_idx = fix_tok_index_at(tokens, lc[0], lc[1])
+    let var_name = fix_resolve_mut_root_name(tokens, tok_idx)
+    if var_name == "" { return out }
+
+    let mut depth = 0
+    let mut scope_stack: list[int] = []
+    let mut matched_let = -1
+    let mut i = 0
+    while i < tok_idx and i + 1 < len(tokens) {
+        let tk = tokens[i].kind
+        if tk == "LBRACE" {
+            depth = depth + 1
+            scope_stack.append(matched_let)
+        } elif tk == "RBRACE" {
+            if depth > 0 {
+                depth = depth - 1
+                if len(scope_stack) > 0 { matched_let = scope_stack.pop() }
+            }
+        } elif tk == "LET" and tokens[i + 1].kind == "IDENT" and tokens[i + 1].val == var_name {
+            matched_let = i
+        }
+        i = i + 1
+    }
+    if matched_let < 0 { return out }
+    let let_tok = tokens[matched_let]
+    let lc_off = diag_char_offset_at(src, let_tok.line, let_tok.col)
+    if lc_off < 0 or lc_off + 3 > len(src) { return out }
+    if slice(src, lc_off, lc_off + 3) != "let" { return out }
+    let b0 = diag_utf8_byte_at(src, lc_off)
+    let b1 = diag_utf8_byte_at(src, lc_off + 3)
+    out.append(new FixEdit("W3001", "mark binding '" + var_name + "' as mutable (`let mut`)", "machine", b0, b1, "let mut"))
+    return out
+}
+
+fn fix_levenshtein(a: str, b: str) -> int {
+    let la = len(a)
+    let lb = len(b)
+    if la == 0 { return lb }
+    if lb == 0 { return la }
+    let mut prev: list[int] = []
+    for j in 0..lb + 1 { prev.append(j) }
+    for i in 1..la + 1 {
+        let mut cur: list[int] = [i]
+        for j in 1..lb + 1 {
+            let cost = if a[i - 1] == b[j - 1] { 0 } else { 1 }
+            let del_c = prev[j] + 1
+            let ins_c = cur[j - 1] + 1
+            let sub_c = prev[j - 1] + cost
+            let mut m = del_c
+            if ins_c < m { m = ins_c }
+            if sub_c < m { m = sub_c }
+            cur.append(m)
+        }
+        prev = cur
+    }
+    return prev[lb]
+}
+
+fn fix_collect_visible_names(tokens: list[Token], err_idx: int, types_only: bool) -> list[str] {
+    let mut names: list[str] = []
+    if not types_only {
+        let mut depth = 0
+        let mut i = 0
+        let mut cur_fn_params: list[str] = []
+        let mut local_names: list[list[str]] = [[]]
+        while i < err_idx and i < len(tokens) {
+            let tk = tokens[i].kind
+            if tk == "LBRACE" {
+                depth = depth + 1
+                let empty_lvl: list[str] = []
+                local_names.append(empty_lvl)
+                if depth == 1 and len(cur_fn_params) > 0 {
+                    for p in cur_fn_params { local_names[1].append(p) }
+                    cur_fn_params = []
+                }
+            } elif tk == "RBRACE" {
+                if depth > 0 {
+                    if len(local_names) > 1 { let _popped = local_names.pop() }
+                    depth = depth - 1
+                }
+                if depth == 0 { cur_fn_params = [] }
+            } elif depth == 0 and tk == "FN" and i + 1 < len(tokens) and tokens[i + 1].kind == "IDENT" {
+                let fname = tokens[i + 1].val
+                if not tool_str_contains(names, fname) { names.append(fname) }
+                cur_fn_params = []
+                let mut p = i + 2
+                if p < len(tokens) and tokens[p].kind == "LBRACKET" {
+                    let mut bd = 1
+                    p = p + 1
+                    while p < len(tokens) and bd > 0 {
+                        if tokens[p].kind == "LBRACKET" { bd = bd + 1 }
+                        elif tokens[p].kind == "RBRACKET" { bd = bd - 1 }
+                        p = p + 1
+                    }
+                }
+                if p < len(tokens) and tokens[p].kind == "LPAREN" {
+                    p = p + 1
+                    let mut pd = 1
+                    while p < len(tokens) and pd > 0 {
+                        if tokens[p].kind == "LPAREN" { pd = pd + 1 }
+                        elif tokens[p].kind == "RPAREN" { pd = pd - 1 }
+                        elif pd == 1 and tokens[p].kind == "IDENT" and p + 1 < len(tokens) and tokens[p + 1].kind == "COLON" {
+                            cur_fn_params.append(tokens[p].val)
+                        }
+                        p = p + 1
+                    }
+                }
+            } elif tk == "LET" and i + 1 < len(tokens) {
+                let mut npos = i + 1
+                if tokens[npos].kind == "MUT" { npos = npos + 1 }
+                if npos < len(tokens) and tokens[npos].kind == "IDENT" {
+                    local_names[len(local_names) - 1].append(tokens[npos].val)
+                }
+            } elif tk == "FOR" and i + 1 < len(tokens) and tokens[i + 1].kind == "IDENT" {
+                local_names[len(local_names) - 1].append(tokens[i + 1].val)
+            }
+            i = i + 1
+        }
+        for lvl in local_names {
+            for item in lvl {
+                if not tool_str_contains(names, item) { names.append(item) }
+            }
+        }
+    }
+    for i in 0..len(tokens) - 1 {
+        let tk = tokens[i].kind
+        if tk == "STRUCT" or tk == "ENUM" or tk == "CLASS" or tk == "INTERFACE" or (not types_only and tk == "FN") {
+            if tokens[i + 1].kind == "IDENT" {
+                let v = tokens[i + 1].val
+                if not tool_str_contains(names, v) { names.append(v) }
+            }
+        }
+    }
+    if types_only {
+        for prim in ["int", "float", "bool", "str", "unit", "none"] {
+            if not tool_str_contains(names, prim) { names.append(prim) }
+        }
+    }
+    return names
+}
+
+fn fix_plan_w1001(src: str, tokens: list[Token], start_byte: int, end_byte: int, msg: str) -> list[FixEdit] {
+    let mut out: list[FixEdit] = []
+    let mut bad = ""
+    let mut types_only = false
+    if len(msg) > 20 and slice(msg, 0, 20) == "unknown identifier: " {
+        bad = slice(msg, 20, len(msg))
+    } elif len(msg) > 14 and slice(msg, 0, 14) == "unknown type: " {
+        bad = slice(msg, 14, len(msg))
+        types_only = true
+    } else {
+        return out
+    }
+    if bad == "" { return out }
+    let start_char = lsp_char_offset_from_utf8_byte(src, start_byte)
+    let end_char = lsp_char_offset_from_utf8_byte(src, end_byte)
+    if start_char < 0 or end_char <= start_char or end_char > len(src) { return out }
+    if slice(src, start_char, end_char) != bad { return out }
+    let lc = fix_line_col_from_char(src, start_char)
+    let err_idx = fix_tok_index_at(tokens, lc[0], lc[1])
+    let cands = fix_collect_visible_names(tokens, err_idx, types_only)
+
+    let mut best_name = ""
+    let mut best_sim = -1
+    let mut tie = false
+    for cand in cands {
+        if cand == bad { continue }
+        let dist = fix_levenshtein(bad, cand)
+        if dist <= 0 { continue }
+        let mlen = if len(bad) > len(cand) { len(bad) } else { len(cand) }
+        let sim = ((mlen - dist) * 1000) / mlen
+        if sim > best_sim {
+            best_sim = sim
+            best_name = cand
+            tie = false
+        } elif sim == best_sim {
+            tie = true
+        }
+    }
+    if tie or best_name == "" or best_sim < 600 { return out }
+    let app = if best_sim >= 800 { "machine" } else { "maybe" }
+    out.append(new FixEdit("W1001", "replace unknown identifier '" + bad + "' with '" + best_name + "'", app, start_byte, end_byte, best_name))
+    return out
+}
+
+fn fix_apply_non_overlapping(src: str, edits: list[FixEdit]) -> str {
+    # Sort descending by start_byte
+    let mut sorted: list[FixEdit] = []
+    for e in edits { sorted.append(e) }
+    let n = len(sorted)
+    for i in 1..n {
+        let key = sorted[i]
+        let mut j = i - 1
+        while j >= 0 and sorted[j].start_byte < key.start_byte {
+            sorted[j + 1] = sorted[j]
+            j = j - 1
+        }
+        sorted[j + 1] = key
+    }
+    let mut cur = src
+    for e in sorted {
+        let sc = lsp_char_offset_from_utf8_byte(cur, e.start_byte)
+        let ec = lsp_char_offset_from_utf8_byte(cur, e.end_byte)
+        if sc >= 0 and ec >= sc and ec <= len(cur) {
+            cur = slice(cur, 0, sc) + e.replacement + slice(cur, ec, len(cur))
+        }
+    }
+    return cur
+}
+
+fn fix_emit_usage_error(json_mode: bool, msg: str) -> unit {
+    if json_mode {
+        let diag = diag_record_json("W5002", "usage", "error", msg, "<cli>", 1, 1, "")
+        diag_write_output(diag_tool_envelope_json("fix", "usage_error", 2, "[" + diag + "]", "", "", "[]"))
+    } else {
+        eprint("wysna fix: " + msg)
+    }
+    exit(2)
+}
+
+fn tool_handle_fix(args: list[str], json_mode_in: bool) -> unit {
+    let mut json_mode = json_mode_in
+    let mut apply = false
+    let mut include_maybe = false
+    let mut file = ""
+    let mut i = 1
+    while i < len(args) {
+        let a = args[i]
+        if a == "--output-format=json-v1" {
+            json_mode = true
+            i = i + 1
+        } elif a == "--output-format" and i + 1 < len(args) {
+            if args[i + 1] != "json-v1" { fix_emit_usage_error(json_mode, "unsupported output format: " + args[i + 1]) }
+            json_mode = true
+            i = i + 2
+        } elif a == "--apply" {
+            apply = true
+            i = i + 1
+        } elif a == "--include-maybe" {
+            include_maybe = true
+            i = i + 1
+        } elif len(a) > 0 and a[0] != "-" and file == "" {
+            file = a
+            i = i + 1
+        } else {
+            fix_emit_usage_error(json_mode, "unknown or incomplete option for fix: " + a)
+        }
+    }
+    if file == "" { fix_emit_usage_error(json_mode, "fix requires a source file path") }
+    let loaded = module_read_text_or_overlay(file)
+    if loaded[0] != "1" {
+        report_error(file, "W5003", 1, 1, "cannot read input file: " + file)
+    }
+    let orig_src = loaded[1]
+    let before_sha = diag_sha256_hex(orig_src)
+    let canonical = module_canonical(file)
+
+    let mut current_src = orig_src
+    let mut applied_all: list[FixEdit] = []
+    let mut skipped_all: list[FixSkipped] = []
+    let mut diag_before_count = 0
+    let mut last_raw = fix_run_check_subprocess(canonical, current_src, 0)
+    let mut pass_num = 0
+
+    while pass_num < 8 {
+        if last_raw == "" { break }
+        let parsed = lsp_parse_json(last_raw)
+        let d_arr = lsp_json_get(parsed, "diagnostics")
+        if pass_num == 0 and d_arr.kind == "array" {
+            diag_before_count = len(d_arr.items)
+        }
+        if lsp_json_str(parsed, "status", "") == "ok" or d_arr.kind != "array" or len(d_arr.items) == 0 {
+            break
+        }
+        let cur_sha = diag_sha256_hex(current_src)
+        let tokens = tokenize(current_src, file)
+        let mut cands: list[FixEdit] = []
+        for item in d_arr.items {
+            let code = lsp_json_str(item, "code", "")
+            let msg = lsp_json_str(item, "message", "")
+            let sp = lsp_json_get(item, "primary_span")
+            if sp.kind != "object" { continue }
+            let s_sha = lsp_json_str(sp, "source_sha256", "")
+            if s_sha != "" and s_sha != cur_sha { continue }
+            let sb = lsp_json_int(sp, "start_byte", -1)
+            let eb = lsp_json_int(sp, "end_byte", -1)
+            if sb < 0 or eb <= sb { continue }
+            let mut gen: list[FixEdit] = []
+            if code == "W3001" {
+                gen = fix_plan_w3001(current_src, tokens, sb, msg)
+            } elif code == "W1001" {
+                gen = fix_plan_w1001(current_src, tokens, sb, eb, msg)
+            }
+            for g in gen {
+                if g.applicability == "machine" or (include_maybe and g.applicability == "maybe") {
+                    cands.append(g)
+                }
+            }
+        }
+        if len(cands) == 0 { break }
+        let mut chosen_pass: list[FixEdit] = []
+        let mut taken_start: list[int] = []
+        let mut taken_end: list[int] = []
+        for c in cands {
+            let mut overlaps = false
+            for t in 0..len(taken_start) {
+                if c.start_byte < taken_end[t] and taken_start[t] < c.end_byte {
+                    overlaps = true
+                    break
+                }
+            }
+            if overlaps {
+                skipped_all.append(new FixSkipped(c.code, c.description, "overlaps another edit"))
+            } else {
+                taken_start.append(c.start_byte)
+                taken_end.append(c.end_byte)
+                chosen_pass.append(c)
+                applied_all.append(c)
+            }
+        }
+        if len(chosen_pass) == 0 { break }
+        let next_src = fix_apply_non_overlapping(current_src, chosen_pass)
+        if next_src == current_src { break }
+        current_src = next_src
+        pass_num = pass_num + 1
+        last_raw = fix_run_check_subprocess(canonical, current_src, pass_num)
+    }
+
+    let changed = current_src != orig_src
+    let mut written = false
+    if apply and changed {
+        tool_write_atomic_verified(file, before_sha, current_src)
+        written = true
+    }
+
+    let mut rem_diags_json = "[]"
+    let mut still_failing = false
+    if last_raw != "" {
+        let last_parsed = lsp_parse_json(last_raw)
+        let rem_arr = lsp_json_get(last_parsed, "diagnostics")
+        if rem_arr.kind == "array" and len(rem_arr.items) > 0 {
+            still_failing = true
+            rem_diags_json = fix_extract_json_array_field(last_raw, "diagnostics")
+        } elif lsp_json_str(last_parsed, "status", "") != "ok" {
+            still_failing = true
+            rem_diags_json = fix_extract_json_array_field(last_raw, "diagnostics")
+        }
+    }
+
+    let mut app_parts: list[str] = ["["]
+    for idx in 0..len(applied_all) {
+        if idx > 0 { app_parts.append(",") }
+        app_parts.append("{\"code\":" + diag_json_quote(applied_all[idx].code) + ",\"description\":" + diag_json_quote(applied_all[idx].description) + "}")
+    }
+    app_parts.append("]")
+
+    let mut skip_parts: list[str] = ["["]
+    for idx in 0..len(skipped_all) {
+        if idx > 0 { skip_parts.append(",") }
+        skip_parts.append("{\"code\":" + diag_json_quote(skipped_all[idx].code) + ",\"description\":" + diag_json_quote(skipped_all[idx].description) + ",\"reason\":" + diag_json_quote(skipped_all[idx].reason) + "}")
+    }
+    skip_parts.append("]")
+
+    let mut res_parts: list[str] = ["{"]
+    res_parts.append("\"applied\":" + join_strings(app_parts, ""))
+    res_parts.append(",\"skipped\":" + join_strings(skip_parts, ""))
+    res_parts.append(",\"changed\":" + (if changed { "true" } else { "false" }))
+    res_parts.append(",\"written\":" + (if written { "true" } else { "false" }))
+    res_parts.append(",\"remaining_diagnostics\":" + rem_diags_json)
+    res_parts.append(",\"diagnostics_before\":" + str(diag_before_count))
+    if not apply {
+        res_parts.append(",\"fixed_source\":" + diag_json_quote(current_src))
+    }
+    res_parts.append("}")
+    let result_json = join_strings(res_parts, "")
+
+    if json_mode {
+        let status_str = if still_failing { "diagnostic_error" } else { "ok" }
+        let exit_c = if still_failing { 1 } else { 0 }
+        diag_write_output(diag_tool_envelope_json("fix", status_str, exit_c, rem_diags_json, "result", result_json, "[]"))
+    } else {
+        let verb = if apply { "Applied" } else { "Would apply" }
+        for item in applied_all {
+            print(verb + ": [" + item.code + "] " + item.description)
+        }
+        if len(applied_all) == 0 {
+            print("No machine-applicable fixes.")
+        }
+        if still_failing {
+            eprint("Diagnostics remain; run 'wysna check'.")
+        }
+    }
+    if still_failing { exit(1) }
+    exit(0)
+}

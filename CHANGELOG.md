@@ -3,6 +3,7 @@
 ## Unreleased
 
 - Adds parameterized interface declarations (`interface Foo[T]`, constrained `interface Foo[T: Show]`) and parameterized `implements` clauses across Selfhost (`native-core-v1`), supporting cross-module generic interfaces, generic call unification against `Collection[T]`, inherited generic implementations, and checked MIR virtual dispatch parity with Seed.
+- Completes standalone Python-free Agent-First autonomy in `selfhost/` and `packaging/native/driver.c`: adds native `wysna schema` (`--all`, `--function`, `--emit-codecs`, Draft 2020-12 contract bounds), `wysna fix` (`W3001`/`W1001`, `--apply`, `--include-maybe`, non-overlapping byte-span verification), `wysna skills`, `wysna capabilities`, stdio JSON-RPC 2.0 MCP server (`wysna mcp --root` with 10 static tools and canonical path confinement), and SHA-256 atomic exclusive writes in `patch`/`fix`.
 
 ## 0.7.0 — 2026-11-17
 

@@ -227,6 +227,7 @@ fn diag_cli_json_mode() -> str {
         if clean[i] == "--check-json" { return "check-json" }
         if clean[i] == "--output-format=json-v1" { return "json-v1" }
         if clean[i] == "--output-format" and i + 1 < len(clean) and clean[i + 1] == "json-v1" { return "json-v1" }
+        if len(clean) > 0 and clean[0] == "schema" and clean[i] == "--json" { return "json-v1" }
     }
     return ""
 }
@@ -237,7 +238,7 @@ fn diag_cli_command() -> str {
     let first = clean[0]
     if first == "check" or first == "--check" or first == "--check-json" { return "check" }
     if first == "fmt" or first == "--fmt" or first == "--fmt-write" { return "fmt" }
-    if first == "graph" or first == "inspect" or first == "patch" or first == "explain" or first == "lsp" { return first }
+    if first == "graph" or first == "inspect" or first == "patch" or first == "explain" or first == "lsp" or first == "schema" or first == "fix" or first == "skills" or first == "capabilities" or first == "mcp" { return first }
     if first == "--emit-c-mir" or first == "--emit-mir" or first == "--check-mir" { return "build" }
     return "check"
 }
@@ -259,7 +260,7 @@ fn diag_emit_and_exit(file: str, code: str, line: int, col: int, msg: str) -> un
         exit(1)
     }
     let cmd = diag_cli_command()
-    let status = if code == "W5002" or code == "W5003" or code == "W5004" or code == "W5005" { "usage_error" } else { "diagnostic_error" }
+    let status = if code == "W5002" { "usage_error" } elif code == "W5003" or code == "W5004" { "toolchain_error" } else { "diagnostic_error" }
     diag_write_output(diag_tool_envelope_json(cmd, status, 1, "[" + diag_json + "]", "", "", "[]"))
     exit(1)
 }
