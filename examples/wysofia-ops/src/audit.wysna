@@ -104,11 +104,8 @@ pub fn parse_events_json(raw: str) -> list[AuditEvent] ! AuditError {
     let parsed = json.parse(raw) else err {
         return Err(AuditError { reason: err.message })
     }
-    let items: list[json.Value] = match parsed {
-        json.Value.Array(arr) => arr,
-        else => {
-            return Err(AuditError { reason: "expected top-level JSON array of events" })
-        },
+    let items = json.to_array(parsed) else err {
+        return Err(AuditError { reason: "expected top-level JSON array of events" })
     }
     let mut out: list[AuditEvent] = []
     for entry in items {

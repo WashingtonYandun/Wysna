@@ -279,7 +279,8 @@ class Phase6V08AutonomyAndDogfoodTests(unittest.TestCase):
                 self.assertEqual(sql_res.returncode, 0, sql_res.stderr)
                 self.assertEqual(sql_res.stdout, "sqlite_total=3 critical=1\n")
 
-            leftovers = list(scratch.iterdir())
+            # Apple toolchain discovery can create its own cache in TMPDIR.
+            leftovers = [path for path in scratch.iterdir() if not (sys.platform == "darwin" and path.name == "xcrun_db")]
             self.assertEqual(leftovers, [], f"Temporary files leaked in scratch dir: {leftovers}")
 
     @unittest.skipIf(os.name == "nt", "POSIX execv cc shim used for compiled run without Python")
