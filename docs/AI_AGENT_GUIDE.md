@@ -147,7 +147,7 @@ the complete interfaces and limitations.
 
 ## Impacto de un símbolo en el proyecto
 
-En Seed, consulta los destinos y pruebas declarados desde el manifiesto:
+Consulta los destinos y pruebas declarados desde el manifiesto:
 
 ```sh
 wysna graph --manifest examples/shared-browser-app/wysna.toml --symbol quote_validation_code --rel impact
