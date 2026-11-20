@@ -664,6 +664,10 @@ fn tool_build_graph_with_overlays(src: str, file: str, ov_paths: list[str], ov_t
     let canonical = module_canonical(file)
     let expanded = module_tokens_with_overlays(src, canonical, ov_paths, ov_texts)
     let program = check_source_with_overlays(src, canonical, ov_paths, ov_texts)
+    return tool_build_checked_graph(src, canonical, expanded, program, ov_paths, ov_texts, false)
+}
+
+fn tool_build_checked_graph(src: str, canonical: str, expanded: list[Token], program: CheckedProgram, ov_paths: list[str], ov_texts: list[str], include_entry: bool) -> ToolGraph {
     let graph = new ToolGraph(canonical, src)
     graph.mod_names.append(canonical)
     tool_scan_decl_nodes(graph, program, src, canonical)
@@ -737,6 +741,15 @@ fn tool_build_graph_with_overlays(src: str, file: str, ov_paths: list[str], ov_t
         }
         if fn_info.body >= 0 {
             tool_walk_subtree(program, graph, f_idx, fn_info.body)
+        }
+    }
+
+    if include_entry and len(program.entry) > 0 {
+        let idx = len(graph.nodes)
+        let node = new ToolGraphNode("fn:__entry__", "__entry__", "__entry__", "entrypoint", "entry", canonical, 1, 1, 1, 0, 0, 0, 0, "private", false, "", "")
+        graph.nodes.append(node)
+        for entry_node in program.entry {
+            tool_walk_subtree(program, graph, idx, entry_node)
         }
     }
 
@@ -1008,6 +1021,7 @@ fn tool_is_code_token(s: str) -> bool {
 }
 
 fn tool_handle_graph(args: list[str], json_mode: bool) -> unit {
+    let mut manifest = ""
     let mut file = ""
     let mut symbol = ""
     let mut rel = ""
@@ -1017,6 +1031,9 @@ fn tool_handle_graph(args: list[str], json_mode: bool) -> unit {
         if a == "--output-format=json-v1" {
             i = i + 1
         } elif a == "--output-format" and i + 1 < len(args) {
+            i = i + 2
+        } elif a == "--manifest" and i + 1 < len(args) {
+            manifest = args[i + 1]
             i = i + 2
         } elif (a == "--symbol" or a == "-s") and i + 1 < len(args) {
             symbol = args[i + 1]
@@ -1030,6 +1047,13 @@ fn tool_handle_graph(args: list[str], json_mode: bool) -> unit {
         } else {
             report_error("<cli>", "W5002", 1, 1, "unknown option for graph: " + a)
         }
+    }
+    if manifest != "" {
+        if file != "" or symbol == "" or rel != "impact" {
+            report_error("<cli>", "W5002", 1, 1, "use --manifest PATH --symbol NAME --rel impact without a source file")
+        }
+        proj_handle_impact(manifest, symbol, json_mode)
+        return
     }
     if file == "" { report_error("<cli>", "W5002", 1, 1, "graph requires a source file path") }
     let loaded = module_read_text_or_overlay(file)

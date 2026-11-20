@@ -75,3 +75,19 @@ python3 bench/ai_eval/run_eval.py \
 ```bash
 PYTHONPATH=. pytest bench/ai_eval/tests/test_harness.py
 ```
+
+## Consultas elegidas por el modelo
+
+Usa `ab_cohort.py --interactive-tools` para comparar dos condiciones con el
+mismo modelo y las mismas pruebas. Ambas pueden leer un archivo Wysna del
+proyecto de trabajo. La condición B también puede consultar `graph` e
+`inspect` por símbolo. Cada intento admite dos consultas y una respuesta
+final. La medición suma los turnos y tokens de las consultas al total.
+
+```sh
+python3 bench/ai_eval/ab_cohort.py --interactive-tools --provider openai --base-url http://localhost:1234/v1 --model MODEL_ID --output /tmp/wysna-ab.json
+```
+
+Ejecuta la evaluación con código generado dentro de un entorno aislado.
+El proveedor simulado comprueba el protocolo de consultas. Para medir éxito,
+tiempo y tokens de un modelo, utiliza un proveedor real con uso reportado.

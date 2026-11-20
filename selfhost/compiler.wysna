@@ -1087,27 +1087,37 @@ fn module_load_source(context: ModuleLoader, canonical: str, requested: str, tok
         }
         resolved = cand
     } else {
-        let base_dir = module_directory(canonical)
         let need_ext = len(requested) < 6 or slice(requested, len(requested) - 6, len(requested)) != ".wysna"
-        let rel_ext = if need_ext { module_normalize(base_dir + requested + ".wysna") } else { "" }
         let proj_src = module_resolve_proj_src_root(context)
-        let cwd_ext = if need_ext { module_normalize(requested + ".wysna") } else { "" }
-        if module_loader_file_readable(context, resolved) {
-            resolved = resolved
-        } elif rel_ext != "" and module_loader_file_readable(context, rel_ext) {
-            resolved = rel_ext
-        } elif proj_src != "" and module_safe_pkg_rel(requested) {
-            let proj_raw = module_normalize(proj_src + "/" + requested)
-            let proj_ext = if need_ext { module_normalize(proj_src + "/" + requested + ".wysna") } else { "" }
-            if module_loader_file_readable(context, proj_raw) and module_is_confined_under(proj_raw, proj_src) {
-                resolved = proj_raw
-            } elif proj_ext != "" and module_loader_file_readable(context, proj_ext) and module_is_confined_under(proj_ext, proj_src) {
-                resolved = proj_ext
+        if proj_src != "" {
+            if not module_safe_pkg_rel(requested) {
+                report_error_at("W1003", token, "invalid project import path: " + requested)
             }
-        } elif proj_src == "" and module_loader_file_readable(context, module_normalize(requested)) {
-            resolved = module_normalize(requested)
-        } elif proj_src == "" and cwd_ext != "" and module_loader_file_readable(context, cwd_ext) {
-            resolved = cwd_ext
+            let mut owner = proj_src
+            for dep_root in context.dep_roots {
+                if module_is_confined_under(canonical, dep_root) {
+                    owner = dep_root
+                    break
+                }
+            }
+            let base = if module_is_confined_under(canonical, owner) { module_directory(canonical) } else { owner + "/" }
+            let relative = if need_ext { requested + ".wysna" } else { requested }
+            resolved = module_normalize(base + relative)
+            if not module_is_confined_under(resolved, owner) {
+                report_error_at("W1003", token, "module not found inside project source root: " + requested)
+            }
+        } else {
+            let rel_ext = if need_ext { module_normalize(module_directory(canonical) + requested + ".wysna") } else { "" }
+            let cwd_ext = if need_ext { module_normalize(requested + ".wysna") } else { "" }
+            if module_loader_file_readable(context, resolved) {
+                resolved = resolved
+            } elif rel_ext != "" and module_loader_file_readable(context, rel_ext) {
+                resolved = rel_ext
+            } elif module_loader_file_readable(context, module_normalize(requested)) {
+                resolved = module_normalize(requested)
+            } elif cwd_ext != "" and module_loader_file_readable(context, cwd_ext) {
+                resolved = cwd_ext
+            }
         }
     }
     let loaded = module_read_with_overlays(resolved, context.ov_paths, context.ov_texts)
@@ -8718,6 +8728,10 @@ fn tool_build_graph_with_overlays(src: str, file: str, ov_paths: list[str], ov_t
     let canonical = module_canonical(file)
     let expanded = module_tokens_with_overlays(src, canonical, ov_paths, ov_texts)
     let program = check_source_with_overlays(src, canonical, ov_paths, ov_texts)
+    return tool_build_checked_graph(src, canonical, expanded, program, ov_paths, ov_texts, false)
+}
+
+fn tool_build_checked_graph(src: str, canonical: str, expanded: list[Token], program: CheckedProgram, ov_paths: list[str], ov_texts: list[str], include_entry: bool) -> ToolGraph {
     let graph = new ToolGraph(canonical, src)
     graph.mod_names.append(canonical)
     tool_scan_decl_nodes(graph, program, src, canonical)
@@ -8791,6 +8805,15 @@ fn tool_build_graph_with_overlays(src: str, file: str, ov_paths: list[str], ov_t
         }
         if fn_info.body >= 0 {
             tool_walk_subtree(program, graph, f_idx, fn_info.body)
+        }
+    }
+
+    if include_entry and len(program.entry) > 0 {
+        let idx = len(graph.nodes)
+        let node = new ToolGraphNode("fn:__entry__", "__entry__", "__entry__", "entrypoint", "entry", canonical, 1, 1, 1, 0, 0, 0, 0, "private", false, "", "")
+        graph.nodes.append(node)
+        for entry_node in program.entry {
+            tool_walk_subtree(program, graph, idx, entry_node)
         }
     }
 
@@ -9062,6 +9085,7 @@ fn tool_is_code_token(s: str) -> bool {
 }
 
 fn tool_handle_graph(args: list[str], json_mode: bool) -> unit {
+    let mut manifest = ""
     let mut file = ""
     let mut symbol = ""
     let mut rel = ""
@@ -9071,6 +9095,9 @@ fn tool_handle_graph(args: list[str], json_mode: bool) -> unit {
         if a == "--output-format=json-v1" {
             i = i + 1
         } elif a == "--output-format" and i + 1 < len(args) {
+            i = i + 2
+        } elif a == "--manifest" and i + 1 < len(args) {
+            manifest = args[i + 1]
             i = i + 2
         } elif (a == "--symbol" or a == "-s") and i + 1 < len(args) {
             symbol = args[i + 1]
@@ -9084,6 +9111,13 @@ fn tool_handle_graph(args: list[str], json_mode: bool) -> unit {
         } else {
             report_error("<cli>", "W5002", 1, 1, "unknown option for graph: " + a)
         }
+    }
+    if manifest != "" {
+        if file != "" or symbol == "" or rel != "impact" {
+            report_error("<cli>", "W5002", 1, 1, "use --manifest PATH --symbol NAME --rel impact without a source file")
+        }
+        proj_handle_impact(manifest, symbol, json_mode)
+        return
     }
     if file == "" { report_error("<cli>", "W5002", 1, 1, "graph requires a source file path") }
     let loaded = module_read_text_or_overlay(file)
@@ -14304,6 +14338,148 @@ fn tool_handle_project(args: list[str], json_mode_in: bool) -> unit {
     }
     exit(0)
 }
+
+
+struct ProjectImpactEntry {
+    name: str, kind: str, entry: str, profile: str, graph: ToolGraph,
+}
+
+fn proj_impact_graph(m: ProjectManifest, entry: str, aliases: list[str], roots: list[str]) -> ToolGraph {
+    let file = module_canonical(m.root + "/" + entry)
+    let source = read_file(file) else err {
+        report_error(file, "W5004", 1, 1, "cannot read project entry: " + err.message)
+        ""
+    }
+    let expanded = module_tokens_with_project(source, file, m.source_root_abs, aliases, roots)
+    let checked = check_program(expanded, file, true)
+    for node in checked.nodes {
+        if node.kind == "unsupported" {
+            report_error_at("W2013", node.source, "Compiler native-core-v1 does not support expression " + node.text)
+        }
+    }
+    return tool_build_checked_graph(source, file, expanded, checked, [], [], true)
+}
+
+fn proj_impact_matches(a: ToolGraphNode, b: ToolGraphNode) -> bool {
+    return a.file == b.file and a.kind == b.kind and a.line == b.line and a.col == b.col and a.name == b.name
+}
+
+fn proj_impact_entry_json(item: ProjectImpactEntry, target: ToolGraphNode, root: str, output_json: bool) -> str {
+    let graph = item.graph
+    let mut ids: list[str] = []
+    let mut next_edges: list[ToolGraphEdge] = []
+    for n in graph.nodes {
+        if proj_impact_matches(n, target) {
+            ids.append(n.id)
+            next_edges.append(ToolGraphEdge { from_id: "", to_id: "", kind: "", context: "", file: "", line: 0 })
+            break
+        }
+    }
+    let mut index = 0
+    while index < len(ids) {
+        for e in graph.edges {
+            if e.to_id == ids[index] and not tool_str_contains(ids, e.from_id) {
+                ids.append(e.from_id)
+                next_edges.append(e)
+            }
+        }
+        index = index + 1
+    }
+
+    let mut paths: list[str] = []
+    let mut labels: list[str] = []
+    let mut boundaries: list[str] = []
+    if item.profile == "browser-library" { boundaries.append("javascript") }
+    for n in graph.nodes {
+        if n.kind == "extern" and mcp_is_within_root(n.file, root) and not tool_str_contains(boundaries, "c-ffi") {
+            boundaries.append("c-ffi")
+        }
+        if n.file != graph.entry_file { continue }
+        let is_root = if item.profile == "browser-library" { n.kind == "fn" and n.visibility == "public" }
+            else { n.kind == "entrypoint" or (n.kind == "fn" and n.name == "main") }
+        if not is_root { continue }
+        let mut route: list[str] = []
+        let mut description = n.id
+        let mut cursor = -1
+        for i in 0..len(ids) {
+            if ids[i] == n.id { cursor = i break }
+        }
+        if cursor < 0 { continue }
+        while cursor > 0 {
+            let edge = next_edges[cursor]
+            route.append("{\"from\":" + diag_json_quote(edge.from_id) + ",\"to\":" + diag_json_quote(edge.to_id) + ",\"kind\":" + diag_json_quote(edge.kind) + "}")
+            description = description + " --" + edge.kind + "--> " + edge.to_id
+            for j in 0..cursor {
+                if ids[j] == edge.to_id { cursor = j break }
+            }
+        }
+        paths.append("{\"entry_symbol\":" + diag_json_quote(n.id) + ",\"chain\":[" + join_strings(route, ",") + "]}")
+        labels.append(description)
+    }
+    let affected = len(paths) > 0
+    if not output_json {
+        print(item.kind + " " + item.name + " (" + item.entry + "): " + (if affected { "affected" } else { "no static path" }))
+        for label in labels { print("  " + label) }
+        if len(boundaries) > 0 { print("  External boundaries: " + join_strings(boundaries, ", ")) }
+    }
+    return "{\"kind\":" + diag_json_quote(item.kind) + ",\"name\":" + diag_json_quote(item.name) +
+        ",\"entry\":" + diag_json_quote(item.entry) + ",\"profile\":" + diag_json_quote(item.profile) +
+        ",\"affected\":" + (if affected { "true" } else { "false" }) +
+        ",\"paths\":[" + join_strings(paths, ",") + "],\"unanalyzed_boundaries\":" + tool_str_list_json(boundaries) + "}"
+}
+
+fn proj_handle_impact(manifest: str, symbol: str, json_mode: bool) -> unit {
+    let m = proj_load_manifest(manifest)
+    if not m.ok { report_error(manifest, m.err_code, 1, 1, m.err_msg) }
+    let mut aliases: list[str] = []
+    let mut roots: list[str] = []
+    for dep in m.deps {
+        aliases.append(dep.alias)
+        roots.append(dep.source_root_abs)
+    }
+    let mut entries: list[ProjectImpactEntry] = []
+    for target in m.targets {
+        let graph = proj_impact_graph(m, target.entry, aliases, roots)
+        entries.append(ProjectImpactEntry { name: target.name, kind: "target", entry: target.entry, profile: target.profile, graph: graph })
+    }
+    for test in m.tests {
+        let graph = proj_impact_graph(m, test.entry, aliases, roots)
+        entries.append(ProjectImpactEntry { name: test.name, kind: "test", entry: test.entry, profile: "native-cli", graph: graph })
+    }
+    let mut candidates: list[ToolGraphNode] = []
+    let mut match_rank = 0
+    for item in entries {
+        for n in item.graph.nodes {
+            if n.kind == "entrypoint" { continue }
+            let rank = if n.id == symbol { 3 } elif n.qualified_name == symbol { 2 } elif n.name == symbol { 1 } else { 0 }
+            if rank == 0 or rank < match_rank { continue }
+            if rank > match_rank {
+                candidates = []
+                match_rank = rank
+            }
+            let mut seen = false
+            for candidate in candidates {
+                if proj_impact_matches(candidate, n) { seen = true break }
+            }
+            if not seen { candidates.append(n) }
+        }
+    }
+    if len(candidates) != 1 {
+        let msg = if len(candidates) == 0 { "symbol not found in declared targets or tests: " } else { "ambiguous project symbol: " }
+        report_error(manifest, "W5002", 1, 1, msg + symbol)
+    }
+    let selected = candidates[0]
+    let mut results: list[str] = []
+    for item in entries {
+        results.append(proj_impact_entry_json(item, selected, m.root, json_mode))
+    }
+    if json_mode {
+        let payload = "{\"schema_version\":\"wysna.project-impact/1\",\"symbol\":{\"id\":" + diag_json_quote(selected.id) +
+            ",\"name\":" + diag_json_quote(selected.name) + ",\"file\":" + diag_json_quote(selected.file) + ",\"line\":" + str(selected.line) +
+            "},\"entries\":[" + join_strings(results, ",") + "]}"
+        diag_write_output(diag_tool_envelope_json("graph", "ok", 0, "[]", "result", payload, "[]"))
+    }
+}
 # Native standard-library and project API index generator (wysna.api-index/1).
 
 class ApiParam {
@@ -15522,6 +15698,19 @@ fn mcp_tool_schema(state: McpServerState, arguments: LspJson) -> list[str] {
 }
 
 fn mcp_tool_graph(state: McpServerState, arguments: LspJson) -> list[str] {
+    if lsp_json_has(arguments, "manifest") {
+        let manifest = lsp_json_get(arguments, "manifest")
+        let symbol = lsp_json_str(arguments, "symbol", "")
+        if manifest.kind != "str" or symbol == "" or lsp_json_str(arguments, "relation", "") != "impact" or lsp_json_has(arguments, "path") or lsp_json_has(arguments, "source") {
+            return mcp_tool_err("provide manifest, symbol and relation=impact for a project query")
+        }
+        let confined = mcp_confine_path(state.root, manifest.str_val)
+        if confined[0] != "1" { return mcp_tool_err(confined[1]) }
+        let result = mcp_run_subcommand(state, ["graph", "--manifest", confined[1], "--symbol", symbol, "--rel", "impact", "--output-format=json-v1"])
+        if result[1] == "" { return mcp_tool_err("tool produced no JSON (exit " + result[0] + ")") }
+        return ["0", result[1]]
+    }
+
     let rs = mcp_resolve_source(state, arguments)
     if rs[0] != "1" { return mcp_tool_err(rs[1]) }
     let target = rs[1]
@@ -15656,7 +15845,7 @@ fn mcp_tools_list_json() -> str {
     ts.append("{\"name\":\"wysna_schema\",\"description\":\"Emit JSON Schema (Draft 2020-12) for structs/enums and LLM tool definitions with static effect/idempotency metadata for functions.\",\"inputSchema\":{\"type\":\"object\",\"properties\":{" + src_or_path + ",\"all\":{\"type\":\"boolean\",\"description\":\"Include private top-level functions.\"},\"function\":{\"type\":\"string\",\"description\":\"Emit tool schema for a single function.\"},\"emit_codecs\":{\"type\":\"boolean\",\"description\":\"Generate Wysna JSON encoder/decoder functions.\"}}}}")
     ts.append("{\"name\":\"wysna_api\",\"description\":\"Discover standard-library modules and public symbols.\",\"inputSchema\":{\"type\":\"object\",\"properties\":{\"module\":{\"type\":\"string\",\"description\":\"Optional module such as std/json.\"},\"manifest\":{\"type\":\"string\",\"description\":\"Optional path to a wysna.toml manifest inside the server root.\"}}}}")
     ts.append("{\"name\":\"wysna_capabilities\",\"description\":\"Installed commands, targets and their capability contracts.\",\"inputSchema\":{\"type\":\"object\",\"properties\":{}}}")
-    ts.append("{\"name\":\"wysna_graph\",\"description\":\"Compile-time semantic relationship graph (interfaces, classes, usages, calls, blast radius).\",\"inputSchema\":{\"type\":\"object\",\"properties\":{" + src_or_path + ",\"symbol\":{\"type\":\"string\",\"description\":\"Optional symbol name or node ID filter.\"},\"relation\":{\"type\":\"string\",\"description\":\"Optional relation filter: implements|hierarchy|usages|callers|callees|impact.\"}}}}")
+    ts.append("{\"name\":\"wysna_graph\",\"description\":\"Compile-time semantic relationship graph (interfaces, classes, usages, calls, blast radius).\",\"inputSchema\":{\"type\":\"object\",\"properties\":{" + src_or_path + ",\"manifest\":{\"type\":\"string\",\"description\":\"Project manifest for a symbol impact query.\"},\"symbol\":{\"type\":\"string\",\"description\":\"Optional symbol name or node ID filter.\"},\"relation\":{\"type\":\"string\",\"description\":\"Optional relation filter: implements|hierarchy|usages|callers|callees|impact.\"}}}}")
     ts.append("{\"name\":\"wysna_inspect\",\"description\":\"Surgical, token-efficient symbol source slice, contract, effects, and dependency signatures.\",\"inputSchema\":{\"type\":\"object\",\"properties\":{" + src_or_path + ",\"symbol\":{\"type\":\"string\",\"description\":\"Symbol name to extract (omit for compact index).\"},\"with_deps\":{\"type\":\"boolean\",\"description\":\"Include signatures of referenced types and callees.\"}}}}")
     ts.append("{\"name\":\"wysna_patch\",\"description\":\"Checked declaration-level patch guarded by graph hash and in-memory typecheck.\",\"inputSchema\":{\"type\":\"object\",\"properties\":{\"path\":{\"type\":\"string\",\"description\":\"Path to a .wysna file inside the server root.\"},\"symbol\":{\"type\":\"string\",\"description\":\"Target declaration name or Class.method.\"},\"replacement\":{\"type\":\"string\",\"description\":\"Replacement declaration Wysna code.\"},\"expect_graph_hash\":{\"type\":\"string\",\"description\":\"Optional optimistic lock graph hash.\"},\"apply\":{\"type\":\"boolean\",\"description\":\"Write patch to disk after verification (default false).\"}},\"required\":[\"path\",\"symbol\",\"replacement\"]}}")
     ts.append("{\"name\":\"wysna_skills\",\"description\":\"Version-matched concise coding and workflow guides embedded in Wysna.\",\"inputSchema\":{\"type\":\"object\",\"properties\":{\"topic\":{\"type\":\"string\",\"description\":\"overview, agent-loop, syntax, graph, patch, contracts, stdlib.\"}}}}")

@@ -144,3 +144,20 @@ To safeguard agent loops against runaway execution and unrepeatable I/O side-eff
 See [project workflows](PROJECTS.md), [native SDK](NATIVE_SDK.md),
 [effect contracts](EFFECTS.md), and [Seed distribution](SEED_DISTRIBUTION.md) for
 the complete interfaces and limitations.
+
+## Impacto de un símbolo en el proyecto
+
+Consulta los destinos y pruebas declarados desde el manifiesto:
+
+```sh
+wysna graph --manifest examples/shared-browser-app/wysna.toml --symbol quote_validation_code --rel impact
+```
+
+Agrega `--output-format=json-v1` para obtener el resultado `wysna.project-impact/1`.
+En MCP, usa `wysna_graph` con `manifest`, `symbol` y `relation: "impact"`.
+
+Cada entrada afectada incluye una cadena de relaciones hasta el símbolo.
+En una biblioteca web, el análisis parte de sus funciones públicas.
+Las llamadas desde JavaScript y el código C externo aparecen como fronteras
+fuera del análisis estático. Para distinguir símbolos homónimos, usa su ID
+cualificado.

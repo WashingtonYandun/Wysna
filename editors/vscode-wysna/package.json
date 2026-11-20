@@ -10,7 +10,33 @@
   "categories": [
     "Programming Languages"
   ],
+  "main": "./extension.js",
+  "activationEvents": ["onCommand:wysna.projectImpact"],
+  "capabilities": {
+    "untrustedWorkspaces": {
+      "supported": "limited",
+      "description": "Project impact runs the Wysna executable in trusted workspaces only."
+    }
+  },
   "contributes": {
+    "commands": [
+      {
+        "command": "wysna.projectImpact",
+        "title": "Wysna: Show Project Impact",
+        "enablement": "editorLangId == wysna"
+      }
+    ],
+    "configuration": {
+      "title": "Wysna",
+      "properties": {
+        "wysna.executablePath": {
+          "type": "string",
+          "default": "",
+          "scope": "machine",
+          "description": "Path to the Wysna executable. Leave empty to use PATH."
+        }
+      }
+    },
     "languages": [
       {
         "id": "wysna",

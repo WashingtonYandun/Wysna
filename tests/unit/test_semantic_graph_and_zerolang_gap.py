@@ -309,3 +309,32 @@ def test_skills_explain_code_and_mcp_agent_tools(tmp_path):
     failed, skill_mcp = _mcp_call(server, "wysna_skills", {"topic": "graph"})
     assert not failed
     assert "blast radius" in skill_mcp["result"]["content"]
+
+
+def test_project_impact_reports_cli_browser_service_and_test_paths():
+    manifest = "examples/shared-browser-app/wysna.toml"
+    symbol = "quote_validation_code"
+    code, envelope, stderr = _run_cli(
+        "graph", "--manifest", manifest, "--symbol", symbol, "--rel", "impact", "--output-format=json-v1",
+    )
+    assert code == 0, stderr
+    impact = envelope["result"]
+    assert impact["schema_version"] == "wysna.project-impact/1"
+    entries = {entry["name"]: entry for entry in impact["entries"]}
+    assert set(entries) == {"app", "service", "web", "shared-pricing-contract"}
+    assert all(entry["affected"] for entry in entries.values())
+    assert entries["service"]["unanalyzed_boundaries"] == ["c-ffi"]
+    assert entries["web"]["unanalyzed_boundaries"] == ["javascript"]
+    assert entries["app"]["paths"][0]["chain"][-1]["to"].endswith("::" + symbol)
+    assert any(path["chain"] == [] for path in entries["web"]["paths"])
+
+    failed, response = _mcp_call(
+        McpServer(ROOT), "wysna_graph", {"manifest": manifest, "symbol": symbol, "relation": "impact"},
+    )
+    assert not failed, response
+    assert response["result"] == impact
+
+    failed, _ = _mcp_call(
+        McpServer(ROOT / "examples"), "wysna_graph", {"manifest": "../wysna.toml", "symbol": symbol, "relation": "impact"},
+    )
+    assert failed
