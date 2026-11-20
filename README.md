@@ -88,20 +88,13 @@ flowchart LR
 
 ## Quick Start
 
-### 1. Install the Seed Distribution
+### 1. Instalar Wysna
 
-Download the installer for your host from the [**v0.7.0 release**](https://github.com/WashingtonYandun/Wysna/releases/tag/v0.7.0) (includes SHA-256 manifests and private CPython/Zig so core workflows require zero host setup; see [Seed distribution](docs/SEED_DISTRIBUTION.md)):
+Para proyectos nativos, elige el [SDK nativo en GitHub Releases](https://github.com/WashingtonYandun/Wysna/releases/latest) a partir de Wysna 0.8.0. Descarga el archivo de tu plataforma, extráelo en un directorio nuevo y añade su carpeta `bin` al PATH. En Windows también puedes usar `open-terminal.cmd`. El SDK incluye el compilador Wysna, Zig y la biblioteca estándar. Comprueba la instalación con `wysna --version`. [Guía del SDK](docs/NATIVE_SDK.md)
 
-| Host | Package | Default Launcher |
-| :--- | :--- | :--- |
-| **Windows x64** | `.exe` (Inno Setup) | `wysna.exe` / `open-terminal.cmd` |
-| **macOS arm64** | `.pkg` | `/usr/local/bin/wysna` |
-| **Linux x64** | `.deb` / `.rpm` | `/usr/bin/wysna` |
+Usa Seed para WebAssembly, LLVM directo o los comandos de proyecto que requieren crear o verificar `wysna.lock`. Los instaladores de Seed incluyen CPython y Zig.
 
-```sh
-wysna --version
-wysna doctor
-```
+Los paquetes de Seed se identifican por su extensión `.exe` en Windows, `.pkg` en macOS y `.deb` o `.rpm` en Linux. Comprueba su instalación con `wysna doctor`. [Guía de Seed](docs/SEED_DISTRIBUTION.md)
 
 ### 2. Hello, Wysna
 

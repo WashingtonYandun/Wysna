@@ -5,13 +5,13 @@ AI agents. CLI tools and scripting are the first product workflow; general-purpo
 use remains the direction. Version 0.8.0 is published as a pre-1.0 line (with 0.7.0
 tagged desktop installers); it is not a security guarantee, and language contracts may evolve before 1.0.
 
-## One recommended installation
+## Instalación
 
-The primary installation path is the complete Seed distribution, with private
-CPython and Zig, installed through the graphical installer for the announced host.
-Users must not need to select a compiler implementation or install Python, pip or
-a C compiler to use the installed core tools. Source and silent command-line flows
-remain available for contributors and agents. See [distribution status](SEED_DISTRIBUTION.md).
+Para proyectos nativos C99, la descarga recomendada desde 0.8.0 es el [SDK nativo](NATIVE_SDK.md).
+Incluye el compilador escrito en Wysna, Zig y la biblioteca estándar. La
+[distribución Seed](SEED_DISTRIBUTION.md) cubre los destinos y comandos que
+dependen del compilador de referencia, como WebAssembly o la verificación
+de `wysna.lock`.
 
 Installer artifacts are qualified per source commit. A package must pass installation, repair/update,
 relocation where applicable, real program execution and uninstallation acceptance
