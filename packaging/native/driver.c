@@ -73,6 +73,11 @@ static void sdk_help(void) {
          "       wysna inspect SOURCE [--symbol NAME] [--with-deps] [--output-format=json-v1]\n"
          "       wysna patch SOURCE --symbol NAME (--with CODE | --with-file PATH) [--expect-graph-hash HASH] [--apply] [--output-format=json-v1]\n"
          "       wysna explain (SOURCE | --code Wxxxx) [--function NAME] [--output-format=json-v1]\n"
+         "       wysna schema SOURCE [--all] [--function NAME] [--emit-codecs] [-o OUTPUT] [--output-format=json-v1]\n"
+         "       wysna fix SOURCE [--apply] [--include-maybe] [--output-format=json-v1]\n"
+         "       wysna skills [TOPIC] [--output-format=json-v1]\n"
+         "       wysna capabilities [--output-format=json-v1]\n"
+         "       wysna mcp [--root DIR]\n"
          "       wysna lsp\n"
          "Build and run accept --include-dir DIR, --link FILE, --library-dir DIR and --library NAME.\n"
          "This SDK compiles through verified MIR without Python. See native-sdk.json for its profile.");
@@ -87,11 +92,18 @@ static int sdk_has_json_v1(int argc, char** argv) {
 static int sdk_is_agent_passthrough(const char* cmd) {
     return strcmp(cmd, "graph") == 0 || strcmp(cmd, "inspect") == 0 ||
            strcmp(cmd, "patch") == 0 || strcmp(cmd, "explain") == 0 ||
-           strcmp(cmd, "lsp") == 0;
+           strcmp(cmd, "schema") == 0 || strcmp(cmd, "fix") == 0 ||
+           strcmp(cmd, "skills") == 0 || strcmp(cmd, "capabilities") == 0 ||
+           strcmp(cmd, "mcp") == 0 || strcmp(cmd, "lsp") == 0;
 }
 static int sdk_parse(SdkOptions* options, int argc, char** argv) {
-    if (argc >= 2 && argc <= SDK_ARGUMENT_LIMIT && strcmp(argv[1], "lsp") == 0) {
-        options->command = argv[1]; options->profile = "dev"; options->timeout = 0; options->source = "";
+    if (argc >= 2 && argc <= SDK_ARGUMENT_LIMIT &&
+        (strcmp(argv[1], "lsp") == 0 || strcmp(argv[1], "mcp") == 0 ||
+         strcmp(argv[1], "skills") == 0 || strcmp(argv[1], "capabilities") == 0)) {
+        options->command = argv[1];
+        options->profile = "dev";
+        options->timeout = (strcmp(argv[1], "lsp") == 0 || strcmp(argv[1], "mcp") == 0) ? 0 : 600000;
+        options->source = "";
         return 1;
     }
     if (argc < 3 || argc > SDK_ARGUMENT_LIMIT) return 0;
@@ -431,7 +443,7 @@ cleanup:
 
 static int sdk_execute(SdkInvocation* invocation, const SdkOptions* options, int argc, char** argv) {
     if (!sdk_component_paths(invocation)) return sdk_error("W5001", "Cannot locate the native compiler beside this SDK", NULL);
-    if (strcmp(options->command, "lsp") == 0) {
+    if (strcmp(options->command, "lsp") == 0 || strcmp(options->command, "mcp") == 0) {
         const char* engine_arguments[SDK_ARGUMENT_LIMIT + 4];
         engine_arguments[0] = invocation->engine;
         engine_arguments[1] = "--stdlib-root";
@@ -445,7 +457,7 @@ static int sdk_execute(SdkInvocation* invocation, const SdkOptions* options, int
         return (int)_spawnv(_P_WAIT, invocation->engine, engine_arguments);
 #else
         execv(invocation->engine, (char* const*)engine_arguments);
-        return sdk_error("W5001", "Cannot start the native LSP server", invocation->engine);
+        return sdk_error("W5001", "Cannot start the native stdio server", invocation->engine);
 #endif
     }
     if (sdk_is_agent_passthrough(options->command) ||

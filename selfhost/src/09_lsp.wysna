@@ -4,7 +4,6 @@ extern "C" fn wysna_host_stdin_read_line(output: opaque) -> int
 extern "C" fn wysna_host_stdin_read_exact(output: opaque, count: int) -> int
 extern "C" fn wysna_host_stdout_write_raw(input: opaque) -> int
 extern "C" fn wysna_host_self_executable(output: opaque) -> int
-extern "C" fn wysna_host_fs(first: opaque, second: opaque, operation: int) -> int
 extern "C" fn wysna_host_process_run(executable: opaque, arguments: opaque, timeout_ms: int) -> int
 
 fn lsp_buf_from_str(text: str) -> opaque {

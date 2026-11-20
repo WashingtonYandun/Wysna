@@ -342,6 +342,14 @@ def validate(sdk, report, strict_source=False, compiler_source=None):
         require(not list(project.glob('.wysna-*')), 'Output staging directories leaked')
         require(not list((work / 'temporary á').iterdir()), 'Temporary compilation artifacts leaked')
         checks.append({'name': 'cleanup-after-success-error-timeout-cancellation', 'status': 0})
+
+        sk_res = run('agent-skills-json-v1', ['skills', '--output-format=json-v1'])
+        sk_env = json.loads(sk_res.stdout.decode('utf-8'))
+        require(sk_env.get('status') == 'ok' and sk_env.get('result', {}).get('schema_version') == 'wysna.skills/1', sk_env)
+
+        sch_res = run('agent-schema-json-v1', ['schema', '--output-format=json-v1', source])
+        sch_env = json.loads(sch_res.stdout.decode('utf-8'))
+        require(sch_env.get('status') == 'ok' and sch_env.get('result', {}).get('schema_version') == 'wysna.schema/1', sch_env)
         if compiler_source:
             require(digest(Path(compiler_source)) == manifest["compiler_source_sha256"], "Selfbuild source does not match SDK provenance")
             fixture = project / 'compiler.wysna'

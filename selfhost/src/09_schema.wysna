@@ -1,0 +1,1404 @@
+# Native JSON Schema (Draft 2020-12), contract constraints, and Wysna JSON codec generator.
+
+class SchemaType {
+    kind: str
+    name: str
+    args: list[SchemaType]
+
+    fn init(kind: str, name: str) {
+        this.kind = kind
+        this.name = name
+        let initial_args: list[SchemaType] = []
+        this.args = initial_args
+    }
+}
+
+class SchemaBound {
+    has_bound: bool
+    has_min: bool
+    min_num: str
+    excl_min: bool
+    has_max: bool
+    max_num: str
+    excl_max: bool
+    has_min_len: bool
+    min_len: int
+    has_max_len: bool
+    max_len: int
+    x_requires: list[str]
+
+    fn init() {
+        this.has_bound = false
+        this.has_min = false
+        this.min_num = ""
+        this.excl_min = false
+        this.has_max = false
+        this.max_num = ""
+        this.excl_max = false
+        this.has_min_len = false
+        this.min_len = 0
+        this.has_max_len = false
+        this.max_len = 0
+        let reqs: list[str] = []
+        this.x_requires = reqs
+    }
+}
+
+class SchemaField {
+    name: str
+    t: SchemaType
+    bound: SchemaBound
+
+    fn init(name: str, t: SchemaType, bound: SchemaBound) {
+        this.name = name
+        this.t = t
+        this.bound = bound
+    }
+}
+
+class SchemaStruct {
+    name: str
+    line: int
+    has_type_params: bool
+    fields: list[SchemaField]
+
+    fn init(name: str, line: int, has_type_params: bool) {
+        this.name = name
+        this.line = line
+        this.has_type_params = has_type_params
+        let fs: list[SchemaField] = []
+        this.fields = fs
+    }
+}
+
+class SchemaVariant {
+    name: str
+    payloads: list[SchemaType]
+
+    fn init(name: str) {
+        this.name = name
+        let ps: list[SchemaType] = []
+        this.payloads = ps
+    }
+}
+
+class SchemaEnum {
+    name: str
+    line: int
+    has_type_params: bool
+    variants: list[SchemaVariant]
+
+    fn init(name: str, line: int, has_type_params: bool) {
+        this.name = name
+        this.line = line
+        this.has_type_params = has_type_params
+        let vs: list[SchemaVariant] = []
+        this.variants = vs
+    }
+}
+
+class SchemaParam {
+    name: str
+    t: SchemaType
+    bound: SchemaBound
+
+    fn init(name: str, t: SchemaType) {
+        this.name = name
+        this.t = t
+        this.bound = new SchemaBound()
+    }
+}
+
+class SchemaFn {
+    name: str
+    line: int
+    is_pub: bool
+    type_params: list[str]
+    params: list[SchemaParam]
+    has_ret: bool
+    ret: SchemaType
+    req_strs: list[str]
+    ens_strs: list[str]
+    req_clauses: list[list[Token]]
+    ens_clauses: list[list[Token]]
+
+    fn init(name: str, line: int, is_pub: bool) {
+        this.name = name
+        this.line = line
+        this.is_pub = is_pub
+        let tp: list[str] = []
+        this.type_params = tp
+        let ps: list[SchemaParam] = []
+        this.params = ps
+        this.has_ret = false
+        this.ret = new SchemaType("named", "unit")
+        let rs: list[str] = []
+        this.req_strs = rs
+        let es: list[str] = []
+        this.ens_strs = es
+        let rc: list[list[Token]] = []
+        this.req_clauses = rc
+        let ec: list[list[Token]] = []
+        this.ens_clauses = ec
+    }
+}
+
+class SchemaTokCursor {
+    tokens: list[Token]
+    pos: int
+
+    fn init(tokens: list[Token]) {
+        this.tokens = tokens
+        this.pos = 0
+    }
+}
+
+class SchemaDeclSet {
+    structs: list[SchemaStruct]
+    enums: list[SchemaEnum]
+    fns: list[SchemaFn]
+
+    fn init() {
+        let s: list[SchemaStruct] = []
+        let e: list[SchemaEnum] = []
+        let f: list[SchemaFn] = []
+        this.structs = s
+        this.enums = e
+        this.fns = f
+    }
+}
+
+fn schema_split_lines(src: str) -> list[str] {
+    let mut lines: list[str] = []
+    let mut start = 0
+    let n = len(src)
+    for i in 0..n {
+        if src[i] == "\n" {
+            let mut end_idx = i
+            if end_idx > start and src[end_idx - 1] == "\r" { end_idx = end_idx - 1 }
+            lines.append(slice(src, start, end_idx))
+            start = i + 1
+        }
+    }
+    let mut tail_end = n
+    if tail_end > start and src[tail_end - 1] == "\r" { tail_end = tail_end - 1 }
+    lines.append(slice(src, start, tail_end))
+    return lines
+}
+
+fn schema_leading_doc(lines: list[str], decl_line: int) -> list[str] {
+    let mut idx = decl_line - 2
+    let mut rev: list[str] = []
+    while idx >= 0 and idx < len(lines) {
+        let trimmed = lsp_trim(lines[idx])
+        if len(trimmed) == 0 or trimmed[0] != "#" { break }
+        let mut p = 0
+        while p < len(trimmed) and trimmed[p] == "#" { p = p + 1 }
+        rev.append(lsp_trim(slice(trimmed, p, len(trimmed))))
+        idx = idx - 1
+    }
+    if len(rev) == 0 { return ["0", ""] }
+    let mut ordered: list[str] = []
+    let mut k = len(rev) - 1
+    while k >= 0 {
+        ordered.append(rev[k])
+        k = k - 1
+    }
+    return ["1", join_strings(ordered, "\n")]
+}
+
+fn schema_cur_kind(c: SchemaTokCursor) -> str {
+    if c.pos < 0 or c.pos >= len(c.tokens) { return "EOF" }
+    return c.tokens[c.pos].kind
+}
+
+fn schema_cur_val(c: SchemaTokCursor) -> str {
+    if c.pos < 0 or c.pos >= len(c.tokens) { return "" }
+    return c.tokens[c.pos].val
+}
+
+fn schema_skip_newlines(c: SchemaTokCursor) -> unit {
+    while schema_cur_kind(c) == "NEWLINE" { c.pos = c.pos + 1 }
+}
+
+fn schema_parse_primary_type(c: SchemaTokCursor) -> SchemaType {
+    schema_skip_newlines(c)
+    let k = schema_cur_kind(c)
+    let v = schema_cur_val(c)
+    if k == "NONE" {
+        c.pos = c.pos + 1
+        return new SchemaType("named", "none")
+    }
+    if k == "LPAREN" {
+        c.pos = c.pos + 1
+        let mut items: list[SchemaType] = []
+        if schema_cur_kind(c) != "RPAREN" {
+            items.append(schema_parse_type(c))
+            while schema_cur_kind(c) == "COMMA" {
+                c.pos = c.pos + 1
+                items.append(schema_parse_type(c))
+            }
+        }
+        if schema_cur_kind(c) == "RPAREN" { c.pos = c.pos + 1 }
+        if len(items) == 1 { return items[0] }
+        let tup = new SchemaType("tuple", "tuple")
+        tup.args = items
+        return tup
+    }
+    if k == "IDENT" and v == "fn" or k == "FN" {
+        c.pos = c.pos + 1
+        let fn_t = new SchemaType("function", "fn")
+        if schema_cur_kind(c) == "LPAREN" {
+            c.pos = c.pos + 1
+            while schema_cur_kind(c) != "RPAREN" and schema_cur_kind(c) != "EOF" {
+                fn_t.args.append(schema_parse_type(c))
+                if schema_cur_kind(c) == "COMMA" { c.pos = c.pos + 1 } else { break }
+            }
+            if schema_cur_kind(c) == "RPAREN" { c.pos = c.pos + 1 }
+        }
+        if schema_cur_kind(c) == "ARROW" {
+            c.pos = c.pos + 1
+            fn_t.args.append(schema_parse_type(c))
+        } else {
+            fn_t.args.append(new SchemaType("named", "unit"))
+        }
+        return fn_t
+    }
+    if k == "IDENT" {
+        let mut name = v
+        c.pos = c.pos + 1
+        while schema_cur_kind(c) == "DOT" and c.pos + 1 < len(c.tokens) and c.tokens[c.pos + 1].kind == "IDENT" {
+            c.pos = c.pos + 1
+            name = name + "." + schema_cur_val(c)
+            c.pos = c.pos + 1
+        }
+        if schema_cur_kind(c) == "LBRACKET" {
+            c.pos = c.pos + 1
+            let mut args: list[SchemaType] = []
+            while schema_cur_kind(c) != "RBRACKET" and schema_cur_kind(c) != "EOF" {
+                args.append(schema_parse_type(c))
+                if schema_cur_kind(c) == "COMMA" { c.pos = c.pos + 1 } else { break }
+            }
+            if schema_cur_kind(c) == "RBRACKET" { c.pos = c.pos + 1 }
+            if name == "list" and len(args) == 1 {
+                let lt = new SchemaType("list", "list")
+                lt.args = args
+                return lt
+            }
+            if name == "dict" and len(args) == 2 {
+                let dt = new SchemaType("dict", "dict")
+                dt.args = args
+                return dt
+            }
+            if name == "tuple" {
+                let tt = new SchemaType("tuple", "tuple")
+                tt.args = args
+                return tt
+            }
+            let gt = new SchemaType("generic", name)
+            gt.args = args
+            return gt
+        }
+        return new SchemaType("named", name)
+    }
+    c.pos = c.pos + 1
+    return new SchemaType("named", "unknown")
+}
+
+fn schema_parse_postfix_type(c: SchemaTokCursor) -> SchemaType {
+    let mut base = schema_parse_primary_type(c)
+    while schema_cur_kind(c) == "QUESTION" {
+        c.pos = c.pos + 1
+        let opt = new SchemaType("optional", "optional")
+        opt.args.append(base)
+        base = opt
+    }
+    return base
+}
+
+fn schema_parse_error_union_or_single(c: SchemaTokCursor) -> SchemaType {
+    let first = schema_parse_postfix_type(c)
+    if schema_cur_kind(c) != "PIPE" { return first }
+    let eu = new SchemaType("error_union", "error_union")
+    eu.args.append(first)
+    while schema_cur_kind(c) == "PIPE" {
+        c.pos = c.pos + 1
+        eu.args.append(schema_parse_postfix_type(c))
+    }
+    return eu
+}
+
+fn schema_parse_type(c: SchemaTokCursor) -> SchemaType {
+    let ok_t = schema_parse_error_union_or_single(c)
+    if schema_cur_kind(c) == "BANG" {
+        c.pos = c.pos + 1
+        let err_t = schema_parse_error_union_or_single(c)
+        let res_t = new SchemaType("result", "result")
+        res_t.args.append(ok_t)
+        res_t.args.append(err_t)
+        return res_t
+    }
+    return ok_t
+}
+
+fn schema_type_text(t: SchemaType) -> str {
+    if t.kind == "named" { return t.name }
+    if t.kind == "optional" and len(t.args) == 1 { return schema_type_text(t.args[0]) + "?" }
+    if t.kind == "list" and len(t.args) == 1 { return "list[" + schema_type_text(t.args[0]) + "]" }
+    if t.kind == "dict" and len(t.args) == 2 { return "dict[" + schema_type_text(t.args[0]) + ", " + schema_type_text(t.args[1]) + "]" }
+    if t.kind == "tuple" {
+        let mut parts: list[str] = []
+        for a in t.args { parts.append(schema_type_text(a)) }
+        return "(" + join_strings(parts, ", ") + ")"
+    }
+    if t.kind == "result" and len(t.args) == 2 { return schema_type_text(t.args[0]) + " ! " + schema_type_text(t.args[1]) }
+    if t.kind == "error_union" {
+        let mut parts: list[str] = []
+        for a in t.args { parts.append(schema_type_text(a)) }
+        return join_strings(parts, " | ")
+    }
+    if t.kind == "generic" {
+        let mut parts: list[str] = []
+        for a in t.args { parts.append(schema_type_text(a)) }
+        return t.name + "[" + join_strings(parts, ", ") + "]"
+    }
+    if t.kind == "function" and len(t.args) >= 1 {
+        let mut p_parts: list[str] = []
+        for i in 0..len(t.args) - 1 { p_parts.append(schema_type_text(t.args[i])) }
+        return "fn(" + join_strings(p_parts, ", ") + ") -> " + schema_type_text(t.args[len(t.args) - 1])
+    }
+    return t.name
+}
+
+fn schema_bound_json_tail(bound: SchemaBound, base_type: str, include_x_reqs: bool) -> str {
+    let mut extra: list[str] = []
+    if bound.has_min {
+        let k = if bound.excl_min { "\"exclusiveMinimum\":" } else { "\"minimum\":" }
+        extra.append(k + bound.min_num)
+    }
+    if bound.has_max {
+        let k = if bound.excl_max { "\"exclusiveMaximum\":" } else { "\"maximum\":" }
+        extra.append(k + bound.max_num)
+    }
+    if bound.has_min_len {
+        if base_type == "string" { extra.append("\"minLength\":" + str(bound.min_len)) }
+        elif base_type == "array" { extra.append("\"minItems\":" + str(bound.min_len)) }
+    }
+    if bound.has_max_len {
+        if base_type == "string" { extra.append("\"maxLength\":" + str(bound.max_len)) }
+        elif base_type == "array" { extra.append("\"maxItems\":" + str(bound.max_len)) }
+    }
+    if include_x_reqs and len(bound.x_requires) > 0 {
+        let mut rjson: list[str] = ["["]
+        for i in 0..len(bound.x_requires) {
+            if i > 0 { rjson.append(",") }
+            rjson.append(diag_json_quote(bound.x_requires[i]))
+        }
+        rjson.append("]")
+        extra.append("\"x-wysna-requires\":" + join_strings(rjson, ""))
+    }
+    return join_strings(extra, ",")
+}
+
+fn schema_inject_tail(base_json: str, tail: str) -> str {
+    if tail == "" { return base_json }
+    if len(base_json) >= 2 and base_json[len(base_json) - 1] == "}" {
+        let inner = slice(base_json, 0, len(base_json) - 1)
+        if inner == "{" { return "{" + tail + "}" }
+        return inner + "," + tail + "}"
+    }
+    return base_json
+}
+
+fn schema_json_primitive_type(t: SchemaType, known_defs: list[str]) -> str {
+    if t.kind == "named" {
+        if t.name == "str" { return "string" }
+        if t.name == "int" { return "integer" }
+        if t.name == "float" { return "number" }
+        if t.name == "bool" { return "boolean" }
+        if t.name == "unit" or t.name == "none" { return "null" }
+        if not tool_str_contains(known_defs, t.name) { return "string" }
+        return ""
+    }
+    if t.kind == "list" { return "array" }
+    return ""
+}
+
+fn schema_type_to_json(t: SchemaType, known_defs: list[str]) -> str {
+    if t.kind == "named" {
+        if t.name == "int" { return "{\"type\":\"integer\"}" }
+        if t.name == "float" { return "{\"type\":\"number\"}" }
+        if t.name == "bool" { return "{\"type\":\"boolean\"}" }
+        if t.name == "str" { return "{\"type\":\"string\"}" }
+        if t.name == "unit" or t.name == "none" { return "{\"type\":\"null\"}" }
+        if tool_str_contains(known_defs, t.name) { return "{\"$ref\":" + diag_json_quote("#/$defs/" + t.name) + "}" }
+        return "{\"type\":\"string\",\"x-wysna-type\":" + diag_json_quote(t.name) + "}"
+    }
+    if t.kind == "optional" and len(t.args) == 1 {
+        return "{\"anyOf\":[" + schema_type_to_json(t.args[0], known_defs) + ",{\"type\":\"null\"}]}"
+    }
+    if t.kind == "list" and len(t.args) == 1 {
+        return "{\"type\":\"array\",\"items\":" + schema_type_to_json(t.args[0], known_defs) + "}"
+    }
+    if t.kind == "dict" and len(t.args) == 2 {
+        let key_s = schema_type_text(t.args[0])
+        let val_s = schema_type_to_json(t.args[1], known_defs)
+        if key_s != "str" {
+            return "{\"type\":\"object\",\"additionalProperties\":" + val_s + ",\"x-wysna-key-type\":" + diag_json_quote(key_s) + "}"
+        }
+        return "{\"type\":\"object\",\"additionalProperties\":" + val_s + "}"
+    }
+    if t.kind == "tuple" {
+        let mut pitems: list[str] = ["["]
+        for i in 0..len(t.args) {
+            if i > 0 { pitems.append(",") }
+            pitems.append(schema_type_to_json(t.args[i], known_defs))
+        }
+        pitems.append("]")
+        let cnt = str(len(t.args))
+        return "{\"type\":\"array\",\"prefixItems\":" + join_strings(pitems, "") + ",\"minItems\":" + cnt + ",\"maxItems\":" + cnt + "}"
+    }
+    if t.kind == "result" and len(t.args) == 2 {
+        let ok_j = "{\"type\":\"object\",\"properties\":{\"ok\":" + schema_type_to_json(t.args[0], known_defs) + "},\"required\":[\"ok\"],\"additionalProperties\":false}"
+        let err_j = "{\"type\":\"object\",\"properties\":{\"err\":" + schema_type_to_json(t.args[1], known_defs) + "},\"required\":[\"err\"],\"additionalProperties\":false}"
+        return "{\"oneOf\":[" + ok_j + "," + err_j + "]}"
+    }
+    if t.kind == "error_union" {
+        let mut alts: list[str] = ["["]
+        for i in 0..len(t.args) {
+            if i > 0 { alts.append(",") }
+            alts.append(schema_type_to_json(t.args[i], known_defs))
+        }
+        alts.append("]")
+        return "{\"oneOf\":" + join_strings(alts, "") + "}"
+    }
+    if t.kind == "generic" {
+        if tool_str_contains(known_defs, t.name) {
+            return "{\"$ref\":" + diag_json_quote("#/$defs/" + t.name) + ",\"x-wysna-type\":" + diag_json_quote(schema_type_text(t)) + "}"
+        }
+        return "{\"type\":\"object\",\"x-wysna-type\":" + diag_json_quote(schema_type_text(t)) + "}"
+    }
+    return "{\"x-wysna-type\":" + diag_json_quote(schema_type_text(t)) + "}"
+}
+
+fn schema_format_tok_slice(toks: list[Token]) -> str {
+    let mut parts: list[str] = []
+    let n = len(toks)
+    for i in 0..n {
+        let t = toks[i]
+        let txt = if t.kind == "STR" { diag_json_quote(t.val) } else { t.val }
+        if i == 0 {
+            parts.append(txt)
+            continue
+        }
+        let prev = toks[i - 1]
+        let no_space = (t.kind == "LPAREN" or t.kind == "RPAREN" or t.kind == "LBRACKET" or t.kind == "RBRACKET" or t.kind == "COMMA" or t.kind == "DOT" or prev.kind == "LPAREN" or prev.kind == "LBRACKET" or prev.kind == "DOT")
+        let unary_minus = prev.kind == "MINUS" and (i == 1 or (toks[i - 2].kind != "IDENT" and toks[i - 2].kind != "INT" and toks[i - 2].kind != "FLOAT" and toks[i - 2].kind != "RPAREN" and toks[i - 2].kind != "RBRACKET"))
+        if no_space or unary_minus {
+            parts.append(txt)
+        } else {
+            parts.append(" " + txt)
+        }
+    }
+    return join_strings(parts, "")
+}
+
+fn schema_extract_num(toks: list[Token], lo: int, hi: int) -> list[str] {
+    if lo >= hi { return ["0", "", "0"] }
+    if toks[lo].kind == "MINUS" and lo + 1 == hi - 1 {
+        let nxt = toks[lo + 1]
+        if nxt.kind == "INT" { return ["1", "-" + nxt.val, "int"] }
+        if nxt.kind == "FLOAT" { return ["1", "-" + nxt.val, "float"] }
+    }
+    if lo + 1 == hi {
+        let t = toks[lo]
+        if t.kind == "INT" { return ["1", t.val, "int"] }
+        if t.kind == "FLOAT" { return ["1", t.val, "float"] }
+    }
+    return ["0", "", ""]
+}
+
+fn schema_extract_target(toks: list[Token], lo: int, hi: int) -> list[str] {
+    if lo + 1 == hi and toks[lo].kind == "IDENT" {
+        return ["value", toks[lo].val]
+    }
+    if lo + 3 == hi and toks[lo + 1].kind == "DOT" and toks[lo + 2].kind == "IDENT" {
+        if toks[lo].kind == "THIS" or (toks[lo].kind == "IDENT" and toks[lo].val == "self") {
+            return ["value", toks[lo + 2].val]
+        }
+    }
+    if lo + 4 == hi and toks[lo].kind == "IDENT" and toks[lo].val == "len" and toks[lo + 1].kind == "LPAREN" and toks[lo + 3].kind == "RPAREN" and toks[lo + 2].kind == "IDENT" {
+        return ["len", toks[lo + 2].val]
+    }
+    return ["", ""]
+}
+
+fn schema_flip_op(op: str) -> str {
+    if op == ">" { return "<" }
+    if op == ">=" { return "<=" }
+    if op == "<" { return ">" }
+    if op == "<=" { return ">=" }
+    return op
+}
+
+fn schema_apply_cmp_bound(bound: SchemaBound, tkind: str, op: str, num_str: str, num_kind: str) -> unit {
+    if tkind == "value" {
+        if op == ">=" {
+            bound.has_min = true
+            bound.min_num = num_str
+            bound.excl_min = false
+            bound.has_bound = true
+        } elif op == ">" {
+            bound.has_min = true
+            bound.min_num = num_str
+            bound.excl_min = true
+            bound.has_bound = true
+        } elif op == "<=" {
+            bound.has_max = true
+            bound.max_num = num_str
+            bound.excl_max = false
+            bound.has_bound = true
+        } elif op == "<" {
+            bound.has_max = true
+            bound.max_num = num_str
+            bound.excl_max = true
+            bound.has_bound = true
+        }
+    } elif tkind == "len" and num_kind == "int" {
+        let val_i = lsp_parse_int(num_str, 0)
+        if op == ">=" {
+            bound.has_min_len = true
+            bound.min_len = val_i
+            bound.has_bound = true
+        } elif op == ">" {
+            bound.has_min_len = true
+            bound.min_len = val_i + 1
+            bound.has_bound = true
+        } elif op == "<=" {
+            bound.has_max_len = true
+            bound.max_len = val_i
+            bound.has_bound = true
+        } elif op == "<" and val_i > 0 {
+            bound.has_max_len = true
+            bound.max_len = val_i - 1
+            bound.has_bound = true
+        }
+    }
+}
+
+fn schema_apply_tokens_to_targets(toks: list[Token], lo: int, hi: int, target_names: list[str], target_bounds: list[SchemaBound]) -> unit {
+    if lo >= hi { return }
+    # Strip outer balanced parentheses
+    if toks[lo].kind == "LPAREN" and toks[hi - 1].kind == "RPAREN" {
+        let mut d = 0
+        let mut wraps = true
+        for k in lo..hi {
+            if toks[k].kind == "LPAREN" { d = d + 1 }
+            elif toks[k].kind == "RPAREN" {
+                d = d - 1
+                if d == 0 and k < hi - 1 {
+                    wraps = false
+                    break
+                }
+            }
+        }
+        if wraps {
+            schema_apply_tokens_to_targets(toks, lo + 1, hi - 1, target_names, target_bounds)
+            return
+        }
+    }
+    # Split on top-level AND
+    let mut depth = 0
+    for k in lo..hi {
+        let kind = toks[k].kind
+        if kind == "LPAREN" or kind == "LBRACKET" { depth = depth + 1 }
+        elif (kind == "RPAREN" or kind == "RBRACKET") and depth > 0 { depth = depth - 1 }
+        elif depth == 0 and kind == "AND" {
+            schema_apply_tokens_to_targets(toks, lo, k, target_names, target_bounds)
+            schema_apply_tokens_to_targets(toks, k + 1, hi, target_names, target_bounds)
+            return
+        }
+    }
+    # Find top-level comparison operator
+    depth = 0
+    let mut cmp_idx = -1
+    let mut cmp_op = ""
+    for k in lo..hi {
+        let kind = toks[k].kind
+        if kind == "LPAREN" or kind == "LBRACKET" { depth = depth + 1 }
+        elif (kind == "RPAREN" or kind == "RBRACKET") and depth > 0 { depth = depth - 1 }
+        elif depth == 0 and (kind == "GT" or kind == "GTE" or kind == "LT" or kind == "LTE" or kind == "EQ") {
+            cmp_idx = k
+            cmp_op = toks[k].val
+            break
+        }
+    }
+    if cmp_idx < 0 { return }
+    let t_left = schema_extract_target(toks, lo, cmp_idx)
+    let n_right = schema_extract_num(toks, cmp_idx + 1, hi)
+    let mut target_kind = t_left[0]
+    let mut target_name = t_left[1]
+    let mut num_str = n_right[1]
+    let mut num_kind = n_right[2]
+    let mut op = cmp_op
+    if target_kind == "" or n_right[0] != "1" {
+        let t_right = schema_extract_target(toks, cmp_idx + 1, hi)
+        let n_left = schema_extract_num(toks, lo, cmp_idx)
+        if t_right[0] != "" and n_left[0] == "1" {
+            target_kind = t_right[0]
+            target_name = t_right[1]
+            num_str = n_left[1]
+            num_kind = n_left[2]
+            op = schema_flip_op(cmp_op)
+        } else {
+            return
+        }
+    }
+    for i in 0..len(target_names) {
+        if target_names[i] == target_name {
+            schema_apply_cmp_bound(target_bounds[i], target_kind, op, num_str, num_kind)
+        }
+    }
+}
+
+fn schema_skip_brackets(c: SchemaTokCursor) -> list[str] {
+    let mut names: list[str] = []
+    if schema_cur_kind(c) != "LBRACKET" { return names }
+    c.pos = c.pos + 1
+    let mut depth = 1
+    let mut cur_name = ""
+    let mut take_name = true
+    while c.pos < len(c.tokens) and depth > 0 {
+        let k = schema_cur_kind(c)
+        if k == "LBRACKET" { depth = depth + 1 }
+        elif k == "RBRACKET" {
+            depth = depth - 1
+            if depth == 0 {
+                if cur_name != "" { names.append(cur_name) }
+                c.pos = c.pos + 1
+                break
+            }
+        } elif depth == 1 and k == "COMMA" {
+            if cur_name != "" { names.append(cur_name) }
+            cur_name = ""
+            take_name = true
+        } elif depth == 1 and k == "COLON" {
+            take_name = false
+        } elif depth == 1 and take_name and k == "IDENT" and cur_name == "" {
+            cur_name = schema_cur_val(c)
+        }
+        c.pos = c.pos + 1
+    }
+    return names
+}
+
+fn schema_skip_brace_block(c: SchemaTokCursor) -> unit {
+    if schema_cur_kind(c) != "LBRACE" { return }
+    c.pos = c.pos + 1
+    let mut depth = 1
+    while c.pos < len(c.tokens) and depth > 0 {
+        let k = schema_cur_kind(c)
+        if k == "LBRACE" { depth = depth + 1 }
+        elif k == "RBRACE" { depth = depth - 1 }
+        c.pos = c.pos + 1
+    }
+}
+
+fn schema_collect_decls(tokens: list[Token], out: SchemaDeclSet) -> unit {
+    let c = new SchemaTokCursor(tokens)
+    let mut depth = 0
+    let mut is_pub = false
+    let mut is_extern = false
+    while schema_cur_kind(c) != "EOF" {
+        let k = schema_cur_kind(c)
+        let v = schema_cur_val(c)
+        if depth > 0 {
+            if k == "LBRACE" { depth = depth + 1 }
+            elif k == "RBRACE" { depth = depth - 1 }
+            c.pos = c.pos + 1
+            continue
+        }
+        if k == "PUB" or k == "PUBLIC" or (k == "IDENT" and v == "pub") {
+            is_pub = true
+            c.pos = c.pos + 1
+            continue
+        }
+        if k == "IDENT" and v == "async" {
+            c.pos = c.pos + 1
+            continue
+        }
+        if k == "EXTERN" {
+            is_extern = true
+            c.pos = c.pos + 1
+            if schema_cur_kind(c) == "STR" { c.pos = c.pos + 1 }
+            continue
+        }
+        if k == "STRUCT" and c.pos + 1 < len(c.tokens) and c.tokens[c.pos + 1].kind == "IDENT" {
+            let line_1 = c.tokens[c.pos].line
+            c.pos = c.pos + 1
+            let name = schema_cur_val(c)
+            c.pos = c.pos + 1
+            let tps = schema_skip_brackets(c)
+            let st = new SchemaStruct(name, line_1, len(tps) > 0)
+            schema_skip_newlines(c)
+            if schema_cur_kind(c) == "LBRACE" {
+                c.pos = c.pos + 1
+                while schema_cur_kind(c) != "RBRACE" and schema_cur_kind(c) != "EOF" {
+                    while schema_cur_kind(c) == "NEWLINE" or schema_cur_kind(c) == "COMMA" { c.pos = c.pos + 1 }
+                    if schema_cur_kind(c) == "RBRACE" or schema_cur_kind(c) == "EOF" { break }
+                    if schema_cur_kind(c) == "IDENT" {
+                        let fname = schema_cur_val(c)
+                        c.pos = c.pos + 1
+                        if schema_cur_kind(c) == "COLON" {
+                            c.pos = c.pos + 1
+                            let ftype = schema_parse_type(c)
+                            let fbound = new SchemaBound()
+                            while schema_cur_kind(c) == "IDENT" and schema_cur_val(c) == "requires" {
+                                c.pos = c.pos + 1
+                                let mut rtoks: list[Token] = []
+                                let mut rdepth = 0
+                                while schema_cur_kind(c) != "EOF" {
+                                    let rk = schema_cur_kind(c)
+                                    let rv = schema_cur_val(c)
+                                    if rdepth == 0 and (rk == "COMMA" or rk == "RBRACE" or rk == "NEWLINE" or (rk == "IDENT" and rv == "requires")) {
+                                        break
+                                    }
+                                    if rk == "LPAREN" or rk == "LBRACKET" { rdepth = rdepth + 1 }
+                                    elif (rk == "RPAREN" or rk == "RBRACKET") and rdepth > 0 { rdepth = rdepth - 1 }
+                                    if rk != "NEWLINE" { rtoks.append(c.tokens[c.pos]) }
+                                    c.pos = c.pos + 1
+                                }
+                                if len(rtoks) > 0 {
+                                    fbound.x_requires.append(schema_format_tok_slice(rtoks))
+                                    let tnames: list[str] = [fname]
+                                    let tbounds: list[SchemaBound] = [fbound]
+                                    schema_apply_tokens_to_targets(rtoks, 0, len(rtoks), tnames, tbounds)
+                                }
+                            }
+                            st.fields.append(new SchemaField(fname, ftype, fbound))
+                            continue
+                        }
+                    }
+                    c.pos = c.pos + 1
+                }
+                if schema_cur_kind(c) == "RBRACE" { c.pos = c.pos + 1 }
+            }
+            out.structs.append(st)
+            is_pub = false
+            is_extern = false
+            continue
+        }
+        if k == "ENUM" and c.pos + 1 < len(c.tokens) and c.tokens[c.pos + 1].kind == "IDENT" {
+            let line_1 = c.tokens[c.pos].line
+            c.pos = c.pos + 1
+            let name = schema_cur_val(c)
+            c.pos = c.pos + 1
+            let tps = schema_skip_brackets(c)
+            let en = new SchemaEnum(name, line_1, len(tps) > 0)
+            schema_skip_newlines(c)
+            if schema_cur_kind(c) == "LBRACE" {
+                c.pos = c.pos + 1
+                while schema_cur_kind(c) != "RBRACE" and schema_cur_kind(c) != "EOF" {
+                    while schema_cur_kind(c) == "NEWLINE" or schema_cur_kind(c) == "COMMA" { c.pos = c.pos + 1 }
+                    if schema_cur_kind(c) == "RBRACE" or schema_cur_kind(c) == "EOF" { break }
+                    if schema_cur_kind(c) == "IDENT" {
+                        let vname = schema_cur_val(c)
+                        c.pos = c.pos + 1
+                        let vari = new SchemaVariant(vname)
+                        if schema_cur_kind(c) == "LPAREN" {
+                            c.pos = c.pos + 1
+                            while schema_cur_kind(c) != "RPAREN" and schema_cur_kind(c) != "EOF" {
+                                vari.payloads.append(schema_parse_type(c))
+                                if schema_cur_kind(c) == "COMMA" { c.pos = c.pos + 1 } else { break }
+                            }
+                            if schema_cur_kind(c) == "RPAREN" { c.pos = c.pos + 1 }
+                        }
+                        en.variants.append(vari)
+                        continue
+                    }
+                    c.pos = c.pos + 1
+                }
+                if schema_cur_kind(c) == "RBRACE" { c.pos = c.pos + 1 }
+            }
+            out.enums.append(en)
+            is_pub = false
+            is_extern = false
+            continue
+        }
+        if k == "FN" and c.pos + 1 < len(c.tokens) and c.tokens[c.pos + 1].kind == "IDENT" {
+            if is_extern {
+                c.pos = c.pos + 1
+                while schema_cur_kind(c) != "NEWLINE" and schema_cur_kind(c) != "EOF" { c.pos = c.pos + 1 }
+                is_pub = false
+                is_extern = false
+                continue
+            }
+            let line_1 = c.tokens[c.pos].line
+            c.pos = c.pos + 1
+            let name = schema_cur_val(c)
+            c.pos = c.pos + 1
+            let f = new SchemaFn(name, line_1, is_pub)
+            f.type_params = schema_skip_brackets(c)
+            if schema_cur_kind(c) == "LPAREN" {
+                c.pos = c.pos + 1
+                while schema_cur_kind(c) != "RPAREN" and schema_cur_kind(c) != "EOF" {
+                    if schema_cur_kind(c) == "IDENT" {
+                        let pname = schema_cur_val(c)
+                        c.pos = c.pos + 1
+                        if schema_cur_kind(c) == "COLON" {
+                            c.pos = c.pos + 1
+                            let ptype = schema_parse_type(c)
+                            f.params.append(new SchemaParam(pname, ptype))
+                        }
+                    }
+                    if schema_cur_kind(c) == "COMMA" { c.pos = c.pos + 1 } else { break }
+                }
+                if schema_cur_kind(c) == "RPAREN" { c.pos = c.pos + 1 }
+            }
+            if schema_cur_kind(c) == "ARROW" {
+                c.pos = c.pos + 1
+                f.has_ret = true
+                f.ret = schema_parse_type(c)
+            }
+            while true {
+                schema_skip_newlines(c)
+                let ck = schema_cur_kind(c)
+                let cv = schema_cur_val(c)
+                if ck == "IDENT" and (cv == "requires" or cv == "ensures") {
+                    let is_req = cv == "requires"
+                    c.pos = c.pos + 1
+                    let mut ctoks: list[Token] = []
+                    let mut rdepth = 0
+                    while schema_cur_kind(c) != "EOF" {
+                        let rk = schema_cur_kind(c)
+                        let rv = schema_cur_val(c)
+                        if rdepth == 0 and (rk == "NEWLINE" or rk == "LBRACE" or (rk == "IDENT" and (rv == "requires" or rv == "ensures"))) {
+                            break
+                        }
+                        if rk == "LPAREN" or rk == "LBRACKET" { rdepth = rdepth + 1 }
+                        elif (rk == "RPAREN" or rk == "RBRACKET") and rdepth > 0 { rdepth = rdepth - 1 }
+                        if rk != "NEWLINE" { ctoks.append(c.tokens[c.pos]) }
+                        c.pos = c.pos + 1
+                    }
+                    if len(ctoks) > 0 {
+                        let cstr = schema_format_tok_slice(ctoks)
+                        if is_req {
+                            f.req_strs.append(cstr)
+                            f.req_clauses.append(ctoks)
+                        } else {
+                            f.ens_strs.append(cstr)
+                            f.ens_clauses.append(ctoks)
+                        }
+                    }
+                } else {
+                    break
+                }
+            }
+            schema_skip_newlines(c)
+            schema_skip_brace_block(c)
+            out.fns.append(f)
+            is_pub = false
+            is_extern = false
+            continue
+        }
+        if k == "LBRACE" {
+            depth = depth + 1
+            is_pub = false
+            is_extern = false
+        } elif k != "NEWLINE" {
+            is_pub = false
+            is_extern = false
+        }
+        c.pos = c.pos + 1
+    }
+}
+
+fn schema_struct_def_json(st: SchemaStruct, lines: list[str], known_defs: list[str]) -> str {
+    let mut props: list[str] = ["{"]
+    let mut reqs: list[str] = ["["]
+    let mut req_cnt = 0
+    for i in 0..len(st.fields) {
+        let f = st.fields[i]
+        if i > 0 { props.append(",") }
+        let base_j = schema_type_to_json(f.t, known_defs)
+        let prim_t = schema_json_primitive_type(f.t, known_defs)
+        let tail = schema_bound_json_tail(f.bound, prim_t, true)
+        let final_j = schema_inject_tail(base_j, tail)
+        props.append(diag_json_quote(f.name) + ":" + final_j)
+        if f.t.kind != "optional" {
+            if req_cnt > 0 { reqs.append(",") }
+            req_cnt = req_cnt + 1
+            reqs.append(diag_json_quote(f.name))
+        }
+    }
+    props.append("}")
+    reqs.append("]")
+    let doc = schema_leading_doc(lines, st.line)
+    let desc_part = if doc[0] == "1" { ",\"description\":" + diag_json_quote(doc[1]) } else { "" }
+    return "{\"type\":\"object\",\"properties\":" + join_strings(props, "") + ",\"required\":" + join_strings(reqs, "") + ",\"additionalProperties\":false" + desc_part + "}"
+}
+
+fn schema_enum_def_json(en: SchemaEnum, lines: list[str], known_defs: list[str]) -> str {
+    let doc = schema_leading_doc(lines, en.line)
+    let desc_part = if doc[0] == "1" { ",\"description\":" + diag_json_quote(doc[1]) } else { "" }
+    let mut all_unit = true
+    for v in en.variants {
+        if len(v.payloads) > 0 {
+            all_unit = false
+            break
+        }
+    }
+    if all_unit {
+        let mut names_j: list[str] = ["["]
+        for i in 0..len(en.variants) {
+            if i > 0 { names_j.append(",") }
+            names_j.append(diag_json_quote(en.variants[i].name))
+        }
+        names_j.append("]")
+        return "{\"type\":\"string\",\"enum\":" + join_strings(names_j, "") + desc_part + "}"
+    }
+    let mut var_objs: list[str] = ["["]
+    for i in 0..len(en.variants) {
+        let v = en.variants[i]
+        if i > 0 { var_objs.append(",") }
+        let tag_j = "\"tag\":{\"const\":" + diag_json_quote(v.name) + "}"
+        if len(v.payloads) == 0 {
+            var_objs.append("{\"type\":\"object\",\"properties\":{" + tag_j + "},\"required\":[\"tag\"],\"additionalProperties\":false}")
+        } elif len(v.payloads) == 1 {
+            let vj = schema_type_to_json(v.payloads[0], known_defs)
+            var_objs.append("{\"type\":\"object\",\"properties\":{" + tag_j + ",\"value\":" + vj + "},\"required\":[\"tag\",\"value\"],\"additionalProperties\":false}")
+        } else {
+            let mut pitems: list[str] = ["["]
+            for j in 0..len(v.payloads) {
+                if j > 0 { pitems.append(",") }
+                pitems.append(schema_type_to_json(v.payloads[j], known_defs))
+            }
+            pitems.append("]")
+            let cnt = str(len(v.payloads))
+            let val_s = "{\"type\":\"array\",\"prefixItems\":" + join_strings(pitems, "") + ",\"minItems\":" + cnt + ",\"maxItems\":" + cnt + "}"
+            var_objs.append("{\"type\":\"object\",\"properties\":{" + tag_j + ",\"value\":" + val_s + "},\"required\":[\"tag\",\"value\"],\"additionalProperties\":false}")
+        }
+    }
+    var_objs.append("]")
+    return "{\"oneOf\":" + join_strings(var_objs, "") + desc_part + "}"
+}
+
+fn schema_is_read_only_cap(cap: str) -> bool {
+    return cap == "arguments" or cap == "environment" or cap == "clock" or cap == "filesystem.read"
+}
+
+fn schema_tool_json(f: SchemaFn, lines: list[str], known_defs: list[str], graph: ToolGraph) -> str {
+    let mut pnames: list[str] = []
+    let mut pbounds: list[SchemaBound] = []
+    for p in f.params {
+        pnames.append(p.name)
+        pbounds.append(p.bound)
+    }
+    for req_toks in f.req_clauses {
+        schema_apply_tokens_to_targets(req_toks, 0, len(req_toks), pnames, pbounds)
+    }
+    let mut props: list[str] = ["{"]
+    let mut reqs: list[str] = ["["]
+    let mut req_cnt = 0
+    for i in 0..len(f.params) {
+        let p = f.params[i]
+        if i > 0 { props.append(",") }
+        let base_j = schema_type_to_json(p.t, known_defs)
+        let prim_t = schema_json_primitive_type(p.t, known_defs)
+        let tail = schema_bound_json_tail(p.bound, prim_t, false)
+        props.append(diag_json_quote(p.name) + ":" + schema_inject_tail(base_j, tail))
+        if p.t.kind != "optional" {
+            if req_cnt > 0 { reqs.append(",") }
+            req_cnt = req_cnt + 1
+            reqs.append(diag_json_quote(p.name))
+        }
+    }
+    props.append("}")
+    reqs.append("]")
+    let in_schema = "{\"type\":\"object\",\"properties\":" + join_strings(props, "") + ",\"required\":" + join_strings(reqs, "") + ",\"additionalProperties\":false}"
+
+    let mut fallible = false
+    let mut out_base_t = new SchemaType("named", "unit")
+    let mut err_json = "null"
+    if f.has_ret {
+        if f.ret.kind == "result" and len(f.ret.args) == 2 {
+            fallible = true
+            out_base_t = f.ret.args[0]
+            err_json = schema_type_to_json(f.ret.args[1], known_defs)
+        } else {
+            out_base_t = f.ret
+        }
+    }
+    let out_bound = new SchemaBound()
+    let res_names: list[str] = ["result"]
+    let res_bounds: list[SchemaBound] = [out_bound]
+    for ens_toks in f.ens_clauses {
+        schema_apply_tokens_to_targets(ens_toks, 0, len(ens_toks), res_names, res_bounds)
+    }
+    let out_base_j = schema_type_to_json(out_base_t, known_defs)
+    let out_prim_t = schema_json_primitive_type(out_base_t, known_defs)
+    let out_json = schema_inject_tail(out_base_j, schema_bound_json_tail(out_bound, out_prim_t, false))
+
+    let mut sig_ps: list[str] = []
+    for p in f.params { sig_ps.append(p.name + ": " + schema_type_text(p.t)) }
+    let ret_sig = if f.has_ret { schema_type_text(f.ret) } else { "unit" }
+    let gen_prefix = if len(f.type_params) > 0 { "[" + join_strings(f.type_params, ", ") + "]" } else { "" }
+    let signature = "fn " + f.name + gen_prefix + "(" + join_strings(sig_ps, ", ") + ") -> " + ret_sig
+
+    let mut effs: list[str] = []
+    let mut caps: list[str] = []
+    let mut complete = false
+    for n in graph.nodes {
+        if n.kind == "fn" and n.file == graph.entry_file and n.name == f.name {
+            effs = n.effects
+            caps = n.capabilities
+            complete = true
+            break
+        }
+    }
+    let mut has_global_write = false
+    let mut has_global_state = false
+    for ef in effs {
+        if ef == "global.write" {
+            has_global_write = true
+            has_global_state = true
+        } elif ef == "global.read" {
+            has_global_state = true
+        }
+    }
+    let mut all_ro_caps = true
+    for c in caps {
+        if not schema_is_read_only_cap(c) {
+            all_ro_caps = false
+            break
+        }
+    }
+    let pure = complete and len(caps) == 0 and not has_global_state
+    let idemp = complete and not has_global_write and all_ro_caps
+
+    let doc = schema_leading_doc(lines, f.line)
+    let desc_j = if doc[0] == "1" { diag_json_quote(doc[1]) } else { "null" }
+
+    let mut req_j: list[str] = ["["]
+    for i in 0..len(f.req_strs) {
+        if i > 0 { req_j.append(",") }
+        req_j.append(diag_json_quote(f.req_strs[i]))
+    }
+    req_j.append("]")
+    let mut ens_j: list[str] = ["["]
+    for i in 0..len(f.ens_strs) {
+        if i > 0 { ens_j.append(",") }
+        ens_j.append(diag_json_quote(f.ens_strs[i]))
+    }
+    ens_j.append("]")
+
+    let vis = if f.is_pub { "public" } else { "private" }
+    let mut obj: list[str] = ["{"]
+    obj.append("\"name\":" + diag_json_quote(f.name))
+    obj.append(",\"visibility\":" + diag_json_quote(vis))
+    obj.append(",\"signature\":" + diag_json_quote(signature))
+    obj.append(",\"description\":" + desc_j)
+    obj.append(",\"input_schema\":" + in_schema)
+    obj.append(",\"output_schema\":" + out_json)
+    obj.append(",\"error_schema\":" + err_json)
+    obj.append(",\"fallible\":" + (if fallible { "true" } else { "false" }))
+    obj.append(",\"requires\":" + join_strings(req_j, ""))
+    obj.append(",\"ensures\":" + join_strings(ens_j, ""))
+    obj.append(",\"effects\":" + tool_str_list_json(effs))
+    obj.append(",\"capabilities\":" + tool_str_list_json(caps))
+    obj.append(",\"complete_within_model\":" + (if complete { "true" } else { "false" }))
+    obj.append(",\"pure\":" + (if pure { "true" } else { "false" }))
+    obj.append(",\"idempotent\":" + (if idemp { "true" } else { "false" }))
+    obj.append("}")
+    return join_strings(obj, "")
+}
+
+fn schema_encode_scalar(expr: str, t: SchemaType, known_defs: list[str]) -> str {
+    if t.kind != "named" { return "" }
+    if t.name == "int" { return "json.from_int(" + expr + ")" }
+    if t.name == "float" { return "json.from_float(" + expr + ")" }
+    if t.name == "bool" { return "json.from_bool(" + expr + ")" }
+    if t.name == "str" { return "json.from_str(" + expr + ")" }
+    if tool_str_contains(known_defs, t.name) { return "encode_" + t.name + "(" + expr + ")" }
+    return ""
+}
+
+fn schema_decode_scalar(val_expr: str, t: SchemaType, known_defs: list[str]) -> str {
+    if t.kind != "named" { return "" }
+    if t.name == "int" { return "json.to_int(" + val_expr + ")?" }
+    if t.name == "float" { return "json.to_float(" + val_expr + ")?" }
+    if t.name == "bool" { return "json.to_bool(" + val_expr + ")?" }
+    if t.name == "str" { return "json.to_str(" + val_expr + ")?" }
+    if tool_str_contains(known_defs, t.name) { return "decode_" + t.name + "(" + val_expr + ")?" }
+    return ""
+}
+
+fn schema_is_prim_scalar(t: SchemaType) -> bool {
+    return t.kind == "named" and (t.name == "int" or t.name == "float" or t.name == "bool" or t.name == "str")
+}
+
+fn schema_generate_codecs(structs: list[SchemaStruct], enums: list[SchemaEnum], known_defs: list[str]) -> str {
+    let mut blocks: list[str] = ["import \"std/json\""]
+    for en in enums {
+        if en.has_type_params { continue }
+        let name = en.name
+        let mut all_unit = true
+        let mut max_1 = true
+        for v in en.variants {
+            if len(v.payloads) > 0 { all_unit = false }
+            if len(v.payloads) > 1 { max_1 = false }
+        }
+        if all_unit {
+            let mut arms: list[str] = []
+            let mut checks: list[str] = []
+            for v in en.variants {
+                arms.append("        " + name + "." + v.name + " => json.string(\"" + v.name + "\"),")
+                checks.append("    if tag == \"" + v.name + "\" {\n        return " + name + "." + v.name + "\n    }")
+            }
+            blocks.append("pub fn encode_" + name + "(value: " + name + ") -> json.Value {\n    return match value {\n" + join_strings(arms, "\n") + "\n    }\n}")
+            blocks.append("pub fn to_json_" + name + "(value: " + name + ") -> str ! json.JsonError {\n    return json.stringify(encode_" + name + "(value))\n}")
+            blocks.append("pub fn decode_" + name + "(raw_val: json.Value) -> " + name + " ! json.JsonError {\n    let tag = json.to_str(raw_val)?\n" + join_strings(checks, "\n") + "\n    return Err(json.error(0, \"unknown variant for " + name + ": \" + tag))\n}")
+            blocks.append("pub fn from_json_" + name + "(raw: str) -> " + name + " ! json.JsonError {\n    return decode_" + name + "(json.parse(raw)?)\n}")
+        } elif max_1 {
+            let mut arms: list[str] = []
+            let mut checks: list[str] = []
+            let mut supported = true
+            for v in en.variants {
+                if len(v.payloads) == 0 {
+                    arms.append("        " + name + "." + v.name + " => {\n            let mut _obj: dict[str, json.Value] = {}\n            _obj[\"tag\"] = json.string(\"" + v.name + "\")\n            json.object(_obj)\n        },")
+                    checks.append("    if tag == \"" + v.name + "\" {\n        return " + name + "." + v.name + "\n    }")
+                } else {
+                    let enc = schema_encode_scalar("_payload", v.payloads[0], known_defs)
+                    let dec = schema_decode_scalar("json.get_required(raw_val, \"value\")?", v.payloads[0], known_defs)
+                    if enc == "" or dec == "" {
+                        supported = false
+                        break
+                    }
+                    arms.append("        " + name + "." + v.name + "(_payload) => {\n            let mut _obj: dict[str, json.Value] = {}\n            _obj[\"tag\"] = json.string(\"" + v.name + "\")\n            _obj[\"value\"] = " + enc + "\n            json.object(_obj)\n        },")
+                    checks.append("    if tag == \"" + v.name + "\" {\n        return " + name + "." + v.name + "(" + dec + ")\n    }")
+                }
+            }
+            if supported {
+                blocks.append("pub fn encode_" + name + "(value: " + name + ") -> json.Value {\n    return match value {\n" + join_strings(arms, "\n") + "\n    }\n}")
+                blocks.append("pub fn to_json_" + name + "(value: " + name + ") -> str ! json.JsonError {\n    return json.stringify(encode_" + name + "(value))\n}")
+                blocks.append("pub fn decode_" + name + "(raw_val: json.Value) -> " + name + " ! json.JsonError {\n    let tag = json.get_str(raw_val, \"tag\")?\n" + join_strings(checks, "\n") + "\n    return Err(json.error(0, \"unknown variant for " + name + ": \" + tag))\n}")
+                blocks.append("pub fn from_json_" + name + "(raw: str) -> " + name + " ! json.JsonError {\n    return decode_" + name + "(json.parse(raw)?)\n}")
+            }
+        }
+    }
+    for st in structs {
+        if st.has_type_params { continue }
+        let name = st.name
+        let mut enc_lines: list[str] = ["    let mut _fields: dict[str, json.Value] = {}"]
+        let mut dec_lines: list[str] = []
+        let mut ctor_fields: list[str] = []
+        let mut supported = true
+        for f in st.fields {
+            let fn_ = f.name
+            let ft = schema_type_text(f.t)
+            let sc_enc = schema_encode_scalar("value." + fn_, f.t, known_defs)
+            if sc_enc != "" {
+                enc_lines.append("    _fields[\"" + fn_ + "\"] = " + sc_enc)
+                if schema_is_prim_scalar(f.t) {
+                    dec_lines.append("    let _f_" + fn_ + " = json.get_" + f.t.name + "(raw_val, \"" + fn_ + "\")?")
+                } else {
+                    dec_lines.append("    let _f_" + fn_ + " = decode_" + f.t.name + "(json.get_required(raw_val, \"" + fn_ + "\")?)?")
+                }
+                ctor_fields.append(fn_ + ": _f_" + fn_)
+                continue
+            }
+            if f.t.kind == "optional" and len(f.t.args) == 1 {
+                let inner = f.t.args[0]
+                let i_enc = schema_encode_scalar("_opt_v", inner, known_defs)
+                let i_dec = schema_decode_scalar("_opt_item", inner, known_defs)
+                if i_enc == "" or i_dec == "" {
+                    supported = false
+                    break
+                }
+                enc_lines.append("    _fields[\"" + fn_ + "\"] = match value." + fn_ + " {\n        Some(_opt_v) => " + i_enc + ",\n        None => json.null(),\n    }")
+                if schema_is_prim_scalar(inner) {
+                    dec_lines.append("    let _f_" + fn_ + " = json.get_optional_" + inner.name + "(raw_val, \"" + fn_ + "\")?")
+                } else {
+                    dec_lines.append("    let _raw_opt_" + fn_ + " = json.get(raw_val, \"" + fn_ + "\")\n    let _f_" + fn_ + ": " + ft + " = match _raw_opt_" + fn_ + " {\n        None => none,\n        Some(_opt_item) => if json.is_null(_opt_item) {\n            none\n        } else {\n            Some(" + i_dec + ")\n        },\n    }")
+                }
+                ctor_fields.append(fn_ + ": _f_" + fn_)
+                continue
+            }
+            if f.t.kind == "list" and len(f.t.args) == 1 {
+                let elem = f.t.args[0]
+                let e_enc = schema_encode_scalar("_item", elem, known_defs)
+                let e_dec = schema_decode_scalar("_item", elem, known_defs)
+                if e_enc == "" or e_dec == "" {
+                    supported = false
+                    break
+                }
+                enc_lines.append("    let mut _arr_" + fn_ + ": list[json.Value] = []\n    for _item in value." + fn_ + " {\n        _arr_" + fn_ + ".append(" + e_enc + ")\n    }\n    _fields[\"" + fn_ + "\"] = json.array(_arr_" + fn_ + ")")
+                dec_lines.append("    let _raw_arr_" + fn_ + " = json.to_array(json.get_required(raw_val, \"" + fn_ + "\")?)?\n    let mut _f_" + fn_ + ": " + ft + " = []\n    for _item in _raw_arr_" + fn_ + " {\n        _f_" + fn_ + ".append(" + e_dec + ")\n    }")
+                ctor_fields.append(fn_ + ": _f_" + fn_)
+                continue
+            }
+            if f.t.kind == "dict" and len(f.t.args) == 2 and schema_type_text(f.t.args[0]) == "str" {
+                let vt = f.t.args[1]
+                let v_enc = schema_encode_scalar("_v", vt, known_defs)
+                let v_dec = schema_decode_scalar("_v", vt, known_defs)
+                if v_enc == "" or v_dec == "" {
+                    supported = false
+                    break
+                }
+                enc_lines.append("    let mut _map_" + fn_ + ": dict[str, json.Value] = {}\n    for (_k, _v) in dict_items(value." + fn_ + ") {\n        _map_" + fn_ + "[_k] = " + v_enc + "\n    }\n    _fields[\"" + fn_ + "\"] = json.object(_map_" + fn_ + ")")
+                dec_lines.append("    let _raw_map_" + fn_ + " = json.to_object(json.get_required(raw_val, \"" + fn_ + "\")?)?\n    let mut _f_" + fn_ + ": " + ft + " = {}\n    for (_k, _v) in dict_items(_raw_map_" + fn_ + ") {\n        _f_" + fn_ + "[_k] = " + v_dec + "\n    }")
+                ctor_fields.append(fn_ + ": _f_" + fn_)
+                continue
+            }
+            supported = false
+            break
+        }
+        if not supported { continue }
+        enc_lines.append("    return json.object(_fields)")
+        blocks.append("pub fn encode_" + name + "(value: " + name + ") -> json.Value {\n" + join_strings(enc_lines, "\n") + "\n}")
+        blocks.append("pub fn to_json_" + name + "(value: " + name + ") -> str ! json.JsonError {\n    return json.stringify(encode_" + name + "(value))\n}")
+        dec_lines.append("    return " + name + " { " + join_strings(ctor_fields, ", ") + " }")
+        blocks.append("pub fn decode_" + name + "(raw_val: json.Value) -> " + name + " ! json.JsonError {\n" + join_strings(dec_lines, "\n") + "\n}")
+        blocks.append("pub fn from_json_" + name + "(raw: str) -> " + name + " ! json.JsonError {\n    return decode_" + name + "(json.parse(raw)?)\n}")
+    }
+    return join_strings(blocks, "\n\n") + "\n"
+}
+
+fn schema_emit_usage_error(json_mode: bool, msg: str) -> unit {
+    if json_mode {
+        let diag = diag_record_json("W5002", "schema", "error", msg, "<cli>", 1, 1, "")
+        diag_write_output(diag_tool_envelope_json("schema", "usage_error", 2, "[" + diag + "]", "", "", "[]"))
+    } else {
+        eprint("wysna schema: " + msg)
+    }
+    exit(2)
+}
+
+fn tool_handle_schema(args: list[str], json_mode_in: bool) -> unit {
+    let mut json_mode = json_mode_in
+    let mut include_all = false
+    let mut emit_codecs = false
+    let mut fn_filter = ""
+    let mut has_fn_filter = false
+    let mut out_path = ""
+    let mut file = ""
+    let mut i = 1
+    while i < len(args) {
+        let a = args[i]
+        if a == "--output-format=json-v1" or a == "--json" {
+            json_mode = true
+            i = i + 1
+        } elif a == "--output-format" and i + 1 < len(args) {
+            if args[i + 1] != "json-v1" { schema_emit_usage_error(json_mode, "unsupported output format: " + args[i + 1]) }
+            json_mode = true
+            i = i + 2
+        } elif a == "--all" {
+            include_all = true
+            i = i + 1
+        } elif a == "--emit-codecs" {
+            emit_codecs = true
+            i = i + 1
+        } elif a == "--function" and i + 1 < len(args) {
+            fn_filter = args[i + 1]
+            has_fn_filter = true
+            i = i + 2
+        } elif (a == "-o" or a == "--output") and i + 1 < len(args) {
+            out_path = args[i + 1]
+            i = i + 2
+        } elif len(a) > 0 and a[0] != "-" and file == "" {
+            file = a
+            i = i + 1
+        } else {
+            schema_emit_usage_error(json_mode, "unknown or incomplete option for schema: " + a)
+        }
+    }
+    if file == "" { schema_emit_usage_error(json_mode, "schema requires a source file path") }
+    let loaded = module_read_text_or_overlay(file)
+    if loaded[0] != "1" {
+        report_error(file, "W5003", 1, 1, "cannot read input file: " + file)
+    }
+    let src = loaded[1]
+    let canonical = module_canonical(file)
+    let checked = check_source(src, canonical)
+    mir_verify(mir_build(checked))
+    let graph = tool_build_graph(src, file)
+
+    let tokens = tokenize(src, file)
+    let lines = schema_split_lines(src)
+    let decls = new SchemaDeclSet()
+    schema_collect_decls(tokens, decls)
+    let structs = decls.structs
+    let enums = decls.enums
+    let fns = decls.fns
+
+    let mut known_defs: list[str] = []
+    for st in structs { known_defs.append(st.name) }
+    for en in enums { known_defs.append(en.name) }
+
+    let mut defs_parts: list[str] = ["{"]
+    let mut def_cnt = 0
+    for st in structs {
+        if def_cnt > 0 { defs_parts.append(",") }
+        def_cnt = def_cnt + 1
+        defs_parts.append(diag_json_quote(st.name) + ":" + schema_struct_def_json(st, lines, known_defs))
+    }
+    for en in enums {
+        if def_cnt > 0 { defs_parts.append(",") }
+        def_cnt = def_cnt + 1
+        defs_parts.append(diag_json_quote(en.name) + ":" + schema_enum_def_json(en, lines, known_defs))
+    }
+    defs_parts.append("}")
+
+    let mut selected: list[SchemaFn] = []
+    if has_fn_filter {
+        for f in fns {
+            if f.name == fn_filter { selected.append(f) }
+        }
+        if len(selected) == 0 {
+            schema_emit_usage_error(json_mode, "Function '" + fn_filter + "' not found in '" + file + "'")
+        }
+    } elif include_all {
+        for f in fns {
+            if f.name != "main" or len(fns) == 1 { selected.append(f) }
+        }
+    } else {
+        let mut pub_fns: list[SchemaFn] = []
+        for f in fns {
+            if f.is_pub { pub_fns.append(f) }
+        }
+        if len(pub_fns) > 0 {
+            selected = pub_fns
+        } else {
+            let mut non_main: list[SchemaFn] = []
+            for f in fns {
+                if f.name != "main" { non_main.append(f) }
+            }
+            selected = if len(non_main) > 0 { non_main } else { fns }
+        }
+    }
+
+    let mut tools_parts: list[str] = ["["]
+    for idx in 0..len(selected) {
+        if idx > 0 { tools_parts.append(",") }
+        tools_parts.append(schema_tool_json(selected[idx], lines, known_defs, graph))
+    }
+    tools_parts.append("]")
+
+    let codecs_src = if emit_codecs { schema_generate_codecs(structs, enums, known_defs) } else { "" }
+    let codecs_field = if emit_codecs { ",\"codecs_source\":" + diag_json_quote(codecs_src) } else { "" }
+    let payload_json = "{\"schema_version\":\"wysna.schema/1\",\"compiler_version\":\"0.7.0\",\"$schema\":\"https://json-schema.org/draft/2020-12/schema\",\"$defs\":" + join_strings(defs_parts, "") + ",\"tools\":" + join_strings(tools_parts, "") + codecs_field + "}"
+
+    if out_path != "" {
+        let out_content = if emit_codecs and not json_mode { codecs_src } else { payload_json + "\n" }
+        write_file(out_path, out_content) else err {
+            report_error(out_path, "W5004", 1, 1, "cannot write schema output to: " + out_path)
+        }
+    }
+    if json_mode {
+        diag_write_output(diag_tool_envelope_json("schema", "ok", 0, "[]", "result", payload_json, "[]"))
+    } elif out_path == "" {
+        if emit_codecs { print(codecs_src) }
+        else { print(payload_json) }
+    }
+    exit(0)
+}

@@ -1,5 +1,11 @@
 # Agent-first semantic graph, symbol inspection, hash-guarded checked patching, and diagnostic explain tools.
 
+extern "C" fn wysna_host_fs(first: opaque, second: opaque, operation: int) -> int
+extern "C" fn wysna_host_getcwd(output: opaque) -> int
+extern "C" fn wysna_host_file_open(path: opaque, mode: int) -> opaque
+extern "C" fn wysna_host_file_write(file: opaque, data: opaque) -> int
+extern "C" fn wysna_host_is_open(file: opaque) -> int
+
 class ToolGraphNode {
     id: str
     name: str
@@ -1026,14 +1032,15 @@ fn tool_handle_graph(args: list[str], json_mode: bool) -> unit {
         }
     }
     if file == "" { report_error("<cli>", "W5002", 1, 1, "graph requires a source file path") }
-    let src = read_file(file) else err {
+    let loaded = module_read_text_or_overlay(file)
+    if loaded[0] != "1" {
         report_error(file, "W5003", 1, 1, "cannot read input file: " + file)
-        ""
     }
+    let src = loaded[1]
     let graph = tool_build_graph(src, file)
     let payload = tool_graph_payload_json(graph, symbol, rel)
     if json_mode {
-        print(diag_tool_envelope_json("graph", "ok", 0, "[]", "result", payload, "[]"))
+        diag_write_output(diag_tool_envelope_json("graph", "ok", 0, "[]", "result", payload, "[]"))
     } else {
         print("Semantic Graph (" + graph.graph_hash + ") — " + str(len(graph.nodes)) + " nodes, " + str(len(graph.edges)) + " edges")
         for n in graph.nodes {
@@ -1076,10 +1083,11 @@ fn tool_handle_inspect(args: list[str], json_mode: bool) -> unit {
         }
     }
     if file == "" { report_error("<cli>", "W5002", 1, 1, "inspect requires a source file path") }
-    let src = read_file(file) else err {
+    let loaded = module_read_text_or_overlay(file)
+    if loaded[0] != "1" {
         report_error(file, "W5003", 1, 1, "cannot read input file: " + file)
-        ""
     }
+    let src = loaded[1]
     let graph = tool_build_graph(src, file)
     if symbol == "" {
         let mut syms: list[str] = ["["]
@@ -1091,7 +1099,7 @@ fn tool_handle_inspect(args: list[str], json_mode: bool) -> unit {
         syms.append("]")
         let res_json = "{\"schema_version\":\"wysna.inspect/1\",\"file\":" + diag_json_quote(graph.entry_file) + ",\"graph_hash\":" + diag_json_quote(graph.graph_hash) + ",\"symbols\":" + join_strings(syms, "") + "}"
         if json_mode {
-            print(diag_tool_envelope_json("inspect", "ok", 0, "[]", "result", res_json, "[]"))
+            diag_write_output(diag_tool_envelope_json("inspect", "ok", 0, "[]", "result", res_json, "[]"))
         } else {
             print("Symbols in " + file + " (" + graph.graph_hash + "):")
             for n in graph.nodes { print("  [" + n.kind + "] " + n.qualified_name + " (L" + str(n.line) + "-" + str(n.end_line) + ")") }
@@ -1127,7 +1135,7 @@ fn tool_handle_inspect(args: list[str], json_mode: bool) -> unit {
     }
     let res_json = "{\"schema_version\":\"wysna.inspect/1\",\"file\":" + diag_json_quote(n.file) + ",\"graph_hash\":" + diag_json_quote(graph.graph_hash) + ",\"node\":" + tool_node_json(n) + ",\"source\":" + diag_json_quote(decl_src) + ",\"dependencies\":" + deps_json + "}"
     if json_mode {
-        print(diag_tool_envelope_json("inspect", "ok", 0, "[]", "result", res_json, "[]"))
+        diag_write_output(diag_tool_envelope_json("inspect", "ok", 0, "[]", "result", res_json, "[]"))
     } else {
         print(n.id + " (" + graph.graph_hash + ") lines " + str(n.line) + "-" + str(n.end_line) + ":")
         print(decl_src)
@@ -1182,10 +1190,12 @@ fn tool_handle_patch(args: list[str], json_mode: bool) -> unit {
         has_with = true
     }
     if not has_with { report_error("<cli>", "W5002", 1, 1, "patch requires --with or --with-file") }
-    let src = read_file(file) else err {
+    let loaded = module_read_text_or_overlay(file)
+    if loaded[0] != "1" {
         report_error(file, "W5003", 1, 1, "cannot read input file: " + file)
-        ""
     }
+    let src = loaded[1]
+    let before_sha = diag_sha256_hex(src)
     let before = tool_build_graph(src, file)
     if expect_hash != "" and expect_hash != before.graph_hash {
         report_error(file, "W5005", 1, 1, "stale semantic graph hash: expected '" + expect_hash + "', current '" + before.graph_hash + "'")
@@ -1199,14 +1209,12 @@ fn tool_handle_patch(args: list[str], json_mode: bool) -> unit {
     mir_verify(mir_build(checked_after))
     let after = tool_build_graph(candidate, file)
     if apply {
-        write_file(file, candidate) else err {
-            report_error(file, "W5004", 1, 1, "failed writing patched source to disk: " + file)
-        }
+        tool_write_atomic_verified(file, before_sha, candidate)
     }
     let written_str = if apply { "true" } else { "false" }
     let res_json = "{\"schema_version\":\"wysna.patch/1\",\"file\":" + diag_json_quote(canonical) + ",\"symbol\":" + diag_json_quote(target.id) + ",\"written\":" + written_str + ",\"graph_hash_before\":" + diag_json_quote(before.graph_hash) + ",\"graph_hash_after\":" + diag_json_quote(after.graph_hash) + "}"
     if json_mode {
-        print(diag_tool_envelope_json("patch", "ok", 0, "[]", "result", res_json, "[]"))
+        diag_write_output(diag_tool_envelope_json("patch", "ok", 0, "[]", "result", res_json, "[]"))
     } else {
         print("Patched " + target.id + " (" + before.graph_hash + " -> " + after.graph_hash + ", written=" + written_str + ")")
     }
@@ -1248,7 +1256,7 @@ fn tool_handle_explain(args: list[str], json_mode: bool) -> unit {
         if len(info) == 0 { report_error("<cli>", "W5002", 1, 1, "unknown diagnostic code: " + code_arg) }
         let payload = "{\"schema_version\":\"wysna.explain-code/1\",\"code\":" + diag_json_quote(info[0]) + ",\"title\":" + diag_json_quote(info[2]) + ",\"stage\":" + diag_json_quote(info[1]) + ",\"description\":" + diag_json_quote(info[2]) + ",\"common_causes\":[" + diag_json_quote(info[3]) + "],\"bad_example\":" + diag_json_quote(info[4]) + ",\"good_example\":" + diag_json_quote(info[5]) + "}"
         if json_mode {
-            print(diag_tool_envelope_json("explain", "ok", 0, "[]", "result", payload, "[]"))
+            diag_write_output(diag_tool_envelope_json("explain", "ok", 0, "[]", "result", payload, "[]"))
         } else {
             print("[" + info[0] + "] (" + info[1] + ") " + info[2])
             print("  - " + info[3])
@@ -1258,10 +1266,11 @@ fn tool_handle_explain(args: list[str], json_mode: bool) -> unit {
         exit(0)
     }
     if file == "" { report_error("<cli>", "W5002", 1, 1, "explain requires a source file path or --code Wxxxx") }
-    let src = read_file(file) else err {
+    let loaded = module_read_text_or_overlay(file)
+    if loaded[0] != "1" {
         report_error(file, "W5003", 1, 1, "cannot read input file: " + file)
-        ""
     }
+    let src = loaded[1]
     let graph = tool_build_graph(src, file)
     let mut caps_all: list[str] = []
     let mut fn_rows: list[str] = ["["]
@@ -1279,7 +1288,7 @@ fn tool_handle_explain(args: list[str], json_mode: bool) -> unit {
     fn_rows.append("]")
     let res_json = "{\"model\":\"conservative\",\"file\":" + diag_json_quote(graph.entry_file) + ",\"program\":{\"capabilities\":" + tool_str_list_json(caps_all) + "},\"functions\":" + join_strings(fn_rows, "") + "}"
     if json_mode {
-        print(diag_tool_envelope_json("explain", "ok", 0, "[]", "result", res_json, "[]"))
+        diag_write_output(diag_tool_envelope_json("explain", "ok", 0, "[]", "result", res_json, "[]"))
     } else {
         print("Conservative effect report (native)")
         print("Program capabilities: " + (if len(caps_all) == 0 { "none modeled" } else { join_strings(tool_sort_strings(caps_all), ", ") }))
@@ -1320,7 +1329,7 @@ fn tool_emit_fmt_v1(formatted: str, in_path: str, write_in_place: bool) -> unit 
     } else {
         "{\"kind\":\"formatted_source\",\"media_type\":\"text/x-wysna\",\"content\":" + diag_json_quote(formatted) + ",\"sha256\":" + diag_json_quote(sha) + "}"
     }
-    print(diag_tool_envelope_json("fmt", "ok", 0, "[]", "", "", "[" + artifact + "]"))
+    diag_write_output(diag_tool_envelope_json("fmt", "ok", 0, "[]", "", "", "[" + artifact + "]"))
     exit(0)
 }
 
@@ -1465,4 +1474,175 @@ fn selfhost_format_body(source: str, in_path: str) -> str {
         out_lines.pop()
     }
     return join_strings(out_lines, "\n")
+}
+
+fn tool_buf_from_str(text: str) -> opaque {
+    let buf = wysna_host_buffer_new()
+    for b in bytes(text) { wysna_host_buffer_append(buf, b) }
+    return buf
+}
+
+fn tool_write_atomic_verified(path: str, expected_sha256: str, content: str) -> unit {
+    let disk_text = read_file(path) else err {
+        report_error(path, "W5003", 1, 1, "cannot read file before atomic write: " + path)
+        ""
+    }
+    let current_sha = diag_sha256_hex(disk_text)
+    if current_sha != expected_sha256 {
+        report_error(path, "W5005", 1, 1, "source modified on disk before write: " + path)
+    }
+    let stamp = str(unix_time())
+    let empty_buf = tool_buf_from_str("")
+    let mut tmp_path = ""
+    let mut fh = empty_buf
+    let mut opened = false
+    for attempt in 0..32 {
+        let candidate = path + ".wysna_tmp_" + stamp + "_" + str(attempt)
+        let c_buf = tool_buf_from_str(candidate)
+        let handle = wysna_host_file_open(c_buf, 3)
+        wysna_host_close(c_buf)
+        if wysna_host_is_open(handle) == 1 {
+            tmp_path = candidate
+            fh = handle
+            opened = true
+            break
+        }
+    }
+    if not opened {
+        wysna_host_close(empty_buf)
+        report_error(path, "W5004", 1, 1, "failed creating temporary file for atomic write: " + path)
+    }
+    let tmp_buf = tool_buf_from_str(tmp_path)
+    let data_buf = tool_buf_from_str(content)
+    let wr = wysna_host_file_write(fh, data_buf)
+    let cl = wysna_host_close(fh)
+    wysna_host_close(data_buf)
+    if wr != 0 or cl != 0 {
+        let _rm = wysna_host_fs(tmp_buf, empty_buf, 3)
+        wysna_host_close(tmp_buf)
+        wysna_host_close(empty_buf)
+        report_error(path, "W5004", 1, 1, "failed writing temporary file for atomic update: " + path)
+    }
+    let dst_buf = tool_buf_from_str(path)
+    let mv = wysna_host_fs(tmp_buf, dst_buf, 4)
+    wysna_host_close(dst_buf)
+    if mv < 0 {
+        let _rm = wysna_host_fs(tmp_buf, empty_buf, 3)
+        wysna_host_close(tmp_buf)
+        wysna_host_close(empty_buf)
+        report_error(path, "W5004", 1, 1, "failed renaming temporary file into place: " + path)
+    }
+    wysna_host_close(tmp_buf)
+    wysna_host_close(empty_buf)
+}
+
+fn tool_skills_topic_content(topic: str) -> str {
+    if topic == "overview" {
+        return "# Wysna v0.7.0 — Agent-First Native Language & Toolchain\n- Default workflow uses checked static inspection before execution.\n- Memory model: Single-threaded ARC + Copy-on-Write (`Weak[C]` breaks strong cycles).\n- Error channel: Typed values `T ! E`, unwrap with `?` or `else err { fallback }`.\n- Core agent loop: `wysna skills` -> `wysna graph` -> `wysna inspect` -> `wysna patch` -> `wysna fix` -> `wysna check`.\n- Topics available: overview, agent-loop, syntax, graph, patch, contracts, stdlib."
+    }
+    if topic == "agent-loop" {
+        return "# Agent Coding Loop (Token-Efficient, Hash-Guarded)\n1. Discover relationships: `wysna graph <file.wysna> --output-format=json-v1`\n2. Inspect one symbol instead of reading whole files: `wysna inspect <file.wysna> --symbol <name> --with-deps --output-format=json-v1`\n3. Submit checked edits guarded by graph hash: `wysna patch <file.wysna> --symbol <name> --expect-graph-hash <hash> --with <code> --apply`\n4. Auto-repair mechanical diagnostics: `wysna fix --apply --output-format=json-v1 <file.wysna>`\n5. Decode any Wxxxx error: `wysna explain --code W2001 --output-format=json-v1`\n6. Verify & bound runtime: `wysna run --max-steps=100000 --max-heap-mb=64 <file.wysna>`"
+    }
+    if topic == "syntax" {
+        return "# Wysna Canonical Syntax Quick Reference\n- Bindings: `let x = 1` (immutable), `let mut y = 2` (mutable).\n- Functions: `fn add(a: int, b: int) -> int { return a + b }`\n- Cooperative Async: `async fn fetch_id() -> int { ... }`, `let v = await task`.\n- Optionals & Errors: `T?`, `T ! E`, unwrap `?`, recover `expr else err { fallback }`.\n- OOP & Contracts: `interface Drawable { fn draw() -> str }`, `class Rect implements Drawable { fn draw() -> str { ... } }`.\n- Lambdas: `|n: int| => n * n` (capture outer variables by immutable snapshot).\n- Ranges & Loops: `for i in 0..10 { ... }`, inclusive `0..=10`."
+    }
+    if topic == "graph" {
+        return "# Semantic Relationship Graph (`wysna graph`)\n- `wysna graph <file> --output-format=json-v1`: full nodes, edges, and `graph_hash`.\n- `--symbol <name> --rel implements`: find all classes implementing an interface (or vice-versa).\n- `--symbol <name> --rel usages`: find every class, function, field, and param using the type.\n- `--symbol <name> --rel callers|callees`: traverse the resolved call graph.\n- `--symbol <name> --rel impact`: compute transitive blast radius before refactoring."
+    }
+    if topic == "patch" {
+        return "# Checked Semantic Patching (`wysna patch`)\n- Dry-run check in memory (default): validates syntax, types, and interface contracts before disk writes.\n- Optimistic locking: pass `--expect-graph-hash graph:...`; stale hashes fail with `[W5005]`.\n- Target classes, interfaces, structs, enums, functions, or `ClassName.method`."
+    }
+    if topic == "contracts" {
+        return "# Contracts, Schemas, Quotas & Trace Replay\n- Pre/postconditions: `fn f(x: int) -> int requires x > 0 ensures result >= 0 { ... }` (runtime `[W4005]`).\n- Tool Schema export: `wysna schema --emit-codecs --output-format=json-v1 <file.wysna>`.\n- Deterministic quotas: `--max-steps=<N>`, `--max-heap-mb=<N>` (fail-stop `[W4004]`).\n- Offline effect cassettes: `--record-trace <path>`, `--replay-trace <path>`."
+    }
+    if topic == "stdlib" {
+        return "# Standard Library (18 Modules)\n- Data & Text: `std/math`, `std/text`, `std/bytes`, `std/regex`, `std/collections`, `std/json`, `std/csv`, `std/parse`.\n- Systems & I/O: `std/fs`, `std/files`, `std/buffer`, `std/env`, `std/path`, `std/process`, `std/time`.\n- Network, Concurrency & Security: `std/http`, `std/async`, `std/algorithms` (`parallel_map`), `std/crypto`."
+    }
+    return ""
+}
+
+fn tool_skills_payload_json(topic: str) -> str {
+    let content = tool_skills_topic_content(topic)
+    if content == "" { return "" }
+    let topics_json = "[\"agent-loop\",\"contracts\",\"graph\",\"overview\",\"patch\",\"stdlib\",\"syntax\"]"
+    return "{\"schema_version\":\"wysna.skills/1\",\"compiler_version\":\"0.7.0\",\"topic\":" + diag_json_quote(topic) + ",\"available_topics\":" + topics_json + ",\"content\":" + diag_json_quote(content) + "}"
+}
+
+fn tool_handle_skills(args: list[str], json_mode: bool) -> unit {
+    let mut topic = "overview"
+    let mut has_topic = false
+    let mut i = 1
+    while i < len(args) {
+        let a = args[i]
+        if a == "--output-format=json-v1" {
+            i = i + 1
+        } elif a == "--output-format" and i + 1 < len(args) {
+            i = i + 2
+        } elif len(a) > 0 and a[0] != "-" and not has_topic {
+            topic = a
+            has_topic = true
+            i = i + 1
+        } else {
+            report_error("<cli>", "W5002", 1, 1, "unknown option for skills: " + a)
+        }
+    }
+    let content = tool_skills_topic_content(topic)
+    if content == "" {
+        let msg = "Unknown skill topic '" + topic + "'. Available topics: agent-loop, contracts, graph, overview, patch, stdlib, syntax"
+        if json_mode {
+            let diag = diag_record_json("W5002", "usage", "error", msg, "<cli>", 1, 1, "")
+            diag_write_output(diag_tool_envelope_json("skills", "usage_error", 2, "[" + diag + "]", "", "", "[]"))
+        } else {
+            eprint("wysna skills: " + msg)
+        }
+        exit(2)
+    }
+    let payload = tool_skills_payload_json(topic)
+    if json_mode {
+        diag_write_output(diag_tool_envelope_json("skills", "ok", 0, "[]", "result", payload, "[]"))
+    } else {
+        print(content)
+    }
+    exit(0)
+}
+
+fn tool_capabilities_payload_json() -> str {
+    let cmds = "[\"run\",\"check\",\"fmt\",\"ast\",\"mir\",\"tokens\",\"emit-c\",\"emit-mir\",\"build\",\"test\",\"capabilities\",\"explain\",\"graph\",\"inspect\",\"patch\",\"skills\",\"fix\",\"schema\",\"mcp\",\"lsp\"]"
+    let mcmds = "[\"check\",\"fmt\",\"capabilities\",\"explain\",\"graph\",\"inspect\",\"patch\",\"skills\",\"fix\",\"schema\"]"
+    let profs = "[\"native-cli\",\"wasi-command\",\"browser-library\",\"c99-source\"]"
+    let targs = "[\"native\",\"wasm32-wasip1\",\"wasm32-unknown-emscripten\"]"
+    let runtimes = "{\"wasi-command\":\"wasmtime-python==50.0.1\",\"browser-library\":\"browser or Node.js\"}"
+    let native_caps = "[\"stdio\",\"filesystem\",\"environment\",\"processes\",\"network\",\"native-ffi\"]"
+    let wasi_caps = "[\"stdio\",\"arguments\",\"clock\",\"random\",\"manifest-declared-preopens\"]"
+    let browser_caps = "[\"linear-memory\",\"generated-utf8-abi\",\"bigint-int64\"]"
+    let caps = "{\"native-cli\":" + native_caps + ",\"wasi-command\":" + wasi_caps + ",\"browser-library\":" + browser_caps + "}"
+    let p_native = "{\"profile\":\"native-cli\",\"engine\":\"wysna-selfhost\",\"backend\":\"c99\",\"triple\":null,\"artifact_kind\":\"native_executable\",\"capabilities\":" + native_caps + ",\"build_requirements\":[{\"name\":\"c99-compiler\",\"version\":null,\"provided_by\":\"Host C99 toolchain\"}],\"run_requirements\":[{\"name\":\"host-operating-system\",\"version\":null,\"provided_by\":null}]}"
+    let p_wasi = "{\"profile\":\"wasi-command\",\"engine\":\"wysna-seed\",\"backend\":\"c99\",\"triple\":\"wasm32-wasip1\",\"artifact_kind\":\"wasm_module\",\"capabilities\":" + wasi_caps + ",\"build_requirements\":[{\"name\":\"wasi-sdk\",\"version\":\"34\",\"provided_by\":null}],\"run_requirements\":[{\"name\":\"wasmtime-python\",\"version\":\"50.0.1\",\"provided_by\":null}]}"
+    let p_browser = "{\"profile\":\"browser-library\",\"engine\":\"wysna-seed\",\"backend\":\"c99\",\"triple\":\"wasm32-unknown-emscripten\",\"artifact_kind\":\"wasm_module\",\"capabilities\":" + browser_caps + ",\"build_requirements\":[{\"name\":\"emscripten\",\"version\":\"5.0.1\",\"provided_by\":null}],\"run_requirements\":[{\"name\":\"browser-or-nodejs\",\"version\":null,\"provided_by\":null}]}"
+    let tprofiles = "[" + p_native + "," + p_wasi + "," + p_browser + "]"
+    let reqs = "{\"std/http\":{\"interpreter\":\"install wysna[http] with libcurl 8.3.0 or newer\",\"native\":\"install libcurl 8.3.0 or newer development files and expose curl-config on PATH\",\"wasi-command\":\"unavailable\",\"browser-library\":\"unavailable\"}}"
+    let limits = "[\"native-cli capabilities describe host access and are not a sandbox\",\"WASI Preview 1 does not provide networking, child processes, or native FFI\",\"browser-library exposes only generated scalar and UTF-8 exports; WVal and pointers remain internal\",\"project dependencies are local paths only\",\"project lockfiles do not claim bit-for-bit binary reproducibility\"]"
+    return "{\"schema_version\":\"wysna.capabilities/1\",\"compiler_version\":\"0.7.0\",\"commands\":" + cmds + ",\"machine_output\":{\"format\":\"json-v1\",\"commands\":" + mcmds + "},\"profiles\":" + profs + ",\"targets\":" + targs + ",\"runtimes\":" + runtimes + ",\"capabilities\":" + caps + ",\"target_profiles\":" + tprofiles + ",\"requirements\":" + reqs + ",\"limitations\":" + limits + "}"
+}
+
+fn tool_handle_capabilities(args: list[str], json_mode: bool) -> unit {
+    let mut i = 1
+    while i < len(args) {
+        let a = args[i]
+        if a == "--output-format=json-v1" {
+            i = i + 1
+        } elif a == "--output-format" and i + 1 < len(args) {
+            i = i + 2
+        } else {
+            report_error("<cli>", "W5002", 1, 1, "unknown option for capabilities: " + a)
+        }
+    }
+    let payload = tool_capabilities_payload_json()
+    if json_mode {
+        diag_write_output(diag_tool_envelope_json("capabilities", "ok", 0, "[]", "result", payload, "[]"))
+    } else {
+        print("Wysna 0.7.0 capabilities: native-cli, wasi-command, browser-library")
+        print("Machine-readable tools: check, fmt, capabilities, explain, graph, inspect, patch, skills, fix, schema, mcp, lsp")
+    }
+    exit(0)
 }

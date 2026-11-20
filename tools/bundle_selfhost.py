@@ -37,6 +37,9 @@ MODULE_ORDER = [
     "08_mir_c99.wysna",
     "09_agent_tools.wysna",
     "09_lsp.wysna",
+    "09_schema.wysna",
+    "09_fix.wysna",
+    "09_mcp.wysna",
     "09_main.wysna",
 ]
 
