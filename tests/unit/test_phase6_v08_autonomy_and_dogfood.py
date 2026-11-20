@@ -163,6 +163,43 @@ class Phase6V08AutonomyAndDogfoodTests(unittest.TestCase):
             self.assertEqual(diagnostics[0]["code"], "W5002")
             self.assertIn("lockfile verification", diagnostics[0]["message"])
 
+    def test_native_project_impact_uses_manifest_targets_and_mcp(self):
+        with tempfile.TemporaryDirectory(prefix="wysna_p6_impact_") as tmp:
+            scratch = Path(tmp).resolve()
+            project = ROOT / "examples/shared-browser-app"
+            args = ["graph", "--manifest", "wysna.toml", "--symbol", "quote_validation_code",
+                    "--rel", "impact", "--output-format=json-v1"]
+            result = self._run_sdk(args, project, scratch)
+            self.assertEqual(result.returncode, 0, result.stderr + result.stdout)
+            payload = json.loads(result.stdout)["result"]
+            entries = {entry["name"]: entry for entry in payload["entries"]}
+            self.assertEqual(set(entries), {"app", "service", "web", "shared-pricing-contract"})
+            self.assertTrue(all(entry["affected"] for entry in entries.values()), entries)
+            self.assertIn("javascript", entries["web"]["unanalyzed_boundaries"])
+            self.assertIn("c-ffi", entries["service"]["unanalyzed_boundaries"])
+            self.assertTrue(entries["app"]["paths"][0]["chain"])
+
+            requests = [
+                {"jsonrpc": "2.0", "id": 1, "method": "initialize",
+                 "params": {"protocolVersion": "2025-06-18"}},
+                {"jsonrpc": "2.0", "method": "notifications/initialized"},
+                {"jsonrpc": "2.0", "id": 2, "method": "tools/call", "params": {
+                    "name": "wysna_graph", "arguments": {
+                        "manifest": "wysna.toml", "symbol": "quote_validation_code", "relation": "impact",
+                    },
+                }},
+            ]
+            completed = subprocess.run(
+                [str(self.driver_bin), "mcp", "--root", str(project)], cwd=project,
+                env=self._clean_env(scratch), input="".join(json.dumps(row) + "\n" for row in requests),
+                capture_output=True, text=True, timeout=45,
+            )
+            self.assertEqual(completed.returncode, 0, completed.stderr)
+            responses = {row["id"]: row for row in map(json.loads, completed.stdout.splitlines())}
+            reply = responses[2]["result"]
+            self.assertFalse(reply["isError"], reply)
+            self.assertEqual(json.loads(reply["content"][0]["text"])["result"], payload)
+
     def test_native_api_cli_stdlib_and_manifest(self):
         with tempfile.TemporaryDirectory(prefix="wysna_p6_api_") as tmp:
             scratch = Path(tmp).resolve() / "_scratch"

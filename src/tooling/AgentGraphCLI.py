@@ -82,7 +82,7 @@ def _handle_cli_error(command: str, error: Exception, service: CompilerService |
 def run_graph_command(argv) -> int:
     """Inspect compile-time relationships, interface implementations, calls, and blast radius."""
     parser = _Parser(prog='wysna graph', description=__doc__)
-    parser.add_argument('source')
+    parser.add_argument('source', nargs='?')
     parser.add_argument('--symbol', help='Filter graph around a symbol name or node ID')
     parser.add_argument(
         '--rel',
@@ -98,6 +98,25 @@ def run_graph_command(argv) -> int:
     try:
         options = parser.parse_args(list(argv))
         json_output = options.output_format == 'json-v1'
+        if options.source is None:
+            if options.manifest is None or not options.symbol or options.rel != 'impact':
+                raise ValueError('Provide a source path or use --manifest PATH --symbol NAME --rel impact')
+            from tooling.ProjectImpact import project_impact
+            impact = project_impact(options.manifest, options.symbol, frozen=options.frozen)
+            if json_output:
+                envelope = tool_result('graph', 'ok', 0)
+                envelope['result'] = impact
+                write_tool_result(envelope, sys.stdout)
+            else:
+                for entry in impact['entries']:
+                    status = 'affected' if entry['affected'] else 'no static path'
+                    print(f"{entry['kind']} {entry['name']} ({entry['entry']}): {status}")
+                    for path in entry['paths']:
+                        chain = ''.join(f" --{edge['kind']}--> {edge['to']}" for edge in path['chain'])
+                        print(f"  {path['entry_symbol']}{chain}")
+                    if entry['unanalyzed_boundaries']:
+                        print("  External boundaries: " + ', '.join(entry['unanalyzed_boundaries']))
+            return 0
         service, resolver, checked = _load_checked(Path(options.source), options.manifest, options.frozen)
         payload = service.graph(
             checked,

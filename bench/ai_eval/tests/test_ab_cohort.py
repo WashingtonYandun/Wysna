@@ -155,3 +155,30 @@ def test_ab_cohort_cli_runs_isolated_mock_smoke(tmp_path):
     assert payload["families_covered"] == sorted(TASK_FAMILIES)
     assert payload["decision"] == "inconclusive"
     assert len(payload["runs"]) == 10  # 5 families * 2 conditions
+
+
+def test_interactive_cohort_uses_model_selected_queries_and_counts_extra_turns():
+    task = next(item for item in _build_default_cohort_tasks() if item.family == "diagnosis")
+    solution = '```wysna\nfn main() -> unit { print(15) }\nmain()\n```'
+    providers = {}
+
+    def factory(condition):
+        query = {"tool": "read" if condition == "A" else "inspect", "path": "main.wysna"}
+        if condition == "B":
+            query["symbol"] = "main"
+        provider = MockProvider({task.task.id: [json.dumps(query), solution]})
+        providers[condition] = provider
+        return provider
+
+    report = run_ab_cohort(
+        [task], factory, repo_root=REPO_ROOT, repetitions=1, max_repair_cycles=0, interactive=True,
+    )
+    assert report["context_mode"] == "model-selected"
+    a, b = report["runs"]
+    assert a["passed"] and b["passed"]
+    assert a["model_turns"] == b["model_turns"] == 2
+    assert a["files_read_count"] == 1 and b["files_read_count"] == 0
+    assert a["semantic_queries_count"] == 0 and b["semantic_queries_count"] == 1
+    assert "fn main" not in providers["A"].call_history[0]["user_prompt"]
+    assert "fn main" in providers["A"].call_history[1]["user_prompt"]
+    assert "wysna.inspect/1" in providers["B"].call_history[1]["user_prompt"]

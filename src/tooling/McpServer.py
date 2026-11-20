@@ -69,6 +69,7 @@ TOOLS = [
      "description": "Compile-time semantic relationship graph (interfaces, classes, usages, calls, blast radius).",
      "inputSchema": {"type": "object", "properties": {
          **_SOURCE_OR_PATH,
+         "manifest": {"type": "string", "description": "Project manifest for a symbol impact query instead of path or source."},
          "symbol": {"type": "string", "description": "Optional symbol name or node ID filter."},
          "relation": {"type": "string", "description": "Optional relation filter: implements|hierarchy|usages|callers|callees|impact."}}}},
     {"name": "wysna_inspect",
@@ -231,6 +232,20 @@ class McpServer:
         return self._json_cli(["capabilities", "--output-format=json-v1"])
 
     def tool_wysna_graph(self, arguments):
+        if "manifest" in arguments:
+            manifest = arguments["manifest"]
+            symbol = arguments.get("symbol")
+            if (not isinstance(manifest, str) or not isinstance(symbol, str) or not symbol
+                    or "path" in arguments or "source" in arguments or arguments.get("relation") != "impact"):
+                raise ToolError("provide manifest, symbol and relation=impact for a project query")
+            from tooling.ProjectImpact import project_impact
+            try:
+                payload = project_impact(self._confine(manifest), symbol)
+            except (WysnaError, ValueError) as error:
+                raise ToolError(str(error)) from error
+            envelope = tool_result("graph", "ok", 0)
+            envelope["result"] = payload
+            return envelope
         with self._resolve_source(arguments) as (path, source):
             try:
                 checked = self.service.check(source, path)

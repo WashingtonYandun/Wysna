@@ -20,3 +20,13 @@ ln -sfn "$(pwd)/editors/vscode-wysna" ~/.antigravity/extensions/washingtonyandun
 ```
 
 Reload the window (`Cmd+Shift+P` -> `Developer: Reload Window`) to activate `.wysna` syntax highlighting.
+
+## Consultar el impacto de un cambio
+
+Abre un archivo Wysna dentro de un proyecto con `wysna.toml`. Coloca el
+cursor sobre un símbolo y ejecuta **Wysna: Show Project Impact** desde la
+paleta de comandos. El panel **Wysna Project Impact** muestra los destinos
+y las pruebas, con las relaciones que justifican cada resultado.
+
+La extensión usa el comando `wysna` del PATH. Si tienes varias instalaciones,
+indica el ejecutable en `wysna.executablePath`.

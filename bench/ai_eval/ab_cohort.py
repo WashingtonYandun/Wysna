@@ -17,7 +17,7 @@ if __name__ == "__main__" and (__package__ is None or __package__ == ""):
     _ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
     sys.path[:0] = [_ROOT, os.path.join(_ROOT, "src")]
 
-from bench.ai_eval.harness import EvaluationHarness
+from bench.ai_eval.harness import EvaluationHarness, SYSTEM_PROMPT
 from bench.ai_eval.models import SCHEMA_VERSION, Task, TaskEvaluationResult, TaskTestCase
 from bench.ai_eval.providers import GeminiProvider, LlmProvider, MockProvider, OpenAICompatibleProvider
 
@@ -260,9 +260,82 @@ def _count_collateral_lines(
 class ConditionHarness(EvaluationHarness):
     """Variant of EvaluationHarness supporting persistence-safe state assertions and Condition A/B context."""
 
-    def __init__(self, condition: str, *args: Any, **kwargs: Any) -> None:
+    def __init__(self, condition: str, *args: Any, interactive: bool = False, **kwargs: Any) -> None:
         super().__init__(*args, **kwargs)
         self.condition = condition
+        self.interactive = interactive
+        self.tool_turns = 0
+        self.read_count = 0
+        self.semantic_count = 0
+
+    def workspace_context(self, fixtures):
+        if self.interactive:
+            return "".join(f"- {name}\n" for name in fixtures)
+        return super().workspace_context(fixtures)
+
+    def generate_completion(self, provider, prompt, history, workspace):
+        if not self.interactive:
+            return super().generate_completion(provider, prompt, history, workspace)
+        choices = 'read'
+        if self.condition == "B":
+            choices += ', graph, inspect'
+        tool_prompt = SYSTEM_PROMPT + (
+            "\nBefore submitting code you may request up to two read-only queries by replying with only "
+            f'one JSON object: {{"tool":"<one of {choices}>","path":"file.wysna","symbol":"symbol name"}}. '
+            "The symbol field is required for graph and inspect. Always finish by returning the Wysna code."
+        )
+        turns = list(history)
+        totals = {"prompt_tokens": 0, "completion_tokens": 0}
+        total_latency = 0.0
+        for remaining in (2, 1, 0):
+            instruction = tool_prompt if remaining else SYSTEM_PROMPT + "\nReturn the completed code now."
+            completion, tokens, latency = provider.generate(instruction, prompt, turns)
+            for key in totals:
+                totals[key] += tokens.get(key, 0)
+            total_latency += latency
+            if not remaining:
+                break
+            try:
+                query = json.loads(completion)
+            except (ValueError, RecursionError):
+                break
+            if not isinstance(query, dict) or "tool" not in query:
+                break
+            answer = self._query_workspace(workspace, query)
+            self.tool_turns += 1
+            turns.extend((
+                {"role": "user", "content": prompt},
+                {"role": "assistant", "content": completion},
+            ))
+            prompt = "Workspace query result:\n" + answer
+        return completion, totals, total_latency
+
+    def _query_workspace(self, workspace, query):
+        tool, name, symbol = (query.get(key) for key in ("tool", "path", "symbol"))
+        try:
+            if not isinstance(name, str) or not name.endswith(".wysna"):
+                raise ValueError("expected a workspace .wysna file")
+            path = self._resolve_confined_path(workspace, name)
+            if tool == "read":
+                self.read_count += 1
+                with path.open(encoding="utf-8") as source:
+                    return source.read(6000)
+            if self.condition != "B" or tool not in ("graph", "inspect"):
+                raise ValueError("unknown workspace query")
+            if not isinstance(symbol, str) or not symbol.strip() or len(symbol) > 256:
+                raise ValueError("provide a short symbol name")
+            self.semantic_count += 1
+            options = ["--rel=impact"] if tool == "graph" else ["--with-deps"]
+            env = dict(os.environ, PYTHONPATH=os.pathsep.join((os.path.join(self.repo_root, "src"), self.repo_root)))
+            result = subprocess.run(
+                self.compiler_cmd + [tool, str(path), "--symbol=" + symbol, "--output-format=json-v1", *options],
+                cwd=workspace, capture_output=True, encoding="utf-8", errors="replace", env=env,
+                timeout=self.timeout_seconds,
+            )
+            response = result.stdout or result.stderr
+            return response[:6000] + ("\n[additional output omitted]" if len(response) > 6000 else "")
+        except (ValueError, OSError, subprocess.TimeoutExpired) as error:
+            return f"Query failed: {error}"
 
     def run_oracle_tests(
         self,
@@ -392,22 +465,23 @@ def run_ab_cohort(
     max_repair_cycles: int = 3,
     model_name: str = "mock-deterministic",
     provider_name: str = "mock",
+    interactive: bool = False,
 ) -> Dict[str, Any]:
     """Execute alternating blinded A/B repetitions with fresh isolated workspaces per run."""
     runs: List[Dict[str, Any]] = []
-    harness_a = ConditionHarness("A", repo_root=repo_root, max_repair_cycles=max_repair_cycles)
-    harness_b = ConditionHarness("B", repo_root=repo_root, max_repair_cycles=max_repair_cycles)
 
     for rep in range(repetitions):
         order = ("A", "B") if rep % 2 == 0 else ("B", "A")
         for cohort_item in cohort_tasks:
             for condition in order:
-                harness = harness_a if condition == "A" else harness_b
+                harness = ConditionHarness(
+                    condition, repo_root=repo_root, max_repair_cycles=max_repair_cycles, interactive=interactive,
+                )
                 provider = provider_factory(condition)
                 task_copy = Task.from_dict(cohort_item.task.to_dict())
                 semantic_queries = 0
                 files_read = len(task_copy.fixtures)
-                if condition == "B":
+                if condition == "B" and not interactive:
                     sem_note, semantic_queries = _collect_semantic_context(harness, task_copy)
                     if sem_note:
                         task_copy.instruction = f"{task_copy.instruction}\n\n[SEMANTIC_CONTEXT]\n{sem_note}"
@@ -440,13 +514,13 @@ def run_ab_cohort(
                     "passed": passed,
                     "regression": regression,
                     "pass_at_attempt": result.pass_at_attempt,
-                    "model_turns": result.model_turns,
+                    "model_turns": result.model_turns + harness.tool_turns,
                     "wall_time_ms": round(result.wall_time_ms, 2),
                     "provider_latency_ms": round(result.provider_latency_ms, 2),
                     "total_tokens": result.total_tokens,
                     "token_counting_method": getattr(provider, "token_counting_method", "unknown"),
-                    "files_read_count": files_read,
-                    "semantic_queries_count": semantic_queries,
+                    "files_read_count": harness.read_count if interactive else files_read,
+                    "semantic_queries_count": harness.semantic_count if interactive else semantic_queries,
                     "files_touched_count": files_touched,
                     "collateral_lines_changed": collateral_lines,
                     "final_error_category": result.final_error_category or invariant_err,
@@ -454,6 +528,7 @@ def run_ab_cohort(
 
     summary = evaluate_expansion_gate(runs)
     summary["provider_name"] = provider_name
+    summary["context_mode"] = "model-selected" if interactive else "prefetched"
     summary["model_name"] = model_name
     summary["repetitions"] = repetitions
     summary["families_covered"] = sorted({item.family for item in cohort_tasks})
@@ -469,6 +544,7 @@ def main() -> int:
     parser.add_argument("--api-key", type=str, default=None)
     parser.add_argument("--repetitions", type=int, default=3)
     parser.add_argument("--output", type=str, default=None)
+    parser.add_argument("--interactive-tools", action="store_true")
     args = parser.parse_args()
 
     repo_root = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
@@ -491,6 +567,7 @@ def main() -> int:
         repetitions=args.repetitions,
         model_name=model_name,
         provider_name=args.provider,
+        interactive=args.interactive_tools,
     )
     if args.output:
         os.makedirs(os.path.dirname(os.path.abspath(args.output)), exist_ok=True)
