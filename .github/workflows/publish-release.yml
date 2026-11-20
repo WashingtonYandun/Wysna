@@ -94,6 +94,15 @@ jobs:
           repository: ${{ github.repository }}
           run-id: ${{ steps.source-ci.outputs.run_id }}
 
+      - name: Download native SDK archives and installed acceptance reports
+        uses: actions/download-artifact@v4
+        with:
+          pattern: native-sdk-*
+          path: artifacts/native
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          repository: ${{ github.repository }}
+          run-id: ${{ steps.source-ci.outputs.run_id }}
+
       - name: Validate source, installer manifests and checksums
         run: |
           python3 tools/prepare_release_assets.py \
@@ -103,6 +112,7 @@ jobs:
             --windows-artifact artifacts/windows \
             --macos-artifact artifacts/macos \
             --linux-artifact artifacts/linux \
+            --native-artifacts artifacts/native \
             --release-notes "${{ steps.source-ci.outputs.release_notes }}" \
             --output dist/release-assets
 
@@ -127,6 +137,11 @@ jobs:
           assert not data.get("isDraft"), data
           assert not data.get("isPrerelease"), data
           assets = data.get("assets") or []
-          assert len(assets) >= 16, f"Expected >= 16 verified assets, got {len(assets)}"
+          names = {asset["name"] for asset in assets}
+          native = {f"wysna-{ver}-native-{platform}.{ext}" for platform, ext in [
+              ("aarch64-macos", "tar.gz"), ("x86_64-linux", "tar.gz"), ("x86_64-windows", "zip"),
+          ]}
+          assert native <= names, f"Missing native release assets: {native - names}"
+          assert len(assets) >= 19, f"Expected >= 19 verified assets, got {len(assets)}"
           print(f"Published stable Wysna {ver} with {len(assets)} verified assets")
           '

@@ -42,7 +42,7 @@ The `dev`, `release` and `size` profiles select `-O0 -g`, `-O2` and `-Os`. All p
 
 The native pipeline covers scalars, UTF-8 strings and paths, globals, collections, CoW mutation, direct ranges and nested tuple loop bindings, optional and Result channels, closed error unions, structs/enums, classes/inheritance/interfaces, pattern matching with guards, closures by snapshot, function values, concrete generic functions/structs/enums and the scalar/opaque C ABI. The profile and independent-verifier contracts are described in [MIR design](MIR_DESIGN.md).
 
-Parameterized classes and interfaces (including constrained type parameters, independent generic methods `Box[T].transform[R]`, and parameterized class inheritance) as well as stackless CPS `async fn` coroutines and `from ... use` imports are supported in the native profile. `std/environment.arguments()`, `std/environment.get(name)` and `std/time.unix_seconds()` remain supported; C99 builds generated via Seed `wysna build --sandbox` (with optional `--allow`/`--deny`) enforce `WYSNA_DENY_CAP_*` capability sandbox guards (`W5006`) at runtime host boundaries. The native SDK includes `fmt`, `test`, `graph`, `inspect`, `patch`, `explain`, `schema` (`--emit-codecs`), `fix` (`--apply`, `--include-maybe`), `skills`, `capabilities`, `api` (`wysna.api-index/1`, stdlib and `--manifest`), `project check|build|run|test` (`wysna.toml` v1, native C FFI flags `--include-dir`/`--link`/`--library`), `wysna mcp` (11 static tools over newline-delimited JSON-RPC 2.0 stdio with `--root` confinement), and `wysna lsp` (Stage-3 native LSP) without Python; `wysna.toml` lockfile generation (`wysna project lock` / `wysna.lock`), `project new`, library-mode exports, and WebAssembly targets stay in Seed. Use Seed for project commands with `--frozen`, which require verifying lock contents. Native profile exclusions report `W2013`; unsupported commands report `W5002`.
+Parameterized classes and interfaces (including constrained type parameters, independent generic methods `Box[T].transform[R]`, and parameterized class inheritance) as well as stackless CPS `async fn` coroutines and `from ... use` imports are supported in the native profile. `std/environment.arguments()`, `std/environment.get(name)` and `std/time.unix_seconds()` remain supported; C99 builds generated via Seed `wysna build --sandbox` (with optional `--allow`/`--deny`) enforce `WYSNA_DENY_CAP_*` capability sandbox guards (`W5006`) at runtime host boundaries. The native SDK includes `fmt`, `test`, `graph`, `inspect`, `patch`, `explain`, `schema` (`--emit-codecs`), `fix` (`--apply`, `--include-maybe`), `skills`, `capabilities`, `api` (`wysna.api-index/1`, stdlib and `--manifest`), `project new|lock|check|build|run|test` (`wysna.toml` v1, native C FFI flags `--include-dir`/`--link`/`--library`), `wysna mcp` (11 static tools over newline-delimited JSON-RPC 2.0 stdio with `--root` confinement), and `wysna lsp` (Stage-3 native LSP) without Python; library-mode exports and WebAssembly targets stay in Seed. Native profile exclusions report `W2013`; unsupported commands report `W5002`.
 
 For a small CLI, read user arguments and environment configuration through the standard module:
 
@@ -84,3 +84,23 @@ The package builder verifies downloaded toolchain hashes and rejects unsafe arch
 Seed lowers the compiler source through verified HIR/MIR and emits `bootstrap.c` to construct an initial engine. That engine emits native MIR C0; C0 builds Stage 1, which emits C1; C1 builds Stage 2, which emits C2. Packaging requires `C0 == C1 == C2` and unchanged compiler inputs. The Seed HIR emission is recorded separately and is not relabeled as native C0. The independent AST C99 emitter remains a conformance oracle.
 
 CI must build and test each announced platform independently, including an installation outside the checkout without host Python or CC discovery. A successful build on one platform does not certify another platform. Archive artifacts are development builds; release promotion remains separate.
+
+## Arrancar el compilador desde un SDK nativo
+
+En macOS arm64 y Linux x64, ejecuta desde un checkout con el compilador
+consolidado en `selfhost/compiler.wysna`. Usa como entrada un SDK nativo
+cuyo archivo hayas verificado con las sumas de su distribución.
+
+```sh
+tools/bootstrap_from_native.sh /ruta/al/sdk /ruta/a/un/directorio-nuevo
+```
+
+El SDK anterior construye el primer compilador con el Zig incluido. Las tres
+etapas compiladas deben emitir C idéntico a partir de las mismas fuentes.
+El último compilador queda en `stage3` dentro del directorio de salida. Este
+recorrido usa el compilador, Zig y herramientas del sistema POSIX. El flujo
+de empaquetado oficial todavía usa el arranque y los validadores de Seed.
+
+Tanto en proyectos sin dependencias como en proyectos con dependencias de
+paquetes locales, `project lock` genera el mismo lockfile que Seed y `--frozen`
+comprueba el manifiesto, las versiones y las huellas SHA-256 de sus entradas.

@@ -1386,6 +1386,55 @@ def unicode_normalize(input_handle, form, output_handle):
     return 0
 
 
+def project_entries(path_handle, output_handle):
+    path = path_text(path_handle)
+    out = find(output_handle, 'buffer')
+    if path is None or out is None or len(out):
+        return failure(OSError(errno.EINVAL, 'invalid project entry buffers'))
+    try:
+        with os.scandir(path) as entries:
+            for entry in entries:
+                name = entry.name.encode('utf-8')
+                kind = (b'l' if entry.is_symlink() else
+                        b'd' if entry.is_dir(follow_symlinks=False) else
+                        b'f' if entry.is_file(follow_symlinks=False) else b'o')
+                out.extend(kind + name + b'\x00')
+        return len(out)
+    except (OSError, UnicodeError) as error:
+        return failure(error if isinstance(error, OSError) else OSError(errno.EILSEQ, 'invalid UTF-8'))
+
+
+def project_path_key(input_handle, output_handle):
+    import unicodedata
+    source = find(input_handle, 'buffer')
+    out = find(output_handle, 'buffer')
+    if source is None or out is None or len(out):
+        return failure(OSError(errno.EINVAL, 'invalid path-key buffers'))
+    try:
+        text = bytes(source).decode('utf-8')
+    except UnicodeDecodeError:
+        return -1
+    out.extend(unicodedata.normalize('NFC', text).casefold().encode('utf-8'))
+    return len(out)
+
+
+def project_file_sha256(path_handle, output_handle):
+    import hashlib
+    path = path_text(path_handle)
+    out = find(output_handle, 'buffer')
+    if path is None or out is None or len(out):
+        return failure(OSError(errno.EINVAL, 'invalid sha256 buffers'))
+    try:
+        digest = hashlib.sha256()
+        with Path(path).open('rb') as stream:
+            for chunk in iter(lambda: stream.read(65536), b''):
+                digest.update(chunk)
+        out.extend(digest.digest())
+        return 0
+    except OSError as error:
+        return failure(error)
+
+
 FUNCTIONS = {
     'wysna_host_monotonic_ms': monotonic_ms,
     'wysna_host_wall_ms': wall_ms,
@@ -1397,6 +1446,9 @@ FUNCTIONS = {
     'wysna_host_stdout_write_raw': stdout_write_raw,
     'wysna_host_self_executable': self_executable,
     'wysna_host_getcwd': getcwd,
+    'wysna_host_project_entries': project_entries,
+    'wysna_host_project_path_key': project_path_key,
+    'wysna_host_project_file_sha256': project_file_sha256,
     'wysna_host_unicode_normalize': unicode_normalize,
     'wysna_host_last_error': lambda: _error_code,
     'wysna_host_last_error_domain': lambda: _error_domain,

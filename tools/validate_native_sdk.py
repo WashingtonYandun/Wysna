@@ -45,7 +45,7 @@ def require(condition, detail):
         raise AssertionError(detail)
 
 
-def validate(sdk, report, strict_source=False, compiler_source=None):
+def validate(sdk, report, strict_source=False, compiler_source=None, application=None):
     sdk = Path(sdk).resolve()
     manifest = json.loads((sdk / 'native-sdk.json').read_text(encoding='utf-8'))
     require(manifest['profile'] == 'native-core-v1', 'Unexpected compiler profile')
@@ -58,7 +58,7 @@ def validate(sdk, report, strict_source=False, compiler_source=None):
         require(path.is_relative_to(sdk) and '..' not in Path(name).parts, 'Invalid manifest path: ' + name)
         require(path.is_file() and digest(path) == expected, 'File checksum mismatch: ' + name)
     require(not list(sdk.rglob('*.py')) and not (sdk / 'checker').exists(), 'Seed/Python sources were packaged')
-    report.update(platform=manifest['platform'], target=manifest['target'],
+    report.update(platform=manifest['platform'], target=manifest['target'], version=manifest['version'],
                   source_commit=manifest['source_commit'], fingerprint=manifest['compiler_fingerprint'])
     checks = report['checks']
     checks.append({'name': 'manifest-and-files', 'files': len(manifest['files'])})
@@ -376,6 +376,48 @@ def validate(sdk, report, strict_source=False, compiler_source=None):
         require(pout.is_file(), 'Missing project build binary')
         run('project-run', ['project', 'run', '--manifest', proj_dir / 'wysna.toml'], stdout=b'hi native\n')
         run('project-test', ['project', 'test', '--manifest', proj_dir / 'wysna.toml'])
+        if application is not None:
+            scaffold = run('project-new', ['project', 'new', 'first-project', '--output-format=json-v1'])
+            scaffold_result = json.loads(scaffold.stdout)
+            require(scaffold_result['status'] == 'ok' and len(scaffold_result['artifacts']) == 3, scaffold_result)
+            created = project / 'first-project' / 'wysna.toml'
+            run('scaffold-project-lock', ['project', 'lock', '--manifest', created])
+            run('scaffold-project-test', ['project', 'test', '--manifest', created, '--frozen'])
+
+            app = project / 'wysofia-ops'
+            shutil.copytree(application, app)
+            manifest_path = app / 'wysna.toml'
+            source_path = app / 'src/main.wysna'
+            app_options = ['--manifest', manifest_path]
+            run('ops-project-check', ['project', 'check', *app_options])
+            run('ops-project-build', ['project', 'build', *app_options, '-o', project / ('ops' + suffix)])
+            demo = run('ops-project-run', ['project', 'run', *app_options, '--', '--demo'])
+            require(json.loads(demo.stdout) == {
+                'critical_events': 1, 'health_score': 35, 'total_events': 4,
+                'total_tokens': 1650, 'warning_events': 1,
+            }, demo.stdout)
+            tests = run('ops-project-test', ['project', 'test', *app_options])
+            require(b'[PASS] audit-domain-contracts (native)' in tests.stdout, tests.stdout)
+            graph = run('ops-graph-cli', ['graph', source_path, '--output-format=json-v1'])
+            graph_payload = json.loads(graph.stdout)['result']
+            require(any(node['name'] == 'parse_events_json' for node in graph_payload['nodes']), graph_payload)
+
+            requests = [
+                {'jsonrpc': '2.0', 'id': 1, 'method': 'initialize',
+                 'params': {'protocolVersion': '2025-06-18'}},
+                {'jsonrpc': '2.0', 'method': 'notifications/initialized'},
+                {'jsonrpc': '2.0', 'id': 2, 'method': 'tools/call', 'params': {
+                    'name': 'wysna_graph', 'arguments': {'path': 'src/main.wysna'},
+                }},
+            ]
+            stdin = ''.join(json.dumps(request) + '\n' for request in requests).encode()
+            mcp = run('ops-graph-mcp', ['mcp', '--root', app], stdin=stdin)
+            responses = {item['id']: item for item in map(json.loads, mcp.stdout.splitlines())}
+            answer = responses[2]['result']
+            require(not answer['isError'], answer)
+            mcp_graph = json.loads(answer['content'][0]['text'])['result']
+            require(mcp_graph['graph_hash'] == graph_payload['graph_hash'], mcp_graph)
+
         if compiler_source:
             require(digest(Path(compiler_source)) == manifest["compiler_source_sha256"], "Selfbuild source does not match SDK provenance")
             fixture = project / 'compiler.wysna'
@@ -396,10 +438,14 @@ def main():
     parser.add_argument('--report', type=Path, required=True)
     parser.add_argument('--strict-source', action='store_true')
     parser.add_argument('--compiler-source', type=Path)
+    parser.add_argument('--archive', type=Path)
+    parser.add_argument('--application', type=Path)
     options = parser.parse_args()
     report = {'checks': [], 'success': False}
     try:
-        validate(options.sdk, report, options.strict_source, options.compiler_source)
+        validate(options.sdk, report, options.strict_source, options.compiler_source, options.application)
+        if options.archive is not None:
+            report['archive_sha256'] = digest(options.archive)
         report['success'] = True
     except Exception as error:
         report['error'] = str(error)

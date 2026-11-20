@@ -783,6 +783,7 @@ jobs:
           python tools/package_native.py --output dist/native/wysna-native --archive --source-commit "$GITHUB_SHA" > dist/native/package-report.json
           cp tools/validate_native_sdk.py dist/native/validate_native_sdk.py
           cp selfhost/compiler.wysna dist/native/compiler.wysna
+          cp -R examples/wysofia-ops dist/native/wysofia-ops
       - uses: actions/upload-artifact@v4
         with:
           name: native-sdk-${{ matrix.os }}
@@ -791,6 +792,7 @@ jobs:
             dist/native/*.zip
             dist/native/validate_native_sdk.py
             dist/native/compiler.wysna
+            dist/native/wysofia-ops/
             dist/native/package-report.json
           if-no-files-found: error
       - name: Preserve native bootstrap diagnostics
@@ -825,9 +827,12 @@ jobs:
           path: native-artifact
       - name: Extract the platform archive
         run: |
-          python -c "from pathlib import Path; import shutil; files=list(Path('native-artifact').glob('*.tar.gz'))+list(Path('native-artifact').glob('*.zip')); assert len(files)==1, files; shutil.unpack_archive(str(files[0]), 'installed')"
+          python -c "from pathlib import Path; import shutil; files=list(Path('native-artifact').glob('*.tar.gz'))+list(Path('native-artifact').glob('*.zip')); assert len(files)==1, files; shutil.unpack_archive(str(files[0]), 'installed'); Path('native-archive.txt').write_text(str(files[0]))"
       - name: Validate isolated installed workflows and native selfbuild
-        run: python native-artifact/validate_native_sdk.py --sdk installed/wysna-native --strict-source --compiler-source native-artifact/compiler.wysna --report native-install-report.json
+        shell: bash
+        run: |
+          archive="$(cat native-archive.txt)"
+          python native-artifact/validate_native_sdk.py --sdk installed/wysna-native --archive "$archive" --application native-artifact/wysofia-ops --strict-source --compiler-source native-artifact/compiler.wysna --report native-install-report.json
       - uses: actions/upload-artifact@v4
         if: always()
         with:

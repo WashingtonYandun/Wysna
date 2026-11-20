@@ -97,7 +97,7 @@ class NativeToolchain:
                 identity = compiler_identity(command)
                 cache = ArtifactCache('c99')
             def compile_step(arguments, phase):
-                result = subprocess.run(command + arguments, capture_output=True, text=True, timeout=120)
+                result = subprocess.run(command + arguments, capture_output=True, text=True, timeout=300)
                 if result.returncode:
                     raise NativeCompilationError(phase, 'C Compiler Error', result.stderr, result.returncode)
                 return result
@@ -119,7 +119,7 @@ class NativeToolchain:
             if profile and os.name != 'nt':
                 section_flags = ['-Wl,-dead_strip'] if sys.platform == 'darwin' else ['-Wl,--gc-sections']
             link_command = base + [object_path, '-o', output_path] + linker_inputs + native_stack_link_args(command) + section_flags
-            result = subprocess.run(link_command, capture_output=True, text=True, timeout=120)
+            result = subprocess.run(link_command, capture_output=True, text=True, timeout=300)
             link_ms = (time.perf_counter() - started) * 1000.0
             if result.returncode != 0:
                 raise NativeCompilationError(
@@ -217,7 +217,7 @@ class NativeToolchain:
             result = subprocess.run(
                 [os.fspath(compiler_path), "--stdlib-root", str(Path(self.repo_root) / "stdlib"),
                  input_path, output_path],
-                capture_output=True, text=True, cwd=input_directory, timeout=120,
+                capture_output=True, text=True, cwd=input_directory, timeout=300,
             )
             codegen_ms = (time.perf_counter() - started) * 1000.0
             if result.returncode != 0:
@@ -242,7 +242,7 @@ class NativeToolchain:
         result = subprocess.run(
             [os.fspath(compiler_path), "--stdlib-root", str(Path(self.repo_root) / "stdlib"),
              check_flag, input_path],
-            capture_output=True, text=True, cwd=input_directory, timeout=120,
+            capture_output=True, text=True, cwd=input_directory, timeout=300,
         )
         check_ms = (time.perf_counter() - started) * 1000.0
         if result.returncode != 0:
@@ -260,7 +260,7 @@ class NativeToolchain:
         result = subprocess.run(
             [os.fspath(compiler_path), "--stdlib-root", str(Path(self.repo_root) / "stdlib"),
              fmt_flag, input_path],
-            capture_output=True, text=True, cwd=input_directory, timeout=120,
+            capture_output=True, text=True, cwd=input_directory, timeout=300,
         )
         fmt_ms = (time.perf_counter() - started) * 1000.0
         if result.returncode != 0:

@@ -51,7 +51,7 @@ def test_http_native_build_resolves_and_links_libcurl_only_on_demand():
             assert options == {'capture_output': True, 'text': True, 'timeout': 10}
             return curl_outputs[command[1]]
         commands.append(command)
-        assert options == {'capture_output': True, 'text': True, 'timeout': 120}
+        assert options == {'capture_output': True, 'text': True, 'timeout': 300}
         if '-c' in command:
             compiled_sources.append(Path(command[command.index('-c') + 1]).read_text(encoding='utf-8'))
             Path(command[command.index('-o') + 1]).write_bytes(b'object')
@@ -134,7 +134,7 @@ def _check_native_failure_cleanup(failure_stage):
 
         def run(command, **options):
             commands.append(command)
-            assert options == {'capture_output': True, 'text': True, 'timeout': 120}
+            assert options == {'capture_output': True, 'text': True, 'timeout': 300}
             assert command[:2] == ['fake-cc', '--configured-flag']
             assert '-fsanitize=address,undefined' in command
             assert '-fno-omit-frame-pointer' in command
@@ -145,7 +145,7 @@ def _check_native_failure_cleanup(failure_stage):
                 generated.write_bytes(b'partial temporary object')
             stage = 'program' if len(commands) == 1 else 'adapter' if compiling else 'link'
             if failure_stage == 'timeout' and stage == 'adapter':
-                raise subprocess.TimeoutExpired(command, 120)
+                raise subprocess.TimeoutExpired(command, 300)
             if failure_stage == 'os_error' and stage == 'adapter':
                 raise OSError('process launch failed')
             return subprocess.CompletedProcess(command, 9 if stage == failure_stage else 0,
@@ -198,12 +198,12 @@ def _check_selfhost_emission(outcome):
         def run(command, **options):
             assert command[:4] == [str(compiler), "--stdlib-root", str(ROOT / "stdlib"), os.path.abspath(source)]
             assert options == {'capture_output': True, 'text': True,
-                               'cwd': str(directory), 'timeout': 120}
+                               'cwd': str(directory), 'timeout': 300}
             emitted = Path(command[4])
             directories.append(emitted.parent)
             emitted.write_text('/* emitted C */', encoding='utf-8')
             if outcome == 'timeout':
-                raise subprocess.TimeoutExpired(command, 120)
+                raise subprocess.TimeoutExpired(command, 300)
             return subprocess.CompletedProcess(command, 0 if outcome == 'ok' else 7,
                                                stdout='', stderr='selfhost failure')
 

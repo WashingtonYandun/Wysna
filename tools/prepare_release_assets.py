@@ -167,6 +167,34 @@ def verify_platform(name: str, root: Path, expected_sha: str, version: str,
     return provenance
 
 
+def stage_native_sdks(root: Path, source: str, version: str, output: Path) -> dict:
+    platforms = {
+        "macos-latest": ("aarch64-macos", "tar.gz"),
+        "ubuntu-latest": ("x86_64-linux", "tar.gz"),
+        "windows-latest": ("x86_64-windows", "zip"),
+    }
+    staged = {}
+    for runner, (platform, extension) in platforms.items():
+        archive = root / f"native-sdk-{runner}" / f"wysna-native.{extension}"
+        report_path = root / f"native-sdk-acceptance-{runner}" / "native-install-report.json"
+        report = json.loads(report_path.read_text(encoding="utf-8"))
+        checksum = digest(archive)
+        required = {
+            "ops-project-check", "ops-project-build", "ops-project-run", "ops-project-test",
+            "ops-graph-cli", "ops-graph-mcp", "rebuilt-native-engine-emits-identical-C",
+            "project-new", "scaffold-project-lock", "scaffold-project-test",
+        }
+        passed = {check["name"] for check in report.get("checks", []) if check.get("status") == 0}
+        if (not required <= passed or report.get("success") is not True or report.get("source_commit") != source
+                or report.get("version") != version or report.get("platform") != platform
+                or report.get("archive_sha256") != checksum):
+            raise ValueError(f"{platform}: archive does not match installed SDK acceptance")
+        name = f"wysna-{version}-native-{platform}.{extension}"
+        shutil.copyfile(archive, output / name)
+        staged[platform] = {"name": name, "sha256": checksum, "bytes": archive.stat().st_size}
+    return staged
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--version", required=True)
@@ -175,6 +203,7 @@ def main() -> int:
     parser.add_argument("--windows-artifact", type=Path, required=True)
     parser.add_argument("--macos-artifact", type=Path, required=True)
     parser.add_argument("--linux-artifact", type=Path, required=True)
+    parser.add_argument("--native-artifacts", type=Path)
     parser.add_argument("--release-notes", type=Path, required=True)
     parser.add_argument("--output", type=Path, required=True)
     args = parser.parse_args()
@@ -203,10 +232,12 @@ def main() -> int:
         provenance["linux"] = verify_platform("linux", args.linux_artifact,
                                               args.source_commit, args.version,
                                               args.ci_run_id, args.output)
+        native = stage_native_sdks(args.native_artifacts, args.source_commit, args.version, args.output) \
+            if args.native_artifacts else {}
         (args.output / "release-provenance.json").write_text(
             json.dumps({"schema": "wysna.release-provenance/1", "version": args.version,
                         "source_commit": args.source_commit, "source_dirty": False,
-                        "ci_workflow_run_id": int(args.ci_run_id), "platforms": provenance},
+                        "ci_workflow_run_id": int(args.ci_run_id), "platforms": provenance, "native_sdks": native},
                        indent=2, sort_keys=True) + "\n", encoding="utf-8")
         checksums = []
         for asset in sorted(args.output.iterdir()):

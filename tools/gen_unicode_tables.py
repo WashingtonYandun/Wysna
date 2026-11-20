@@ -59,6 +59,23 @@ def render():
     lines += ['    {0x%X,0x%X,0x%X},' % item for item in compositions]
     lines += ['};', 'static const WysnaUnicodeClassRun wysna_unicode_classes[] = {']
     lines += ['    {0x%X,0x%X,%d},' % tuple(item) for item in runs]
+    lines += [
+        '};',
+        'typedef struct { uint32_t code, output[3]; } WysnaUnicodeCasefold;',
+        'static const WysnaUnicodeCasefold wysna_unicode_casefold[] = {',
+    ]
+    folds = []
+    for cp in range(0x110000):
+        if 0xD800 <= cp <= 0xDFFF:
+            continue
+        folded = chr(cp).casefold()
+        if folded != chr(cp):
+            output = [ord(ch) for ch in folded]
+            assert len(output) <= 3
+            output.extend([0] * (3 - len(output)))
+            folds.append('{0x%X,{0x%X,0x%X,0x%X}}' % (cp, *output))
+    for index in range(0, len(folds), 3):
+        lines.append('    ' + ', '.join(folds[index:index + 3]) + ',')
     lines += ['};', '#endif', '']
     return '\n'.join(lines)
 
