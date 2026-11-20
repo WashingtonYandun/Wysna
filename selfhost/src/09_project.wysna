@@ -1135,25 +1135,10 @@ fn proj_scaffold(args: list[str], json_mode_in: bool) -> unit {
     }
 }
 
-fn proj_local_lock_json(m: ProjectManifest) -> str {
-    return "{\n" +
-        "  \"aliases\": [],\n" +
-        "  \"compiler_version\": " + diag_json_quote(m.compiler_version) + ",\n" +
-        "  \"dependencies\": [],\n" +
-        "  \"language_version\": " + diag_json_quote(m.language_version) + ",\n" +
-        "  \"lock_version\": 1,\n" +
-        "  \"root\": {\n" +
-        "    \"manifest_sha256\": " + diag_json_quote(m.manifest_sha256) + ",\n" +
-        "    \"name\": " + diag_json_quote(m.name) + ",\n" +
-        "    \"version\": " + diag_json_quote(m.version) + "\n" +
-        "  },\n" +
-        "  \"stdlib\": " + diag_json_quote(m.stdlib) + "\n}\n"
-}
-
-fn proj_write_local_lock(m: ProjectManifest, json_mode: bool) -> unit {
+fn proj_write_lock(m: ProjectManifest, json_mode: bool) -> unit {
     let path = m.root + "/wysna.lock"
     let use_time = str(unix_time())
-    let content = proj_local_lock_json(m)
+    let content = proj_lock_json(m, "lock", json_mode)
     let mut temp_path = ""
     for i in 0..32 {
         let candidate = m.root + "/.wysna-lock-" + use_time + "-" + str(i) + ".tmp"
@@ -1186,28 +1171,14 @@ fn proj_write_local_lock(m: ProjectManifest, json_mode: bool) -> unit {
     }
 }
 
-fn proj_verify_local_lock(m: ProjectManifest, subcmd: str, json_mode: bool) -> unit {
+fn proj_verify_lock(m: ProjectManifest, subcmd: str, json_mode: bool) -> unit {
     let path = m.root + "/wysna.lock"
     let raw = read_file(path) else err {
         proj_emit_error_and_exit(subcmd, json_mode, "W5002", "cannot read wysna.lock; run 'wysna project lock'")
         ""
     }
-    let lock = mcp_parse_json_strict(raw)
-    let aliases = lsp_json_get(lock, "aliases")
-    let dependencies = lsp_json_get(lock, "dependencies")
-    let version = lsp_json_get(lock, "lock_version")
-    let root = lsp_json_get(lock, "root")
-    let valid = lock.kind == "object" and len(lock.keys) == 7 and
-        aliases.kind == "array" and len(aliases.items) == 0 and
-        dependencies.kind == "array" and len(dependencies.items) == 0 and
-        version.kind == "int" and version.str_val == "1" and
-        lsp_json_str(lock, "compiler_version", "") == m.compiler_version and
-        lsp_json_str(lock, "language_version", "") == m.language_version and
-        lsp_json_str(lock, "stdlib", "") == m.stdlib and
-        root.kind == "object" and len(root.keys) == 3 and
-        lsp_json_str(root, "name", "") == m.name and lsp_json_str(root, "version", "") == m.version and
-        lsp_json_str(root, "manifest_sha256", "") == m.manifest_sha256
-    if not valid {
+    let expected = mcp_parse_json_strict(proj_lock_json(m, subcmd, json_mode))
+    if not proj_lock_matches(expected, mcp_parse_json_strict(raw)) {
         proj_emit_error_and_exit(subcmd, json_mode, "W5002", "wysna.lock is stale or invalid; update it with 'wysna project lock'")
     }
 }
@@ -1317,14 +1288,11 @@ fn tool_handle_project(args: list[str], json_mode_in: bool) -> unit {
     if subcmd == "lock" and (frozen or target_arg != "") {
         proj_emit_error_and_exit(subcmd, json_mode, "W5002", "project lock does not accept --frozen or --target")
     }
-    if (frozen or subcmd == "lock") and len(m.deps) > 0 {
-        proj_emit_error_and_exit(subcmd, json_mode, "W5002", "use Wysna Seed to generate or verify locks for projects with package dependencies")
-    }
     if subcmd == "lock" {
-        proj_write_local_lock(m, json_mode)
+        proj_write_lock(m, json_mode)
         return
     }
-    if frozen { proj_verify_local_lock(m, subcmd, json_mode) }
+    if frozen { proj_verify_lock(m, subcmd, json_mode) }
 
     let mut dep_aliases: list[str] = []
     let mut dep_roots: list[str] = []

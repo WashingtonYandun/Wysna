@@ -500,6 +500,7 @@ static inline void wysna_host_sleep_ms(int64_t ms) {
 
 #include "wysna_host_system.h"
 #include "wysna_host_unicode.h"
+#include "wysna_host_project.h"
 
 static void wysna_async_shutdown(void) {
     for (;;) {

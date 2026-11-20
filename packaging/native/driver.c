@@ -334,8 +334,12 @@ static int sdk_child_captured(const char* executable, int argc, const char** arg
     int saved_err = _dup(2);
     HANDLE orig_std_out = GetStdHandle(STD_OUTPUT_HANDLE);
     HANDLE orig_std_err = GetStdHandle(STD_ERROR_HANDLE);
-    int out_fd = _open(stdout_path, _O_WRONLY | _O_CREAT | _O_TRUNC, 0600);
-    int err_fd = _open(stderr_path, _O_WRONLY | _O_CREAT | _O_TRUNC, 0600);
+    wchar_t* wide_out = wysna_host_process_wide(stdout_path);
+    wchar_t* wide_err = wysna_host_process_wide(stderr_path);
+    int out_fd = wide_out ? _wopen(wide_out, _O_WRONLY | _O_CREAT | _O_TRUNC, 0600) : -1;
+    int err_fd = wide_err ? _wopen(wide_err, _O_WRONLY | _O_CREAT | _O_TRUNC, 0600) : -1;
+    free(wide_out);
+    free(wide_err);
     if (out_fd < 0 || err_fd < 0 || saved_out < 0 || saved_err < 0) {
         if (out_fd >= 0) _close(out_fd);
         if (err_fd >= 0) _close(err_fd);

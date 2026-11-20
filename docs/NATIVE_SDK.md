@@ -101,6 +101,6 @@ El último compilador queda en `stage3` dentro del directorio de salida. Este
 recorrido usa el compilador, Zig y herramientas del sistema POSIX. El flujo
 de empaquetado oficial todavía usa el arranque y los validadores de Seed.
 
-En proyectos sin dependencias de paquetes, `project lock` genera el mismo
-lockfile que Seed y `--frozen` comprueba el manifiesto y las versiones.
-Usa Seed para generar y verificar los locks que incluyen dependencias locales.
+Tanto en proyectos sin dependencias como en proyectos con dependencias de
+paquetes locales, `project lock` genera el mismo lockfile que Seed y `--frozen`
+comprueba el manifiesto, las versiones y las huellas SHA-256 de sus entradas.

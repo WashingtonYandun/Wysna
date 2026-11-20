@@ -207,6 +207,49 @@ class Phase6V08AutonomyAndDogfoodTests(unittest.TestCase):
             stale = self._run_sdk(["project", "check", "--manifest", str(manifest), "--frozen"], work, scratch)
             self.assertEqual(stale.returncode, 2, stale.stderr + stale.stdout)
 
+            dep_dir = project / "vendor" / "util"
+            (dep_dir / "src").mkdir(parents=True)
+            (dep_dir / "wysna.toml").write_text(
+                'manifest_version = 1\n\n'
+                '[package]\n'
+                'name = "util"\n'
+                'version = "0.1.0"\n'
+                'language = "0.8"\n\n'
+                '[toolchain]\n'
+                'compiler = "0.8.0"\n'
+                'stdlib = "bundled"\n\n'
+                '[sources]\n'
+                'root = "src"\n\n'
+                '[targets.lib]\n'
+                'entry = "src/lib.wysna"\n'
+                'profile = "native-cli"\n',
+                encoding="utf-8",
+            )
+            (dep_dir / "src" / "lib.wysna").write_text('pub fn tag() -> str { return "ok" }\n', encoding="utf-8")
+            with manifest.open("a", encoding="utf-8") as stream:
+                stream.write('\n[dependencies.util]\npath = "vendor/util"\n')
+
+            dep_lock = self._run_sdk(
+                ["project", "lock", "--manifest", str(manifest), "--output-format=json-v1"], work, scratch,
+            )
+            self.assertEqual(dep_lock.returncode, 0, dep_lock.stderr + dep_lock.stdout)
+            native_dep_lock = json.loads(lock_path.read_bytes())
+            self.assertEqual(len(native_dep_lock["aliases"]), 1)
+            self.assertEqual(len(native_dep_lock["dependencies"]), 1)
+            dep_checked = self._run_sdk(["project", "check", "--manifest", str(manifest), "--frozen"], work, scratch)
+            self.assertEqual(dep_checked.returncode, 0, dep_checked.stderr + dep_checked.stdout)
+
+            seed_dep = subprocess.run(
+                [sys.executable, str(ROOT / "wysna"), "project", "lock", "--manifest", str(manifest)],
+                cwd=work, capture_output=True, text=True, timeout=30,
+            )
+            self.assertEqual(seed_dep.returncode, 0, seed_dep.stderr + seed_dep.stdout)
+            self.assertEqual(json.loads(lock_path.read_bytes()), native_dep_lock)
+
+            (dep_dir / "src" / "lib.wysna").write_text('pub fn tag() -> str { return "changed" }\n', encoding="utf-8")
+            dep_stale = self._run_sdk(["project", "check", "--manifest", str(manifest), "--frozen"], work, scratch)
+            self.assertEqual(dep_stale.returncode, 2, dep_stale.stderr + dep_stale.stdout)
+
     def test_native_project_impact_uses_manifest_targets_and_mcp(self):
         with tempfile.TemporaryDirectory(prefix="wysna_p6_impact_") as tmp:
             scratch = Path(tmp).resolve()

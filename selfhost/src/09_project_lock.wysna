@@ -1,0 +1,190 @@
+
+extern "C" fn wysna_host_project_entries(path: opaque, output: opaque) -> int
+extern "C" fn wysna_host_project_path_key(path: opaque, output: opaque) -> int
+extern "C" fn wysna_host_project_file_sha256(path: opaque, output: opaque) -> int
+
+class ProjectLockState {
+    command: str
+    json_mode: bool
+    root: str
+    ids: dict[str, str]
+    packages: dict[str, str]
+
+    fn init(command: str, json_mode: bool, root: str) {
+        this.command = command
+        this.json_mode = json_mode
+        this.root = root
+        let ids: dict[str, str] = {}
+        let packages: dict[str, str] = {}
+        this.ids = ids
+        this.packages = packages
+    }
+
+    fn fail(code: str, message: str) -> unit {
+        proj_emit_error_and_exit(this.command, this.json_mode, code, message)
+    }
+}
+
+fn proj_lock_host_text(state: ProjectLockState, path: str, operation: str) -> str {
+    let input = tool_buf_from_str(path)
+    let output = wysna_host_buffer_new()
+    let count = if operation == "entries" { wysna_host_project_entries(input, output) }
+        elif operation == "path-key" { wysna_host_project_path_key(input, output) }
+        else { wysna_host_project_file_sha256(input, output) }
+    wysna_host_close(input)
+    if count < 0 {
+        wysna_host_close(output)
+        state.fail("W5004", "cannot " + operation + " '" + path + "'")
+        return ""
+    }
+    let mut result = ""
+    if operation == "hash" {
+        let mut digits: list[str] = []
+        for i in 0..32 {
+            let value = wysna_host_buffer_get(output, i)
+            digits.append(diag_hex_digit((value / 16) % 16) + diag_hex_digit(value % 16))
+        }
+        result = join_strings(digits, "")
+    } else {
+        result = lsp_buf_to_str(output, count)
+    }
+    wysna_host_close(output)
+    return result
+}
+
+fn proj_lock_paths(state: ProjectLockState, root: str, relative: str, source_only: bool) -> list[str] {
+    let directory = if relative == "" { root } else { root + "/" + relative }
+    let entries = proj_lock_host_text(state, directory, "entries")
+    let ignored: list[str] = [".git", ".wysna_cache", "__pycache__", ".pytest_cache", "build", "dist"]
+    let mut result: list[str] = []
+    let mut i = 0
+    while i < len(entries) {
+        let kind = entries[i]
+        i = i + 1
+        let start = i
+        while i < len(entries) and ord(entries[i]) != 0 { i = i + 1 }
+        let name = slice(entries, start, i)
+        i = i + 1
+        let path = if relative == "" { name } else { relative + "/" + name }
+        if not source_only and relative == "" and tool_str_contains(ignored, name) { continue }
+
+        if kind == "d" {
+            for nested in proj_lock_paths(state, root, path, source_only) { result.append(nested) }
+        } elif source_only or (name != "wysna.lock" and name != "wysna.lock.tmp") {
+            if kind == "l" {
+                state.fail("W5002", "project input '" + root + "/" + path + "' is a symlink")
+            }
+            if kind == "f" and (not source_only or proj_str_ends_with(path, ".wysna")) {
+                result.append(path)
+            }
+        }
+    }
+    return result
+}
+
+fn proj_lock_verify_collisions(state: ProjectLockState, paths: list[str]) -> unit {
+    let mut components: dict[str, str] = {}
+    for path in paths {
+        for i in 0..len(path) + 1 {
+            if i == len(path) or path[i] == "/" {
+                let component = slice(path, 0, i)
+                let key = proj_lock_host_text(state, component, "path-key")
+                let existing = components.get(key) else { "" }
+                if existing != "" and existing != component {
+                    state.fail("W5002", "project inputs collide on portable filesystems: '" + existing + "' and '" + component + "'")
+                }
+                components[key] = component
+            }
+        }
+    }
+}
+
+fn proj_lock_aliases(state: ProjectLockState, m: ProjectManifest) -> str {
+    let mut rows: list[str] = []
+    for dep in m.deps {
+        let id = proj_lock_visit(state, dep.abs_root)
+        rows.append("{\"alias\":" + diag_json_quote(dep.alias) + ",\"package_id\":" + diag_json_quote(id) + "}")
+    }
+    return "[" + join_strings(tool_sort_strings(rows), ",") + "]"
+}
+
+fn proj_lock_visit(state: ProjectLockState, directory: str) -> str {
+    let known = state.ids.get(directory) else { "" }
+    if known != "" { return known }
+
+    let m = proj_parse_manifest_at(directory + "/wysna.toml", [])
+    if not m.ok { state.fail(m.err_code, m.err_msg) }
+    let aliases = proj_lock_aliases(state, m)
+    proj_lock_verify_collisions(state, proj_lock_paths(state, m.source_root_abs, "", true))
+    let paths = tool_sort_strings(proj_lock_paths(state, m.root, "", false))
+    proj_lock_verify_collisions(state, paths)
+    let mut inputs: list[str] = []
+    for path in paths {
+        let sha = proj_lock_host_text(state, m.root + "/" + path, "hash")
+        if path == "wysna.toml" and sha != m.manifest_sha256 {
+            state.fail("W5004", "dependency manifest changed while reading '" + m.path + "'")
+        }
+        inputs.append("{\"path\":" + diag_json_quote(path) + ",\"sha256\":" + diag_json_quote(sha) + "}")
+    }
+    let inputs_json = "[" + join_strings(inputs, ",") + "]"
+    let hash = diag_sha256_hex(inputs_json)
+    let manifest_hash = diag_json_quote(m.manifest_sha256)
+    let name = diag_json_quote(m.name)
+    let version = diag_json_quote(m.version)
+    let content_hash = diag_json_quote(hash)
+    let identity = "{\"content_sha256\":" + content_hash + ",\"manifest_sha256\":" + manifest_hash + ",\"name\":" + name + ",\"version\":" + version + "}"
+    let id = m.name + "@" + m.version + "+" + slice(diag_sha256_hex(identity), 0, 16)
+    let relative = slice(m.root, len(state.root) + 1, len(m.root))
+    let row = "{\"content_sha256\":" + content_hash + ",\"dependencies\":" + aliases + ",\"inputs\":" + inputs_json +
+        ",\"manifest_sha256\":" + manifest_hash + ",\"name\":" + name + ",\"package_id\":" + diag_json_quote(id) +
+        ",\"path\":" + diag_json_quote(relative) + ",\"version\":" + version + "}"
+    let key = m.name + chr(0) + m.version + chr(0) + id + chr(0) + relative
+    state.ids[directory] = id
+    state.packages[key] = row
+    return id
+}
+
+fn proj_lock_json(m: ProjectManifest, command: str, json_mode: bool) -> str {
+    let state = new ProjectLockState(command, json_mode, m.root)
+    proj_lock_verify_collisions(state, proj_lock_paths(state, m.source_root_abs, "", true))
+    let aliases = proj_lock_aliases(state, m)
+    let mut dependencies: list[str] = []
+    for key in tool_sort_strings(state.packages.keys()) {
+        let row = state.packages.get(key) else { "" }
+        dependencies.append(row)
+    }
+    return "{\n" +
+        "  \"aliases\": " + aliases + ",\n" +
+        "  \"compiler_version\": " + diag_json_quote(m.compiler_version) + ",\n" +
+        "  \"dependencies\": [" + join_strings(dependencies, ",") + "],\n" +
+        "  \"language_version\": " + diag_json_quote(m.language_version) + ",\n" +
+        "  \"lock_version\": 1,\n" +
+        "  \"root\": {\n" +
+        "    \"manifest_sha256\": " + diag_json_quote(m.manifest_sha256) + ",\n" +
+        "    \"name\": " + diag_json_quote(m.name) + ",\n" +
+        "    \"version\": " + diag_json_quote(m.version) + "\n" +
+        "  },\n" +
+        "  \"stdlib\": " + diag_json_quote(m.stdlib) + "\n}\n"
+}
+
+fn proj_lock_matches(expected: LspJson, actual: LspJson) -> bool {
+    if expected.kind != actual.kind { return false }
+    if expected.kind == "str" or expected.kind == "int" {
+        return expected.str_val == actual.str_val
+    }
+    if expected.kind == "object" {
+        if len(expected.keys) != len(actual.keys) { return false }
+        for key in expected.keys {
+            if not proj_lock_matches(lsp_json_get(expected, key), lsp_json_get(actual, key)) { return false }
+        }
+        return true
+    }
+    if expected.kind == "array" {
+        if len(expected.items) != len(actual.items) { return false }
+        for i in 0..len(expected.items) {
+            if not proj_lock_matches(expected.items[i], actual.items[i]) { return false }
+        }
+        return true
+    }
+    return false
+}

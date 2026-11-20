@@ -8,10 +8,11 @@ tagged desktop installers); it is not a security guarantee, and language contrac
 ## Instalación
 
 Para proyectos nativos C99, la descarga recomendada desde 0.8.0 es el [SDK nativo](NATIVE_SDK.md).
-Incluye el compilador escrito en Wysna, Zig y la biblioteca estándar. La
-[distribución Seed](SEED_DISTRIBUTION.md) cubre los destinos y comandos que
-dependen del compilador de referencia, como WebAssembly o la verificación
-de `wysna.lock` en proyectos con dependencias de paquetes.
+Incluye el compilador escrito en Wysna, Zig y la biblioteca estándar, así como
+la creación de proyectos y la generación/verificación de `wysna.lock` (con o sin
+dependencias locales). La [distribución Seed](SEED_DISTRIBUTION.md) cubre los
+destinos y comandos que dependen del compilador de referencia, como WebAssembly,
+el backend LLVM experimental y el intérprete (`wysna repl`).
 
 Installer artifacts are qualified per source commit. A package must pass installation, repair/update,
 relocation where applicable, real program execution and uninstallation acceptance
