@@ -416,10 +416,13 @@ class Formatter:
 
         if isinstance(expr, StructInitExpr):
             targs = f"[{', '.join([self.format_type(a) for a in expr.type_args])}]" if getattr(expr, "type_args", None) else ""
-            if not expr.fields:
+            parts: List[str] = []
+            if getattr(expr, "spread", None) is not None:
+                parts.append(f"..{self.format_expr(expr.spread, level)}")
+            parts.extend(f"{f.name}: {self.format_expr(f.value, level)}" for f in expr.fields)
+            if not parts:
                 return f"{expr.struct_name}{targs} {{}}"
-            fields_str = ", ".join([f"{f.name}: {self.format_expr(f.value, level)}" for f in expr.fields])
-            return f"{expr.struct_name}{targs} {{ {fields_str} }}"
+            return f"{expr.struct_name}{targs} {{ {', '.join(parts)} }}"
 
         if isinstance(expr, ListExpr):
             elems_str = ", ".join([self.format_expr(e, level) for e in expr.elements])
@@ -452,7 +455,7 @@ class Formatter:
             subj_str = self.format_expr(expr.subject, level)
             lines: List[str] = [f"match {subj_str} {{"]
             for arm in expr.arms:
-                pat_str = "else" if isinstance(arm.pattern, WildcardPattern) else self.format_pattern(arm.pattern)
+                pat_str = self.format_pattern(arm.pattern)
                 if arm.guard is not None:
                     pat_str += ' if ' + self.format_expr(arm.guard, level + 1)
                 # If single tail_expr with no statements, can format inline or block

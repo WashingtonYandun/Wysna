@@ -447,12 +447,311 @@ fn keyword_kind(word: str) -> str {
     return "IDENT"
 }
 
+struct LexScanResult {
+    next_i: int,
+    next_line: int,
+    next_col: int,
+    val: str,
+}
+
+struct FStrPart {
+    kind: str,
+    text: str,
+    line: int,
+    col: int,
+}
+
+struct FStrScanResult {
+    next_i: int,
+    next_line: int,
+    next_col: int,
+    parts: list[FStrPart],
+}
+
+fn is_hex_digit(c: int) -> bool {
+    return (c >= 48 and c <= 57) or (c >= 65 and c <= 70) or (c >= 97 and c <= 102)
+}
+
+fn is_bin_digit(c: int) -> bool {
+    return c == 48 or c == 49
+}
+
+fn is_prefixed_digit(c: int, base: int) -> bool {
+    if base == 16 { return is_hex_digit(c) }
+    return is_bin_digit(c)
+}
+
+fn parse_prefixed_int_str(file: str, line: int, col: int, prefix: str, digits: str) -> str {
+    let base = if prefix == "x" or prefix == "X" { 16 } else { 2 }
+    let n = len(digits)
+    let mut nz = 0
+    while nz < n and digits[nz] == "0" {
+        nz = nz + 1
+    }
+    let trimmed = if nz == n { "0" } else { slice(digits, nz, n) }
+    if base == 16 and trimmed == "8000000000000000" {
+        return "9223372036854775808"
+    }
+    if base == 2 and trimmed == "1000000000000000000000000000000000000000000000000000000000000000" {
+        return "9223372036854775808"
+    }
+    let max_div = 9223372036854775807 / base
+    let max_rem = 9223372036854775807 % base
+    let mut acc = 0
+    for idx in 0..len(trimmed) {
+        let d = hex_val(ord(trimmed[idx]))
+        if acc > max_div or (acc == max_div and d > max_rem) {
+            report_error(file, "W0002", line, col, "out-of-range numeric literal")
+        }
+        acc = acc * base + d
+    }
+    return str(acc)
+}
+
+fn lex_multiline_nl(src: str, n: int, i_in: int, line_in: int) -> LexScanResult {
+    let mut i = i_in
+    if src[i] == "\r" {
+        i = i + 1
+        if i < n and src[i] == "\n" {
+            i = i + 1
+        }
+    } else {
+        i = i + 1
+    }
+    return LexScanResult { next_i: i, next_line: line_in + 1, next_col: 1, val: "\n" }
+}
+
+fn lex_escape(src: str, n: int, file: str, i_in: int, line: int, col_in: int) -> LexScanResult {
+    if i_in + 1 >= n {
+        report_error(file, "W0004", line, col_in, "unterminated string escape")
+    }
+    let mut i = i_in + 1
+    let mut col = col_in + 1
+    let esc = src[i]
+    if esc == "n" {
+        return LexScanResult { next_i: i + 1, next_line: line, next_col: col + 1, val: "\n" }
+    } elif esc == "r" {
+        return LexScanResult { next_i: i + 1, next_line: line, next_col: col + 1, val: "\r" }
+    } elif esc == "t" {
+        return LexScanResult { next_i: i + 1, next_line: line, next_col: col + 1, val: "\t" }
+    } elif esc == "\\" {
+        return LexScanResult { next_i: i + 1, next_line: line, next_col: col + 1, val: "\\" }
+    } elif esc == "\"" {
+        return LexScanResult { next_i: i + 1, next_line: line, next_col: col + 1, val: "\"" }
+    } elif esc == "0" {
+        return LexScanResult { next_i: i + 1, next_line: line, next_col: col + 1, val: chr(0) }
+    } elif esc == "u" {
+        if i + 1 >= n or src[i + 1] != "{" {
+            report_error(file, "W0005", line, col - 1, "invalid Unicode scalar escape sequence")
+        }
+        i = i + 2
+        col = col + 2
+        let mut u_cp = 0
+        let mut has_hex = false
+        let mut valid_hex = true
+        while i < n and src[i] != "}" {
+            let hcode = ord(src[i])
+            if not is_hex_digit(hcode) {
+                valid_hex = false
+            }
+            u_cp = u_cp * 16 + hex_val(hcode)
+            has_hex = true
+            i = i + 1
+            col = col + 1
+        }
+        if i >= n or src[i] != "}" or not has_hex or not valid_hex {
+            report_error(file, "W0005", line, col, "invalid Unicode scalar escape sequence")
+        }
+        return LexScanResult { next_i: i + 1, next_line: line, next_col: col + 1, val: chr(u_cp) }
+    }
+    report_error(file, "W0004", line, col - 1, "invalid string escape sequence")
+    return LexScanResult { next_i: i, next_line: line, next_col: col, val: "" }
+}
+
+fn lex_string_lit(src: str, n: int, file: str, i_in: int, start_line: int, start_col: int) -> LexScanResult {
+    let triple = i_in + 2 < n and src[i_in + 1] == "\"" and src[i_in + 2] == "\""
+    let mut i = if triple { i_in + 3 } else { i_in + 1 }
+    let mut line = start_line
+    let mut col = if triple { start_col + 3 } else { start_col + 1 }
+    let mut s_val = ""
+    while i < n {
+        let sc = src[i]
+        if triple and sc == "\"" and i + 2 < n and src[i + 1] == "\"" and src[i + 2] == "\"" {
+            return LexScanResult { next_i: i + 3, next_line: line, next_col: col + 3, val: s_val }
+        }
+        if not triple and sc == "\"" {
+            return LexScanResult { next_i: i + 1, next_line: line, next_col: col + 1, val: s_val }
+        }
+        if sc == "\n" or sc == "\r" {
+            if not triple {
+                report_error(file, "W0003", start_line, start_col, "unterminated string literal")
+            }
+            let nl = lex_multiline_nl(src, n, i, line)
+            s_val = s_val + nl.val
+            i = nl.next_i
+            line = nl.next_line
+            col = nl.next_col
+        } elif sc == "\\" {
+            let esc = lex_escape(src, n, file, i, line, col)
+            s_val = s_val + esc.val
+            i = esc.next_i
+            line = esc.next_line
+            col = esc.next_col
+        } else {
+            s_val = s_val + sc
+            i = i + 1
+            col = col + 1
+        }
+    }
+    report_error(file, "W0003", start_line, start_col, "unterminated string literal")
+    return LexScanResult { next_i: i, next_line: line, next_col: col, val: s_val }
+}
+
+fn has_non_space(text: str) -> bool {
+    for idx in 0..len(text) {
+        if not is_space(ord(text[idx])) {
+            return true
+        }
+    }
+    return false
+}
+
+fn lex_fstring_scan(src: str, n: int, file: str, i_in: int, start_line: int, start_col: int) -> FStrScanResult {
+    let triple = i_in + 3 < n and src[i_in + 2] == "\"" and src[i_in + 3] == "\""
+    let mut i = if triple { i_in + 4 } else { i_in + 2 }
+    let mut line = start_line
+    let mut col = if triple { start_col + 4 } else { start_col + 2 }
+    let mut parts: list[FStrPart] = []
+    let mut buf = ""
+    let mut lit_line = line
+    let mut lit_col = col
+    while i < n {
+        let sc = src[i]
+        if triple and sc == "\"" and i + 2 < n and src[i + 1] == "\"" and src[i + 2] == "\"" {
+            if len(buf) > 0 {
+                parts.append(FStrPart { kind: "lit", text: buf, line: lit_line, col: lit_col })
+            }
+            return FStrScanResult { next_i: i + 3, next_line: line, next_col: col + 3, parts: parts }
+        }
+        if not triple and sc == "\"" {
+            if len(buf) > 0 {
+                parts.append(FStrPart { kind: "lit", text: buf, line: lit_line, col: lit_col })
+            }
+            return FStrScanResult { next_i: i + 1, next_line: line, next_col: col + 1, parts: parts }
+        }
+        if sc == "\n" or sc == "\r" {
+            if not triple {
+                report_error(file, "W0003", start_line, start_col, "unterminated formatted string literal")
+            }
+            let nl = lex_multiline_nl(src, n, i, line)
+            buf = buf + nl.val
+            i = nl.next_i
+            line = nl.next_line
+            col = nl.next_col
+        } elif sc == "\\" {
+            let esc = lex_escape(src, n, file, i, line, col)
+            buf = buf + esc.val
+            i = esc.next_i
+            line = esc.next_line
+            col = esc.next_col
+        } elif sc == "{" {
+            if i + 1 < n and src[i + 1] == "{" {
+                buf = buf + "{"
+                i = i + 2
+                col = col + 2
+            } else {
+                if len(buf) > 0 {
+                    parts.append(FStrPart { kind: "lit", text: buf, line: lit_line, col: lit_col })
+                    buf = ""
+                }
+                i = i + 1
+                col = col + 1
+                let expr_start = i
+                let expr_line = line
+                let expr_col = col
+                let mut bdepth = 1
+                let mut expr_end = -1
+                while i < n {
+                    let ec = src[i]
+                    if ec == "\n" or ec == "\r" {
+                        if not triple {
+                            report_error(file, "W0003", start_line, start_col, "unterminated formatted string literal")
+                        }
+                        let nl = lex_multiline_nl(src, n, i, line)
+                        i = nl.next_i
+                        line = nl.next_line
+                        col = nl.next_col
+                    } elif ec == "\"" {
+                        let skip = lex_string_lit(src, n, file, i, line, col)
+                        i = skip.next_i
+                        line = skip.next_line
+                        col = skip.next_col
+                    } elif ec == "#" {
+                        if not triple {
+                            report_error(file, "W0006", line, col, "comment inside single-line formatted string interpolation")
+                        }
+                        while i < n and src[i] != "\n" and src[i] != "\r" {
+                            i = i + 1
+                            col = col + 1
+                        }
+                    } elif ec == "{" {
+                        bdepth = bdepth + 1
+                        i = i + 1
+                        col = col + 1
+                    } elif ec == "}" {
+                        bdepth = bdepth - 1
+                        if bdepth == 0 {
+                            expr_end = i
+                            i = i + 1
+                            col = col + 1
+                            break
+                        }
+                        i = i + 1
+                        col = col + 1
+                    } else {
+                        i = i + 1
+                        col = col + 1
+                    }
+                }
+                if expr_end < 0 {
+                    report_error(file, "W0003", start_line, start_col, "unterminated interpolation expression in formatted string")
+                }
+                let expr_src = slice(src, expr_start, expr_end)
+                if not has_non_space(expr_src) {
+                    report_error(file, "W0006", expr_line, expr_col, "empty expression in formatted string")
+                }
+                parts.append(FStrPart { kind: "expr", text: expr_src, line: expr_line, col: expr_col })
+                lit_line = line
+                lit_col = col
+            }
+        } elif sc == "}" {
+            if i + 1 < n and src[i + 1] == "}" {
+                buf = buf + "}"
+                i = i + 2
+                col = col + 2
+            } else {
+                report_error(file, "W0006", line, col, "single '}' is not allowed in formatted string; use '}}'")
+            }
+        } else {
+            buf = buf + sc
+            i = i + 1
+            col = col + 1
+        }
+    }
+    report_error(file, "W0003", start_line, start_col, "unterminated formatted string literal")
+    return FStrScanResult { next_i: i, next_line: line, next_col: col, parts: parts }
+}
+
 fn tokenize(src: str, file: str) -> list[Token] {
+    return tokenize_at(src, file, 1, 1)
+}
+
+fn tokenize_at(src: str, file: str, init_line: int, init_col: int) -> list[Token] {
     let mut tokens: list[Token] = []
     let n = len(src)
     let mut i = 0
-    let mut line = 1
-    let mut col = 1
+    let mut line = init_line
+    let mut col = init_col
     let mut paren_depth = 0
     let mut bracket_depth = 0
     while i < n {
@@ -517,6 +816,53 @@ fn tokenize(src: str, file: str) -> list[Token] {
             } elif saw_newline and paren_depth == 0 and bracket_depth == 0 and len(tokens) > 0 and line_terminates_statement(tokens[len(tokens) - 1].kind) {
                 tokens.append(Token { kind: "NEWLINE", val: "\n", line: nl_line, col: nl_col, file: file })
             }
+        } elif ch == "f" and i + 1 < n and src[i + 1] == "\"" {
+            let start_col = col
+            let start_line = line
+            let fscan = lex_fstring_scan(src, n, file, i, start_line, start_col)
+            i = fscan.next_i
+            line = fscan.next_line
+            col = fscan.next_col
+            let mut has_expr = false
+            for pi in 0..len(fscan.parts) {
+                if fscan.parts[pi].kind == "expr" {
+                    has_expr = true
+                    break
+                }
+            }
+            if not has_expr {
+                let mut lit_all = ""
+                for pi in 0..len(fscan.parts) {
+                    lit_all = lit_all + fscan.parts[pi].text
+                }
+                tokens.append(Token { kind: "STR", val: lit_all, line: start_line, col: start_col, file: file })
+            } else {
+                tokens.append(Token { kind: "LPAREN", val: "(", line: start_line, col: start_col, file: file })
+                for pi in 0..len(fscan.parts) {
+                    let part = fscan.parts[pi]
+                    if pi > 0 {
+                        tokens.append(Token { kind: "PLUS", val: "+", line: part.line, col: part.col, file: file })
+                    }
+                    if part.kind == "lit" {
+                        tokens.append(Token { kind: "STR", val: part.text, line: part.line, col: part.col, file: file })
+                    } else {
+                        let mut sub_toks = tokenize_at(part.text, file, part.line, part.col)
+                        if len(sub_toks) > 0 and sub_toks[len(sub_toks) - 1].kind == "EOF" {
+                            sub_toks.pop()
+                        }
+                        while len(sub_toks) > 0 and sub_toks[len(sub_toks) - 1].kind == "NEWLINE" {
+                            sub_toks.pop()
+                        }
+                        tokens.append(Token { kind: "IDENT", val: "str", line: part.line, col: part.col, file: file })
+                        tokens.append(Token { kind: "LPAREN", val: "(", line: part.line, col: part.col, file: file })
+                        for sti in 0..len(sub_toks) {
+                            tokens.append(sub_toks[sti])
+                        }
+                        tokens.append(Token { kind: "RPAREN", val: ")", line: part.line, col: part.col, file: file })
+                    }
+                }
+                tokens.append(Token { kind: "RPAREN", val: ")", line: line, col: col, file: file })
+            }
         } elif is_alpha(code) {
             let start = i
             let start_col = col
@@ -527,6 +873,43 @@ fn tokenize(src: str, file: str) -> list[Token] {
             let word = slice(src, start, i)
             let k = keyword_kind(word)
             tokens.append(Token { kind: k, val: word, line: line, col: start_col, file: file })
+        } elif ch == "0" and i + 1 < n and (src[i + 1] == "x" or src[i + 1] == "X" or src[i + 1] == "b" or src[i + 1] == "B") {
+            let start_col = col
+            let prefix = src[i + 1]
+            let base = if prefix == "x" or prefix == "X" { 16 } else { 2 }
+            i = i + 2
+            col = col + 2
+            let mut p_digits = ""
+            let mut saw_digit = false
+            let mut last_was_under = false
+            let mut sep_err = false
+            while i < n {
+                let pc = ord(src[i])
+                if is_prefixed_digit(pc, base) {
+                    p_digits = p_digits + src[i]
+                    saw_digit = true
+                    last_was_under = false
+                    i = i + 1
+                    col = col + 1
+                } elif src[i] == "_" {
+                    if not saw_digit or last_was_under {
+                        sep_err = true
+                    }
+                    last_was_under = true
+                    i = i + 1
+                    col = col + 1
+                } else {
+                    break
+                }
+            }
+            if not saw_digit or last_was_under or sep_err {
+                report_error(file, "W0002", line, start_col, "malformed prefixed integer literal")
+            }
+            if i < n and (is_alnum(ord(src[i])) or src[i] == "_" or (src[i] == "." and not (i + 1 < n and src[i + 1] == "."))) {
+                report_error(file, "W0002", line, start_col, "malformed numeric literal")
+            }
+            let dec_val = parse_prefixed_int_str(file, line, start_col, prefix, p_digits)
+            tokens.append(Token { kind: "INT", val: dec_val, line: line, col: start_col, file: file })
         } elif is_digit(code) {
             let start_col = col
             let mut is_flt = false
@@ -573,6 +956,9 @@ fn tokenize(src: str, file: str) -> list[Token] {
             } elif i < n and src[i] == "." and not (i + 1 < n and src[i + 1] == ".") {
                 report_error(file, "W0002", line, start_col, "malformed float literal: trailing dot")
             }
+            if i < n and (is_alnum(ord(src[i])) or src[i] == "_") {
+                report_error(file, "W0002", line, start_col, "malformed numeric literal")
+            }
             if is_flt {
                 tokens.append(Token { kind: "FLOAT", val: clean_num, line: line, col: start_col, file: file })
             } else {
@@ -583,81 +969,11 @@ fn tokenize(src: str, file: str) -> list[Token] {
         } elif ch == "\"" {
             let start_col = col
             let start_line = line
-            i = i + 1
-            col = col + 1
-            let mut s_val = ""
-            while i < n and src[i] != "\"" {
-                if src[i] == "\\" {
-                    if i + 1 >= n {
-                        report_error(file, "W0004", line, col, "unterminated string escape")
-                    }
-                    i = i + 1
-                    col = col + 1
-                    let esc = src[i]
-                    if esc == "n" {
-                        s_val = s_val + "\n"
-                        i = i + 1
-                        col = col + 1
-                    } elif esc == "r" {
-                        s_val = s_val + "\r"
-                        i = i + 1
-                        col = col + 1
-                    } elif esc == "t" {
-                        s_val = s_val + "\t"
-                        i = i + 1
-                        col = col + 1
-                    } elif esc == "\\" {
-                        s_val = s_val + "\\"
-                        i = i + 1
-                        col = col + 1
-                    } elif esc == "\"" {
-                        s_val = s_val + "\""
-                        i = i + 1
-                        col = col + 1
-                    } elif esc == "0" {
-                        s_val = s_val + chr(0)
-                        i = i + 1
-                        col = col + 1
-                    } elif esc == "u" {
-                        if i + 1 >= n or src[i + 1] != "{" {
-                            report_error(file, "W0005", line, col - 1, "invalid Unicode scalar escape sequence")
-                        }
-                        i = i + 2
-                        col = col + 2
-                        let mut u_cp = 0
-                        let mut has_hex = false
-                        let mut valid_hex = true
-                        while i < n and src[i] != "}" {
-                            let hcode = ord(src[i])
-                            if not (hcode >= 48 and hcode <= 57 or hcode >= 65 and hcode <= 70 or hcode >= 97 and hcode <= 102) {
-                                valid_hex = false
-                            }
-                            u_cp = u_cp * 16 + hex_val(hcode)
-                            has_hex = true
-                            i = i + 1
-                            col = col + 1
-                        }
-                        if i >= n or src[i] != "}" or not has_hex or not valid_hex {
-                            report_error(file, "W0005", line, col, "invalid Unicode scalar escape sequence")
-                        }
-                        i = i + 1
-                        col = col + 1
-                        s_val = s_val + chr(u_cp)
-                    } else {
-                        report_error(file, "W0004", line, col - 1, "invalid string escape sequence")
-                    }
-                } else {
-                    s_val = s_val + src[i]
-                    i = i + 1
-                    col = col + 1
-                }
-            }
-            if i >= n {
-                report_error(file, "W0003", start_line, start_col, "unterminated string literal")
-            }
-            i = i + 1
-            col = col + 1
-            tokens.append(Token { kind: "STR", val: s_val, line: start_line, col: start_col, file: file })
+            let sl = lex_string_lit(src, n, file, i, start_line, start_col)
+            i = sl.next_i
+            line = sl.next_line
+            col = sl.next_col
+            tokens.append(Token { kind: "STR", val: sl.val, line: start_line, col: start_col, file: file })
         } else {
             let start_col = col
             let mut two = ""
@@ -698,6 +1014,18 @@ fn tokenize(src: str, file: str) -> list[Token] {
                 col = col + 2
             } elif two == ".." {
                 tokens.append(Token { kind: "DOT_DOT", val: "..", line: line, col: start_col, file: file })
+                i = i + 2
+                col = col + 2
+            } elif two == "+=" {
+                tokens.append(Token { kind: "PLUS_ASSIGN", val: "+=", line: line, col: start_col, file: file })
+                i = i + 2
+                col = col + 2
+            } elif two == "-=" {
+                tokens.append(Token { kind: "MINUS_ASSIGN", val: "-=", line: line, col: start_col, file: file })
+                i = i + 2
+                col = col + 2
+            } elif two == "*=" {
+                tokens.append(Token { kind: "STAR_ASSIGN", val: "*=", line: line, col: start_col, file: file })
                 i = i + 2
                 col = col + 2
             } elif two == "??" {
@@ -770,7 +1098,7 @@ fn expression_starter(kind: str) -> bool {
 }
 
 fn op_precedence(k: str) -> int {
-    if k == "ASSIGN" {
+    if k == "ASSIGN" or k == "PLUS_ASSIGN" or k == "MINUS_ASSIGN" or k == "STAR_ASSIGN" {
         return 1
     }
     if k == "QQ" {
@@ -1060,14 +1388,65 @@ fn module_is_confined_under(candidate: str, root: str) -> bool {
     return len(can_file) > len(prefix) and slice(can_file, 0, len(prefix)) == prefix
 }
 
-fn module_load_source(context: ModuleLoader, canonical: str, requested: str, token: Token) -> int {
+struct UseHeader {
+    found: bool,
+    use_pos: int,
+    requested: str,
+}
+
+fn module_strip_wysna_ext(path: str) -> str {
+    let n = len(path)
+    if n >= 6 and slice(path, n - 6, n) == ".wysna" {
+        return slice(path, 0, n - 6)
+    }
+    return path
+}
+
+fn module_parse_from_header(tokens: list[Token], pos_in: int) -> UseHeader {
+    let n = len(tokens)
+    if pos_in >= n or tokens[pos_in].kind != "IDENT" or tokens[pos_in].val != "from" {
+        return UseHeader { found: false, use_pos: pos_in, requested: "" }
+    }
+    let mut cur = pos_in + 1
+    let mut requested = ""
+    if cur < n and tokens[cur].kind == "STR" {
+        requested = tokens[cur].val
+        cur = cur + 1
+    } else {
+        let mut prefix = ""
+        if cur < n and tokens[cur].kind == "DOT" {
+            prefix = "./"
+            cur = cur + 1
+        } elif cur < n and tokens[cur].kind == "DOT_DOT" {
+            prefix = "../"
+            cur = cur + 1
+        }
+        if cur >= n or tokens[cur].kind != "IDENT" {
+            return UseHeader { found: false, use_pos: pos_in, requested: "" }
+        }
+        let mut segs: list[str] = [tokens[cur].val]
+        cur = cur + 1
+        while cur + 1 < n and tokens[cur].kind == "DOT" and tokens[cur + 1].kind == "IDENT" {
+            segs.append(tokens[cur + 1].val)
+            cur = cur + 2
+        }
+        requested = prefix + join_strings(segs, "/")
+    }
+    if cur < n and tokens[cur].kind == "IDENT" and tokens[cur].val == "use" {
+        return UseHeader { found: true, use_pos: cur, requested: requested }
+    }
+    return UseHeader { found: false, use_pos: pos_in, requested: "" }
+}
+
+fn module_try_resolve_source(context: ModuleLoader, canonical: str, requested: str, token: Token) -> str {
     let mut resolved = module_normalize(module_directory(canonical) + requested)
     let standard = len(requested) >= 4 and slice(requested, 0, 4) == "std/"
     if standard {
         if not module_stdlib_name_safe(requested) { report_error_at("W1003", token, "invalid standard module: " + requested) }
         resolved = module_stdlib_path(requested)
-        if not module_file_readable(resolved) { report_error_at("W1003", token, "module not found: " + requested) }
+        if not module_loader_file_readable(context, resolved) { return "" }
         if not module_stdlib_confined(requested, resolved) { report_error_at("W1003", token, "cannot resolve standard module within its root: " + requested) }
+        return resolved
     } elif len(requested) >= 4 and slice(requested, 0, 4) == "pkg/" {
         let rest = slice(requested, 4, len(requested))
         let mut slash = -1
@@ -1082,15 +1461,17 @@ fn module_load_source(context: ModuleLoader, canonical: str, requested: str, tok
         if dep_root == "" { report_error_at("W1003", token, "unknown project dependency: " + dep_alias) }
         let need_ext = len(dep_mod) < 6 or slice(dep_mod, len(dep_mod) - 6, len(dep_mod)) != ".wysna"
         let cand = module_normalize(dep_root + "/" + (if need_ext { dep_mod + ".wysna" } else { dep_mod }))
-        if not module_loader_file_readable(context, cand) or not module_is_confined_under(cand, dep_root) {
+        if not module_loader_file_readable(context, cand) { return "" }
+        if not module_is_confined_under(cand, dep_root) {
             report_error_at("W1003", token, "module not found: " + requested)
         }
-        resolved = cand
+        return cand
     } else {
         let need_ext = len(requested) < 6 or slice(requested, len(requested) - 6, len(requested)) != ".wysna"
         let proj_src = module_resolve_proj_src_root(context)
         if proj_src != "" {
-            if not module_safe_pkg_rel(requested) {
+            let is_rel_dot = (len(requested) >= 2 and slice(requested, 0, 2) == "./") or (len(requested) >= 3 and slice(requested, 0, 3) == "../")
+            if not is_rel_dot and not module_safe_pkg_rel(requested) {
                 report_error_at("W1003", token, "invalid project import path: " + requested)
             }
             let mut owner = proj_src
@@ -1100,31 +1481,50 @@ fn module_load_source(context: ModuleLoader, canonical: str, requested: str, tok
                     break
                 }
             }
-            let base = if module_is_confined_under(canonical, owner) { module_directory(canonical) } else { owner + "/" }
+            let base = if is_rel_dot or module_is_confined_under(canonical, owner) { module_directory(canonical) } else { owner + "/" }
             let relative = if need_ext { requested + ".wysna" } else { requested }
             resolved = module_normalize(base + relative)
             if not module_is_confined_under(resolved, owner) {
                 report_error_at("W1003", token, "module not found inside project source root: " + requested)
             }
+            return if module_loader_file_readable(context, resolved) { resolved } else { "" }
         } else {
             let rel_ext = if need_ext { module_normalize(module_directory(canonical) + requested + ".wysna") } else { "" }
             let cwd_ext = if need_ext { module_normalize(requested + ".wysna") } else { "" }
             if module_loader_file_readable(context, resolved) {
-                resolved = resolved
+                return resolved
             } elif rel_ext != "" and module_loader_file_readable(context, rel_ext) {
-                resolved = rel_ext
+                return rel_ext
             } elif module_loader_file_readable(context, module_normalize(requested)) {
-                resolved = module_normalize(requested)
+                return module_normalize(requested)
             } elif cwd_ext != "" and module_loader_file_readable(context, cwd_ext) {
-                resolved = cwd_ext
+                return cwd_ext
             }
         }
     }
+    return ""
+}
+
+fn module_load_from_resolved(context: ModuleLoader, resolved: str, requested: str, token: Token) -> int {
     let loaded = module_read_with_overlays(resolved, context.ov_paths, context.ov_texts)
     if loaded[0] != "1" {
         report_error_at("W1003", token, "module not found: " + requested)
     }
     return module_expand(context, loaded[1], resolved, false)
+}
+
+fn module_load_source(context: ModuleLoader, canonical: str, requested: str, token: Token) -> int {
+    let resolved = module_try_resolve_source(context, canonical, requested, token)
+    if resolved == "" {
+        report_error_at("W1003", token, "module not found: " + requested)
+    }
+    return module_load_from_resolved(context, resolved, requested, token)
+}
+
+fn module_format_exports_hint(context: ModuleLoader, dep: int) -> str {
+    let exps = context.public_names[dep]
+    if len(exps) == 0 { return "" }
+    return " (Available exports: " + join_strings(exps, ", ") + ")"
 }
 
 fn module_expand(context: ModuleLoader, src: str, path: str, entry: bool) -> int {
@@ -1173,10 +1573,12 @@ fn module_expand(context: ModuleLoader, src: str, path: str, entry: bool) -> int
     let mut use_targets: list[str] = []
     let mut body: list[Token] = []
     let mut position = 0
+    let mut top_depth = 0
     while position < len(tokens) - 1 {
         let token = tokens[position]
+        let from_hdr = if top_depth == 0 { module_parse_from_header(tokens, position) } else { UseHeader { found: false, use_pos: position, requested: "" } }
 
-        if token.kind == "IMPORT" {
+        if top_depth == 0 and token.kind == "IMPORT" {
             let public_import = position > 0 and tokens[position - 1].kind == "PUB"
             if public_import and len(body) > 0 and body[len(body) - 1].kind == "PUB" { body.pop() }
             let requested = tokens[position + 1].val
@@ -1192,32 +1594,100 @@ fn module_expand(context: ModuleLoader, src: str, path: str, entry: bool) -> int
             context.import_targets.append(dependency)
             context.import_public.append(public_import)
             if public_import { context.public_names[index].append(alias) }
-        } elif token.kind == "IDENT" and token.val == "from" and position + 4 < len(tokens) and tokens[position + 1].kind == "STR" and tokens[position + 2].kind == "IDENT" and tokens[position + 2].val == "use" and tokens[position + 3].kind == "LBRACE" {
+        } elif from_hdr.found {
             let public_use = position > 0 and tokens[position - 1].kind == "PUB"
             if public_use and len(body) > 0 and body[len(body) - 1].kind == "PUB" { body.pop() }
-            let requested = tokens[position + 1].val
-            let dependency = module_load_source(context, canonical, requested, token)
-            position = position + 4
-            while position < len(tokens) - 1 and tokens[position].kind != "RBRACE" {
-                while position < len(tokens) - 1 and (tokens[position].kind == "NEWLINE" or tokens[position].kind == "COMMA") { position = position + 1 }
-                if position >= len(tokens) - 1 or tokens[position].kind == "RBRACE" { break }
-                if tokens[position].kind != "IDENT" { report_error_at("W0006", tokens[position], "expected imported symbol identifier") }
-                let sym_tok = tokens[position]
-                position = position + 1
-                let mut bound = sym_tok.val
-                if position + 1 < len(tokens) and tokens[position].kind == "AS" {
-                    bound = tokens[position + 1].val
-                    position = position + 2
+            let requested = from_hdr.requested
+            let base_req = module_strip_wysna_ext(requested)
+            let mut base_resolved = false
+            let mut base_dep = -1
+            position = from_hdr.use_pos + 1
+            let braced = position < len(tokens) - 1 and tokens[position].kind == "LBRACE"
+            if braced { position = position + 1 }
+            let mut parsed_any = false
+            while position < len(tokens) - 1 {
+                if braced {
+                    while position < len(tokens) - 1 and (tokens[position].kind == "NEWLINE" or tokens[position].kind == "COMMA") { position = position + 1 }
+                    if position >= len(tokens) - 1 or tokens[position].kind == "RBRACE" { break }
+                } elif parsed_any {
+                    break
                 }
-                if not module_contains(context.public_names[dependency], sym_tok.val) { report_error_at("W1001", sym_tok, "member is not exported: " + sym_tok.val) }
-                if module_contains(names, bound) or module_contains(aliases, bound) or module_contains(use_locals, bound) { report_error_at("W1002", sym_tok, "imported symbol conflicts with declaration: " + bound) }
-                use_locals.append(bound)
-                use_targets.append(module_name(dependency, sym_tok.val))
-                if public_use { context.public_names[index].append(bound) }
+                if tokens[position].kind != "IDENT" { report_error_at("W0006", tokens[position], "expected imported symbol identifier") }
+                let first_tok = tokens[position]
+                position = position + 1
+                parsed_any = true
+                if position + 1 < len(tokens) and tokens[position].kind == "DOT" and tokens[position + 1].kind == "IDENT" {
+                    let sym_tok = tokens[position + 1]
+                    position = position + 2
+                    let mut bound = sym_tok.val
+                    if position + 1 < len(tokens) and tokens[position].kind == "AS" {
+                        if tokens[position + 1].kind != "IDENT" { report_error_at("W0006", tokens[position + 1], "expected alias identifier") }
+                        bound = tokens[position + 1].val
+                        position = position + 2
+                    }
+                    let sub_req = base_req + "/" + first_tok.val
+                    let sub_dep = module_load_source(context, canonical, sub_req, first_tok)
+                    if not module_contains(context.public_names[sub_dep], sym_tok.val) {
+                        report_error_at("W1003", sym_tok, "member is not exported: " + sym_tok.val + module_format_exports_hint(context, sub_dep))
+                    }
+                    if module_contains(names, bound) or module_contains(aliases, bound) or module_contains(use_locals, bound) {
+                        report_error_at("W1002", sym_tok, "imported symbol conflicts with declaration: " + bound)
+                    }
+                    use_locals.append(bound)
+                    use_targets.append(module_name(sub_dep, sym_tok.val))
+                    if public_use { context.public_names[index].append(bound) }
+                } else {
+                    let sym_tok = first_tok
+                    let mut bound = sym_tok.val
+                    if position + 1 < len(tokens) and tokens[position].kind == "AS" {
+                        if tokens[position + 1].kind != "IDENT" { report_error_at("W0006", tokens[position + 1], "expected alias identifier") }
+                        bound = tokens[position + 1].val
+                        position = position + 2
+                    }
+                    if not base_resolved {
+                        base_resolved = true
+                        let base_path = module_try_resolve_source(context, canonical, requested, token)
+                        if base_path != "" {
+                            base_dep = module_load_from_resolved(context, base_path, requested, token)
+                        }
+                    }
+                    if base_dep >= 0 and module_contains(context.public_names[base_dep], sym_tok.val) {
+                        if module_contains(names, bound) or module_contains(aliases, bound) or module_contains(use_locals, bound) {
+                            report_error_at("W1002", sym_tok, "imported symbol conflicts with declaration: " + bound)
+                        }
+                        use_locals.append(bound)
+                        use_targets.append(module_name(base_dep, sym_tok.val))
+                        if public_use { context.public_names[index].append(bound) }
+                    } else {
+                        let sub_req = base_req + "/" + sym_tok.val
+                        let sub_path = module_try_resolve_source(context, canonical, sub_req, sym_tok)
+                        if sub_path != "" {
+                            let sub_dep = module_load_from_resolved(context, sub_path, sub_req, sym_tok)
+                            if module_contains(aliases, bound) or module_contains(names, bound) or module_contains(use_locals, bound) {
+                                report_error_at("W1002", sym_tok, "duplicate module alias: " + bound)
+                            }
+                            aliases.append(bound)
+                            dependencies.append(sub_dep)
+                            context.import_owners.append(index)
+                            context.import_aliases.append(bound)
+                            context.import_targets.append(sub_dep)
+                            context.import_public.append(public_use)
+                            if public_use { context.public_names[index].append(bound) }
+                        } elif base_dep >= 0 {
+                            report_error_at("W1003", sym_tok, "member is not exported: " + sym_tok.val + module_format_exports_hint(context, base_dep))
+                        } else {
+                            report_error_at("W1003", token, "module not found: " + requested)
+                        }
+                    }
+                }
             }
-            if position >= len(tokens) - 1 or tokens[position].kind != "RBRACE" { report_error_at("W0006", token, "expected '}' in from-use declaration") }
-            position = position + 1
+            if braced {
+                if position >= len(tokens) - 1 or tokens[position].kind != "RBRACE" { report_error_at("W0006", token, "expected '}' in from-use declaration") }
+                position = position + 1
+            }
         } else {
+            if token.kind == "LBRACE" { top_depth = top_depth + 1 }
+            elif token.kind == "RBRACE" and top_depth > 0 { top_depth = top_depth - 1 }
             body.append(token)
             position = position + 1
         }
@@ -2973,6 +3443,7 @@ fn sem_member(context: SemanticContext, receiver: SemValue, name: str, location:
         } elif name == "get" and type_.kind == "dict" { args = [type_.args[0], sem_wrap(context, "optional", type_.args[1])] }
         elif name == "keys" and type_.kind == "dict" { args = [sem_wrap(context, "list", type_.args[0])] }
         elif name == "values" and type_.kind == "dict" { args = [sem_wrap(context, "list", type_.args[1])] }
+        elif name == "items" and type_.kind == "dict" { args = [sem_wrap(context, "list", sem_intern(context, "tuple", "", type_.args))] }
         else { report_error_at("W3002", location, "unknown collection method") }
         return SemValue { type_id: sem_intern(context, "function", "", args), root: "#collection", writable: -1, terminates: false, node: -1 }
     }
@@ -3075,20 +3546,34 @@ fn sem_prefix(context: SemanticContext, allow_struct: bool, statement: bool) -> 
             let empty: list[int] = []
             return sem_expr(context, "tuple", sem_value(sem_intern(context, "tuple", "", empty)), source, "", [], -1, -1)
         }
+        let expected_tuple = context.expected_type
+        let is_tuple_ctx = expected_tuple >= 0 and sem_kind(context, expected_tuple) == "tuple" and sem_group_is_tuple(context)
         context.statement_context = statement and not sem_group_is_tuple(context)
+        if is_tuple_ctx and len(context.types[expected_tuple].args) > 0 {
+            context.expected_type = context.types[expected_tuple].args[0]
+        }
         let first = sem_expression(context, 0, true)
         if sem_match(context, "COMMA") {
             let mut types: list[int] = [first.type_id]
             let mut values: list[int] = [first.node]
+            let mut elem_idx = 1
             while not sem_is(context, "RPAREN") {
+                if is_tuple_ctx and elem_idx < len(context.types[expected_tuple].args) {
+                    context.expected_type = context.types[expected_tuple].args[elem_idx]
+                } else {
+                    context.expected_type = -1
+                }
                 let next = sem_expression(context, 0, true)
                 types.append(next.type_id)
                 values.append(next.node)
+                elem_idx = elem_idx + 1
                 if not sem_match(context, "COMMA") { break }
             }
+            context.expected_type = expected_tuple
             sem_expect(context, "RPAREN")
             return sem_expr(context, "tuple", sem_value(sem_intern(context, "tuple", "", types)), source, "", values, -1, -1)
         }
+        context.expected_type = expected_tuple
         sem_expect(context, "RPAREN")
         return first
     }
@@ -3297,9 +3782,40 @@ fn sem_prefix(context: SemanticContext, allow_struct: bool, statement: bool) -> 
                 unification.names = context.generic_types[generic_type].params
                 unification.types = context.types[selected_type].args
             }
+            let mut has_spread = false
+            let mut spread_val = sem_value(-1)
+            let mut spread_source = source
             let mut initialized: list[str] = []
             let mut values: list[int] = []
             while not sem_is(context, "RBRACE") {
+                if sem_is(context, "DOT_DOT") {
+                    let dot_tok = sem_take(context)
+                    if has_spread { report_error_at("W0006", dot_tok, "multiple spread expressions in struct literal") }
+                    let prev_sp_ctx = context.expected_type
+                    context.expected_type = if selected_type >= 0 { selected_type } else { -1 }
+                    spread_source = sem_at(context)
+                    spread_val = sem_expression(context, 0, true)
+                    context.expected_type = prev_sp_ctx
+                    has_spread = true
+                    if generic_type >= 0 and selected_type < 0 and sem_kind(context, spread_val.type_id) == context.generic_types[generic_type].kind and context.types[spread_val.type_id].name == name {
+                        let gparams = context.generic_types[generic_type].params
+                        let sp_args = context.types[spread_val.type_id].args
+                        if len(gparams) == len(sp_args) {
+                            for pi in 0..len(gparams) {
+                                let mut already = false
+                                for ni in 0..len(unification.names) {
+                                    if unification.names[ni] == gparams[pi] { already = true }
+                                }
+                                if not already {
+                                    unification.names.append(gparams[pi])
+                                    unification.types.append(sp_args[pi])
+                                }
+                            }
+                        }
+                    }
+                    sem_match(context, "COMMA")
+                    continue
+                }
                 let field_token = sem_at(context)
                 let field_name = sem_expect(context, "IDENT").val
                 let field = sem_field(context, name, field_name)
@@ -3321,13 +3837,6 @@ fn sem_prefix(context: SemanticContext, allow_struct: bool, statement: bool) -> 
                 sem_match(context, "COMMA")
             }
             sem_expect(context, "RBRACE")
-            for field in context.fields {
-                if field.owner == name {
-                    let mut found = false
-                    for candidate in initialized { if candidate == field.name { found = true } }
-                    if not found { report_error_at("W2007", source, "missing struct field") }
-                }
-            }
             if generic_type >= 0 and selected_type < 0 {
                 let mut concrete_types: list[int] = []
                 for parameter in context.generic_types[generic_type].params {
@@ -3338,6 +3847,51 @@ fn sem_prefix(context: SemanticContext, allow_struct: bool, statement: bool) -> 
                 }
                 named_type = sem_intern(context, context.generic_types[generic_type].kind, name, concrete_types)
                 sem_check_nominal_constraints(context, name, concrete_types, source)
+            }
+            if has_spread {
+                sem_require_at(context, spread_val.type_id, named_type, "W2001", spread_source)
+                let mut missing_names: list[str] = []
+                let mut missing_types: list[int] = []
+                for field in context.fields {
+                    if field.owner == name {
+                        let mut found = false
+                        for candidate in initialized { if candidate == field.name { found = true } }
+                        if not found {
+                            let ftype = sem_substitute_type(context, field.type_id, unification.names, unification.types)
+                            missing_names.append(field.name)
+                            missing_types.append(ftype)
+                        }
+                    }
+                }
+                if len(missing_names) > 1 and context.capture_nodes and spread_val.node >= 0 and context.nodes[spread_val.node].kind != "binding" {
+                    let sp_scope = sem_enter_scope(context)
+                    let sp_binding = sem_declare(context, "__wysna_spread", spread_val.type_id, false)
+                    let sp_let = sem_node(context, "let", context.unit_type, spread_source, "__wysna_spread", [spread_val.node], sp_binding, -1)
+                    for mi in 0..len(missing_names) {
+                        let sp_ref = sem_node(context, "binding", spread_val.type_id, spread_source, "__wysna_spread", [], sp_binding, -1)
+                        let sp_member = sem_node(context, "member", missing_types[mi], spread_source, missing_names[mi], [sp_ref], -1, -1)
+                        initialized.append(missing_names[mi])
+                        values.append(sp_member)
+                    }
+                    let constructed_sp = sem_expr(context, "struct", sem_value(named_type), source, name, values, -1, -1)
+                    if context.capture_nodes { context.nodes[constructed_sp.node].labels = initialized }
+                    sem_leave_scope(context, sp_scope)
+                    let wrapped = sem_node(context, "block", named_type, source, "", [sp_let, constructed_sp.node], -1, -1)
+                    return SemValue { type_id: named_type, root: "", writable: -1, terminates: false, node: wrapped }
+                } else {
+                    for mi in 0..len(missing_names) {
+                        let sp_member = sem_node(context, "member", missing_types[mi], spread_source, missing_names[mi], [spread_val.node], -1, -1)
+                        initialized.append(missing_names[mi])
+                        values.append(sp_member)
+                    }
+                }
+            }
+            for field in context.fields {
+                if field.owner == name {
+                    let mut found = false
+                    for candidate in initialized { if candidate == field.name { found = true } }
+                    if not found { report_error_at("W2007", source, "missing struct field") }
+                }
             }
             let constructed = sem_expr(context, "struct", sem_value(named_type), source, name, values, -1, -1)
             if context.capture_nodes { context.nodes[constructed.node].labels = initialized }
@@ -3636,7 +4190,10 @@ fn sem_expression(context: SemanticContext, minimum: int, allow_struct: bool) ->
                 error_binding = sem_declare(context, error_name, operand.args[1], false)
             }
             let handler_source = sem_at(context)
+            let prev_handler_expected = context.expected_type
+            context.expected_type = operand.args[0]
             let handler = sem_block(context, false)
+            context.expected_type = prev_handler_expected
             sem_leave_scope(context, scope)
             if not handler.terminates {
                 if sem_kind(context, handler.type_id) == "empty" { report_error_at("W2001", handler_source, "handler collection requires a concrete element type") }
@@ -3648,6 +4205,7 @@ fn sem_expression(context: SemanticContext, minimum: int, allow_struct: bool) ->
             let operator = sem_at(context).kind
             let precedence = op_precedence(operator)
             if precedence <= minimum { break }
+            let is_compound = operator == "PLUS_ASSIGN" or operator == "MINUS_ASSIGN" or operator == "STAR_ASSIGN"
             let logical_left = context.pos - 1
             let mut logical_constant = -1
             if logical_left >= 0 {
@@ -3656,9 +4214,9 @@ fn sem_expression(context: SemanticContext, minimum: int, allow_struct: bool) ->
             }
             sem_take(context)
             let mut right_minimum = precedence
-            if operator == "ASSIGN" or operator == "QQ" { right_minimum = precedence - 1 }
+            if operator == "ASSIGN" or is_compound or operator == "QQ" { right_minimum = precedence - 1 }
             let previous_expected = context.expected_type
-            if operator == "ASSIGN" { context.expected_type = left.writable }
+            if operator == "ASSIGN" or is_compound { context.expected_type = left.writable }
             let before_right = context.initialized
             let right_source = sem_at(context)
             let right = sem_expression(context, right_minimum, allow_struct)
@@ -3670,6 +4228,21 @@ fn sem_expression(context: SemanticContext, minimum: int, allow_struct: bool) ->
                 sem_require_at(context, right.type_id, left.writable, "W2001", right_source)
                 if context.initializing and len(left.root) > 5 and slice(left.root, 0, 5) == "this:" { context.initialized.append(slice(left.root, 5, len(left.root))) }
                 left = sem_value(left.writable)
+                left = sem_expr(context, "assign", left, call_token, operator, [operand_node, right.node], -1, -1)
+            } elif is_compound {
+                if left.writable < 0 { report_error_at("W2002", source, "invalid assignment target") }
+                sem_mutable_at(context, left.root, source)
+                let bin_op = if operator == "PLUS_ASSIGN" { "PLUS" } elif operator == "MINUS_ASSIGN" { "MINUS" } else { "STAR" }
+                let deferred = sem_defer(context, "operator:" + bin_op, [left.type_id, right.type_id])
+                if not deferred and left.type_id != right.type_id {
+                    report_error_at("W2001", right_source, "binary operand types: expected '" + sem_diagnostic_type(context, left.type_id, 0) + "', found '" + sem_diagnostic_type(context, right.type_id, 0) + "'")
+                }
+                if not deferred and left.type_id != context.integer_type and left.type_id != context.float_type and (bin_op != "PLUS" or left.type_id != context.string_type) {
+                    report_error_at("W2001", source, "invalid binary operation")
+                }
+                sem_require_at(context, left.type_id, left.writable, "W2001", right_source)
+                let bin_node = sem_node(context, "binary", left.writable, call_token, bin_op, [operand_node, right.node], -1, -1)
+                left = sem_expr(context, "assign", sem_value(left.writable), call_token, "ASSIGN", [operand_node, bin_node], -1, -1)
             } elif operator == "QQ" {
                 if left.type_id == context.none_type {
                     context.initialized = after_right
@@ -3682,10 +4255,12 @@ fn sem_expression(context: SemanticContext, minimum: int, allow_struct: bool) ->
                     sem_require_at(context, right.type_id, inner, "W2001", right_source)
                     left = sem_value(inner)
                 } else { report_error_at("W2006", source, "coalesce requires optional") }
+                left = sem_expr(context, "binary", left, call_token, operator, [operand_node, right.node], -1, -1)
             } elif operator == "DOT_DOT" or operator == "DOT_DOT_EQ" {
                 sem_require_at(context, left.type_id, context.integer_type, "W2001", source)
                 sem_require_at(context, right.type_id, context.integer_type, "W2001", right_source)
                 left = sem_value(sem_wrap(context, "list", context.integer_type))
+                left = sem_expr(context, "binary", left, call_token, operator, [operand_node, right.node], -1, -1)
             } elif operator == "AND" or operator == "OR" {
                 sem_require_at(context, left.type_id, context.boolean_type, "W2001", source)
                 sem_require_at(context, right.type_id, context.boolean_type, "W2001", right_source)
@@ -3699,6 +4274,7 @@ fn sem_expression(context: SemanticContext, minimum: int, allow_struct: bool) ->
                 elif runs_right { context.initialized = after_right }
                 else { context.initialized = sem_intersect(before_right, after_right) }
                 left = sem_value(context.boolean_type)
+                left = sem_expr(context, "binary", left, call_token, operator, [operand_node, right.node], -1, -1)
             } elif operator == "EQ" or operator == "NEQ" {
                 let left_kind = sem_kind(context, left.type_id)
                 let right_kind = sem_kind(context, right.type_id)
@@ -3706,15 +4282,18 @@ fn sem_expression(context: SemanticContext, minimum: int, allow_struct: bool) ->
                 let result_pair = (left_kind == "ok" or left_kind == "err") and (right_kind == "ok" or right_kind == "err")
                 if not result_pair and not sem_assignable(context, left.type_id, right.type_id) and not sem_assignable(context, right.type_id, left.type_id) { report_error_at("W2001", right_source, "equality types") }
                 left = sem_value(context.boolean_type)
+                left = sem_expr(context, "binary", left, call_token, operator, [operand_node, right.node], -1, -1)
             } else {
                 let deferred = sem_defer(context, "operator:" + operator, [left.type_id, right.type_id])
-                if not deferred and left.type_id != right.type_id { report_error_at("W2001", right_source, "binary operand types") }
+                if not deferred and left.type_id != right.type_id {
+                    report_error_at("W2001", right_source, "binary operand types: expected '" + sem_diagnostic_type(context, left.type_id, 0) + "', found '" + sem_diagnostic_type(context, right.type_id, 0) + "'")
+                }
                 if not deferred and left.type_id != context.integer_type and left.type_id != context.float_type and (operator != "PLUS" or left.type_id != context.string_type) { report_error_at("W2001", source, "invalid binary operation") }
                 if not deferred and operator == "PERCENT" and left.type_id != context.integer_type { report_error_at("W2001", source, "modulo requires integers") }
                 if operator == "LT" or operator == "LTE" or operator == "GT" or operator == "GTE" { left = sem_value(context.boolean_type) }
                 else { left = sem_value(left.type_id) }
+                left = sem_expr(context, "binary", left, call_token, operator, [operand_node, right.node], -1, -1)
             }
-            left = sem_expr(context, if operator == "ASSIGN" { "assign" } else { "binary" }, left, call_token, operator, [operand_node, right.node], -1, -1)
         }
     }
     if left.root == "#method" or left.root == "#collection" or sem_kind(context, left.type_id) == "builtin" or sem_kind(context, left.type_id) == "constructor" { sem_error(context, "W2013", "callable syntax requires an explicit lambda adapter") }
@@ -3731,6 +4310,9 @@ fn sem_check_discarded_branch(context: SemanticContext, type_id: int, statement:
     }
 }
 fn sem_if(context: SemanticContext, statement: bool) -> SemValue {
+    let outer_expected = context.expected_type
+    let stmt_result_ctx = if statement and outer_expected >= 0 and sem_kind(context, outer_expected) == "result" and sem_unit_return(context, outer_expected) { outer_expected } else { -1 }
+    context.expected_type = -1
     let source = sem_expect(context, "IF")
     let condition_source = sem_at(context)
     let condition = sem_expression(context, 0, false)
@@ -3740,28 +4322,39 @@ fn sem_if(context: SemanticContext, statement: bool) -> SemValue {
     let mut sources: list[Token] = [source]
     let initial = context.initialized
     let first_source = sem_at(context)
+    context.expected_type = if statement { stmt_result_ctx } else { outer_expected }
     let first = sem_block(context, statement)
     branches.append(first.node)
     sem_check_discarded_branch(context, first.type_id, statement, first_source)
     let mut initialized = context.initialized
     let mut all_return = first.terminates
     let mut common = first.type_id
+    let mut branch_expected = -1
+    if not statement {
+        if outer_expected >= 0 and outer_expected != context.unit_type { branch_expected = outer_expected }
+        elif not first.terminates and first.type_id != context.unit_type { branch_expected = first.type_id }
+    }
     sem_skip_newlines_before_branch(context)
     while sem_is(context, "ELIF") {
         sources.append(sem_take(context))
         context.initialized = initial
+        context.expected_type = -1
         let condition_source = sem_at(context)
         let condition = sem_expression(context, 0, false)
         sem_require_at(context, condition.type_id, context.boolean_type, "W2001", condition_source)
         conditions.append(condition.node)
         let branch_source = sem_at(context)
+        context.expected_type = if statement { stmt_result_ctx } else { branch_expected }
         let branch = sem_block(context, statement)
         branches.append(branch.node)
         sem_check_discarded_branch(context, branch.type_id, statement, branch_source)
         if not branch.terminates and not all_return and not sem_assignable(context, branch.type_id, common) { if not statement { report_error_at("W2001", branch_source, "incompatible if branches") } common = context.unit_type }
         if not branch.terminates {
             if all_return { initialized = context.initialized } else { initialized = sem_intersect(initialized, context.initialized) }
-            if all_return { common = branch.type_id }
+            if all_return {
+                common = branch.type_id
+                if not statement and branch_expected < 0 and common != context.unit_type { branch_expected = common }
+            }
         }
         all_return = all_return and branch.terminates
         sem_skip_newlines_before_branch(context)
@@ -3769,6 +4362,7 @@ fn sem_if(context: SemanticContext, statement: bool) -> SemValue {
     context.initialized = initial
     if sem_match(context, "ELSE") {
         let branch_source = sem_at(context)
+        context.expected_type = if statement { stmt_result_ctx } else { branch_expected }
         let branch = sem_block(context, statement)
         branches.append(branch.node)
         sem_check_discarded_branch(context, branch.type_id, statement, branch_source)
@@ -3783,6 +4377,7 @@ fn sem_if(context: SemanticContext, statement: bool) -> SemValue {
         all_return = false
         common = context.unit_type
     }
+    context.expected_type = outer_expected
     context.initialized = initialized
     let mut alternate = sem_node(context, "unit", context.unit_type, source, "", [], -1, -1)
     if len(branches) > len(conditions) { alternate = branches[len(branches) - 1] }
@@ -4010,6 +4605,9 @@ fn sem_match_expression(context: SemanticContext, statement: bool) -> SemValue {
             report_error_at("W0001", following, "expected '=>' after match pattern")
         }
     }
+    let outer_expected = context.expected_type
+    let stmt_result_ctx = if statement and outer_expected >= 0 and sem_kind(context, outer_expected) == "result" and sem_unit_return(context, outer_expected) { outer_expected } else { -1 }
+    context.expected_type = -1
     let subject_value = sem_expression(context, 0, false)
     let subject = subject_value.type_id
     let mut arms: list[int] = []
@@ -4017,6 +4615,7 @@ fn sem_match_expression(context: SemanticContext, statement: bool) -> SemValue {
     let mut covered: list[list[int]] = []
     let mut all_return = true
     let mut common = -1
+    let mut arm_expected = if not statement and outer_expected >= 0 and outer_expected != context.unit_type { outer_expected } else { -1 }
     let mut wildcard = false
     let initial = context.initialized
     let mut initialized = initial
@@ -4026,6 +4625,7 @@ fn sem_match_expression(context: SemanticContext, statement: bool) -> SemValue {
         if sem_is(context, "RBRACE") { break }
         let scope = sem_enter_scope(context)
         context.initialized = initial
+        context.expected_type = -1
         sem_pattern(context, subject)
         let pattern = context.last_pattern
         let mut guarded = false
@@ -4034,8 +4634,10 @@ fn sem_match_expression(context: SemanticContext, statement: bool) -> SemValue {
         if not sem_match(context, "FAT_ARROW") { sem_error(context, "W0001", "expected '=>' after match pattern") }
         let mut branch = SemFlow { type_id: context.unit_type, terminates: false, node: -1 }
         let branch_source = sem_at(context)
+        context.expected_type = if statement { stmt_result_ctx } else { arm_expected }
         if sem_is(context, "LBRACE") { branch = sem_block(context, false) }
         else { let value = sem_expression(context, 0, true) branch = SemFlow { type_id: value.type_id, terminates: value.terminates, node: value.node } }
+        context.expected_type = outer_expected
         if context.capture_nodes {
             arms.append(len(context.arms))
             context.arms.append(CheckedArm { pattern: pattern, guard: guard, body: branch.node, source: context.patterns[pattern].source })
@@ -4047,12 +4649,17 @@ fn sem_match_expression(context: SemanticContext, statement: bool) -> SemValue {
         if not branch.terminates {
             if live_branches == 0 { initialized = context.initialized } else { initialized = sem_intersect(initialized, context.initialized) }
             live_branches = live_branches + 1
-            if common >= 0 { sem_require_at(context, branch.type_id, common, "W2001", branch_source) } else { common = branch.type_id }
+            if common >= 0 { sem_require_at(context, branch.type_id, common, "W2001", branch_source) }
+            else {
+                common = branch.type_id
+                if not statement and arm_expected < 0 and common != context.unit_type { arm_expected = common }
+            }
         }
         all_return = all_return and branch.terminates
         sem_leave_scope(context, scope)
         sem_match(context, "COMMA")
     }
+    context.expected_type = outer_expected
     sem_expect(context, "RBRACE")
     let kind = sem_kind(context, subject)
     let closed = kind == "enum" or kind == "optional" or kind == "result" or kind == "error_union" or kind == "bool" or kind == "tuple"
@@ -4097,6 +4704,8 @@ fn sem_let(context: SemanticContext) -> int {
 }
 fn sem_block(context: SemanticContext, statement: bool) -> SemFlow {
     let source = sem_expect(context, "LBRACE")
+    let outer_expected = context.expected_type
+    let stmt_keep_expected = if outer_expected >= 0 and sem_kind(context, outer_expected) == "result" and sem_unit_return(context, outer_expected) { outer_expected } else { -1 }
     let mut statements: list[int] = []
     let scope = sem_enter_scope(context)
     let mut tail = context.unit_type
@@ -4105,7 +4714,7 @@ fn sem_block(context: SemanticContext, statement: bool) -> SemFlow {
         sem_skip_separators(context)
         if sem_is(context, "RBRACE") or sem_is(context, "EOF") { break }
         let statement_source = sem_at(context)
-        if sem_is(context, "LET") { statements.append(sem_let(context)) tail = context.unit_type }
+        if sem_is(context, "LET") { context.expected_type = -1 statements.append(sem_let(context)) tail = context.unit_type }
         elif sem_match(context, "RETURN") {
             let previous = context.expected_type
             context.expected_type = context.return_type
@@ -4150,6 +4759,7 @@ fn sem_block(context: SemanticContext, statement: bool) -> SemFlow {
             terminates = true
             tail = context.unit_type
         } elif sem_match(context, "WHILE") {
+            context.expected_type = -1
             let condition_source = sem_at(context)
             let condition = sem_expression(context, 0, false)
             sem_require_at(context, condition.type_id, context.boolean_type, "W2001", condition_source)
@@ -4161,19 +4771,31 @@ fn sem_block(context: SemanticContext, statement: bool) -> SemFlow {
             context.loop = context.loop - 1
             tail = context.unit_type
         } elif sem_match(context, "FOR") {
+            context.expected_type = -1
             let pattern = sem_for_pattern(context, true)
             sem_expect(context, "IN")
             let sequence_source = sem_at(context)
             let sequence = sem_expression(context, 0, false)
             let iterable = sequence.type_id
-            if sem_kind(context, iterable) != "list" { report_error_at("W2001", sequence_source, "for requires list or range") }
-            let element = context.types[iterable].args[0]
+            let mut element = -1
+            let mut iter_node = sequence.node
+            if sem_kind(context, iterable) == "list" {
+                element = context.types[iterable].args[0]
+            } elif sem_kind(context, iterable) == "dict" {
+                element = sem_intern(context, "tuple", "", context.types[iterable].args)
+                if context.capture_nodes {
+                    let items_list_t = sem_wrap(context, "list", element)
+                    iter_node = sem_node(context, "collection_call", items_list_t, sequence_source, "items", [sequence.node], -1, -1)
+                }
+            } else {
+                report_error_at("W2001", sequence_source, "for requires list, dict, or range")
+            }
             let scope = sem_enter_scope(context)
             sem_bind_for_pattern(context, pattern, element)
             context.loop = context.loop + 1
             let initialized = context.initialized
             let body = sem_block(context, true)
-            let node = sem_node(context, "for", context.unit_type, statement_source, "", [sequence.node, body.node], -1, -1)
+            let node = sem_node(context, "for", context.unit_type, statement_source, "", [iter_node, body.node], -1, -1)
             if context.capture_nodes { context.nodes[node].pattern = pattern }
             statements.append(node)
             context.initialized = initialized
@@ -4187,12 +4809,14 @@ fn sem_block(context: SemanticContext, statement: bool) -> SemFlow {
             tail = context.unit_type
         } else {
             context.statement_context = statement or not sem_tail_expression(context)
+            context.expected_type = if context.statement_context { stmt_keep_expected } else { outer_expected }
             let expression = sem_expression(context, 0, true)
             tail = expression.type_id
             statements.append(expression.node)
             terminates = terminates or expression.terminates
         }
     }
+    context.expected_type = outer_expected
     sem_expect(context, "RBRACE")
     sem_leave_scope(context, scope)
     return SemFlow { type_id: tail, terminates: terminates, node: sem_node(context, "block", tail, source, "", statements, -1, -1) }
@@ -5761,6 +6385,9 @@ fn mir_collection_call(context: MirBuilder, node: CheckedNode) -> int {
     let mut args_: list[int] = [receiver]
     for i in 1..len(node.children) { args_.append(mir_expression(context, node.children[i])) }
     if context.current < 0 { return -1 }
+    if node.text == "items" {
+        return mir_op(context, "runtime", mir_type(context, node.type_id, source), args_, "wysna_builtin_dict_items", mir_literal_unit(), source)
+    }
     if node.text == "get" or node.text == "keys" or node.text == "values" {
         return mir_op(context, "runtime", mir_type(context, node.type_id, source), args_, "wysna_dict_" + node.text, mir_literal_unit(), source)
     }
@@ -10719,7 +11346,7 @@ fn lsp_semantic_tok_type(tok: Token) -> int {
         if len(tok.val) > 0 and ord(tok.val[0]) >= 65 and ord(tok.val[0]) <= 90 { return 1 }
         return 9
     }
-    if k == "PLUS" or k == "MINUS" or k == "STAR" or k == "SLASH" or k == "PERCENT" or k == "EQ" or k == "NEQ" or k == "LT" or k == "LTE" or k == "GT" or k == "GTE" or k == "ASSIGN" or k == "ARROW" or k == "FAT_ARROW" {
+    if k == "PLUS" or k == "MINUS" or k == "STAR" or k == "SLASH" or k == "PERCENT" or k == "EQ" or k == "NEQ" or k == "LT" or k == "LTE" or k == "GT" or k == "GTE" or k == "ASSIGN" or k == "PLUS_ASSIGN" or k == "MINUS_ASSIGN" or k == "STAR_ASSIGN" or k == "ARROW" or k == "FAT_ARROW" {
         return 13
     }
     return -1
@@ -12484,7 +13111,7 @@ fn fix_resolve_mut_root_name(tokens: list[Token], tok_idx: int) -> str {
         }
         return t.val
     }
-    if t.kind == "ASSIGN" and tok_idx > 0 {
+    if (t.kind == "ASSIGN" or t.kind == "PLUS_ASSIGN" or t.kind == "MINUS_ASSIGN" or t.kind == "STAR_ASSIGN") and tok_idx > 0 {
         let mut p = tok_idx - 1
         while p >= 0 {
             if tokens[p].kind == "RBRACKET" {
@@ -12504,6 +13131,64 @@ fn fix_resolve_mut_root_name(tokens: list[Token], tok_idx: int) -> str {
         if p >= 0 and tokens[p].kind == "IDENT" { return tokens[p].val }
     }
     return ""
+}
+
+fn fix_is_scalar_wrap_tok(t: Token) -> bool {
+    return t.kind == "IDENT" or t.kind == "INT" or t.kind == "FLOAT" or t.kind == "TRUE" or t.kind == "FALSE"
+}
+
+fn fix_raw_token_span(src: str, tok: Token) -> list[int] {
+    let off0 = diag_char_offset_at(src, tok.line, tok.col)
+    if off0 < 0 or off0 >= len(src) { return [-1, -1] }
+    let mut off1 = off0
+    let mut saw_dot = false
+    while off1 < len(src) {
+        let ch = src[off1]
+        let c = ord(ch)
+        if is_alnum(c) {
+            off1 = off1 + 1
+        } elif tok.kind == "FLOAT" and ch == "." and not saw_dot and off1 + 1 < len(src) and is_digit(ord(src[off1 + 1])) {
+            saw_dot = true
+            off1 = off1 + 1
+        } else {
+            break
+        }
+    }
+    if off1 <= off0 { return [-1, -1] }
+    return [off0, off1]
+}
+
+fn fix_plan_w2001(src: str, tokens: list[Token], start_byte: int, msg: str) -> list[FixEdit] {
+    let mut out: list[FixEdit] = []
+    if not proj_str_contains_substr(msg, "binary operand types:") { return out }
+    let is_str_scalar = proj_str_contains_substr(msg, "expected 'str', found 'int'") or proj_str_contains_substr(msg, "expected 'str', found 'float'") or proj_str_contains_substr(msg, "expected 'str', found 'bool'")
+    let is_scalar_str = proj_str_contains_substr(msg, "expected 'int', found 'str'") or proj_str_contains_substr(msg, "expected 'float', found 'str'") or proj_str_contains_substr(msg, "expected 'bool', found 'str'")
+    if not is_str_scalar and not is_scalar_str { return out }
+    let start_char = lsp_char_offset_from_utf8_byte(src, start_byte)
+    let lc = fix_line_col_from_char(src, start_char)
+    let tok_idx = fix_tok_index_at(tokens, lc[0], lc[1])
+    if tok_idx < 0 or tok_idx >= len(tokens) { return out }
+    let mut wrap_idx = -1
+    if is_str_scalar and tok_idx >= 1 and tokens[tok_idx - 1].kind == "PLUS" and fix_is_scalar_wrap_tok(tokens[tok_idx]) {
+        let nxt_kind = if tok_idx + 1 < len(tokens) { tokens[tok_idx + 1].kind } else { "EOF" }
+        if nxt_kind != "LPAREN" and nxt_kind != "DOT" and nxt_kind != "LBRACKET" {
+            wrap_idx = tok_idx
+        }
+    } elif is_scalar_str and tok_idx >= 2 and tokens[tok_idx - 1].kind == "PLUS" and fix_is_scalar_wrap_tok(tokens[tok_idx - 2]) {
+        let prev_kind = if tok_idx >= 3 { tokens[tok_idx - 3].kind } else { "EOF" }
+        if prev_kind != "DOT" and prev_kind != "RBRACKET" and prev_kind != "RPAREN" {
+            wrap_idx = tok_idx - 2
+        }
+    }
+    if wrap_idx < 0 { return out }
+    let wtok = tokens[wrap_idx]
+    let span = fix_raw_token_span(src, wtok)
+    if span[0] < 0 { return out }
+    let orig = slice(src, span[0], span[1])
+    let b0 = diag_utf8_byte_at(src, span[0])
+    let b1 = diag_utf8_byte_at(src, span[1])
+    out.append(new FixEdit("W2001", "wrap '" + orig + "' in str(...)", "machine", b0, b1, "str(" + orig + ")"))
+    return out
 }
 
 fn fix_plan_w3001(src: str, tokens: list[Token], start_byte: int, msg: str) -> list[FixEdit] {
@@ -12801,6 +13486,8 @@ fn tool_handle_fix(args: list[str], json_mode_in: bool) -> unit {
             let mut gen: list[FixEdit] = []
             if code == "W3001" {
                 gen = fix_plan_w3001(current_src, tokens, sb, msg)
+            } elif code == "W2001" {
+                gen = fix_plan_w2001(current_src, tokens, sb, msg)
             } elif code == "W1001" {
                 gen = fix_plan_w1001(current_src, tokens, sb, eb, msg)
             }
@@ -14941,10 +15628,21 @@ fn api_extract_module(src: str, file_path: str, module_id: str, package_id: str)
             is_extern = false
             continue
         }
-        if k == "IDENT" and v == "from" and c.pos + 3 < len(c.tokens) and c.tokens[c.pos + 1].kind == "STR" and c.tokens[c.pos + 2].kind == "IDENT" and c.tokens[c.pos + 2].val == "use" {
-            rec.imports.append(c.tokens[c.pos + 1].val)
-            c.pos = c.pos + 3
-            if schema_cur_kind(c) == "LBRACE" { schema_skip_brace_block(c) }
+        let api_from = module_parse_from_header(c.tokens, c.pos)
+        if api_from.found {
+            rec.imports.append(api_from.requested)
+            c.pos = api_from.use_pos + 1
+            if schema_cur_kind(c) == "LBRACE" {
+                schema_skip_brace_block(c)
+            } else {
+                if schema_cur_kind(c) == "IDENT" { c.pos = c.pos + 1 }
+                if schema_cur_kind(c) == "DOT" and c.pos + 1 < len(c.tokens) and c.tokens[c.pos + 1].kind == "IDENT" {
+                    c.pos = c.pos + 2
+                }
+                if schema_cur_kind(c) == "AS" and c.pos + 1 < len(c.tokens) {
+                    c.pos = c.pos + 2
+                }
+            }
             is_pub = false
             is_extern = false
             continue

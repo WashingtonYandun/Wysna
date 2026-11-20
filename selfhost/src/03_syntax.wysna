@@ -4,7 +4,7 @@ fn expression_starter(kind: str) -> bool {
 }
 
 fn op_precedence(k: str) -> int {
-    if k == "ASSIGN" {
+    if k == "ASSIGN" or k == "PLUS_ASSIGN" or k == "MINUS_ASSIGN" or k == "STAR_ASSIGN" {
         return 1
     }
     if k == "QQ" {

@@ -983,7 +983,7 @@ fn lsp_semantic_tok_type(tok: Token) -> int {
         if len(tok.val) > 0 and ord(tok.val[0]) >= 65 and ord(tok.val[0]) <= 90 { return 1 }
         return 9
     }
-    if k == "PLUS" or k == "MINUS" or k == "STAR" or k == "SLASH" or k == "PERCENT" or k == "EQ" or k == "NEQ" or k == "LT" or k == "LTE" or k == "GT" or k == "GTE" or k == "ASSIGN" or k == "ARROW" or k == "FAT_ARROW" {
+    if k == "PLUS" or k == "MINUS" or k == "STAR" or k == "SLASH" or k == "PERCENT" or k == "EQ" or k == "NEQ" or k == "LT" or k == "LTE" or k == "GT" or k == "GTE" or k == "ASSIGN" or k == "PLUS_ASSIGN" or k == "MINUS_ASSIGN" or k == "STAR_ASSIGN" or k == "ARROW" or k == "FAT_ARROW" {
         return 13
     }
     return -1

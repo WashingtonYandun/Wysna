@@ -832,18 +832,22 @@ class TypeChecker:
                     file=self.file
                 )
         old_scope = self.current_scope
+        old_expected = self.expected_type
         self.current_scope = block_scope
         self.scope_spans.append(((block.line, block.col),
                                  (getattr(block, 'end_line', block.line), getattr(block, 'end_col', block.col)), block_scope))
 
         try:
+            self.expected_type = None
             for s in block.statements:
                 self._check_stmt_recovering(s)
             if block.tail_expr:
+                self.expected_type = old_expected
                 return self._check_expr(block.tail_expr, is_statement_context=is_statement_context)
             return None
         finally:
             self.current_scope = old_scope
+            self.expected_type = old_expected
 
     def _check_let_decl(self, stmt: LetDecl) -> None:
         if stmt.name.startswith("_WYSNA_") or stmt.name.startswith("__wysna_internal_"):
@@ -918,13 +922,15 @@ class TypeChecker:
     def _check_for_stmt(self, stmt: ForStmt) -> None:
         iter_t = self._check_expr(stmt.iterable)
 
-        # Iterable must be a list
+        # Iterable must be a list or dict
         elem_t: WysnaType
         if isinstance(iter_t, ListType):
             elem_t = iter_t.element
+        elif isinstance(iter_t, DictType):
+            elem_t = TupleType([iter_t.key, iter_t.value])
         else:
             raise TypeError(
-                message=f"Cannot iterate over non-list value of type '{iter_t}'",
+                message=f"Cannot iterate over non-iterable value of type '{iter_t}'",
                 line=stmt.iterable.line,
                 col=stmt.iterable.col,
                 file=self.file,
@@ -1334,6 +1340,8 @@ class TypeChecker:
         elif isinstance(node, StructInitExpr):
             if node.type_args:
                 node.type_args = [self._substitute_type_node(a, subst) for a in node.type_args]
+            if getattr(node, "spread", None) is not None:
+                self._substitute_ast_types(node.spread, subst)
             for f in node.fields:
                 self._substitute_ast_types(f.value, subst)
         elif isinstance(node, CallExpr):

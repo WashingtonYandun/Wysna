@@ -437,6 +437,9 @@ def emit_call_expr(emitter: "CCodeGen", expr: CallExpr, out: List[str]) -> str:
         if method == "values" and isinstance(receiver_type, DictType):
             obj_v = emitter.emit_value(obj_expr, out)
             return emitter._bind_call(f"wysna_dict_values({obj_v})", out)
+        if method == "items" and isinstance(receiver_type, DictType):
+            obj_v = emitter.emit_value(obj_expr, out)
+            return emitter._bind_call(f"wysna_builtin_dict_items({obj_v})", out)
 
         # OOP dynamic method dispatch
         obj_v = emitter.emit_value(obj_expr, out)

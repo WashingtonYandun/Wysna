@@ -143,12 +143,311 @@ fn keyword_kind(word: str) -> str {
     return "IDENT"
 }
 
+struct LexScanResult {
+    next_i: int,
+    next_line: int,
+    next_col: int,
+    val: str,
+}
+
+struct FStrPart {
+    kind: str,
+    text: str,
+    line: int,
+    col: int,
+}
+
+struct FStrScanResult {
+    next_i: int,
+    next_line: int,
+    next_col: int,
+    parts: list[FStrPart],
+}
+
+fn is_hex_digit(c: int) -> bool {
+    return (c >= 48 and c <= 57) or (c >= 65 and c <= 70) or (c >= 97 and c <= 102)
+}
+
+fn is_bin_digit(c: int) -> bool {
+    return c == 48 or c == 49
+}
+
+fn is_prefixed_digit(c: int, base: int) -> bool {
+    if base == 16 { return is_hex_digit(c) }
+    return is_bin_digit(c)
+}
+
+fn parse_prefixed_int_str(file: str, line: int, col: int, prefix: str, digits: str) -> str {
+    let base = if prefix == "x" or prefix == "X" { 16 } else { 2 }
+    let n = len(digits)
+    let mut nz = 0
+    while nz < n and digits[nz] == "0" {
+        nz = nz + 1
+    }
+    let trimmed = if nz == n { "0" } else { slice(digits, nz, n) }
+    if base == 16 and trimmed == "8000000000000000" {
+        return "9223372036854775808"
+    }
+    if base == 2 and trimmed == "1000000000000000000000000000000000000000000000000000000000000000" {
+        return "9223372036854775808"
+    }
+    let max_div = 9223372036854775807 / base
+    let max_rem = 9223372036854775807 % base
+    let mut acc = 0
+    for idx in 0..len(trimmed) {
+        let d = hex_val(ord(trimmed[idx]))
+        if acc > max_div or (acc == max_div and d > max_rem) {
+            report_error(file, "W0002", line, col, "out-of-range numeric literal")
+        }
+        acc = acc * base + d
+    }
+    return str(acc)
+}
+
+fn lex_multiline_nl(src: str, n: int, i_in: int, line_in: int) -> LexScanResult {
+    let mut i = i_in
+    if src[i] == "\r" {
+        i = i + 1
+        if i < n and src[i] == "\n" {
+            i = i + 1
+        }
+    } else {
+        i = i + 1
+    }
+    return LexScanResult { next_i: i, next_line: line_in + 1, next_col: 1, val: "\n" }
+}
+
+fn lex_escape(src: str, n: int, file: str, i_in: int, line: int, col_in: int) -> LexScanResult {
+    if i_in + 1 >= n {
+        report_error(file, "W0004", line, col_in, "unterminated string escape")
+    }
+    let mut i = i_in + 1
+    let mut col = col_in + 1
+    let esc = src[i]
+    if esc == "n" {
+        return LexScanResult { next_i: i + 1, next_line: line, next_col: col + 1, val: "\n" }
+    } elif esc == "r" {
+        return LexScanResult { next_i: i + 1, next_line: line, next_col: col + 1, val: "\r" }
+    } elif esc == "t" {
+        return LexScanResult { next_i: i + 1, next_line: line, next_col: col + 1, val: "\t" }
+    } elif esc == "\\" {
+        return LexScanResult { next_i: i + 1, next_line: line, next_col: col + 1, val: "\\" }
+    } elif esc == "\"" {
+        return LexScanResult { next_i: i + 1, next_line: line, next_col: col + 1, val: "\"" }
+    } elif esc == "0" {
+        return LexScanResult { next_i: i + 1, next_line: line, next_col: col + 1, val: chr(0) }
+    } elif esc == "u" {
+        if i + 1 >= n or src[i + 1] != "{" {
+            report_error(file, "W0005", line, col - 1, "invalid Unicode scalar escape sequence")
+        }
+        i = i + 2
+        col = col + 2
+        let mut u_cp = 0
+        let mut has_hex = false
+        let mut valid_hex = true
+        while i < n and src[i] != "}" {
+            let hcode = ord(src[i])
+            if not is_hex_digit(hcode) {
+                valid_hex = false
+            }
+            u_cp = u_cp * 16 + hex_val(hcode)
+            has_hex = true
+            i = i + 1
+            col = col + 1
+        }
+        if i >= n or src[i] != "}" or not has_hex or not valid_hex {
+            report_error(file, "W0005", line, col, "invalid Unicode scalar escape sequence")
+        }
+        return LexScanResult { next_i: i + 1, next_line: line, next_col: col + 1, val: chr(u_cp) }
+    }
+    report_error(file, "W0004", line, col - 1, "invalid string escape sequence")
+    return LexScanResult { next_i: i, next_line: line, next_col: col, val: "" }
+}
+
+fn lex_string_lit(src: str, n: int, file: str, i_in: int, start_line: int, start_col: int) -> LexScanResult {
+    let triple = i_in + 2 < n and src[i_in + 1] == "\"" and src[i_in + 2] == "\""
+    let mut i = if triple { i_in + 3 } else { i_in + 1 }
+    let mut line = start_line
+    let mut col = if triple { start_col + 3 } else { start_col + 1 }
+    let mut s_val = ""
+    while i < n {
+        let sc = src[i]
+        if triple and sc == "\"" and i + 2 < n and src[i + 1] == "\"" and src[i + 2] == "\"" {
+            return LexScanResult { next_i: i + 3, next_line: line, next_col: col + 3, val: s_val }
+        }
+        if not triple and sc == "\"" {
+            return LexScanResult { next_i: i + 1, next_line: line, next_col: col + 1, val: s_val }
+        }
+        if sc == "\n" or sc == "\r" {
+            if not triple {
+                report_error(file, "W0003", start_line, start_col, "unterminated string literal")
+            }
+            let nl = lex_multiline_nl(src, n, i, line)
+            s_val = s_val + nl.val
+            i = nl.next_i
+            line = nl.next_line
+            col = nl.next_col
+        } elif sc == "\\" {
+            let esc = lex_escape(src, n, file, i, line, col)
+            s_val = s_val + esc.val
+            i = esc.next_i
+            line = esc.next_line
+            col = esc.next_col
+        } else {
+            s_val = s_val + sc
+            i = i + 1
+            col = col + 1
+        }
+    }
+    report_error(file, "W0003", start_line, start_col, "unterminated string literal")
+    return LexScanResult { next_i: i, next_line: line, next_col: col, val: s_val }
+}
+
+fn has_non_space(text: str) -> bool {
+    for idx in 0..len(text) {
+        if not is_space(ord(text[idx])) {
+            return true
+        }
+    }
+    return false
+}
+
+fn lex_fstring_scan(src: str, n: int, file: str, i_in: int, start_line: int, start_col: int) -> FStrScanResult {
+    let triple = i_in + 3 < n and src[i_in + 2] == "\"" and src[i_in + 3] == "\""
+    let mut i = if triple { i_in + 4 } else { i_in + 2 }
+    let mut line = start_line
+    let mut col = if triple { start_col + 4 } else { start_col + 2 }
+    let mut parts: list[FStrPart] = []
+    let mut buf = ""
+    let mut lit_line = line
+    let mut lit_col = col
+    while i < n {
+        let sc = src[i]
+        if triple and sc == "\"" and i + 2 < n and src[i + 1] == "\"" and src[i + 2] == "\"" {
+            if len(buf) > 0 {
+                parts.append(FStrPart { kind: "lit", text: buf, line: lit_line, col: lit_col })
+            }
+            return FStrScanResult { next_i: i + 3, next_line: line, next_col: col + 3, parts: parts }
+        }
+        if not triple and sc == "\"" {
+            if len(buf) > 0 {
+                parts.append(FStrPart { kind: "lit", text: buf, line: lit_line, col: lit_col })
+            }
+            return FStrScanResult { next_i: i + 1, next_line: line, next_col: col + 1, parts: parts }
+        }
+        if sc == "\n" or sc == "\r" {
+            if not triple {
+                report_error(file, "W0003", start_line, start_col, "unterminated formatted string literal")
+            }
+            let nl = lex_multiline_nl(src, n, i, line)
+            buf = buf + nl.val
+            i = nl.next_i
+            line = nl.next_line
+            col = nl.next_col
+        } elif sc == "\\" {
+            let esc = lex_escape(src, n, file, i, line, col)
+            buf = buf + esc.val
+            i = esc.next_i
+            line = esc.next_line
+            col = esc.next_col
+        } elif sc == "{" {
+            if i + 1 < n and src[i + 1] == "{" {
+                buf = buf + "{"
+                i = i + 2
+                col = col + 2
+            } else {
+                if len(buf) > 0 {
+                    parts.append(FStrPart { kind: "lit", text: buf, line: lit_line, col: lit_col })
+                    buf = ""
+                }
+                i = i + 1
+                col = col + 1
+                let expr_start = i
+                let expr_line = line
+                let expr_col = col
+                let mut bdepth = 1
+                let mut expr_end = -1
+                while i < n {
+                    let ec = src[i]
+                    if ec == "\n" or ec == "\r" {
+                        if not triple {
+                            report_error(file, "W0003", start_line, start_col, "unterminated formatted string literal")
+                        }
+                        let nl = lex_multiline_nl(src, n, i, line)
+                        i = nl.next_i
+                        line = nl.next_line
+                        col = nl.next_col
+                    } elif ec == "\"" {
+                        let skip = lex_string_lit(src, n, file, i, line, col)
+                        i = skip.next_i
+                        line = skip.next_line
+                        col = skip.next_col
+                    } elif ec == "#" {
+                        if not triple {
+                            report_error(file, "W0006", line, col, "comment inside single-line formatted string interpolation")
+                        }
+                        while i < n and src[i] != "\n" and src[i] != "\r" {
+                            i = i + 1
+                            col = col + 1
+                        }
+                    } elif ec == "{" {
+                        bdepth = bdepth + 1
+                        i = i + 1
+                        col = col + 1
+                    } elif ec == "}" {
+                        bdepth = bdepth - 1
+                        if bdepth == 0 {
+                            expr_end = i
+                            i = i + 1
+                            col = col + 1
+                            break
+                        }
+                        i = i + 1
+                        col = col + 1
+                    } else {
+                        i = i + 1
+                        col = col + 1
+                    }
+                }
+                if expr_end < 0 {
+                    report_error(file, "W0003", start_line, start_col, "unterminated interpolation expression in formatted string")
+                }
+                let expr_src = slice(src, expr_start, expr_end)
+                if not has_non_space(expr_src) {
+                    report_error(file, "W0006", expr_line, expr_col, "empty expression in formatted string")
+                }
+                parts.append(FStrPart { kind: "expr", text: expr_src, line: expr_line, col: expr_col })
+                lit_line = line
+                lit_col = col
+            }
+        } elif sc == "}" {
+            if i + 1 < n and src[i + 1] == "}" {
+                buf = buf + "}"
+                i = i + 2
+                col = col + 2
+            } else {
+                report_error(file, "W0006", line, col, "single '}' is not allowed in formatted string; use '}}'")
+            }
+        } else {
+            buf = buf + sc
+            i = i + 1
+            col = col + 1
+        }
+    }
+    report_error(file, "W0003", start_line, start_col, "unterminated formatted string literal")
+    return FStrScanResult { next_i: i, next_line: line, next_col: col, parts: parts }
+}
+
 fn tokenize(src: str, file: str) -> list[Token] {
+    return tokenize_at(src, file, 1, 1)
+}
+
+fn tokenize_at(src: str, file: str, init_line: int, init_col: int) -> list[Token] {
     let mut tokens: list[Token] = []
     let n = len(src)
     let mut i = 0
-    let mut line = 1
-    let mut col = 1
+    let mut line = init_line
+    let mut col = init_col
     let mut paren_depth = 0
     let mut bracket_depth = 0
     while i < n {
@@ -213,6 +512,53 @@ fn tokenize(src: str, file: str) -> list[Token] {
             } elif saw_newline and paren_depth == 0 and bracket_depth == 0 and len(tokens) > 0 and line_terminates_statement(tokens[len(tokens) - 1].kind) {
                 tokens.append(Token { kind: "NEWLINE", val: "\n", line: nl_line, col: nl_col, file: file })
             }
+        } elif ch == "f" and i + 1 < n and src[i + 1] == "\"" {
+            let start_col = col
+            let start_line = line
+            let fscan = lex_fstring_scan(src, n, file, i, start_line, start_col)
+            i = fscan.next_i
+            line = fscan.next_line
+            col = fscan.next_col
+            let mut has_expr = false
+            for pi in 0..len(fscan.parts) {
+                if fscan.parts[pi].kind == "expr" {
+                    has_expr = true
+                    break
+                }
+            }
+            if not has_expr {
+                let mut lit_all = ""
+                for pi in 0..len(fscan.parts) {
+                    lit_all = lit_all + fscan.parts[pi].text
+                }
+                tokens.append(Token { kind: "STR", val: lit_all, line: start_line, col: start_col, file: file })
+            } else {
+                tokens.append(Token { kind: "LPAREN", val: "(", line: start_line, col: start_col, file: file })
+                for pi in 0..len(fscan.parts) {
+                    let part = fscan.parts[pi]
+                    if pi > 0 {
+                        tokens.append(Token { kind: "PLUS", val: "+", line: part.line, col: part.col, file: file })
+                    }
+                    if part.kind == "lit" {
+                        tokens.append(Token { kind: "STR", val: part.text, line: part.line, col: part.col, file: file })
+                    } else {
+                        let mut sub_toks = tokenize_at(part.text, file, part.line, part.col)
+                        if len(sub_toks) > 0 and sub_toks[len(sub_toks) - 1].kind == "EOF" {
+                            sub_toks.pop()
+                        }
+                        while len(sub_toks) > 0 and sub_toks[len(sub_toks) - 1].kind == "NEWLINE" {
+                            sub_toks.pop()
+                        }
+                        tokens.append(Token { kind: "IDENT", val: "str", line: part.line, col: part.col, file: file })
+                        tokens.append(Token { kind: "LPAREN", val: "(", line: part.line, col: part.col, file: file })
+                        for sti in 0..len(sub_toks) {
+                            tokens.append(sub_toks[sti])
+                        }
+                        tokens.append(Token { kind: "RPAREN", val: ")", line: part.line, col: part.col, file: file })
+                    }
+                }
+                tokens.append(Token { kind: "RPAREN", val: ")", line: line, col: col, file: file })
+            }
         } elif is_alpha(code) {
             let start = i
             let start_col = col
@@ -223,6 +569,43 @@ fn tokenize(src: str, file: str) -> list[Token] {
             let word = slice(src, start, i)
             let k = keyword_kind(word)
             tokens.append(Token { kind: k, val: word, line: line, col: start_col, file: file })
+        } elif ch == "0" and i + 1 < n and (src[i + 1] == "x" or src[i + 1] == "X" or src[i + 1] == "b" or src[i + 1] == "B") {
+            let start_col = col
+            let prefix = src[i + 1]
+            let base = if prefix == "x" or prefix == "X" { 16 } else { 2 }
+            i = i + 2
+            col = col + 2
+            let mut p_digits = ""
+            let mut saw_digit = false
+            let mut last_was_under = false
+            let mut sep_err = false
+            while i < n {
+                let pc = ord(src[i])
+                if is_prefixed_digit(pc, base) {
+                    p_digits = p_digits + src[i]
+                    saw_digit = true
+                    last_was_under = false
+                    i = i + 1
+                    col = col + 1
+                } elif src[i] == "_" {
+                    if not saw_digit or last_was_under {
+                        sep_err = true
+                    }
+                    last_was_under = true
+                    i = i + 1
+                    col = col + 1
+                } else {
+                    break
+                }
+            }
+            if not saw_digit or last_was_under or sep_err {
+                report_error(file, "W0002", line, start_col, "malformed prefixed integer literal")
+            }
+            if i < n and (is_alnum(ord(src[i])) or src[i] == "_" or (src[i] == "." and not (i + 1 < n and src[i + 1] == "."))) {
+                report_error(file, "W0002", line, start_col, "malformed numeric literal")
+            }
+            let dec_val = parse_prefixed_int_str(file, line, start_col, prefix, p_digits)
+            tokens.append(Token { kind: "INT", val: dec_val, line: line, col: start_col, file: file })
         } elif is_digit(code) {
             let start_col = col
             let mut is_flt = false
@@ -269,6 +652,9 @@ fn tokenize(src: str, file: str) -> list[Token] {
             } elif i < n and src[i] == "." and not (i + 1 < n and src[i + 1] == ".") {
                 report_error(file, "W0002", line, start_col, "malformed float literal: trailing dot")
             }
+            if i < n and (is_alnum(ord(src[i])) or src[i] == "_") {
+                report_error(file, "W0002", line, start_col, "malformed numeric literal")
+            }
             if is_flt {
                 tokens.append(Token { kind: "FLOAT", val: clean_num, line: line, col: start_col, file: file })
             } else {
@@ -279,81 +665,11 @@ fn tokenize(src: str, file: str) -> list[Token] {
         } elif ch == "\"" {
             let start_col = col
             let start_line = line
-            i = i + 1
-            col = col + 1
-            let mut s_val = ""
-            while i < n and src[i] != "\"" {
-                if src[i] == "\\" {
-                    if i + 1 >= n {
-                        report_error(file, "W0004", line, col, "unterminated string escape")
-                    }
-                    i = i + 1
-                    col = col + 1
-                    let esc = src[i]
-                    if esc == "n" {
-                        s_val = s_val + "\n"
-                        i = i + 1
-                        col = col + 1
-                    } elif esc == "r" {
-                        s_val = s_val + "\r"
-                        i = i + 1
-                        col = col + 1
-                    } elif esc == "t" {
-                        s_val = s_val + "\t"
-                        i = i + 1
-                        col = col + 1
-                    } elif esc == "\\" {
-                        s_val = s_val + "\\"
-                        i = i + 1
-                        col = col + 1
-                    } elif esc == "\"" {
-                        s_val = s_val + "\""
-                        i = i + 1
-                        col = col + 1
-                    } elif esc == "0" {
-                        s_val = s_val + chr(0)
-                        i = i + 1
-                        col = col + 1
-                    } elif esc == "u" {
-                        if i + 1 >= n or src[i + 1] != "{" {
-                            report_error(file, "W0005", line, col - 1, "invalid Unicode scalar escape sequence")
-                        }
-                        i = i + 2
-                        col = col + 2
-                        let mut u_cp = 0
-                        let mut has_hex = false
-                        let mut valid_hex = true
-                        while i < n and src[i] != "}" {
-                            let hcode = ord(src[i])
-                            if not (hcode >= 48 and hcode <= 57 or hcode >= 65 and hcode <= 70 or hcode >= 97 and hcode <= 102) {
-                                valid_hex = false
-                            }
-                            u_cp = u_cp * 16 + hex_val(hcode)
-                            has_hex = true
-                            i = i + 1
-                            col = col + 1
-                        }
-                        if i >= n or src[i] != "}" or not has_hex or not valid_hex {
-                            report_error(file, "W0005", line, col, "invalid Unicode scalar escape sequence")
-                        }
-                        i = i + 1
-                        col = col + 1
-                        s_val = s_val + chr(u_cp)
-                    } else {
-                        report_error(file, "W0004", line, col - 1, "invalid string escape sequence")
-                    }
-                } else {
-                    s_val = s_val + src[i]
-                    i = i + 1
-                    col = col + 1
-                }
-            }
-            if i >= n {
-                report_error(file, "W0003", start_line, start_col, "unterminated string literal")
-            }
-            i = i + 1
-            col = col + 1
-            tokens.append(Token { kind: "STR", val: s_val, line: start_line, col: start_col, file: file })
+            let sl = lex_string_lit(src, n, file, i, start_line, start_col)
+            i = sl.next_i
+            line = sl.next_line
+            col = sl.next_col
+            tokens.append(Token { kind: "STR", val: sl.val, line: start_line, col: start_col, file: file })
         } else {
             let start_col = col
             let mut two = ""
@@ -394,6 +710,18 @@ fn tokenize(src: str, file: str) -> list[Token] {
                 col = col + 2
             } elif two == ".." {
                 tokens.append(Token { kind: "DOT_DOT", val: "..", line: line, col: start_col, file: file })
+                i = i + 2
+                col = col + 2
+            } elif two == "+=" {
+                tokens.append(Token { kind: "PLUS_ASSIGN", val: "+=", line: line, col: start_col, file: file })
+                i = i + 2
+                col = col + 2
+            } elif two == "-=" {
+                tokens.append(Token { kind: "MINUS_ASSIGN", val: "-=", line: line, col: start_col, file: file })
+                i = i + 2
+                col = col + 2
+            } elif two == "*=" {
+                tokens.append(Token { kind: "STAR_ASSIGN", val: "*=", line: line, col: start_col, file: file })
                 i = i + 2
                 col = col + 2
             } elif two == "??" {

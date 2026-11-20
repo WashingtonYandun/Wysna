@@ -293,7 +293,9 @@ class HirBindings:
             elif entry.tag == 'dict':
                 key, value = entry.data
                 signatures = {'get': ([key], self.interner.mk_optional(value)),
-                              'keys': ([], self.interner.mk_list(key)), 'values': ([], self.interner.mk_list(value))}
+                              'keys': ([], self.interner.mk_list(key)),
+                              'values': ([], self.interner.mk_list(value)),
+                              'items': ([], self.interner.mk_list(self.interner.mk_tuple((key, value))))}
                 if node.method_name not in signatures:
                     self.verifier._fail(node, 'Unresolved HIR dictionary method')
                 self.signature(node, *signatures[node.method_name])

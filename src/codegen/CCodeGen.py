@@ -15,6 +15,7 @@ from node.NodeType import (
     ListExpr, DictExpr, TupleExpr, IfExpr, MatchExpr
 )
 from common.Telemetry import CodegenTelemetry
+from checker.WysnaType import DictType
 
 
 class CleanupScope:
@@ -622,7 +623,11 @@ class CCodeGen:
             out.append("{")
             self._push_scope("block")
             for_outer: List[str] = []
-            iter_val = self.emit_expr(stmt.iterable, for_outer)
+            if isinstance(getattr(stmt.iterable, "inferred_type", None), DictType):
+                dict_v = self.emit_value(stmt.iterable, for_outer)
+                iter_val = self._bind_call(f"wysna_builtin_dict_items({dict_v})", for_outer)
+            else:
+                iter_val = self.emit_expr(stmt.iterable, for_outer)
             iter_tmp = self.new_temp()
             idx_tmp = self.new_aux("_idx")
             item_tmp = self.new_aux("_item")

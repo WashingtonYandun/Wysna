@@ -1,10 +1,10 @@
 # Wysna Workflow for AI Agents
 
 Use the installed Seed CLI as the project workflow. It provides deterministic
-project checks, builds, tests, API discovery and versioned machine output. The
-standalone `native-core-v1` SDK provides `check`, `fmt`, `test`, `build`, `run`, `graph`,
-`inspect`, `patch`, `explain`, and Stage-3 native `lsp` without Python, while Seed
-continues to own project manifests (`wysna.toml`), lockfiles, `fix`, `schema`, `mcp`,
+project checks, builds, tests, API discovery and versioned machine output. The standalone `native-core-v1` SDK provides `check`, `fmt`, `test`, `build`, `run`, `graph`,
+`inspect`, `patch`, `explain`, `fix`, `schema`, `mcp`, `api`, `capabilities`, `skills`,
+`project check|build|run|test`, and Stage-3 native `lsp` without Python, while Seed continues
+to own `wysna project new`, `wysna project lock` / `wysna.lock`, library-mode exports,
 and WebAssembly targets.
 
 ## Discover the installed toolchain
@@ -58,8 +58,8 @@ and `fixes`:
   declaration on `W3001` or the prior declaration on `W1002`).
 - `fixes` contains SHA-256-guarded byte-range edits (`applicability: "machine"` or
   `"maybe"`). Run `wysna fix --apply --output-format=json-v1 <file.wysna>` before
-  spending an LLM repair turn to automatically repair identifier/field typos and
-  immutable `let` -> `let mut` bindings.
+  spending an LLM repair turn for automatic repair of identifier/field typos,
+  immutable `let` -> `let mut` bindings, and `str(...)` wrapping on `W2001` string concatenation mismatches.
 
 Re-run the check after editing and require a successful result before building.
 
@@ -134,7 +134,10 @@ To safeguard agent loops against runaway execution and unrepeatable I/O side-eff
   commands, and `browser-library` for the generated browser ABI. The capability
   response states the toolchain and runtime each one needs.
 - The native SDK currently implements `native-core-v1` source checking, MIR/C99
-  emission, native build/run/test/fmt, Agent-First tools (`graph`, `inspect`, `patch`, `explain`), and Stage-3 native `lsp` without Python. Do not assume Seed project manifests, `fix`, `schema`, `mcp`, WASI or browser targets are available through that SDK.
+  emission, native build/run/test/fmt, Agent-First tools (`graph`, `inspect`, `patch`,
+  `explain`, `schema`, `fix`, `api`, `capabilities`, `skills`, `mcp`, `project check|build|run|test`),
+  and Stage-3 native `lsp` without Python. Do not assume Seed `project new`, `project lock` /
+  `wysna.lock`, library-mode exports, WASI, or browser targets are available through that SDK.
 - Effect reports and capability declarations help review programs; `wysna run --allow/--deny` enforces static pre-execution gates (`W5006`) and Seed `wysna build --sandbox` (with `--allow/--deny`) compiles `WYSNA_DENY_CAP_*` runtime checks (`W5006`), though neither replaces an OS kernel sandbox for arbitrary native C extensions.
 - AI authoring and self-healing repair benchmarks live in `bench/ai_eval/`
   (`harness.py` and `token_audit.py`); outside this evaluation suite, Wysna

@@ -5,7 +5,7 @@ from tokens.TokenType import TokenType
 from lexer.Lexer import Lexer
 from error.Error import ParserError, ParserErrors
 from node.NodeType import (
-    ExternFnDecl, LambdaExpr, FunctionType as AstFunctionType, Node, Program, Stmt, Expr, TypeNode, Pattern, Block,
+    clone_ast, ExternFnDecl, LambdaExpr, FunctionType as AstFunctionType, Node, Program, Stmt, Expr, TypeNode, Pattern, Block,
     NamedType, GenericType, TypeParam, OptionalType, ListType, DictType, TupleType, ResultType, ErrorUnionType,
     IdentifierPattern, TuplePattern, EnumPattern, LiteralPattern, WildcardPattern,
     FnDecl, Param, StructDecl, StructField, EnumDecl, VariantDecl,
@@ -24,6 +24,9 @@ from node.NodeType import (
 # Infix Precedence Binding Power (higher = binds tighter)
 PRECEDENCE = {
     TokenType.ASSIGN: 1,             # '=' (right-associative)
+    TokenType.PLUS_ASSIGN: 1,        # '+=' (right-associative)
+    TokenType.MINUS_ASSIGN: 1,       # '-=' (right-associative)
+    TokenType.STAR_ASSIGN: 1,        # '*=' (right-associative)
     TokenType.QUESTION_QUESTION: 2,  # '??' (right-associative)
     TokenType.OR: 3,                 # 'or'
     TokenType.AND: 4,                # 'and'
@@ -1162,12 +1165,22 @@ class Parser:
 
             self.advance()  # consume operator token
 
-            # Right associativity for assignment (=) and coalesce (??)
-            next_min_prec = prec - 1 if op_tok.type in (TokenType.ASSIGN, TokenType.QUESTION_QUESTION) else prec
+            # Right associativity for assignment (=, +=, -=, *=) and coalesce (??)
+            next_min_prec = (
+                prec - 1
+                if op_tok.type in (
+                    TokenType.ASSIGN,
+                    TokenType.PLUS_ASSIGN,
+                    TokenType.MINUS_ASSIGN,
+                    TokenType.STAR_ASSIGN,
+                    TokenType.QUESTION_QUESTION,
+                )
+                else prec
+            )
             right = self.parse_expr(min_prec=next_min_prec, allow_struct_init=allow_struct_init)
 
 
-            if op_tok.type == TokenType.ASSIGN:
+            if op_tok.type in (TokenType.ASSIGN, TokenType.PLUS_ASSIGN, TokenType.MINUS_ASSIGN, TokenType.STAR_ASSIGN):
                 # Target validation
                 if not isinstance(left, (IdentExpr, IndexExpr, MemberExpr)):
                     raise ParserError(
@@ -1177,7 +1190,11 @@ class Parser:
                         file=self.file,
                         code="W2002"
                     )
-                left = AssignmentExpr(target=left, value=right, line=op_tok.line, col=op_tok.col)
+                if op_tok.type == TokenType.ASSIGN:
+                    left = AssignmentExpr(target=left, value=right, line=op_tok.line, col=op_tok.col)
+                else:
+                    rhs = BinaryExpr(left=clone_ast(left), op=op_tok.value[0], right=right, line=op_tok.line, col=op_tok.col)
+                    left = AssignmentExpr(target=left, value=rhs, line=op_tok.line, col=op_tok.col)
 
             elif op_tok.type == TokenType.QUESTION_QUESTION:
                 left = CoalesceExpr(left=left, right=right, line=op_tok.line, col=op_tok.col)
@@ -1208,6 +1225,13 @@ class Parser:
         finally:
             self.pos = previous
 
+    def _starts_struct_init_brace(self) -> bool:
+        return self.check(TokenType.LBRACE) and (
+            self.peek(1).type == TokenType.RBRACE
+            or self.peek(1).type == TokenType.DOT_DOT
+            or (self.peek(1).type == TokenType.IDENTIFIER and self.peek(2).type == TokenType.COLON)
+        )
+
     def _try_parse_generic_type_args(self, allow_struct_init: bool = True) -> Optional[List[TypeNode]]:
         if not self.check(TokenType.LBRACKET):
             return None
@@ -1226,9 +1250,7 @@ class Parser:
                 self.pos = saved_pos
                 return None
             # Only treat as generic args if followed by '{' or '('
-            if not (self.check(TokenType.LPAREN) or (allow_struct_init and self.check(TokenType.LBRACE)
-                    and (self.peek(1).type == TokenType.RBRACE or
-                         (self.peek(1).type == TokenType.IDENTIFIER and self.peek(2).type == TokenType.COLON)))):
+            if not (self.check(TokenType.LPAREN) or (allow_struct_init and self._starts_struct_init_brace())):
                 self.pos = saved_pos
                 return None
             return args
@@ -1349,23 +1371,35 @@ class Parser:
                 call.index_alternative = self._parse_index_alternative(bracket_start, type_args)
                 return call
 
-            # Check if this is a Struct Initialization: Identifier { field: val, ... } or Identifier[T] { field: val, ... }
-            if allow_struct_init and self.check(TokenType.LBRACE):
-                # Disambiguate struct init from block: next must be IDENTIFIER followed by COLON, or empty RBRACE
-                if self.peek(1).type == TokenType.RBRACE or (self.peek(1).type == TokenType.IDENTIFIER and self.peek(2).type == TokenType.COLON):
-                    self.advance()  # consume '{'
-                    fields: List[FieldInit] = []
-                    while not self.check(TokenType.RBRACE) and not self.is_at_end():
-                        self._skip_statement_separators()
-                        if self.check(TokenType.RBRACE) or self.is_at_end():
-                            break
-                        f_tok = self.expect(TokenType.IDENTIFIER, code="W0001", msg="Expected struct field name")
-                        self.expect(TokenType.COLON, code="W0001", msg="Expected ':' after struct field name")
-                        f_val = self.parse_expr()
-                        fields.append(FieldInit(name=f_tok.value, value=f_val, line=f_tok.line, col=f_tok.col))
+            # Check if this is a Struct Initialization: Identifier { field: val, ... } or Identifier { ..base, ... }
+            if allow_struct_init and self._starts_struct_init_brace():
+                self.advance()  # consume '{'
+                fields: List[FieldInit] = []
+                spread: Optional[Expr] = None
+                while not self.check(TokenType.RBRACE) and not self.is_at_end():
+                    self._skip_statement_separators()
+                    if self.check(TokenType.RBRACE) or self.is_at_end():
+                        break
+                    if self.match(TokenType.DOT_DOT):
+                        dot_tok = self.tokens[self.pos - 1]
+                        if spread is not None:
+                            raise ParserError(
+                                message="Struct initializer accepts at most one '..' base expression",
+                                line=dot_tok.line,
+                                col=dot_tok.col,
+                                file=self.file,
+                                code="W0006",
+                            )
+                        spread = self.parse_expr()
                         self.match(TokenType.COMMA)
-                    self.expect(TokenType.RBRACE, code="W0006", msg="Unterminated struct initializer, expected '}'")
-                    return StructInitExpr(struct_name=ident_name, fields=fields, type_args=type_args, line=token.line, col=token.col)
+                        continue
+                    f_tok = self.expect(TokenType.IDENTIFIER, code="W0001", msg="Expected struct field name")
+                    self.expect(TokenType.COLON, code="W0001", msg="Expected ':' after struct field name")
+                    f_val = self.parse_expr()
+                    fields.append(FieldInit(name=f_tok.value, value=f_val, line=f_tok.line, col=f_tok.col))
+                    self.match(TokenType.COMMA)
+                self.expect(TokenType.RBRACE, code="W0006", msg="Unterminated struct initializer, expected '}'")
+                return StructInitExpr(struct_name=ident_name, fields=fields, type_args=type_args, line=token.line, col=token.col, spread=spread)
 
             return IdentExpr(name=ident_name, line=token.line, col=token.col)
 

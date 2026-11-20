@@ -719,6 +719,19 @@ class HirBuilder:
             entry = self.interner.get_entry(list_tid)
             if entry.tag == "list":
                 elem_tid = entry.data
+            elif entry.tag == "dict":
+                k_tid, v_tid = entry.data
+                elem_tid = self.interner.mk_tuple((k_tid, v_tid))
+                items_list_tid = self.interner.mk_list(elem_tid)
+                list_hir = HirMethodCall(
+                    list_hir,
+                    "items",
+                    [],
+                    items_list_tid,
+                    span,
+                    slot=None,
+                    target=CollectionCallTarget("dict", "items"),
+                )
             self._push_scope()
             pat_hir = self._lower_pattern(stmt.pattern, elem_tid)
             body_hir = self._lower_block(stmt.body)

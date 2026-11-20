@@ -195,13 +195,44 @@ def check_binary_expr(checker: "TypeChecker", expr: BinaryExpr, is_statement_con
             return FloatType
         if lhs_t == StrType and rhs_t == StrType:
             return StrType
-        raise TypeError(
+        err = TypeError(
             message=f"Binary '+' cannot be applied to '{lhs_t}' and '{rhs_t}'",
             line=expr.line,
             col=expr.col,
             file=checker.file,
-            code="W2001"
+            code="W2001",
         )
+        scalar_expr = None
+        scalar_t = None
+        if lhs_t == StrType and rhs_t in (IntType, FloatType, BoolType):
+            scalar_expr, scalar_t = expr.right, rhs_t
+        elif rhs_t == StrType and lhs_t in (IntType, FloatType, BoolType):
+            scalar_expr, scalar_t = expr.left, lhs_t
+        if scalar_expr is not None and isinstance(
+            scalar_expr, (IdentExpr, IntLiteral, FloatLiteral, BoolLiteral)
+        ):
+            if isinstance(scalar_expr, IdentExpr):
+                raw_tok = scalar_expr.name
+            elif isinstance(scalar_expr, BoolLiteral):
+                raw_tok = "true" if scalar_expr.value else "false"
+            else:
+                raw_tok = str(scalar_expr.value)
+            err.with_data(
+                kind="type_mismatch",
+                expected="str",
+                found=str(scalar_t),
+                conversion_hint="str(...)",
+            )
+            err.help = f"Convert the {scalar_t} operand using 'str({raw_tok})' or use string interpolation"
+            err.with_fix(
+                f"Wrap '{raw_tok}' in str(...)",
+                old=raw_tok,
+                new=f"str({raw_tok})",
+                line=scalar_expr.line,
+                col=scalar_expr.col,
+                applicability="machine",
+            )
+        raise err
 
     if op in ("-", "*", "/"):
         if lhs_t == IntType and rhs_t == IntType:

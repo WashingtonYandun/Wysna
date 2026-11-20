@@ -284,6 +284,8 @@ class Interpreter:
                 iter_val = self.eval_expr(stmt.iterable, env)
             if isinstance(iter_val, WysnaList):
                 elements = list(iter_val.storage.data)
+            elif isinstance(iter_val, WysnaDict):
+                elements = [WysnaTuple([k.clone_value(), v]) for k, v in iter_val.storage.data.items()]
             elif isinstance(iter_val, WysnaRange):
                 elements = iter(iter_val)
             elif iter_val is not None:
@@ -683,6 +685,8 @@ class Interpreter:
                 return WysnaList(elements=receiver.keys())
             if method == "values":
                 return WysnaList(elements=receiver.values())
+            if method == "items":
+                return WysnaList(elements=[WysnaTuple([k.clone_value(), v]) for k, v in receiver.storage.data.items()])
 
         raise WysnaRuntimeError(f"Method '{method}' not found on '{receiver}'", file=self.file)
 

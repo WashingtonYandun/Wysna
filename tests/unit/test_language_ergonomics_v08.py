@@ -1,0 +1,445 @@
+"""End-to-end regression suite for v0.8.0 language ergonomics & Selfhost parity."""
+import importlib.util
+import json
+import os
+from pathlib import Path
+import subprocess
+import tempfile
+import unittest
+
+from compiler.CompilerService import CompilerService
+from compiler.LlvmToolchain import LlvmToolchain
+from compiler.NativeToolchain import NativeToolchain
+from error.Error import WysnaError
+from formatter.Formatter import format_source
+from main import ensure_selfhost_compiler_binary
+from tests.engine_harness import ENGINES, run_engine
+from tests.formatter_contract import verify_formatting
+from tooling.FixCLI import apply_fix_to_file
+
+
+ROOT = Path(__file__).resolve().parents[2]
+HAS_LLVM = (
+    importlib.util.find_spec("llvmlite") is not None
+    or bool(os.environ.get("WYSNA_LLVM_SDK"))
+)
+
+
+def _run_llvm(source: str, workdir: Path, name: str = "prog.wysna") -> subprocess.CompletedProcess:
+    service = CompilerService(project_root=ROOT)
+    checked = service.check(source, file=str(workdir / name))
+    emission = service.emit_llvm(checked)
+    toolchain = LlvmToolchain()
+    toolchain.verify(emission.source)
+    build = toolchain.build(emission, workdir / "llvm_out")
+    return subprocess.run([build.output_path], cwd=ROOT, capture_output=True, text=True, timeout=30)
+
+
+def _run_selfhost_cli(
+    selfhost_bin: str,
+    src_path: Path,
+    workdir: Path,
+) -> subprocess.CompletedProcess:
+    c_path = workdir / "out.c"
+    bin_path = workdir / "out_bin"
+    compiled = subprocess.run(
+        [selfhost_bin, str(src_path), str(c_path)],
+        cwd=ROOT,
+        capture_output=True,
+        text=True,
+        timeout=60,
+    )
+    if compiled.returncode != 0:
+        return compiled
+    NativeToolchain(ROOT).build(c_path.read_text(encoding="utf-8"), bin_path)
+    return subprocess.run([str(bin_path)], cwd=workdir, capture_output=True, text=True, timeout=30)
+
+
+class LanguageErgonomicsV08Tests(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls):
+        cls.selfhost_bin = ensure_selfhost_compiler_binary(str(ROOT))
+        cls.service = CompilerService(project_root=ROOT)
+
+    def _assert_all_engines(self, source: str, expected_stdout: str, stem: str) -> None:
+        with tempfile.TemporaryDirectory(prefix=f"wysna-{stem}-") as tmpdir:
+            root_tmp = Path(tmpdir)
+            for engine in ENGINES:
+                res = run_engine(engine, source, stem, selfhost_bin=self.selfhost_bin, directory=root_tmp / engine)
+                self.assertEqual(res.exit_code, 0, f"{engine} failed: {res.stderr}")
+                self.assertEqual(res.stdout, expected_stdout, f"{engine} stdout mismatch")
+            if HAS_LLVM:
+                llvm_res = _run_llvm(source, root_tmp / "llvm", name=f"{stem}.wysna")
+                self.assertEqual(llvm_res.returncode, 0, f"llvm failed: {llvm_res.stderr}")
+                self.assertEqual(llvm_res.stdout, expected_stdout, "llvm stdout mismatch")
+
+    def test_b1_bidirectional_empty_collection_inference(self):
+        source = '''
+struct Bag {
+    items: list[int],
+    tags: dict[str, int],
+}
+
+class Repo {
+    public ids: dict[str, int]
+    fn init() {
+        this.ids = {}
+    }
+    public fn set_empty() -> unit {
+        this.ids = {}
+    }
+}
+
+fn maybe_nums(ok: bool) -> list[int]? {
+    if ok {
+        return Some([7])
+    }
+    return none
+}
+
+fn pick_branch(mode: int) -> list[int] {
+    if mode == 1 {
+        return [1]
+    }
+    let chosen = if mode == 2 {
+        [10]
+    } elif mode == 3 {
+        [20]
+    } else {
+        []
+    }
+    return chosen
+}
+
+fn match_list(code: int) -> list[int] {
+    let from_expected: list[int] = match code {
+        1 => [],
+        _ => [99],
+    }
+    let from_arm = match code {
+        1 => [42],
+        _ => [],
+    }
+    return [len(from_expected), len(from_arm)]
+}
+
+fn main() -> unit {
+    let r = new Repo()
+    r.ids["k"] = 5
+    r.set_empty()
+
+    let mut matrix: list[list[int]] = [[1, 2], [3]]
+    matrix[0] = []
+
+    let bag = Bag { items: [], tags: {} }
+    let pair: tuple[list[int], dict[str, int]] = ([], {})
+    let p_sum = match pair {
+        (p_list, p_dict) => len(p_list) + len(p_dict),
+    }
+    let recovered = maybe_nums(false) else { [] }
+    let b = pick_branch(4)
+    let m = match_list(1)
+    let from_outer_if: list[int] = if false { [3] } else { [] }
+
+    print(
+        len(r.ids),
+        len(matrix[0]),
+        len(bag.items),
+        len(bag.tags),
+        p_sum,
+        len(recovered),
+        len(b),
+        m[0],
+        m[1],
+        len(from_outer_if),
+    )
+}
+main()
+'''
+        self._assert_all_engines(source, "0 0 0 0 0 0 0 0 1 0\n", "b1_empty_infer")
+
+    def test_b2_compound_assignments_and_w3001_autofix(self):
+        source = '''
+struct Stat {
+    score: int,
+}
+
+class Meter {
+    public value: int
+    fn init(start: int) {
+        this.value = start
+    }
+    public fn bump(delta: int) -> unit {
+        this.value += delta
+        this.value -= 1
+    }
+}
+
+fn main() -> unit {
+    let mut n = 10
+    n += 5
+    n -= 3
+    n *= 2
+
+    let mut s = "wy"
+    s += "sna"
+
+    let mut xs = [1, 2, 3]
+    xs[1] += 10
+    xs[2] *= 4
+
+    let mut d = {"hits": 3}
+    d["hits"] += 4
+
+    let mut st = Stat { score: 5 }
+    st.score += 7
+    st.score -= 2
+
+    let m = new Meter(20)
+    m.bump(6)
+
+    print(n, s, xs[1], xs[2], d["hits"], st.score, m.value)
+}
+main()
+'''
+        self._assert_all_engines(source, "24 wysna 12 12 7 10 25\n", "b2_compound")
+
+        bad = "let x = 1\nx += 2\nprint(x)\n"
+        with tempfile.TemporaryDirectory(prefix="wysna-b2-fix-") as tmpdir:
+            tmp = Path(tmpdir)
+            seed_file = tmp / "seed_fix.wysna"
+            seed_file.write_text(bad, encoding="utf-8")
+            result, _ = apply_fix_to_file(str(seed_file), apply=True)
+            self.assertTrue(result["changed"])
+            self.assertEqual(seed_file.read_text(encoding="utf-8"), "let mut x = 1\nx += 2\nprint(x)\n")
+
+            sh_file = tmp / "selfhost_fix.wysna"
+            sh_file.write_text(bad, encoding="utf-8")
+            sh_fix = subprocess.run(
+                [self.selfhost_bin, "fix", "--apply", "--output-format=json-v1", str(sh_file)],
+                cwd=ROOT,
+                capture_output=True,
+                text=True,
+                timeout=30,
+            )
+            self.assertEqual(sh_fix.returncode, 0, sh_fix.stdout + sh_fix.stderr)
+            self.assertEqual(sh_file.read_text(encoding="utf-8"), "let mut x = 1\nx += 2\nprint(x)\n")
+
+    def test_b3_canonical_wildcard_formatting_and_w2001_str_autofix(self):
+        unformatted_else = "fn f(x: int) -> int {\n    return match x {\n        1 => 10,\n        else => 0,\n    }\n}\n"
+        formatted_else = format_source(unformatted_else, "match_else.wysna")
+        self.assertIn("_ => 0", formatted_else)
+        self.assertNotIn("else =>", formatted_else)
+        self.assertEqual(format_source(formatted_else, "match_else.wysna"), formatted_else)
+
+        canonical_under = "fn g(x: int) -> int {\n    return match x {\n        1 => 10,\n        _ => 0,\n    }\n}\n"
+        self.assertEqual(format_source(canonical_under, "match_under.wysna"), canonical_under)
+
+        bad_concat = '''
+fn main() -> unit {
+    let port = 8080
+    let ok = true
+    let s1 = "port=" + port
+    let s2 = port + ":ok"
+    let s3 = "ok=" + ok
+    print(s1, s2, s3)
+}
+main()
+'''
+        with tempfile.TemporaryDirectory(prefix="wysna-b3-w2001-") as tmpdir:
+            tmp = Path(tmpdir)
+            seed_file = tmp / "seed_concat.wysna"
+            seed_file.write_text(bad_concat, encoding="utf-8")
+            result, _ = apply_fix_to_file(str(seed_file), apply=True)
+            self.assertTrue(result["changed"])
+            seed_fixed = seed_file.read_text(encoding="utf-8")
+            self.assertIn('"port=" + str(port)', seed_fixed)
+            self.assertIn('str(port) + ":ok"', seed_fixed)
+            self.assertIn('"ok=" + str(ok)', seed_fixed)
+            self.service.check(seed_fixed, file=str(seed_file))
+
+            sh_file = tmp / "sh_concat.wysna"
+            sh_file.write_text(bad_concat, encoding="utf-8")
+            sh_fix = subprocess.run(
+                [self.selfhost_bin, "fix", "--apply", "--output-format=json-v1", str(sh_file)],
+                cwd=ROOT,
+                capture_output=True,
+                text=True,
+                timeout=30,
+            )
+            self.assertEqual(sh_fix.returncode, 0, sh_fix.stdout + sh_fix.stderr)
+            sh_fixed = sh_file.read_text(encoding="utf-8")
+            self.assertIn('"port=" + str(port)', sh_fixed)
+            self.assertIn('str(port) + ":ok"', sh_fixed)
+            self.assertIn('"ok=" + str(ok)', sh_fixed)
+
+    def test_c1_c2_hex_binary_multiline_and_fstrings(self):
+        source = '''
+fn add(a: int, b: int) -> int {
+    return a + b
+}
+
+fn main() -> unit {
+    let hx = 0xFF
+    let hx2 = 0x10_2A
+    let bn = 0b1010_0101
+    let min_i = -0x8000000000000000
+    let ml = """line1
+"quoted"
+line3"""
+    let name = "Wysna"
+    let plain = f"hello {{world}}"
+    let interp = f"{name}:{add(hx, bn)}"
+    let fml = f"""v={hx2}
+neg={min_i < 0}
+esc={{x}}"""
+    print(hx, hx2, bn, min_i < 0, len(ml) > 10, plain, interp, fml)
+}
+main()
+'''
+        expected = "255 4138 165 true true hello {world} Wysna:420 v=4138\nneg=true\nesc={x}\n"
+        self._assert_all_engines(source, expected, "c1_c2_literals")
+
+        for bad_num in ("let a = 0x\n", "let b = 0xGG\n", "let c = 0b102\n", "let d = 123abc\n"):
+            with self.assertRaises(WysnaError) as ctx:
+                self.service.check(bad_num, file="bad_num.wysna")
+            self.assertEqual(ctx.exception.code, "W0002")
+
+            with tempfile.TemporaryDirectory(prefix="wysna-badnum-") as tmpdir:
+                res = run_engine("selfhost", bad_num, "bad_num", selfhost_bin=self.selfhost_bin, directory=Path(tmpdir))
+                self.assertNotEqual(res.exit_code, 0)
+                self.assertIn("W0002", res.stderr)
+
+    def test_c3_functional_struct_update_spread(self):
+        fmt_src = "let next_user = User { ..base, active: false }\n"
+        self.assertEqual(verify_formatting(fmt_src), fmt_src)
+
+        source = '''
+struct User {
+    id: int,
+    name: str,
+    active: bool,
+}
+
+struct Box[T] {
+    value: T,
+    label: str,
+}
+
+fn main() -> unit {
+    let base = User { id: 1, name: "washo", active: true }
+    let updated = User { ..base, active: false }
+    let b1 = Box[int] { value: 42, label: "v1" }
+    let b2 = Box { ..b1, label: "v2" }
+    print(base.active, updated.id, updated.name, updated.active, b2.value, b2.label)
+}
+main()
+'''
+        self._assert_all_engines(source, "true 1 washo false 42 v2\n", "c3_struct_spread")
+
+        single_eval_src = '''
+struct Pair3 {
+    a: int,
+    b: int,
+    c: int,
+}
+
+let mut calls = 0
+
+fn make_pair() -> Pair3 {
+    calls += 1
+    return Pair3 { a: 10, b: 20, c: 30 }
+}
+
+fn main() -> unit {
+    let p = Pair3 { ..make_pair(), c: 99 }
+    print(calls, p.a, p.b, p.c)
+}
+main()
+'''
+        with tempfile.TemporaryDirectory(prefix="wysna-spread-once-") as tmpdir:
+            res = run_engine("selfhost", single_eval_src, "spread_once", selfhost_bin=self.selfhost_bin, directory=Path(tmpdir))
+            self.assertEqual(res.exit_code, 0, res.stderr)
+            self.assertEqual(res.stdout, "1 10 20 99\n")
+
+    def test_c4_dict_items_and_direct_for_kv(self):
+        source = '''
+fn main() -> unit {
+    let counts = {"a": 10, "b": 20}
+    let pairs = counts.items()
+    let mut sum_v = 0
+    let mut joined = ""
+    for k, v in counts {
+        joined += k
+        sum_v += v
+    }
+    let mut pair_sum = 0
+    for pk, pv in pairs {
+        if pk == "a" or pk == "b" {
+            pair_sum += pv
+        }
+    }
+    let first_pair = match pairs[0] {
+        (k0, v0) => f"{k0}={v0}",
+    }
+    print(len(pairs), joined, sum_v, pair_sum, first_pair)
+}
+main()
+'''
+        self._assert_all_engines(source, "2 ab 30 30 a=10\n", "c4_dict_items")
+
+    def test_c5_selfhost_from_use_dot_relative_and_submodule_parity(self):
+        with tempfile.TemporaryDirectory(prefix="wysna-sh-use-") as tmpdir:
+            root = Path(tmpdir)
+            (root / "helper.wysna").write_text(
+                "pub fn triple(x: int) -> int { return x * 3 }\n",
+                encoding="utf-8",
+            )
+            domain_dir = root / "app" / "domain"
+            domain_dir.mkdir(parents=True)
+            (domain_dir / "user.wysna").write_text(
+                "pub struct User { id: int }\npub fn get_id(u: User) -> int { return u.id }\npub fn calc(n: int) -> int { return n + 5 }\n",
+                encoding="utf-8",
+            )
+            (domain_dir / "auth.wysna").write_text(
+                "pub fn role_level() -> int { return 9 }\n",
+                encoding="utf-8",
+            )
+
+            main_src = '''
+from std.text use { contains, to_lower }
+from .helper use triple
+from app.domain use { user.User, user.get_id, auth.role_level }
+from app.domain use user as user_ns
+
+fn main() -> unit {
+    let from = 2
+    let use = 3
+    let u = User { id: triple(4) }
+    let low = to_lower("WYSOFIA")
+    let has = contains(low, "sofia")
+    print(has, get_id(u), role_level(), user_ns.calc(from + use))
+}
+main()
+'''
+            main_path = root / "main.wysna"
+            main_path.write_text(main_src, encoding="utf-8")
+            run_res = _run_selfhost_cli(self.selfhost_bin, main_path, root)
+            self.assertEqual(run_res.returncode, 0, run_res.stderr)
+            self.assertEqual(run_res.stdout, "true 12 9 10\n")
+
+            # Also test single unbraced stdlib import
+            single_dir = root / "s_out"
+            single_dir.mkdir(exist_ok=True)
+            single_path = root / "single_std.wysna"
+            single_path.write_text(
+                'from std.text use to_lower\nprint(to_lower("WYSNA"))\n',
+                encoding="utf-8",
+            )
+            single_res = _run_selfhost_cli(self.selfhost_bin, single_path, single_dir)
+            self.assertEqual(single_res.returncode, 0, single_res.stderr)
+            self.assertEqual(single_res.stdout, "wysna\n")
+
+
+if __name__ == "__main__":
+    unittest.main()

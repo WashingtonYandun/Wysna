@@ -557,7 +557,8 @@ class Lowering:
                     values = [self.expr(arg) for arg in node.args]
                     return self.op('mutate', self.slot(type_id), values, {'place': place, 'method': method}, node=node)
                 values = [self.expr(node.receiver)] + [self.expr(arg) for arg in node.args]
-                return self.runtime('wysna_dict_' + method, values, type_id, node)
+                runtime_fn = 'wysna_builtin_dict_items' if method == 'items' else 'wysna_dict_' + method
+                return self.runtime(runtime_fn, values, type_id, node)
             if isinstance(node.receiver, H.HirSuperRef):
                 parent = self.module.layouts[self.classes[self.current_class.superclass].type_id]
                 owner = parent.methods[node.method_name][0]

@@ -2,7 +2,7 @@
 from typing import TYPE_CHECKING
 
 from typing import Dict, Optional, Set
-from node.NodeType import StructInitExpr, ListExpr, DictExpr, TupleExpr
+from node.NodeType import StructInitExpr, FieldInit, MemberExpr, ListExpr, DictExpr, TupleExpr, clone_ast
 from checker.WysnaType import (
     WysnaType,
     ListType,
@@ -20,6 +20,7 @@ if TYPE_CHECKING:
 
 
 def check_struct_init_expr(checker: "TypeChecker", expr: StructInitExpr, is_statement_context: bool = False) -> WysnaType:
+    spread_t = checker._check_payload(expr.spread, None) if expr.spread is not None else None
     template = checker.generic_struct_templates.get(expr.struct_name)
     if template is not None:
         if expr.type_args:
@@ -28,6 +29,10 @@ def check_struct_init_expr(checker: "TypeChecker", expr: StructInitExpr, is_stat
             type_params_set = {p.name if hasattr(p, "name") else str(p) for p in template.type_params}
             bindings: Dict[str, WysnaType] = {}
             template_fields = {f.name: f.type_ann for f in template.ast_decl.fields}
+            if isinstance(spread_t, StructType):
+                for f_name, f_ann in template_fields.items():
+                    if f_name in spread_t.fields:
+                        checker._unify_type(f_ann, spread_t.fields[f_name], type_params_set, bindings)
             for f in expr.fields:
                 if f.name in template_fields:
                     a_t = checker._check_expr(f.value)
@@ -84,7 +89,48 @@ def check_struct_init_expr(checker: "TypeChecker", expr: StructInitExpr, is_stat
                 file=checker.file,
                 code="W1002"
             )
+        if f.name not in struct_t.fields:
+            raise suggest(TypeError(
+                message=f"Struct '{expr.struct_name}' has no field '{f.name}'",
+                line=f.line,
+                col=f.col,
+                file=checker.file,
+                code="W3002"
+            ), f.name, struct_t.fields)
         seen_fields.add(f.name)
+
+    if expr.spread is not None:
+        if spread_t is None or not checker.type_relations.is_assignable(spread_t, struct_t):
+            raise TypeError(
+                message=f"Struct spread type mismatch: expected '{struct_t}', found '{spread_t}'",
+                line=expr.spread.line,
+                col=expr.spread.col,
+                file=checker.file,
+                code="W2001"
+            )
+        spread_end_line = getattr(expr.spread, "end_line", expr.spread.line)
+        spread_end_col = getattr(expr.spread, "end_col", expr.spread.col)
+        for req_field in struct_t.fields:
+            if req_field not in seen_fields:
+                member = MemberExpr(
+                    clone_ast(expr.spread),
+                    req_field,
+                    line=expr.spread.line,
+                    col=expr.spread.col,
+                )
+                member.end_line = spread_end_line
+                member.end_col = spread_end_col
+                f_init = FieldInit(
+                    req_field,
+                    member,
+                    line=expr.spread.line,
+                    col=expr.spread.col,
+                )
+                f_init.end_line = spread_end_line
+                f_init.end_col = spread_end_col
+                expr.fields.append(f_init)
+                seen_fields.add(req_field)
+        expr.spread = None
 
     for req_field in struct_t.fields:
         if req_field not in seen_fields:
@@ -106,7 +152,7 @@ def check_struct_init_expr(checker: "TypeChecker", expr: StructInitExpr, is_stat
                 code="W3002"
             ), f.name, struct_t.fields)
         expected_f_type = struct_t.fields[f.name]
-        actual_f_type = checker._check_expr(f.value)
+        actual_f_type = checker._check_payload(f.value, expected_f_type)
         if not checker.type_relations.is_assignable(actual_f_type, expected_f_type):
             raise TypeError(
                 message=f"Field '{f.name}' type mismatch: expected '{expected_f_type}', found '{actual_f_type}'",
@@ -153,7 +199,14 @@ def check_list_expr(checker: "TypeChecker", expr: ListExpr, is_statement_context
 
 
 def check_tuple_expr(checker: "TypeChecker", expr: TupleExpr, is_statement_context: bool = False) -> WysnaType:
-    elem_types = [checker._check_expr(e) for e in expr.elements]
+    expected = checker.expected_type if isinstance(checker.expected_type, TupleType) else None
+    if expected is not None and len(expected.elements) == len(expr.elements):
+        elem_types = [
+            checker._check_payload(elem, exp_t)
+            for elem, exp_t in zip(expr.elements, expected.elements)
+        ]
+    else:
+        elem_types = [checker._check_payload(e, None) for e in expr.elements]
     return TupleType(elem_types)
 
 
