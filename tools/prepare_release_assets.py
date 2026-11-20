@@ -182,7 +182,7 @@ def stage_native_sdks(root: Path, source: str, version: str, output: Path) -> di
         required = {
             "ops-project-check", "ops-project-build", "ops-project-run", "ops-project-test",
             "ops-graph-cli", "ops-graph-mcp", "rebuilt-native-engine-emits-identical-C",
-            "project-new", "scaffold-project-test",
+            "project-new", "scaffold-project-lock", "scaffold-project-test",
         }
         passed = {check["name"] for check in report.get("checks", []) if check.get("status") == 0}
         if (not required <= passed or report.get("success") is not True or report.get("source_commit") != source

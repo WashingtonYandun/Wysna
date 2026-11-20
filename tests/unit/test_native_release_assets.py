@@ -15,7 +15,7 @@ def test_native_release_requires_matching_archive_and_installed_checks(tmp_path)
         for name in (
             "ops-project-check", "ops-project-build", "ops-project-run", "ops-project-test",
             "ops-graph-cli", "ops-graph-mcp", "rebuilt-native-engine-emits-identical-C",
-            "project-new", "scaffold-project-test",
+            "project-new", "scaffold-project-lock", "scaffold-project-test",
         )
     ]
     for runner, platform, extension in (

@@ -166,7 +166,7 @@ class Phase6V08AutonomyAndDogfoodTests(unittest.TestCase):
             self.assertIn("already exists", json.loads(repeat.stdout)["diagnostics"][0]["message"])
             self.assertEqual(manifest.read_bytes(), original)
 
-    def test_native_project_refuses_frozen_without_lock_verification(self):
+    def test_native_project_verifies_frozen_lock_contents(self):
         with tempfile.TemporaryDirectory(prefix="wysna_p6_frozen_") as tmp:
             work = Path(tmp).resolve()
             scratch = work / "_scratch"
@@ -184,7 +184,28 @@ class Phase6V08AutonomyAndDogfoodTests(unittest.TestCase):
             self.assertEqual(result.returncode, 2, result.stderr + result.stdout)
             diagnostics = json.loads(result.stdout)["diagnostics"]
             self.assertEqual(diagnostics[0]["code"], "W5002")
-            self.assertIn("lockfile verification", diagnostics[0]["message"])
+            self.assertIn("stale or invalid", diagnostics[0]["message"])
+
+            lock = self._run_sdk(
+                ["project", "lock", "--manifest", str(manifest), "--output-format=json-v1"], work, scratch,
+            )
+            self.assertEqual(lock.returncode, 0, lock.stderr + lock.stdout)
+            lock_path = project / "wysna.lock"
+            native_lock = lock_path.read_bytes()
+            checked = self._run_sdk(["project", "check", "--manifest", str(manifest), "--frozen"], work, scratch)
+            self.assertEqual(checked.returncode, 0, checked.stderr + checked.stdout)
+            seed = subprocess.run(
+                [sys.executable, str(ROOT / "wysna"), "project", "lock", "--manifest", str(manifest)],
+                cwd=work, capture_output=True, text=True, timeout=30,
+            )
+            self.assertEqual(seed.returncode, 0, seed.stderr + seed.stdout)
+            self.assertEqual(json.loads(lock_path.read_bytes()), json.loads(native_lock))
+            checked = self._run_sdk(["project", "check", "--manifest", str(manifest), "--frozen"], work, scratch)
+            self.assertEqual(checked.returncode, 0, checked.stderr + checked.stdout)
+            with manifest.open("a", encoding="utf-8") as stream:
+                stream.write("\n# manifest changed\n")
+            stale = self._run_sdk(["project", "check", "--manifest", str(manifest), "--frozen"], work, scratch)
+            self.assertEqual(stale.returncode, 2, stale.stderr + stale.stdout)
 
     def test_native_api_cli_stdlib_and_manifest(self):
         with tempfile.TemporaryDirectory(prefix="wysna_p6_api_") as tmp:

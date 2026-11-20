@@ -77,6 +77,7 @@ class ProjectManifest {
     name: str
     version: str
     language_version: str
+    manifest_sha256: str
     compiler_version: str
     stdlib: str
     source_root_rel: str
@@ -106,6 +107,7 @@ class ProjectManifest {
         this.name = ""
         this.version = ""
         this.language_version = ""
+        this.manifest_sha256 = ""
         this.compiler_version = ""
         this.stdlib = ""
         this.source_root_rel = ""
@@ -621,6 +623,7 @@ fn proj_parse_manifest_at(abs_manifest_path: str, visit_stack: list[str]) -> Pro
     }
 
     let m = new ProjectManifest(resolved_m, root)
+    m.manifest_sha256 = diag_sha256_hex(raw)
     let raw_lines = schema_split_lines(raw)
     let mut logical_lines: list[str] = []
     let mut buf = ""
@@ -1132,6 +1135,83 @@ fn proj_scaffold(args: list[str], json_mode_in: bool) -> unit {
     }
 }
 
+fn proj_local_lock_json(m: ProjectManifest) -> str {
+    return "{\n" +
+        "  \"aliases\": [],\n" +
+        "  \"compiler_version\": " + diag_json_quote(m.compiler_version) + ",\n" +
+        "  \"dependencies\": [],\n" +
+        "  \"language_version\": " + diag_json_quote(m.language_version) + ",\n" +
+        "  \"lock_version\": 1,\n" +
+        "  \"root\": {\n" +
+        "    \"manifest_sha256\": " + diag_json_quote(m.manifest_sha256) + ",\n" +
+        "    \"name\": " + diag_json_quote(m.name) + ",\n" +
+        "    \"version\": " + diag_json_quote(m.version) + "\n" +
+        "  },\n" +
+        "  \"stdlib\": " + diag_json_quote(m.stdlib) + "\n}\n"
+}
+
+fn proj_write_local_lock(m: ProjectManifest, json_mode: bool) -> unit {
+    let path = m.root + "/wysna.lock"
+    let use_time = str(unix_time())
+    let content = proj_local_lock_json(m)
+    let mut temp_path = ""
+    for i in 0..32 {
+        let candidate = m.root + "/.wysna-lock-" + use_time + "-" + str(i) + ".tmp"
+        let write = proj_scaffold_write(candidate, content)
+        if not write[0] { continue }
+        if not write[1] {
+            let _removed = proj_scaffold_fs(candidate, 3)
+            break
+        }
+        temp_path = candidate
+        break
+    }
+    if temp_path == "" {
+        proj_emit_error_and_exit("lock", json_mode, "W5004", "cannot write temporary lock beside '" + path + "'")
+    }
+    let staging = tool_buf_from_str(temp_path)
+    let to = tool_buf_from_str(path)
+    let status = wysna_host_fs(staging, to, 4)
+    wysna_host_close(staging)
+    wysna_host_close(to)
+    if status != 0 {
+        let _removed = proj_scaffold_fs(temp_path, 3)
+        proj_emit_error_and_exit("lock", json_mode, "W5004", "cannot publish '" + path + "'")
+    }
+    if json_mode {
+        let artifact = "[{\"kind\":\"lockfile\",\"media_type\":\"application/json\",\"path\":" + diag_json_quote(path) + "}]"
+        diag_write_output(proj_check_envelope_json("project.lock", "ok", 0, "[]", "null", artifact))
+    } else {
+        print("[OK] Wrote " + path)
+    }
+}
+
+fn proj_verify_local_lock(m: ProjectManifest, subcmd: str, json_mode: bool) -> unit {
+    let path = m.root + "/wysna.lock"
+    let raw = read_file(path) else err {
+        proj_emit_error_and_exit(subcmd, json_mode, "W5002", "cannot read wysna.lock; run 'wysna project lock'")
+        ""
+    }
+    let lock = mcp_parse_json_strict(raw)
+    let aliases = lsp_json_get(lock, "aliases")
+    let dependencies = lsp_json_get(lock, "dependencies")
+    let version = lsp_json_get(lock, "lock_version")
+    let root = lsp_json_get(lock, "root")
+    let valid = lock.kind == "object" and len(lock.keys) == 7 and
+        aliases.kind == "array" and len(aliases.items) == 0 and
+        dependencies.kind == "array" and len(dependencies.items) == 0 and
+        version.kind == "int" and version.str_val == "1" and
+        lsp_json_str(lock, "compiler_version", "") == m.compiler_version and
+        lsp_json_str(lock, "language_version", "") == m.language_version and
+        lsp_json_str(lock, "stdlib", "") == m.stdlib and
+        root.kind == "object" and len(root.keys) == 3 and
+        lsp_json_str(root, "name", "") == m.name and lsp_json_str(root, "version", "") == m.version and
+        lsp_json_str(root, "manifest_sha256", "") == m.manifest_sha256
+    if not valid {
+        proj_emit_error_and_exit(subcmd, json_mode, "W5002", "wysna.lock is stale or invalid; update it with 'wysna project lock'")
+    }
+}
+
 fn tool_handle_project(args: list[str], json_mode_in: bool) -> unit {
     let mut plan_out = ""
     let mut cleaned: list[str] = []
@@ -1148,9 +1228,9 @@ fn tool_handle_project(args: list[str], json_mode_in: bool) -> unit {
 
     if len(cleaned) == 0 or cleaned[0] == "--help" or cleaned[0] == "-h" {
         if json_mode_in {
-            proj_emit_error_and_exit("", true, "W5002", "Usage: wysna project <new|check|build|run|test> [options]")
+            proj_emit_error_and_exit("", true, "W5002", "Usage: wysna project <new|lock|check|build|run|test> [options]")
         }
-        print("Usage: wysna project <new|check|build|run|test> [options]")
+        print("Usage: wysna project <new|lock|check|build|run|test> [options]")
         print("Use --manifest PATH to select a project root explicitly.")
         if len(cleaned) == 0 { exit(2) }
         exit(0)
@@ -1158,7 +1238,7 @@ fn tool_handle_project(args: list[str], json_mode_in: bool) -> unit {
 
     let subcmd = cleaned[0]
     if subcmd == "new" { proj_scaffold(cleaned, json_mode_in) return }
-    if subcmd != "check" and subcmd != "build" and subcmd != "run" and subcmd != "test" {
+    if subcmd != "lock" and subcmd != "check" and subcmd != "build" and subcmd != "run" and subcmd != "test" {
         proj_emit_error_and_exit("", json_mode_in, "W5002", "unknown project command '" + subcmd + "'")
     }
 
@@ -1183,14 +1263,14 @@ fn tool_handle_project(args: list[str], json_mode_in: bool) -> unit {
             if a == "--frozen" { frozen = true }
             i = i + 1
         } elif a == "--output-format=json-v1" {
-            if subcmd != "check" and subcmd != "build" {
-                proj_emit_error_and_exit(subcmd, true, "W5002", "--output-format=json-v1 is supported only by project check and build")
+            if subcmd != "lock" and subcmd != "check" and subcmd != "build" {
+                proj_emit_error_and_exit(subcmd, true, "W5002", "--output-format=json-v1 is supported only by project lock, check and build")
             }
             json_mode = true
             i = i + 1
         } elif a == "--output-format" and i + 1 < len(cleaned) {
-            if subcmd != "check" and subcmd != "build" {
-                proj_emit_error_and_exit(subcmd, true, "W5002", "--output-format=json-v1 is supported only by project check and build")
+            if subcmd != "lock" and subcmd != "check" and subcmd != "build" {
+                proj_emit_error_and_exit(subcmd, true, "W5002", "--output-format=json-v1 is supported only by project lock, check and build")
             }
             if cleaned[i + 1] != "json-v1" {
                 proj_emit_error_and_exit(subcmd, json_mode, "W5002", "unsupported output format: " + cleaned[i + 1])
@@ -1234,9 +1314,17 @@ fn tool_handle_project(args: list[str], json_mode_in: bool) -> unit {
     if not m.ok {
         proj_emit_error_and_exit(subcmd, json_mode, m.err_code, m.err_msg)
     }
-    if frozen {
-        proj_emit_error_and_exit(subcmd, json_mode, "W5002", "--frozen requires lockfile verification; use Wysna Seed for this option")
+    if subcmd == "lock" and (frozen or target_arg != "") {
+        proj_emit_error_and_exit(subcmd, json_mode, "W5002", "project lock does not accept --frozen or --target")
     }
+    if (frozen or subcmd == "lock") and len(m.deps) > 0 {
+        proj_emit_error_and_exit(subcmd, json_mode, "W5002", "use Wysna Seed to generate or verify locks for projects with package dependencies")
+    }
+    if subcmd == "lock" {
+        proj_write_local_lock(m, json_mode)
+        return
+    }
+    if frozen { proj_verify_local_lock(m, subcmd, json_mode) }
 
     let mut dep_aliases: list[str] = []
     let mut dep_roots: list[str] = []

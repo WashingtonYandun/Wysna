@@ -284,6 +284,7 @@ fn mcp_strict_parse_val(c: LspJsonCursor) -> LspJson {
     if int_start == c.pos { return mcp_json_error() }
     let num = new LspJson("int")
     num.int_val = lsp_parse_int(int_str, 0)
+    num.str_val = slice(c.src, int_start, c.pos)
     return num
 }
 

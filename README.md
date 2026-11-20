@@ -92,7 +92,7 @@ flowchart LR
 
 Para proyectos nativos, elige el [SDK nativo en GitHub Releases](https://github.com/WashingtonYandun/Wysna/releases/latest) a partir de Wysna 0.8.0. Descarga el archivo de tu plataforma, extráelo en un directorio nuevo y añade su carpeta `bin` al PATH. En Windows también puedes usar `open-terminal.cmd`. El SDK incluye el compilador Wysna, Zig y la biblioteca estándar. Comprueba la instalación con `wysna --version`. [Guía del SDK](docs/NATIVE_SDK.md)
 
-Usa Seed para WebAssembly, LLVM directo o los comandos de proyecto que requieren crear o verificar `wysna.lock`. Los instaladores de Seed incluyen CPython y Zig.
+Usa Seed para WebAssembly, LLVM directo o los comandos de proyecto que requieren crear o verificar `wysna.lock` en proyectos con dependencias de paquetes. Los instaladores de Seed incluyen CPython y Zig.
 
 Los paquetes de Seed se identifican por su extensión `.exe` en Windows, `.pkg` en macOS y `.deb` o `.rpm` en Linux. Comprueba su instalación con `wysna doctor`. [Guía de Seed](docs/SEED_DISTRIBUTION.md)
 
@@ -123,7 +123,7 @@ wysna schema hello.wysna         # Draft 2020-12 JSON Schema
 wysna explain hello.wysna --output-format=json-v1
 ```
 
-Create an isolated package with `wysna project new myapp && cd myapp && wysna project test`, or launch an interactive session with `wysna repl` (`:help`, `:reload`, `:reset`, `exit`).
+Crea un proyecto con `wysna project new myapp && cd myapp && wysna project lock && wysna project test --frozen`. En Seed también puedes experimentar con `wysna repl`.
 
 ---
 

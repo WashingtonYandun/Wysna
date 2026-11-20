@@ -381,7 +381,8 @@ def validate(sdk, report, strict_source=False, compiler_source=None, application
             scaffold_result = json.loads(scaffold.stdout)
             require(scaffold_result['status'] == 'ok' and len(scaffold_result['artifacts']) == 3, scaffold_result)
             created = project / 'first-project' / 'wysna.toml'
-            run('scaffold-project-test', ['project', 'test', '--manifest', created])
+            run('scaffold-project-lock', ['project', 'lock', '--manifest', created])
+            run('scaffold-project-test', ['project', 'test', '--manifest', created, '--frozen'])
 
             app = project / 'wysofia-ops'
             shutil.copytree(application, app)

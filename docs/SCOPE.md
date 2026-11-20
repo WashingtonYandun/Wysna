@@ -11,7 +11,7 @@ Para proyectos nativos C99, la descarga recomendada desde 0.8.0 es el [SDK nativ
 Incluye el compilador escrito en Wysna, Zig y la biblioteca estándar. La
 [distribución Seed](SEED_DISTRIBUTION.md) cubre los destinos y comandos que
 dependen del compilador de referencia, como WebAssembly o la verificación
-de `wysna.lock`.
+de `wysna.lock` en proyectos con dependencias de paquetes.
 
 Installer artifacts are qualified per source commit. A package must pass installation, repair/update,
 relocation where applicable, real program execution and uninstallation acceptance
