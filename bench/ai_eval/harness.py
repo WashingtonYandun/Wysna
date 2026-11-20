@@ -306,6 +306,12 @@ class EvaluationHarness:
 
         return True, None
 
+    def generate_completion(self, provider, prompt, history, workspace):
+        return provider.generate(SYSTEM_PROMPT, prompt, history)
+
+    def workspace_context(self, fixtures):
+        return "".join(f"### {name}\n```wysna\n{content}\n```\n" for name, content in fixtures.items())
+
     def evaluate_task(self, task: Task, provider: LlmProvider) -> TaskEvaluationResult:
         """Evaluates a single task with initial attempt and up to max_repair_cycles."""
         if task.status == "blocked":
@@ -339,16 +345,11 @@ class EvaluationHarness:
             )
             if task.fixtures:
                 user_prompt += "\nExisting Workspace Files:\n"
-                for fname, fcontent in task.fixtures.items():
-                    user_prompt += f"### {fname}\n```wysna\n{fcontent}\n```\n"
+                user_prompt += self.workspace_context(task.fixtures)
 
             for cycle in range(self.max_repair_cycles + 1):
                 attempt_wall_start = time.perf_counter()
-                completion, tokens, lat_ms = provider.generate(
-                    system_prompt=SYSTEM_PROMPT,
-                    user_prompt=user_prompt,
-                    conversation_history=conversation_history,
-                )
+                completion, tokens, lat_ms = self.generate_completion(provider, user_prompt, conversation_history, tmpdir)
                 total_provider_latency_ms += lat_ms
                 prompt_tok = tokens.get("prompt_tokens", 0)
                 comp_tok = tokens.get("completion_tokens", 0)

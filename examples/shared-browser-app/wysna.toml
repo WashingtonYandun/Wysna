@@ -21,6 +21,10 @@ entry = "src/pricing.wysna"
 profile = "browser-library"
 memory_limit_mb = 32
 
+[targets.service]
+entry = "src/service_worker.wysna"
+profile = "native-cli"
+
 [[tests]]
 name = "shared-pricing-contract"
 entry = "tests/pricing.wysna"
