@@ -686,6 +686,55 @@ static int sdk_execute_project(SdkInvocation* invocation, const SdkOptions* opti
     return status;
 }
 
+#ifdef _WIN32
+static int sdk_spawn_stdio_win32(const char* executable, int argc, const char* const* argv) {
+    wchar_t* application = wysna_host_process_wide(executable);
+    if (!application) return sdk_error("W5001", "Cannot start the native stdio server", executable);
+    wchar_t* wide_argv[SDK_ARGUMENT_LIMIT + 5];
+    size_t command_length = 1;
+    for (int i = 0; i < argc; i++) {
+        wchar_t* wide = wysna_host_process_wide(argv[i]);
+        if (!wide) {
+            for (int j = 0; j < i; j++) free(wide_argv[j]);
+            free(application);
+            return sdk_error("W5001", "Cannot encode stdio server arguments", executable);
+        }
+        wide_argv[i] = wysna_host_process_quote(wide);
+        free(wide);
+        command_length += wcslen(wide_argv[i]) + 1;
+    }
+    wchar_t* command_line = (wchar_t*)wysna_alloc_safe(command_length * sizeof(wchar_t));
+    size_t pos = 0;
+    for (int i = 0; i < argc; i++) {
+        if (i) command_line[pos++] = L' ';
+        size_t len = wcslen(wide_argv[i]);
+        memcpy(command_line + pos, wide_argv[i], len * sizeof(wchar_t));
+        pos += len;
+        free(wide_argv[i]);
+    }
+    command_line[pos] = 0;
+    STARTUPINFOW startup;
+    PROCESS_INFORMATION process;
+    memset(&startup, 0, sizeof(startup));
+    memset(&process, 0, sizeof(process));
+    startup.cb = sizeof(startup);
+    startup.dwFlags = STARTF_USESTDHANDLES;
+    startup.hStdInput = GetStdHandle(STD_INPUT_HANDLE);
+    startup.hStdOutput = GetStdHandle(STD_OUTPUT_HANDLE);
+    startup.hStdError = GetStdHandle(STD_ERROR_HANDLE);
+    BOOL started = CreateProcessW(application, command_line, NULL, NULL, TRUE, 0, NULL, NULL, &startup, &process);
+    free(application);
+    free(command_line);
+    if (!started) return sdk_error("W5001", "Cannot start the native stdio server", executable);
+    WaitForSingleObject(process.hProcess, INFINITE);
+    DWORD exit_code = 1;
+    GetExitCodeProcess(process.hProcess, &exit_code);
+    CloseHandle(process.hThread);
+    CloseHandle(process.hProcess);
+    return (int)exit_code;
+}
+#endif
+
 static int sdk_execute(SdkInvocation* invocation, const SdkOptions* options, int argc, char** argv) {
     if (!sdk_component_paths(invocation)) return sdk_error("W5001", "Cannot locate the native compiler beside this SDK", NULL);
     if (strcmp(options->command, "project") == 0) {
@@ -702,7 +751,7 @@ static int sdk_execute(SdkInvocation* invocation, const SdkOptions* options, int
         }
         engine_arguments[out_count] = NULL;
 #ifdef _WIN32
-        return (int)_spawnv(_P_WAIT, invocation->engine, engine_arguments);
+        return sdk_spawn_stdio_win32(invocation->engine, out_count, engine_arguments);
 #else
         execv(invocation->engine, (char* const*)engine_arguments);
         return sdk_error("W5001", "Cannot start the native stdio server", invocation->engine);

@@ -21,8 +21,9 @@ import time
 from typing import Dict, List
 
 ROOT = Path(__file__).resolve().parents[1]
-if str(ROOT) not in sys.path:
-    sys.path.insert(0, str(ROOT))
+for _entry in (ROOT / "src", ROOT):
+    if str(_entry) not in sys.path:
+        sys.path.insert(0, str(_entry))
 
 from parser.Parser import Parser
 from checker.TypeChecker import TypeChecker
