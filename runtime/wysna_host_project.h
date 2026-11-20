@@ -7,6 +7,7 @@
 extern int lstat(const char* restrict path, struct stat* restrict status);
 #endif
 
+#ifndef __wasi__
 /* Directory records are a kind byte followed by a NUL-terminated UTF-8 name. */
 static bool wysna_project_append_entry(WysnaHostEntry* output, char kind, const char* name) {
     size_t size = strlen(name);
@@ -14,6 +15,7 @@ static bool wysna_project_append_entry(WysnaHostEntry* output, char kind, const 
     return wysna_host_buffer_append_bytes(output, &kind, 1) == 1 &&
            wysna_host_buffer_append_bytes(output, name, size + 1) == size + 1;
 }
+#endif
 
 static int64_t wysna_host_project_entries(void* path_handle, void* output_handle) {
 #ifdef WYSNA_DENY_CAP_FILESYSTEM_READ
