@@ -143,6 +143,29 @@ class Phase6V08AutonomyAndDogfoodTests(unittest.TestCase):
             timeout=timeout,
         )
 
+    def test_native_project_new_creates_a_project_once(self):
+        with tempfile.TemporaryDirectory(prefix="wysna_p6_scaffold_") as tmp:
+            work = Path(tmp).resolve()
+            scratch = work / "_scratch"
+            scratch.mkdir()
+            args = ["project", "new", "from-native-sdk", "--output-format=json-v1"]
+
+            result = self._run_sdk(args, work, scratch)
+            self.assertEqual(result.returncode, 0, result.stderr + result.stdout)
+            envelope = json.loads(result.stdout)
+            self.assertEqual(envelope["status"], "ok")
+            self.assertEqual(len(envelope["artifacts"]), 3)
+            project = work / "from-native-sdk"
+            manifest = project / "wysna.toml"
+            original = manifest.read_bytes()
+            check = self._run_sdk(["project", "check", "--manifest", str(manifest)], work, scratch)
+            self.assertEqual(check.returncode, 0, check.stderr + check.stdout)
+
+            repeat = self._run_sdk(args, work, scratch)
+            self.assertEqual(repeat.returncode, 2, repeat.stderr + repeat.stdout)
+            self.assertIn("already exists", json.loads(repeat.stdout)["diagnostics"][0]["message"])
+            self.assertEqual(manifest.read_bytes(), original)
+
     def test_native_project_refuses_frozen_without_lock_verification(self):
         with tempfile.TemporaryDirectory(prefix="wysna_p6_frozen_") as tmp:
             work = Path(tmp).resolve()

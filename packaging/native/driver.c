@@ -81,7 +81,7 @@ static void sdk_help(void) {
          "       wysna skills [TOPIC] [--output-format=json-v1]\n"
          "       wysna capabilities [--output-format=json-v1]\n"
          "       wysna api [MODULE] [--manifest PATH] [--output-format=json-v1]\n"
-         "       wysna project <check|build|run|test> [--manifest PATH] [--target NAME] [--profile dev|release|size] [-o OUTPUT] [--filter NAME] [-- ARGUMENTS]\n"
+         "       wysna project <new|check|build|run|test> [--manifest PATH] [--target NAME] [--profile dev|release|size] [-o OUTPUT] [--filter NAME] [-- ARGUMENTS]\n"
          "       wysna mcp [--root DIR]\n"
          "       wysna lsp\n"
          "Build and run accept --include-dir DIR, --link FILE, --library-dir DIR and --library NAME.\n"

@@ -1607,8 +1607,8 @@ fn tool_handle_skills(args: list[str], json_mode: bool) -> unit {
 }
 
 fn tool_capabilities_payload_json() -> str {
-    let cmds = "[\"run\",\"check\",\"fmt\",\"ast\",\"mir\",\"tokens\",\"emit-c\",\"emit-mir\",\"build\",\"test\",\"project.check\",\"project.build\",\"project.run\",\"project.test\",\"api\",\"capabilities\",\"explain\",\"graph\",\"inspect\",\"patch\",\"skills\",\"fix\",\"schema\",\"mcp\",\"lsp\"]"
-    let mcmds = "[\"check\",\"fmt\",\"project.check\",\"api\",\"capabilities\",\"explain\",\"graph\",\"inspect\",\"patch\",\"skills\",\"fix\",\"schema\"]"
+    let cmds = "[\"run\",\"check\",\"fmt\",\"ast\",\"mir\",\"tokens\",\"emit-c\",\"emit-mir\",\"build\",\"test\",\"project.new\",\"project.check\",\"project.build\",\"project.run\",\"project.test\",\"api\",\"capabilities\",\"explain\",\"graph\",\"inspect\",\"patch\",\"skills\",\"fix\",\"schema\",\"mcp\",\"lsp\"]"
+    let mcmds = "[\"check\",\"fmt\",\"project.new\",\"project.check\",\"api\",\"capabilities\",\"explain\",\"graph\",\"inspect\",\"patch\",\"skills\",\"fix\",\"schema\"]"
     let profs = "[\"native-cli\",\"wasi-command\",\"browser-library\",\"c99-source\"]"
     let targs = "[\"native\",\"wasm32-wasip1\",\"wasm32-unknown-emscripten\"]"
     let runtimes = "{\"wasi-command\":\"wasmtime-python==50.0.1\",\"browser-library\":\"browser or Node.js\"}"
@@ -1642,7 +1642,7 @@ fn tool_handle_capabilities(args: list[str], json_mode: bool) -> unit {
         diag_write_output(diag_tool_envelope_json("capabilities", "ok", 0, "[]", "result", payload, "[]"))
     } else {
         print("Wysna 0.8.0 capabilities: native-cli, wasi-command, browser-library")
-        print("Machine-readable tools: check, fmt, project.check, api, capabilities, explain, graph, inspect, patch, skills, fix, schema, mcp, lsp")
+        print("Machine-readable tools: check, fmt, project.new, project.check, api, capabilities, explain, graph, inspect, patch, skills, fix, schema, mcp, lsp")
     }
     exit(0)
 }

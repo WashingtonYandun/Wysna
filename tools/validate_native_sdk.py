@@ -377,6 +377,12 @@ def validate(sdk, report, strict_source=False, compiler_source=None, application
         run('project-run', ['project', 'run', '--manifest', proj_dir / 'wysna.toml'], stdout=b'hi native\n')
         run('project-test', ['project', 'test', '--manifest', proj_dir / 'wysna.toml'])
         if application is not None:
+            scaffold = run('project-new', ['project', 'new', 'first-project', '--output-format=json-v1'])
+            scaffold_result = json.loads(scaffold.stdout)
+            require(scaffold_result['status'] == 'ok' and len(scaffold_result['artifacts']) == 3, scaffold_result)
+            created = project / 'first-project' / 'wysna.toml'
+            run('scaffold-project-test', ['project', 'test', '--manifest', created])
+
             app = project / 'wysofia-ops'
             shutil.copytree(application, app)
             manifest_path = app / 'wysna.toml'

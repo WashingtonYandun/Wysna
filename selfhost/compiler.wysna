@@ -9661,8 +9661,8 @@ fn tool_handle_skills(args: list[str], json_mode: bool) -> unit {
 }
 
 fn tool_capabilities_payload_json() -> str {
-    let cmds = "[\"run\",\"check\",\"fmt\",\"ast\",\"mir\",\"tokens\",\"emit-c\",\"emit-mir\",\"build\",\"test\",\"project.check\",\"project.build\",\"project.run\",\"project.test\",\"api\",\"capabilities\",\"explain\",\"graph\",\"inspect\",\"patch\",\"skills\",\"fix\",\"schema\",\"mcp\",\"lsp\"]"
-    let mcmds = "[\"check\",\"fmt\",\"project.check\",\"api\",\"capabilities\",\"explain\",\"graph\",\"inspect\",\"patch\",\"skills\",\"fix\",\"schema\"]"
+    let cmds = "[\"run\",\"check\",\"fmt\",\"ast\",\"mir\",\"tokens\",\"emit-c\",\"emit-mir\",\"build\",\"test\",\"project.new\",\"project.check\",\"project.build\",\"project.run\",\"project.test\",\"api\",\"capabilities\",\"explain\",\"graph\",\"inspect\",\"patch\",\"skills\",\"fix\",\"schema\",\"mcp\",\"lsp\"]"
+    let mcmds = "[\"check\",\"fmt\",\"project.new\",\"project.check\",\"api\",\"capabilities\",\"explain\",\"graph\",\"inspect\",\"patch\",\"skills\",\"fix\",\"schema\"]"
     let profs = "[\"native-cli\",\"wasi-command\",\"browser-library\",\"c99-source\"]"
     let targs = "[\"native\",\"wasm32-wasip1\",\"wasm32-unknown-emscripten\"]"
     let runtimes = "{\"wasi-command\":\"wasmtime-python==50.0.1\",\"browser-library\":\"browser or Node.js\"}"
@@ -9696,7 +9696,7 @@ fn tool_handle_capabilities(args: list[str], json_mode: bool) -> unit {
         diag_write_output(diag_tool_envelope_json("capabilities", "ok", 0, "[]", "result", payload, "[]"))
     } else {
         print("Wysna 0.8.0 capabilities: native-cli, wasi-command, browser-library")
-        print("Machine-readable tools: check, fmt, project.check, api, capabilities, explain, graph, inspect, patch, skills, fix, schema, mcp, lsp")
+        print("Machine-readable tools: check, fmt, project.new, project.check, api, capabilities, explain, graph, inspect, patch, skills, fix, schema, mcp, lsp")
     }
     exit(0)
 }
@@ -13907,6 +13907,105 @@ fn proj_is_protected_build_dest(m: ProjectManifest, dest_abs: str) -> bool {
     return false
 }
 
+fn proj_scaffold_fs(path: str, operation: int) -> int {
+    let value = tool_buf_from_str(path)
+    let unused = wysna_host_buffer_new()
+    let status = wysna_host_fs(value, unused, operation)
+    wysna_host_close(value)
+    wysna_host_close(unused)
+    return status
+}
+
+fn proj_scaffold_write(path: str, content: str) -> list[bool] {
+    let path_buffer = tool_buf_from_str(path)
+    let handle = wysna_host_file_open(path_buffer, 3)
+    wysna_host_close(path_buffer)
+    if wysna_host_is_open(handle) != 1 { return [false, false] }
+    let contents = tool_buf_from_str(content)
+    let written = wysna_host_file_write(handle, contents)
+    let closed = wysna_host_close(handle)
+    wysna_host_close(contents)
+    return [true, written == 0 and closed == 0]
+}
+
+fn proj_scaffold(args: list[str], json_mode_in: bool) -> unit {
+    let mut json_mode = json_mode_in
+    let mut name = ""
+    let mut i = 1
+    while i < len(args) {
+        let arg = args[i]
+        if arg == "--output-format=json-v1" {
+            json_mode = true
+        } elif arg == "--output-format" and i + 1 < len(args) and args[i + 1] == "json-v1" {
+            json_mode = true
+            i = i + 1
+        } elif arg == "--help" or arg == "-h" {
+            print("Usage: wysna project new NAME [--output-format=json-v1]")
+            return
+        } elif name == "" and proj_valid_name(arg) {
+            name = arg
+        } else {
+            proj_emit_error_and_exit("new", json_mode, "W5002", "expected one lowercase project name and optional --output-format=json-v1")
+        }
+        i = i + 1
+    }
+    if name == "" {
+        proj_emit_error_and_exit("new", json_mode, "W5002", "expected a project name")
+    }
+
+    let root = module_canonical(name)
+    if proj_scaffold_fs(root, 2) != 0 {
+        if proj_path_exists(root) {
+            proj_emit_error_and_exit("new", json_mode, "W5002", "project destination already exists: '" + root + "'")
+        }
+        proj_emit_error_and_exit("new", json_mode, "W5004", "cannot create project directory '" + root + "'")
+    }
+    let dirs = [root + "/src", root + "/tests"]
+    let paths = [root + "/src/main.wysna", root + "/tests/example.wysna", root + "/wysna.toml"]
+    let manifest = "manifest_version = 1\n\n[package]\nname = \"" + name + "\"\nversion = \"0.1.0\"\nlanguage = \"0.8\"\n\n" +
+        "[toolchain]\ncompiler = \"0.8.0\"\nstdlib = \"bundled\"\n\n[sources]\nroot = \"src\"\n\n" +
+        "[targets.app]\nentry = \"src/main.wysna\"\nprofile = \"native-cli\"\n\n" +
+        "[[tests]]\nname = \"example\"\nentry = \"tests/example.wysna\"\ntimeout_ms = 10000\n"
+    let contents = [
+        "fn main() -> unit {\n    print(\"Hello, Wysna!\")\n}\n",
+        "import \"std/test\"\n\nfn main() -> unit {\n    test.expect_equal_int(1 + 1, 2, \"addition\")\n}\n",
+        manifest,
+    ]
+    let mut created_dirs: list[str] = [root]
+    let mut failed = ""
+    for dir in dirs {
+        if proj_scaffold_fs(dir, 2) != 0 { failed = dir break }
+        created_dirs.append(dir)
+    }
+    let mut created_files: list[str] = []
+    if failed == "" {
+        for j in 0..len(paths) {
+            let result = proj_scaffold_write(paths[j], contents[j])
+            if result[0] { created_files.append(paths[j]) }
+            if not result[1] { failed = paths[j] break }
+        }
+    }
+    if failed != "" {
+        for file in created_files {
+            let _removed = proj_scaffold_fs(file, 3)
+        }
+        while len(created_dirs) > 0 {
+            let dir = created_dirs.pop()
+            let _removed = proj_scaffold_fs(dir, 3)
+        }
+        proj_emit_error_and_exit("new", json_mode, "W5004", "cannot initialize project path '" + failed + "'")
+    }
+    if json_mode {
+        let mut artifacts: list[str] = []
+        for path in paths {
+            artifacts.append("{\"kind\":\"project-source\",\"media_type\":\"text/plain\",\"path\":" + diag_json_quote(path) + "}")
+        }
+        diag_write_output(proj_check_envelope_json("project.new", "ok", 0, "[]", "null", "[" + join_strings(artifacts, ",") + "]"))
+    } else {
+        print("[OK] Created project: " + root)
+    }
+}
+
 fn tool_handle_project(args: list[str], json_mode_in: bool) -> unit {
     let mut plan_out = ""
     let mut cleaned: list[str] = []
@@ -13923,15 +14022,16 @@ fn tool_handle_project(args: list[str], json_mode_in: bool) -> unit {
 
     if len(cleaned) == 0 or cleaned[0] == "--help" or cleaned[0] == "-h" {
         if json_mode_in {
-            proj_emit_error_and_exit("", true, "W5002", "Usage: wysna project <check|build|run|test> [options]")
+            proj_emit_error_and_exit("", true, "W5002", "Usage: wysna project <new|check|build|run|test> [options]")
         }
-        print("Usage: wysna project <check|build|run|test> [options]")
+        print("Usage: wysna project <new|check|build|run|test> [options]")
         print("Use --manifest PATH to select a project root explicitly.")
         if len(cleaned) == 0 { exit(2) }
         exit(0)
     }
 
     let subcmd = cleaned[0]
+    if subcmd == "new" { proj_scaffold(cleaned, json_mode_in) return }
     if subcmd != "check" and subcmd != "build" and subcmd != "run" and subcmd != "test" {
         proj_emit_error_and_exit("", json_mode_in, "W5002", "unknown project command '" + subcmd + "'")
     }
