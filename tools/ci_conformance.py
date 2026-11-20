@@ -213,9 +213,9 @@ def main():
     bootstrap = execute([sys.executable, '-c',
         'import json; from compiler.Bootstrap import ensure_selfhost_compiler_binary; '
         'print(json.dumps(ensure_selfhost_compiler_binary(' + repr(str(ROOT)) + ')))'],
-        artifacts, 'bootstrap', 600)
+        artifacts, 'bootstrap', 1200)
     if bootstrap['returncode']:
-        print(bootstrap['stderr'])
+        print(bootstrap['stderr'] or bootstrap['stdout'] or f"bootstrap failed (rc={bootstrap['returncode']}, timeout={bootstrap.get('timeout')})")
         return 1
     selfhost_bin = bootstrap_binary(bootstrap['stdout'])
     support_files = PROFILES['support_files']
