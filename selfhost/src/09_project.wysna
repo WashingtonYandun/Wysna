@@ -1,0 +1,1244 @@
+# Native strict parser, validator, and runner/planner for wysna.toml manifest version 1.
+
+class ProjectPreopen {
+    path: str
+    access: str
+    fn init(path: str, access: str) {
+        this.path = path
+        this.access = access
+    }
+}
+
+class ProjectTarget {
+    name: str
+    entry: str
+    profile: str
+    has_preopens: bool
+    has_fuel: bool
+    has_memory_limit_mb: bool
+    fuel: int
+    memory_limit_mb: int
+    preopens: list[ProjectPreopen]
+
+    fn init(name: str) {
+        this.name = name
+        this.entry = ""
+        this.profile = ""
+        this.has_preopens = false
+        this.has_fuel = false
+        this.has_memory_limit_mb = false
+        this.fuel = 100000000
+        this.memory_limit_mb = 128
+        let ps: list[ProjectPreopen] = []
+        this.preopens = ps
+    }
+}
+
+class ProjectDep {
+    alias: str
+    rel_path: str
+    abs_root: str
+    source_root_abs: str
+    package_id: str
+
+    fn init(alias: str, rel_path: str, abs_root: str, source_root_abs: str, package_id: str) {
+        this.alias = alias
+        this.rel_path = rel_path
+        this.abs_root = abs_root
+        this.source_root_abs = source_root_abs
+        this.package_id = package_id
+    }
+}
+
+class ProjectTestCase {
+    name: str
+    entry: str
+    timeout_ms: int
+    has_name: bool
+    has_entry: bool
+    has_timeout_ms: bool
+
+    fn init() {
+        this.name = ""
+        this.entry = ""
+        this.timeout_ms = 10000
+        this.has_name = false
+        this.has_entry = false
+        this.has_timeout_ms = false
+    }
+}
+
+class ProjectManifest {
+    ok: bool
+    err_code: str
+    err_msg: str
+    path: str
+    root: str
+    name: str
+    version: str
+    language_version: str
+    compiler_version: str
+    stdlib: str
+    source_root_rel: str
+    source_root_abs: str
+    has_manifest_version: bool
+    manifest_version: int
+    has_pkg_table: bool
+    has_tc_table: bool
+    has_src_table: bool
+    targets: list[ProjectTarget]
+    deps: list[ProjectDep]
+    tests: list[ProjectTestCase]
+    pkg_keys: list[str]
+    tc_keys: list[str]
+    src_keys: list[str]
+    seen_target_keys: list[list[str]]
+    seen_dep_aliases: list[str]
+    seen_dep_keys: list[list[str]]
+    active_test_keys: list[str]
+
+    fn init(path: str, root: str) {
+        this.ok = true
+        this.err_code = ""
+        this.err_msg = ""
+        this.path = path
+        this.root = root
+        this.name = ""
+        this.version = ""
+        this.language_version = ""
+        this.compiler_version = ""
+        this.stdlib = ""
+        this.source_root_rel = ""
+        this.source_root_abs = ""
+        this.has_manifest_version = false
+        this.manifest_version = 0
+        this.has_pkg_table = false
+        this.has_tc_table = false
+        this.has_src_table = false
+        let ts: list[ProjectTarget] = []
+        this.targets = ts
+        let ds: list[ProjectDep] = []
+        this.deps = ds
+        let cs: list[ProjectTestCase] = []
+        this.tests = cs
+        let pks: list[str] = []
+        this.pkg_keys = pks
+        let tks: list[str] = []
+        this.tc_keys = tks
+        let sks: list[str] = []
+        this.src_keys = sks
+        let stks: list[list[str]] = []
+        this.seen_target_keys = stks
+        let sdas: list[str] = []
+        this.seen_dep_aliases = sdas
+        let sdks: list[list[str]] = []
+        this.seen_dep_keys = sdks
+        let atks: list[str] = []
+        this.active_test_keys = atks
+    }
+}
+
+fn proj_path_exists(p: str) -> bool {
+    let b1 = tool_buf_from_str(p)
+    let b2 = wysna_host_buffer_new()
+    let st = wysna_host_fs(b1, b2, 0)
+    wysna_host_close(b1)
+    wysna_host_close(b2)
+    return st == 1
+}
+
+fn proj_is_readable_file(p: str) -> bool {
+    let _txt = read_file(p) else _err {
+        return false
+    }
+    return true
+}
+
+fn proj_is_dir(p: str) -> bool {
+    return proj_path_exists(p) and not proj_is_readable_file(p)
+}
+
+fn proj_str_ends_with(s: str, suffix: str) -> bool {
+    let ns = len(s)
+    let nf = len(suffix)
+    if ns < nf { return false }
+    return slice(s, ns - nf, ns) == suffix
+}
+
+fn proj_str_contains_substr(hay: str, needle: str) -> bool {
+    if needle == "" { return true }
+    let nh = len(hay)
+    let nn = len(needle)
+    if nn > nh { return false }
+    for i in 0..(nh - nn + 1) {
+        if slice(hay, i, i + nn) == needle { return true }
+    }
+    return false
+}
+
+fn proj_valid_name(s: str) -> bool {
+    let n = len(s)
+    if n < 1 or n > 63 { return false }
+    let c0 = ord(s[0])
+    if c0 < 97 or c0 > 122 { return false }
+    for i in 1..n {
+        let c = ord(s[i])
+        let ok = (c >= 97 and c <= 122) or (c >= 48 and c <= 57) or c == 45
+        if not ok { return false }
+    }
+    return true
+}
+
+fn proj_scan_digits_end(s: str, pos: int) -> int {
+    let n = len(s)
+    let mut p = pos
+    while p < n and is_digit(ord(s[p])) { p = p + 1 }
+    return p
+}
+
+fn proj_valid_semver(s: str) -> bool {
+    let n = len(s)
+    if n == 0 { return false }
+    let mut p = 0
+    for seg in 0..3 {
+        if seg > 0 {
+            if p >= n or s[p] != "." { return false }
+            p = p + 1
+        }
+        if p >= n or not is_digit(ord(s[p])) { return false }
+        let start = p
+        p = proj_scan_digits_end(s, p)
+        if p - start > 1 and s[start] == "0" { return false }
+    }
+    if p < n and s[p] == "-" {
+        p = p + 1
+        if p >= n { return false }
+        let mut cur = ""
+        while p <= n {
+            if p == n or s[p] == "." or s[p] == "+" {
+                if cur == "" { return false }
+                if len(cur) > 1 and cur[0] == "0" {
+                    let mut all_dig = true
+                    for k in 0..len(cur) { if not is_digit(ord(cur[k])) { all_dig = false } }
+                    if all_dig { return false }
+                }
+                cur = ""
+                if p == n or s[p] == "+" { break }
+            } else {
+                let c = ord(s[p])
+                let ok = (c >= 48 and c <= 57) or (c >= 65 and c <= 90) or (c >= 97 and c <= 122) or c == 45
+                if not ok { return false }
+                cur = cur + s[p]
+            }
+            p = p + 1
+        }
+    }
+    if p < n and s[p] == "+" {
+        p = p + 1
+        if p >= n { return false }
+        let mut cur = ""
+        while p <= n {
+            if p == n or s[p] == "." {
+                if cur == "" { return false }
+                cur = ""
+                if p == n { break }
+            } else {
+                let c = ord(s[p])
+                let ok = (c >= 48 and c <= 57) or (c >= 65 and c <= 90) or (c >= 97 and c <= 122) or c == 45
+                if not ok { return false }
+                cur = cur + s[p]
+            }
+            p = p + 1
+        }
+    }
+    return p == n
+}
+
+fn proj_abs_from_cwd(raw_path: str) -> str {
+    if mcp_is_abs_path(raw_path) {
+        return module_normalize(raw_path)
+    }
+    let cwd = mcp_getcwd()
+    if cwd == "" { return module_normalize(raw_path) }
+    if cwd == "/" { return module_normalize("/" + raw_path) }
+    return module_normalize(cwd + "/" + raw_path)
+}
+
+fn proj_safe_rel_path(value: str, label: str) -> list[str] {
+    if lsp_trim(value) == "" { return ["0", label + " must be a non-empty string"] }
+    let n = len(value)
+    if value[0] == "/" { return ["0", label + " must be a relative path using '/' separators"] }
+    for i in 0..n {
+        let ch = value[i]
+        let code = ord(ch)
+        if ch == "\\" or ch == ":" or code == 0 {
+            return ["0", label + " must be a relative path using '/' separators"]
+        }
+    }
+    let mut seg = ""
+    for i in 0..(n + 1) {
+        let ch = if i < n { value[i] } else { "/" }
+        if ch == "/" {
+            if seg == "" or seg == "." or seg == ".." {
+                return ["0", label + " must not contain empty, '.' or '..' path components"]
+            }
+            seg = ""
+        } else {
+            seg = seg + ch
+        }
+    }
+    return ["1", value]
+}
+
+fn proj_contained_existing(root_canon: str, rel: str, label: str) -> list[str] {
+    let joined = if root_canon == "/" { "/" + rel } else { root_canon + "/" + rel }
+    if not proj_path_exists(joined) {
+        return ["0", label + " does not exist inside package root: " + rel]
+    }
+    let resolved = module_canonical_resolved(joined)
+    if resolved == "" {
+        return ["0", label + " could not be resolved: " + rel]
+    }
+    if not mcp_is_within_root(resolved, root_canon) {
+        return ["0", label + " escapes the package root"]
+    }
+    return ["1", resolved]
+}
+
+fn proj_strip_toml_comment(line: str) -> str {
+    let mut in_dq = false
+    let mut in_sq = false
+    let mut esc = false
+    let n = len(line)
+    for i in 0..n {
+        let ch = line[i]
+        if in_dq {
+            if esc { esc = false }
+            elif ch == "\\" { esc = true }
+            elif ch == "\"" { in_dq = false }
+        } elif in_sq {
+            if ch == "'" { in_sq = false }
+        } else {
+            if ch == "\"" { in_dq = true }
+            elif ch == "'" { in_sq = true }
+            elif ch == "#" { return slice(line, 0, i) }
+        }
+    }
+    return line
+}
+
+fn proj_bracket_delta(text: str) -> int {
+    let mut in_dq = false
+    let mut in_sq = false
+    let mut esc = false
+    let mut delta = 0
+    for i in 0..len(text) {
+        let ch = text[i]
+        if in_dq {
+            if esc { esc = false }
+            elif ch == "\\" { esc = true }
+            elif ch == "\"" { in_dq = false }
+        } elif in_sq {
+            if ch == "'" { in_sq = false }
+        } else {
+            if ch == "\"" { in_dq = true }
+            elif ch == "'" { in_sq = true }
+            elif ch == "[" or ch == "{" { delta = delta + 1 }
+            elif ch == "]" or ch == "}" { delta = delta - 1 }
+        }
+    }
+    return delta
+}
+
+fn proj_parse_toml_string(raw_in: str) -> list[str] {
+    let s = lsp_trim(raw_in)
+    let n = len(s)
+    if n < 2 { return ["0", "expected string"] }
+    if s[0] == "'" and s[n - 1] == "'" {
+        for i in 1..(n - 1) {
+            if s[i] == "'" { return ["0", "invalid literal string"] }
+        }
+        return ["1", slice(s, 1, n - 1)]
+    }
+    if s[0] != "\"" or s[n - 1] != "\"" { return ["0", "expected quoted string"] }
+    let mut parts: list[str] = []
+    let mut i = 1
+    while i < n - 1 {
+        let ch = s[i]
+        if ch == "\"" { return ["0", "unexpected quote inside string"] }
+        if ch == "\\" {
+            i = i + 1
+            if i >= n - 1 { return ["0", "unterminated string escape"] }
+            let esc = s[i]
+            if esc == "\"" { parts.append("\"") }
+            elif esc == "\\" { parts.append("\\") }
+            elif esc == "n" { parts.append("\n") }
+            elif esc == "r" { parts.append("\r") }
+            elif esc == "t" { parts.append("\t") }
+            else { return ["0", "unsupported string escape: \\" + esc] }
+        } else {
+            parts.append(ch)
+        }
+        i = i + 1
+    }
+    return ["1", join_strings(parts, "")]
+}
+
+fn proj_parse_toml_int(raw_in: str) -> list[str] {
+    let s = lsp_trim(raw_in)
+    if s == "" or s == "true" or s == "false" { return ["0", ""] }
+    let n = len(s)
+    let mut pos = 0
+    let mut neg = false
+    if s[0] == "-" { neg = true pos = 1 }
+    elif s[0] == "+" { pos = 1 }
+    if pos >= n { return ["0", ""] }
+    let mut clean = if neg { "-" } else { "" }
+    let mut prev_under = false
+    let mut digits = 0
+    while pos < n {
+        let ch = s[pos]
+        if ch == "_" {
+            if digits == 0 or prev_under or pos + 1 >= n { return ["0", ""] }
+            prev_under = true
+        } elif is_digit(ord(ch)) {
+            clean = clean + ch
+            digits = digits + 1
+            prev_under = false
+        } else {
+            return ["0", ""]
+        }
+        pos = pos + 1
+    }
+    if digits == 0 { return ["0", ""] }
+    return ["1", clean]
+}
+
+fn proj_parse_header_segs(inner: str) -> list[str] {
+    let n = len(inner)
+    let mut pos = 0
+    let mut segs: list[str] = []
+    while pos < n {
+        while pos < n and (inner[pos] == " " or inner[pos] == "\t") { pos = pos + 1 }
+        if pos >= n { return [] }
+        if inner[pos] == "\"" or inner[pos] == "'" {
+            let q = inner[pos]
+            let start = pos
+            pos = pos + 1
+            let mut esc = false
+            while pos < n {
+                if q == "\"" and esc { esc = false }
+                elif q == "\"" and inner[pos] == "\\" { esc = true }
+                elif inner[pos] == q { pos = pos + 1 break }
+                pos = pos + 1
+            }
+            let parsed = proj_parse_toml_string(slice(inner, start, pos))
+            if parsed[0] != "1" { return [] }
+            segs.append(parsed[1])
+        } else {
+            let start = pos
+            while pos < n {
+                let c = ord(inner[pos])
+                let bare = (c >= 65 and c <= 90) or (c >= 97 and c <= 122) or (c >= 48 and c <= 57) or c == 95 or c == 45
+                if not bare { break }
+                pos = pos + 1
+            }
+            if pos == start { return [] }
+            segs.append(slice(inner, start, pos))
+        }
+        while pos < n and (inner[pos] == " " or inner[pos] == "\t") { pos = pos + 1 }
+        if pos < n {
+            if inner[pos] != "." { return [] }
+            pos = pos + 1
+        }
+    }
+    return segs
+}
+
+fn proj_split_kv_eq(line: str) -> list[str] {
+    let mut in_dq = false
+    let mut in_sq = false
+    let mut esc = false
+    let n = len(line)
+    for i in 0..n {
+        let ch = line[i]
+        if in_dq {
+            if esc { esc = false }
+            elif ch == "\\" { esc = true }
+            elif ch == "\"" { in_dq = false }
+        } elif in_sq {
+            if ch == "'" { in_sq = false }
+        } else {
+            if ch == "\"" { in_dq = true }
+            elif ch == "'" { in_sq = true }
+            elif ch == "=" {
+                return ["1", lsp_trim(slice(line, 0, i)), lsp_trim(slice(line, i + 1, n))]
+            }
+        }
+    }
+    return ["0", "", ""]
+}
+
+fn proj_find_target_idx(m: ProjectManifest, name: str) -> int {
+    for i in 0..len(m.targets) {
+        if m.targets[i].name == name { return i }
+    }
+    return -1
+}
+
+fn proj_fail(m: ProjectManifest, code: str, msg: str) -> ProjectManifest {
+    m.ok = false
+    m.err_code = code
+    m.err_msg = msg
+    return m
+}
+
+fn proj_parse_inline_preopens(raw_val: str, root_canon: str, target_label: str) -> list[str] {
+    let s = lsp_trim(raw_val)
+    let n = len(s)
+    if n < 2 or s[0] != "[" or s[n - 1] != "]" {
+        return ["0", target_label + ".preopens must be an array of tables"]
+    }
+    let body = lsp_trim(slice(s, 1, n - 1))
+    if body == "" { return ["1"] }
+    let mut items: list[str] = []
+    let mut cur = ""
+    let mut in_dq = false
+    let mut in_sq = false
+    let mut esc = false
+    let mut depth = 0
+    for i in 0..len(body) {
+        let ch = body[i]
+        if in_dq {
+            if esc { esc = false }
+            elif ch == "\\" { esc = true }
+            elif ch == "\"" { in_dq = false }
+            cur = cur + ch
+        } elif in_sq {
+            if ch == "'" { in_sq = false }
+            cur = cur + ch
+        } else {
+            if ch == "\"" { in_dq = true cur = cur + ch }
+            elif ch == "'" { in_sq = true cur = cur + ch }
+            elif ch == "{" or ch == "[" { depth = depth + 1 cur = cur + ch }
+            elif ch == "}" or ch == "]" { depth = depth - 1 cur = cur + ch }
+            elif ch == "," and depth == 0 {
+                let t = lsp_trim(cur)
+                if t != "" { items.append(t) }
+                cur = ""
+            } else {
+                cur = cur + ch
+            }
+        }
+    }
+    let last = lsp_trim(cur)
+    if last != "" { items.append(last) }
+    let mut out: list[str] = ["1"]
+    let mut seen_paths: list[str] = []
+    for idx in 0..len(items) {
+        let item = items[idx]
+        let li = len(item)
+        let label = target_label + ".preopens[" + str(idx) + "]"
+        if li < 2 or item[0] != "{" or item[li - 1] != "}" {
+            return ["0", label + " must be an inline table"]
+        }
+        let inner = lsp_trim(slice(item, 1, li - 1))
+        let mut parts: list[str] = []
+        let mut pc = ""
+        let mut pq = false
+        let mut psq = false
+        let mut pe = false
+        for j in 0..len(inner) {
+            let c = inner[j]
+            if pq {
+                if pe { pe = false }
+                elif c == "\\" { pe = true }
+                elif c == "\"" { pq = false }
+                pc = pc + c
+            } elif psq {
+                if c == "'" { psq = false }
+                pc = pc + c
+            } else {
+                if c == "\"" { pq = true pc = pc + c }
+                elif c == "'" { psq = true pc = pc + c }
+                elif c == "," { parts.append(lsp_trim(pc)) pc = "" }
+                else { pc = pc + c }
+            }
+        }
+        if lsp_trim(pc) != "" { parts.append(lsp_trim(pc)) }
+        let mut ppath = ""
+        let mut pacc = ""
+        for kv_str in parts {
+            let kv = proj_split_kv_eq(kv_str)
+            if kv[0] != "1" { return ["0", "invalid entry in " + label] }
+            let k = kv[1]
+            let vr = proj_parse_toml_string(kv[2])
+            if vr[0] != "1" { return ["0", label + "." + k + " must be a string"] }
+            if k == "path" { ppath = vr[1] }
+            elif k == "access" { pacc = vr[1] }
+            else { return ["0", "unknown key in " + label + ": " + k] }
+        }
+        let rel = proj_safe_rel_path(ppath, label + ".path")
+        if rel[0] != "1" { return ["0", rel[1]] }
+        if pacc != "read-only" and pacc != "read-write" {
+            return ["0", label + ".access must be 'read-only' or 'read-write'"]
+        }
+        if tool_str_contains(seen_paths, ppath) {
+            return ["0", label + ".path duplicates another preopen"]
+        }
+        seen_paths.append(ppath)
+        let cont = proj_contained_existing(root_canon, ppath, label + ".path")
+        if cont[0] != "1" { return ["0", cont[1]] }
+        if not proj_is_dir(cont[1]) {
+            return ["0", label + ".path must name an existing directory"]
+        }
+        out.append(ppath)
+        out.append(pacc)
+    }
+    return out
+}
+
+fn proj_parse_manifest_at(abs_manifest_path: str, visit_stack: list[str]) -> ProjectManifest {
+    let norm_m = module_normalize(abs_manifest_path)
+    let raw = read_file(norm_m) else err {
+        let fail_m = new ProjectManifest(norm_m, module_directory(norm_m))
+        return proj_fail(fail_m, "W5004", "cannot read manifest '" + norm_m + "': " + err.message)
+    }
+    let canon_m = module_canonical_resolved(norm_m)
+    let resolved_m = if canon_m != "" { canon_m } else { norm_m }
+    let dir_with_slash = module_directory(resolved_m)
+    let root_raw = if len(dir_with_slash) > 1 and proj_str_ends_with(dir_with_slash, "/") {
+        slice(dir_with_slash, 0, len(dir_with_slash) - 1)
+    } else { dir_with_slash }
+    let canon_root = module_canonical_resolved(root_raw)
+    let root = if canon_root != "" { canon_root } else { root_raw }
+
+    for active in visit_stack {
+        if active == root {
+            let fail_m = new ProjectManifest(resolved_m, root)
+            return proj_fail(fail_m, "W5002", "dependency cycle detected at: " + root)
+        }
+    }
+
+    let m = new ProjectManifest(resolved_m, root)
+    let raw_lines = schema_split_lines(raw)
+    let mut logical_lines: list[str] = []
+    let mut buf = ""
+    let mut balance = 0
+    for rline in raw_lines {
+        let stripped = lsp_trim(proj_strip_toml_comment(rline))
+        if buf == "" and stripped == "" { continue }
+        if buf == "" { buf = stripped } else { buf = buf + " " + stripped }
+        balance = balance + proj_bracket_delta(stripped)
+        if balance <= 0 {
+            logical_lines.append(buf)
+            buf = ""
+            balance = 0
+        }
+    }
+    if buf != "" {
+        return proj_fail(m, "W5002", "unclosed TOML bracket/brace in '" + resolved_m + "'")
+    }
+
+    let mut cur_sec = ""
+    let mut cur_sub = ""
+    let mut cur_target_idx = -1
+    let mut cur_test_idx = -1
+
+    for line in logical_lines {
+        let nl = len(line)
+        if nl >= 4 and slice(line, 0, 2) == "[[" and slice(line, nl - 2, nl) == "]]" {
+            let hdr = proj_parse_header_segs(lsp_trim(slice(line, 2, nl - 2)))
+            if len(hdr) == 1 and hdr[0] == "tests" {
+                cur_sec = "tests"
+                cur_sub = ""
+                cur_target_idx = -1
+                cur_test_idx = len(m.tests)
+                m.tests.append(new ProjectTestCase())
+                let fresh: list[str] = []
+                m.active_test_keys = fresh
+                continue
+            }
+            return proj_fail(m, "W5002", "unknown or unsupported array table in manifest: " + line)
+        }
+        if nl >= 2 and line[0] == "[" and line[nl - 1] == "]" {
+            let hdr = proj_parse_header_segs(lsp_trim(slice(line, 1, nl - 1)))
+            if len(hdr) == 1 {
+                let s = hdr[0]
+                if s == "package" {
+                    if m.has_pkg_table { return proj_fail(m, "W5002", "duplicate [package] table") }
+                    m.has_pkg_table = true
+                    cur_sec = "package"
+                    continue
+                }
+                if s == "toolchain" {
+                    if m.has_tc_table { return proj_fail(m, "W5002", "duplicate [toolchain] table") }
+                    m.has_tc_table = true
+                    cur_sec = "toolchain"
+                    continue
+                }
+                if s == "sources" {
+                    if m.has_src_table { return proj_fail(m, "W5002", "duplicate [sources] table") }
+                    m.has_src_table = true
+                    cur_sec = "sources"
+                    continue
+                }
+                return proj_fail(m, "W5002", "unknown key in manifest: " + s)
+            }
+            if len(hdr) == 2 and hdr[0] == "targets" {
+                let tname = hdr[1]
+                if not proj_valid_name(tname) { return proj_fail(m, "W5002", "invalid target name '" + tname + "'") }
+                if proj_find_target_idx(m, tname) >= 0 { return proj_fail(m, "W5002", "duplicate target '" + tname + "'") }
+                cur_sec = "targets"
+                cur_sub = tname
+                cur_target_idx = len(m.targets)
+                m.targets.append(new ProjectTarget(tname))
+                let tks: list[str] = []
+                m.seen_target_keys.append(tks)
+                continue
+            }
+            if len(hdr) == 2 and hdr[0] == "dependencies" {
+                let alias = hdr[1]
+                if not proj_valid_name(alias) { return proj_fail(m, "W5002", "invalid dependency alias '" + alias + "'") }
+                if tool_str_contains(m.seen_dep_aliases, alias) { return proj_fail(m, "W5002", "duplicate dependency '" + alias + "'") }
+                cur_sec = "dependencies"
+                cur_sub = alias
+                m.seen_dep_aliases.append(alias)
+                let dks: list[str] = []
+                m.seen_dep_keys.append(dks)
+                continue
+            }
+            return proj_fail(m, "W5002", "unknown or invalid table in manifest: " + line)
+        }
+
+        let kv = proj_split_kv_eq(line)
+        if kv[0] != "1" { return proj_fail(m, "W5002", "cannot read manifest '" + resolved_m + "': expected key = value at '" + line + "'") }
+        let key = kv[1]
+        let val = kv[2]
+
+        if cur_sec == "" {
+            if key == "manifest_version" {
+                let iv = proj_parse_toml_int(val)
+                if iv[0] != "1" or lsp_parse_int(iv[1], -1) != 1 {
+                    return proj_fail(m, "W5002", "manifest_version must be exactly 1")
+                }
+                m.has_manifest_version = true
+                m.manifest_version = 1
+                continue
+            }
+            return proj_fail(m, "W5002", "unknown key in manifest: " + key)
+        }
+        if cur_sec == "package" {
+            if tool_str_contains(m.pkg_keys, key) { return proj_fail(m, "W5002", "duplicate key in package: " + key) }
+            m.pkg_keys.append(key)
+            let sv = proj_parse_toml_string(val)
+            if key == "name" {
+                if sv[0] != "1" or lsp_trim(sv[1]) == "" { return proj_fail(m, "W5002", "package.name must be a non-empty string") }
+                m.name = sv[1]
+            } elif key == "version" {
+                if sv[0] != "1" or lsp_trim(sv[1]) == "" { return proj_fail(m, "W5002", "package.version must be a non-empty string") }
+                m.version = sv[1]
+            } elif key == "language" {
+                if sv[0] != "1" or lsp_trim(sv[1]) == "" { return proj_fail(m, "W5002", "package.language must be a non-empty string") }
+                m.language_version = sv[1]
+            } else {
+                return proj_fail(m, "W5002", "unknown key in package: " + key)
+            }
+            continue
+        }
+        if cur_sec == "toolchain" {
+            if tool_str_contains(m.tc_keys, key) { return proj_fail(m, "W5002", "duplicate key in toolchain: " + key) }
+            m.tc_keys.append(key)
+            let sv = proj_parse_toml_string(val)
+            if key == "compiler" {
+                if sv[0] != "1" or lsp_trim(sv[1]) == "" { return proj_fail(m, "W5002", "toolchain.compiler must be a non-empty string") }
+                m.compiler_version = sv[1]
+            } elif key == "stdlib" {
+                if sv[0] != "1" or lsp_trim(sv[1]) == "" { return proj_fail(m, "W5002", "toolchain.stdlib must be a non-empty string") }
+                m.stdlib = sv[1]
+            } else {
+                return proj_fail(m, "W5002", "unknown key in toolchain: " + key)
+            }
+            continue
+        }
+        if cur_sec == "sources" {
+            if tool_str_contains(m.src_keys, key) { return proj_fail(m, "W5002", "duplicate key in sources: " + key) }
+            m.src_keys.append(key)
+            let sv = proj_parse_toml_string(val)
+            if key == "root" {
+                if sv[0] != "1" or lsp_trim(sv[1]) == "" { return proj_fail(m, "W5002", "sources.root must be a non-empty string") }
+                m.source_root_rel = sv[1]
+            } else {
+                return proj_fail(m, "W5002", "unknown key in sources: " + key)
+            }
+            continue
+        }
+        if cur_sec == "targets" {
+            let label = "targets." + cur_sub
+            if tool_str_contains(m.seen_target_keys[cur_target_idx], key) {
+                return proj_fail(m, "W5002", "duplicate key in " + label + ": " + key)
+            }
+            m.seen_target_keys[cur_target_idx].append(key)
+            let t = m.targets[cur_target_idx]
+            if key == "entry" {
+                let sv = proj_parse_toml_string(val)
+                if sv[0] != "1" { return proj_fail(m, "W5002", label + ".entry must be a non-empty string") }
+                t.entry = sv[1]
+            } elif key == "profile" {
+                let sv = proj_parse_toml_string(val)
+                if sv[0] != "1" { return proj_fail(m, "W5002", label + ".profile must be a non-empty string") }
+                t.profile = sv[1]
+            } elif key == "preopens" {
+                let pr = proj_parse_inline_preopens(val, root, label)
+                if pr[0] != "1" { return proj_fail(m, "W5002", pr[1]) }
+                t.has_preopens = true
+                let mut k = 1
+                while k + 1 < len(pr) {
+                    t.preopens.append(new ProjectPreopen(pr[k], pr[k + 1]))
+                    k = k + 2
+                }
+            } elif key == "fuel" {
+                let iv = proj_parse_toml_int(val)
+                if iv[0] != "1" { return proj_fail(m, "W5002", label + ".fuel must be between 1000 and 10000000000") }
+                let fv = lsp_parse_int(iv[1], -1)
+                if fv < 1000 or fv > 10000000000 { return proj_fail(m, "W5002", label + ".fuel must be between 1000 and 10000000000") }
+                t.has_fuel = true
+                t.fuel = fv
+            } elif key == "memory_limit_mb" {
+                let iv = proj_parse_toml_int(val)
+                if iv[0] != "1" { return proj_fail(m, "W5002", label + ".memory_limit_mb must be between 8 and 1024") }
+                let mv = lsp_parse_int(iv[1], -1)
+                if mv < 8 or mv > 1024 { return proj_fail(m, "W5002", label + ".memory_limit_mb must be between 8 and 1024") }
+                t.has_memory_limit_mb = true
+                t.memory_limit_mb = mv
+            } else {
+                return proj_fail(m, "W5002", "unknown key in " + label + ": " + key)
+            }
+            continue
+        }
+        if cur_sec == "dependencies" {
+            let dep_idx = len(m.seen_dep_aliases) - 1
+            let label = "dependencies." + cur_sub
+            if tool_str_contains(m.seen_dep_keys[dep_idx], key) {
+                return proj_fail(m, "W5002", "duplicate key in " + label + ": " + key)
+            }
+            m.seen_dep_keys[dep_idx].append(key)
+            if key != "path" { return proj_fail(m, "W5002", "unknown key in " + label + ": " + key) }
+            let sv = proj_parse_toml_string(val)
+            if sv[0] != "1" { return proj_fail(m, "W5002", label + ".path must be a non-empty string") }
+            let rel = proj_safe_rel_path(sv[1], label + ".path")
+            if rel[0] != "1" { return proj_fail(m, "W5002", rel[1]) }
+            let cont = proj_contained_existing(root, rel[1], label + ".path")
+            if cont[0] != "1" { return proj_fail(m, "W5002", cont[1]) }
+            if not proj_is_dir(cont[1]) { return proj_fail(m, "W5002", label + ".path must name a directory") }
+            let mut next_stack: list[str] = []
+            for s_item in visit_stack { next_stack.append(s_item) }
+            next_stack.append(root)
+            let dep_manifest = proj_parse_manifest_at(cont[1] + "/wysna.toml", next_stack)
+            if not dep_manifest.ok { return proj_fail(m, dep_manifest.err_code, dep_manifest.err_msg) }
+            let pkg_id = dep_manifest.name + "@" + dep_manifest.version
+            m.deps.append(new ProjectDep(cur_sub, rel[1], cont[1], dep_manifest.source_root_abs, pkg_id))
+            continue
+        }
+        if cur_sec == "tests" {
+            let label = "tests[" + str(cur_test_idx) + "]"
+            if tool_str_contains(m.active_test_keys, key) {
+                return proj_fail(m, "W5002", "duplicate key in " + label + ": " + key)
+            }
+            m.active_test_keys.append(key)
+            let tc = m.tests[cur_test_idx]
+            if key == "name" {
+                let sv = proj_parse_toml_string(val)
+                if sv[0] != "1" or lsp_trim(sv[1]) == "" { return proj_fail(m, "W5002", label + ".name must be a non-empty string") }
+                tc.name = sv[1]
+                tc.has_name = true
+            } elif key == "entry" {
+                let sv = proj_parse_toml_string(val)
+                if sv[0] != "1" { return proj_fail(m, "W5002", label + ".entry must be a non-empty string") }
+                tc.entry = sv[1]
+                tc.has_entry = true
+            } elif key == "timeout_ms" {
+                let iv = proj_parse_toml_int(val)
+                if iv[0] != "1" { return proj_fail(m, "W5002", label + ".timeout_ms must be between 1 and 600000") }
+                let tv = lsp_parse_int(iv[1], -1)
+                if tv < 1 or tv > 600000 { return proj_fail(m, "W5002", label + ".timeout_ms must be between 1 and 600000") }
+                tc.timeout_ms = tv
+                tc.has_timeout_ms = true
+            } else {
+                return proj_fail(m, "W5002", "unknown key in " + label + ": " + key)
+            }
+            continue
+        }
+    }
+
+    if len(m.deps) != len(m.seen_dep_aliases) {
+        return proj_fail(m, "W5002", "each dependency table requires path")
+    }
+    if not m.has_manifest_version or m.manifest_version != 1 { return proj_fail(m, "W5002", "manifest_version must be exactly 1") }
+    if not m.has_pkg_table { return proj_fail(m, "W5002", "package must be a table") }
+    if not proj_valid_name(m.name) {
+        return proj_fail(m, "W5002", "package.name must start with a lowercase letter and contain only lowercase letters, digits, or hyphens")
+    }
+    if not proj_valid_semver(m.version) {
+        return proj_fail(m, "W5002", "package.version must be an exact semantic version")
+    }
+    if m.language_version != "0.8" {
+        return proj_fail(m, "W5002", "package.language must be exactly '0.8' for this compiler")
+    }
+    if not m.has_tc_table { return proj_fail(m, "W5002", "toolchain must be a table") }
+    if m.compiler_version != "0.8.0" {
+        return proj_fail(m, "W5002", "toolchain.compiler must exactly match this compiler (0.8.0)")
+    }
+    if m.stdlib != "bundled" {
+        return proj_fail(m, "W5002", "toolchain.stdlib must be 'bundled'")
+    }
+    if not m.has_src_table { return proj_fail(m, "W5002", "sources must be a table") }
+    let src_rel = proj_safe_rel_path(m.source_root_rel, "sources.root")
+    if src_rel[0] != "1" { return proj_fail(m, "W5002", src_rel[1]) }
+    let src_cont = proj_contained_existing(root, src_rel[1], "sources.root")
+    if src_cont[0] != "1" { return proj_fail(m, "W5002", src_cont[1]) }
+    if not proj_is_dir(src_cont[1]) { return proj_fail(m, "W5002", "sources.root must name an existing directory") }
+    m.source_root_abs = src_cont[1]
+
+    if len(m.targets) == 0 {
+        return proj_fail(m, "W5002", "targets must contain at least one named target")
+    }
+    for t in m.targets {
+        let label = "targets." + t.name
+        let er = proj_safe_rel_path(t.entry, label + ".entry")
+        if er[0] != "1" { return proj_fail(m, "W5002", er[1]) }
+        if t.profile != "native-cli" and t.profile != "wasi-command" and t.profile != "browser-library" {
+            return proj_fail(m, "W5002", label + ".profile must be 'native-cli', 'wasi-command', or 'browser-library' in manifest version 1")
+        }
+        if t.profile == "native-cli" and (t.has_preopens or t.has_fuel or t.has_memory_limit_mb) {
+            return proj_fail(m, "W5002", label + " resource settings require a WASM target profile")
+        }
+        if t.profile == "browser-library" and (t.has_preopens or t.has_fuel) {
+            return proj_fail(m, "W5002", label + " preopens and fuel require profile = 'wasi-command'")
+        }
+        let ec = proj_contained_existing(root, er[1], label + ".entry")
+        if ec[0] != "1" { return proj_fail(m, "W5002", ec[1]) }
+        if not proj_is_readable_file(ec[1]) or not proj_str_ends_with(ec[1], ".wysna") {
+            return proj_fail(m, "W5002", label + ".entry must name an existing .wysna source file")
+        }
+    }
+
+    let mut seen_t_names: list[str] = []
+    for idx in 0..len(m.tests) {
+        let tc = m.tests[idx]
+        let label = "tests[" + str(idx) + "]"
+        if not tc.has_name or not proj_valid_name(tc.name) or tool_str_contains(seen_t_names, tc.name) {
+            return proj_fail(m, "W5002", label + ".name must be unique and use lowercase letters, digits, or hyphens")
+        }
+        seen_t_names.append(tc.name)
+        let te = proj_safe_rel_path(tc.entry, label + ".entry")
+        if te[0] != "1" { return proj_fail(m, "W5002", te[1]) }
+        let tc_cont = proj_contained_existing(root, te[1], label + ".entry")
+        if tc_cont[0] != "1" { return proj_fail(m, "W5002", tc_cont[1]) }
+        if not proj_is_readable_file(tc_cont[1]) or not proj_str_ends_with(tc_cont[1], ".wysna") {
+            return proj_fail(m, "W5002", label + ".entry must name an existing .wysna source file")
+        }
+    }
+    return m
+}
+
+fn proj_find_manifest_path(explicit: str) -> list[str] {
+    if explicit != "" {
+        let abs = proj_abs_from_cwd(explicit)
+        let cand = if proj_is_dir(abs) { module_normalize(abs + "/wysna.toml") } else { abs }
+        if not proj_is_readable_file(cand) {
+            return ["0", "manifest not found: '" + cand + "'"]
+        }
+        return ["1", cand]
+    }
+    let cwd = module_canonical(mcp_getcwd())
+    let mut cur = cwd
+    while cur != "" {
+        let cand = if cur == "/" { "/wysna.toml" } else { cur + "/wysna.toml" }
+        if proj_is_readable_file(cand) { return ["1", cand] }
+        let mut slash = -1
+        for i in 0..len(cur) { if cur[i] == "/" { slash = i } }
+        if slash < 0 { break }
+        if slash == 0 {
+            if cur == "/" { break }
+            cur = "/"
+        } else {
+            cur = slice(cur, 0, slash)
+        }
+    }
+    return ["0", "no wysna.toml found from the current directory to its parents"]
+}
+
+fn proj_load_manifest(explicit: str) -> ProjectManifest {
+    let found = proj_find_manifest_path(explicit)
+    if found[0] != "1" {
+        let fail_m = new ProjectManifest("", "")
+        return proj_fail(fail_m, "W5002", found[1])
+    }
+    return proj_parse_manifest_at(found[1], [])
+}
+
+fn proj_emit_error_and_exit(subcmd: str, json_mode: bool, code: str, msg: str) -> unit {
+    let cmd_name = if subcmd != "" { "project." + subcmd } else { "project" }
+    let exit_c = if code == "W5004" { 3 } elif code == "W5002" { 2 } else { 1 }
+    let status = if exit_c == 3 { "toolchain_error" } elif exit_c == 2 { "usage_error" } else { "diagnostic_error" }
+    if json_mode {
+        let diag = diag_record_json(code, if exit_c == 2 { "usage" } else { "filesystem" }, "error", msg, "<project>", 1, 1, "")
+        diag_write_output(diag_tool_envelope_json(cmd_name, status, exit_c, "[" + diag + "]", "", "", "[]"))
+    } else {
+        eprint("[" + code + "] wysna project: " + msg)
+    }
+    exit(exit_c)
+}
+
+fn proj_target_meta_json(profile: str) -> str {
+    let triple = if profile == "wasi-command" { "\"wasm32-wasip1\"" } elif profile == "browser-library" { "\"wasm32-unknown-emscripten\"" } else { "null" }
+    return "{\"profile\":" + diag_json_quote(profile) + ",\"triple\":" + triple + "}"
+}
+
+fn proj_check_envelope_json(command: str, status: str, exit_code: int, diagnostics_json: str, target_json: str, artifacts_json: str) -> str {
+    let mut parts: list[str] = ["{\"schema_version\":\"wysna.tool-result/1\""]
+    parts.append(",\"command\":" + diag_json_quote(command))
+    parts.append(",\"status\":" + diag_json_quote(status))
+    parts.append(",\"invocation_id\":\"native\"")
+    parts.append(",\"tool_exit_code\":" + str(exit_code))
+    parts.append(",\"process_exit_code\":" + str(exit_code))
+    parts.append(",\"execution\":null")
+    parts.append(",\"toolchain\":{\"compiler\":\"0.8.0\"}")
+    parts.append(",\"target\":" + target_json)
+    parts.append(",\"diagnostics\":" + diagnostics_json)
+    parts.append(",\"artifacts\":" + artifacts_json)
+    parts.append(",\"telemetry\":null}")
+    return join_strings(parts, "")
+}
+
+fn proj_resolve_entry_override(m: ProjectManifest, raw_override: str) -> list[str] {
+    let rel = proj_safe_rel_path(raw_override, "--entry")
+    if rel[0] != "1" { return ["0", rel[1]] }
+    let cont = proj_contained_existing(m.root, rel[1], "--entry")
+    if cont[0] != "1" { return ["0", cont[1]] }
+    if not proj_is_readable_file(cont[1]) or not proj_str_ends_with(cont[1], ".wysna") {
+        return ["0", "project entry is not an existing .wysna file: '" + raw_override + "'"]
+    }
+    return ["1", cont[1]]
+}
+
+fn proj_is_protected_build_dest(m: ProjectManifest, dest_abs: str) -> bool {
+    let norm = module_canonical(dest_abs)
+    if norm == module_canonical(m.path) or norm == module_canonical(m.root + "/wysna.lock") { return true }
+    for d in m.deps {
+        if norm == module_canonical(d.abs_root + "/wysna.toml") { return true }
+    }
+    if proj_str_ends_with(norm, ".wysna") { return true }
+    return false
+}
+
+fn tool_handle_project(args: list[str], json_mode_in: bool) -> unit {
+    let mut plan_out = ""
+    let mut cleaned: list[str] = []
+    let mut idx = 1
+    while idx < len(args) {
+        if args[idx] == "--resolve-plan" and idx + 1 < len(args) {
+            plan_out = args[idx + 1]
+            idx = idx + 2
+        } else {
+            cleaned.append(args[idx])
+            idx = idx + 1
+        }
+    }
+
+    if len(cleaned) == 0 or cleaned[0] == "--help" or cleaned[0] == "-h" {
+        if json_mode_in {
+            proj_emit_error_and_exit("", true, "W5002", "Usage: wysna project <check|build|run|test> [options]")
+        }
+        print("Usage: wysna project <check|build|run|test> [options]")
+        print("Use --manifest PATH to select a project root explicitly.")
+        if len(cleaned) == 0 { exit(2) }
+        exit(0)
+    }
+
+    let subcmd = cleaned[0]
+    if subcmd != "check" and subcmd != "build" and subcmd != "run" and subcmd != "test" {
+        proj_emit_error_and_exit("", json_mode_in, "W5002", "unknown project command '" + subcmd + "'")
+    }
+
+    let mut manifest_arg = ""
+    let mut target_arg = ""
+    let mut entry_arg = ""
+    let mut filter_arg = ""
+    let mut output_arg = ""
+    let mut has_filter = false
+    let mut frozen = false
+    let mut json_mode = json_mode_in
+
+    let mut i = 1
+    while i < len(cleaned) {
+        let a = cleaned[i]
+        if a == "--" {
+            if subcmd != "run" {
+                proj_emit_error_and_exit(subcmd, json_mode, "W5002", "arguments after -- are supported only by 'wysna project run'")
+            }
+            break
+        } elif a == "--frozen" or a == "--offline" {
+            if a == "--frozen" { frozen = true }
+            i = i + 1
+        } elif a == "--output-format=json-v1" {
+            if subcmd != "check" and subcmd != "build" {
+                proj_emit_error_and_exit(subcmd, true, "W5002", "--output-format=json-v1 is supported only by project check and build")
+            }
+            json_mode = true
+            i = i + 1
+        } elif a == "--output-format" and i + 1 < len(cleaned) {
+            if subcmd != "check" and subcmd != "build" {
+                proj_emit_error_and_exit(subcmd, true, "W5002", "--output-format=json-v1 is supported only by project check and build")
+            }
+            if cleaned[i + 1] != "json-v1" {
+                proj_emit_error_and_exit(subcmd, json_mode, "W5002", "unsupported output format: " + cleaned[i + 1])
+            }
+            json_mode = true
+            i = i + 2
+        } elif a == "--manifest" and i + 1 < len(cleaned) {
+            manifest_arg = cleaned[i + 1]
+            i = i + 2
+        } elif a == "--target" and i + 1 < len(cleaned) {
+            if subcmd != "check" and subcmd != "build" and subcmd != "run" {
+                proj_emit_error_and_exit(subcmd, json_mode, "W5002", "--target is supported only by project check, build, and run")
+            }
+            target_arg = cleaned[i + 1]
+            i = i + 2
+        } elif a == "--entry" and i + 1 < len(cleaned) {
+            if subcmd != "run" {
+                proj_emit_error_and_exit(subcmd, json_mode, "W5002", "--entry is supported only by 'wysna project run'")
+            }
+            entry_arg = cleaned[i + 1]
+            i = i + 2
+        } elif a == "--filter" and i + 1 < len(cleaned) {
+            if subcmd != "test" {
+                proj_emit_error_and_exit(subcmd, json_mode, "W5002", "--filter is supported only by 'wysna project test'")
+            }
+            filter_arg = cleaned[i + 1]
+            has_filter = true
+            i = i + 2
+        } elif (a == "-o" or a == "--output") and i + 1 < len(cleaned) {
+            if subcmd != "build" {
+                proj_emit_error_and_exit(subcmd, json_mode, "W5002", "-o is supported only by 'wysna project build'")
+            }
+            output_arg = cleaned[i + 1]
+            i = i + 2
+        } else {
+            proj_emit_error_and_exit(subcmd, json_mode, "W5002", "unknown or incomplete option for project " + subcmd + ": " + a)
+        }
+    }
+
+    let m = proj_load_manifest(manifest_arg)
+    if not m.ok {
+        proj_emit_error_and_exit(subcmd, json_mode, m.err_code, m.err_msg)
+    }
+    if frozen {
+        proj_emit_error_and_exit(subcmd, json_mode, "W5002", "--frozen requires lockfile verification; use Wysna Seed for this option")
+    }
+
+    let mut dep_aliases: list[str] = []
+    let mut dep_roots: list[str] = []
+    for d in m.deps {
+        dep_aliases.append(d.alias)
+        dep_roots.append(d.source_root_abs)
+    }
+
+    if subcmd == "check" {
+        let tname = if target_arg != "" { target_arg } else { "app" }
+        let tidx = proj_find_target_idx(m, tname)
+        if tidx < 0 {
+            proj_emit_error_and_exit("check", json_mode, "W5002", "unknown target '" + tname + "'")
+        }
+        let target = m.targets[tidx]
+        let entry_path = m.root + "/" + target.entry
+        let src = read_file(entry_path) else err {
+            proj_emit_error_and_exit("check", json_mode, "W5004", "cannot read project entry '" + entry_path + "': " + err.message)
+            ""
+        }
+        let loader = new ModuleLoader()
+        loader.project_sources_root = m.source_root_abs
+        loader.dep_aliases = dep_aliases
+        loader.dep_roots = dep_roots
+        module_expand(loader, src, entry_path, true)
+        loader.output.append(Token { kind: "EOF", val: "", line: 1, col: 1, file: module_normalize(entry_path) })
+        let checked = check_program(loader.output, module_canonical(entry_path), true)
+        for node in checked.nodes {
+            if node.kind == "unsupported" {
+                report_error_at("W2013", node.source, "Compiler native-core-v1 does not support expression " + node.text)
+            }
+        }
+        let mod_count = str(len(loader.paths))
+        if json_mode {
+            diag_write_output(proj_check_envelope_json("project.check", "ok", 0, "[]", proj_target_meta_json(target.profile), "[]"))
+        } else {
+            print("[OK] Project check passed: " + m.name + " (" + mod_count + " modules)")
+        }
+        exit(0)
+    }
+
+    if plan_out == "" {
+        proj_emit_error_and_exit(subcmd, json_mode, "W5002", "project " + subcmd + " requires the wysna native SDK driver")
+    }
+
+    let mut lines: list[str] = []
+    lines.append("KIND=" + subcmd)
+    lines.append("NAME=" + m.name)
+    lines.append("ROOT=" + m.root)
+    lines.append("SRC_ROOT=" + m.source_root_abs)
+    for d in m.deps {
+        lines.append("DEP=" + d.alias + "\t" + d.source_root_abs)
+    }
+
+    if subcmd == "build" or subcmd == "run" {
+        let tname = if target_arg != "" { target_arg } else { "app" }
+        let tidx = proj_find_target_idx(m, tname)
+        if tidx < 0 {
+            proj_emit_error_and_exit(subcmd, json_mode, "W5002", "unknown target '" + tname + "'")
+        }
+        let target = m.targets[tidx]
+        if target.profile != "native-cli" {
+            proj_emit_error_and_exit(subcmd, json_mode, "W5002", "native SDK only supports profile = 'native-cli' (target '" + target.name + "' uses '" + target.profile + "')")
+        }
+        let mut entry_abs = m.root + "/" + target.entry
+        if entry_arg != "" {
+            let ov = proj_resolve_entry_override(m, entry_arg)
+            if ov[0] != "1" {
+                proj_emit_error_and_exit(subcmd, json_mode, "W5002", ov[1])
+            }
+            entry_abs = ov[1]
+        }
+        lines.append("TARGET=" + target.name)
+        lines.append("ENTRY=" + entry_abs)
+        if subcmd == "build" {
+            let dest = if output_arg != "" { proj_abs_from_cwd(output_arg) } else { module_normalize(m.root + "/build/" + target.name) }
+            if proj_is_protected_build_dest(m, dest) {
+                proj_emit_error_and_exit("build", json_mode, "W5002", "build output must not overwrite a source, manifest, or lockfile")
+            }
+            lines.append("OUTPUT=" + dest)
+        }
+    } else {
+        let mut selected: list[ProjectTestCase] = []
+        for tc in m.tests {
+            if not has_filter or proj_str_contains_substr(tc.name, filter_arg) {
+                selected.append(tc)
+            }
+        }
+        if len(selected) == 0 {
+            if has_filter {
+                proj_emit_error_and_exit("test", json_mode, "W5002", "test filter '" + filter_arg + "' matched no cases")
+            }
+            print("[EMPTY] No [[tests]] cases are declared; no project code was checked.")
+            exit(2)
+        }
+        for tc in selected {
+            lines.append("TEST=" + tc.name + "\t" + str(tc.timeout_ms) + "\t" + m.root + "/" + tc.entry)
+        }
+    }
+
+    write_file(plan_out, join_strings(lines, "\n") + "\n") else err {
+        proj_emit_error_and_exit(subcmd, json_mode, "W5004", "cannot write project execution plan: " + err.message)
+    }
+    exit(0)
+}

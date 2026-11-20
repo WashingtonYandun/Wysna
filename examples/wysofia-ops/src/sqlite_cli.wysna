@@ -1,0 +1,50 @@
+import "audit.wysna" as audit
+
+extern "C" fn ops_db_open() -> opaque
+extern "C" fn ops_db_is_open(handle: opaque) -> int32
+extern "C" fn ops_db_record(handle: opaque, event_id: int64, status_code: int64, latency_ms: int64, risk_points: int64) -> int32
+extern "C" fn ops_db_count(handle: opaque) -> int64
+extern "C" fn ops_db_critical_count(handle: opaque) -> int64
+extern "C" fn ops_db_close(handle: opaque) -> int32
+
+fn main() -> unit {
+    let db = ops_db_open()
+    if ops_db_is_open(db) == 0 {
+        eprint("wysofia-ops: failed to open SQLite audit database")
+        exit(1)
+    }
+    let sample = (
+        "[" +
+        "{\"service\":\"maby-router\",\"status_code\":200,\"latency_ms\":80,\"token_cost\":320}," +
+        "{\"service\":\"wyedge-odds\",\"status_code\":502,\"latency_ms\":1700,\"token_cost\":640}," +
+        "{\"service\":\"auth-gateway\",\"status_code\":429,\"latency_ms\":450,\"token_cost\":90}" +
+        "]"
+    )
+    let fallback: list[audit.AuditEvent] = []
+    let events = audit.parse_events_json(sample) else err {
+        let _closed = ops_db_close(db)
+        eprint("wysofia-ops: " + err.reason)
+        exit(1)
+        fallback
+    }
+    for idx in 0..len(events) {
+        let ev = events[idx]
+        let risk = audit.compute_risk_points(ev.status_code, ev.latency_ms)
+        let rc = ops_db_record(db, idx + 1, ev.status_code, ev.latency_ms, risk)
+        if rc != 0 {
+            let _closed = ops_db_close(db)
+            eprint("wysofia-ops: sqlite insert failed")
+            exit(1)
+        }
+    }
+    let total = ops_db_count(db)
+    let critical = ops_db_critical_count(db)
+    let close_rc = ops_db_close(db)
+    if close_rc != 0 {
+        eprint("wysofia-ops: sqlite close failed")
+        exit(1)
+    }
+    print("sqlite_total=" + str(total) + " critical=" + str(critical))
+}
+
+main()

@@ -1,0 +1,774 @@
+# Native standard-library and project API index generator (wysna.api-index/1).
+
+class ApiParam {
+    name: str
+    type_text: str
+    fn init(name: str, type_text: str) {
+        this.name = name
+        this.type_text = type_text
+    }
+}
+
+class ApiField {
+    name: str
+    type_text: str
+    fn init(name: str, type_text: str) {
+        this.name = name
+        this.type_text = type_text
+    }
+}
+
+class ApiVariant {
+    name: str
+    payloads: list[str]
+    fn init(name: str) {
+        this.name = name
+        let ps: list[str] = []
+        this.payloads = ps
+    }
+}
+
+class ApiSymbol {
+    identity: str
+    name: str
+    kind: str
+    signature: str
+    type_parameters: list[str]
+    parameters: list[ApiParam]
+    return_type: str
+    has_error_channel: bool
+    error_channel: str
+    fields: list[ApiField]
+    variants: list[ApiVariant]
+    methods: list[ApiSymbol]
+    has_doc: bool
+    documentation: str
+    module_id: str
+    package_id: str
+
+    fn init(identity: str, name: str, kind: str, signature: str, module_id: str, package_id: str) {
+        this.identity = identity
+        this.name = name
+        this.kind = kind
+        this.signature = signature
+        let tps: list[str] = []
+        this.type_parameters = tps
+        let ps: list[ApiParam] = []
+        this.parameters = ps
+        this.return_type = "unit"
+        this.has_error_channel = false
+        this.error_channel = ""
+        let fs: list[ApiField] = []
+        this.fields = fs
+        let vs: list[ApiVariant] = []
+        this.variants = vs
+        let ms: list[ApiSymbol] = []
+        this.methods = ms
+        this.has_doc = false
+        this.documentation = ""
+        this.module_id = module_id
+        this.package_id = package_id
+    }
+}
+
+class ApiModuleRecord {
+    identity: str
+    symbols: list[ApiSymbol]
+    imports: list[str]
+
+    fn init(identity: str) {
+        this.identity = identity
+        let ss: list[ApiSymbol] = []
+        this.symbols = ss
+        let imps: list[str] = []
+        this.imports = imps
+    }
+}
+
+class ApiIndexCollector {
+    stdlib_root: str
+    visited: list[str]
+    modules: list[ApiModuleRecord]
+
+    fn init(stdlib_root: str) {
+        this.stdlib_root = stdlib_root
+        let vs: list[str] = []
+        this.visited = vs
+        let ms: list[ApiModuleRecord] = []
+        this.modules = ms
+    }
+}
+
+fn api_find_stdlib_root() -> str {
+    let explicit = lsp_stdlib_root_arg()
+    if explicit != "" {
+        let c = module_canonical_resolved(explicit)
+        return if c != "" { c } else { module_normalize(explicit) }
+    }
+    let arguments = args()
+    if len(arguments) > 0 {
+        let mut directory = module_directory(module_normalize(arguments[0]))
+        while directory != "" {
+            let probe = module_normalize(directory + "stdlib/json.wysna")
+            if proj_is_readable_file(probe) {
+                let c = module_canonical_resolved(module_normalize(directory + "stdlib"))
+                if c != "" { return c }
+                return module_normalize(directory + "stdlib")
+            }
+            let trim_d = if len(directory) > 1 and proj_str_ends_with(directory, "/") {
+                slice(directory, 0, len(directory) - 1)
+            } else { directory }
+            let parent = module_directory(trim_d)
+            if parent == directory { break }
+            directory = parent
+        }
+    }
+    let cwd = mcp_getcwd()
+    let local_std = if cwd != "" { module_normalize(cwd + "/stdlib") } else { "stdlib" }
+    let c = module_canonical_resolved(local_std)
+    return if c != "" { c } else { local_std }
+}
+
+fn api_resolve_stdlib_module(stdlib_root: str, relative_in: str) -> list[str] {
+    if lsp_trim(relative_in) == "" {
+        return ["0", "invalid standard-library module path: '" + relative_in + "'"]
+    }
+    let norm_rel = if len(relative_in) >= 4 and slice(relative_in, 0, 4) == "std/" {
+        slice(relative_in, 4, len(relative_in))
+    } else {
+        relative_in
+    }
+    if not module_safe_pkg_rel(norm_rel) {
+        return ["0", "invalid standard-library module path: '" + relative_in + "'"]
+    }
+    let with_ext = if proj_str_ends_with(norm_rel, ".wysna") { norm_rel } else { norm_rel + ".wysna" }
+    let cand = if stdlib_root == "/" { "/" + with_ext } else { stdlib_root + "/" + with_ext }
+    if not proj_is_readable_file(cand) or not module_is_confined_under(cand, stdlib_root) {
+        return ["0", "standard-library module not found: '" + relative_in + "'"]
+    }
+    let canon = module_canonical_resolved(cand)
+    return ["1", if canon != "" { canon } else { cand }]
+}
+
+fn api_availability_json(module_id: str) -> str {
+    let mut interp = "supported"
+    let mut nat = "supported"
+    let mut selfhost = "unknown"
+    let mut wasm = "supported"
+    if module_id == "std/http" or (len(module_id) >= 9 and slice(module_id, 0, 9) == "std/http/") {
+        interp = "requires-pycurl-extra"
+        nat = "requires-libcurl"
+        selfhost = "requires-libcurl"
+        wasm = "unavailable"
+    } elif module_id == "std/process" or (len(module_id) >= 12 and slice(module_id, 0, 12) == "std/process/") {
+        wasm = "unavailable"
+    } elif module_id == "std/fs" or module_id == "std/files" {
+        wasm = "requires-declared-preopens"
+    }
+    return "{\"interpreter\":" + diag_json_quote(interp) + ",\"native\":" + diag_json_quote(nat) + ",\"selfhost\":" + diag_json_quote(selfhost) + ",\"wasm\":" + diag_json_quote(wasm) + "}"
+}
+
+fn api_set_doc(sym: ApiSymbol, lines: list[str], decl_line: int) -> unit {
+    let doc = schema_leading_doc(lines, decl_line)
+    if doc[0] == "1" {
+        sym.has_doc = true
+        sym.documentation = doc[1]
+    }
+}
+
+fn api_skip_generics_names(c: SchemaTokCursor) -> list[str] {
+    let mut names: list[str] = []
+    if schema_cur_kind(c) != "LBRACKET" { return names }
+    c.pos = c.pos + 1
+    let mut depth = 1
+    let mut take_next = true
+    while depth > 0 and schema_cur_kind(c) != "EOF" {
+        let k = schema_cur_kind(c)
+        if k == "LBRACKET" {
+            depth = depth + 1
+        } elif k == "RBRACKET" {
+            depth = depth - 1
+            if depth == 0 { c.pos = c.pos + 1 break }
+        } elif depth == 1 and k == "COMMA" {
+            take_next = true
+        } elif depth == 1 and take_next and k == "IDENT" {
+            names.append(schema_cur_val(c))
+            take_next = false
+        }
+        c.pos = c.pos + 1
+    }
+    return names
+}
+
+fn api_skip_contract_clauses(c: SchemaTokCursor, stop_at_newline: bool) -> unit {
+    while schema_cur_kind(c) != "EOF" {
+        let k = schema_cur_kind(c)
+        if k == "LBRACE" or k == "RBRACE" { break }
+        if stop_at_newline and k == "NEWLINE" { break }
+        c.pos = c.pos + 1
+    }
+}
+
+fn api_parse_fn_symbol(c: SchemaTokCursor, lines: list[str], owner_prefix: str, kind: str, module_id: str, package_id: str, has_body_block: bool) -> ApiSymbol {
+    let decl_line = c.tokens[c.pos].line
+    c.pos = c.pos + 1
+    let name = schema_cur_val(c)
+    c.pos = c.pos + 1
+    let tps = api_skip_generics_names(c)
+    let mut params: list[ApiParam] = []
+    schema_skip_newlines(c)
+    if schema_cur_kind(c) == "LPAREN" {
+        c.pos = c.pos + 1
+        while schema_cur_kind(c) != "RPAREN" and schema_cur_kind(c) != "EOF" {
+            schema_skip_newlines(c)
+            if schema_cur_kind(c) == "RPAREN" { break }
+            if schema_cur_kind(c) == "IDENT" or schema_cur_kind(c) == "THIS" {
+                let pname = schema_cur_val(c)
+                c.pos = c.pos + 1
+                schema_skip_newlines(c)
+                let mut ptype_text = "inferred"
+                if schema_cur_kind(c) == "COLON" {
+                    c.pos = c.pos + 1
+                    ptype_text = schema_type_text(schema_parse_type(c))
+                }
+                params.append(new ApiParam(pname, ptype_text))
+                schema_skip_newlines(c)
+                if schema_cur_kind(c) == "COMMA" { c.pos = c.pos + 1 } else { break }
+            } else {
+                c.pos = c.pos + 1
+            }
+        }
+        if schema_cur_kind(c) == "RPAREN" { c.pos = c.pos + 1 }
+    }
+
+    let mut ret_text = if kind == "method" and name == "init" { "unit" } else { "inferred" }
+    let mut has_err = false
+    let mut err_text = ""
+    if schema_cur_kind(c) == "ARROW" {
+        c.pos = c.pos + 1
+        let ret_t = schema_parse_type(c)
+        ret_text = schema_type_text(ret_t)
+        if ret_t.kind == "result" and len(ret_t.args) == 2 {
+            has_err = true
+            err_text = schema_type_text(ret_t.args[1])
+        }
+    }
+
+    if has_body_block {
+        api_skip_contract_clauses(c, false)
+        if schema_cur_kind(c) == "LBRACE" { schema_skip_brace_block(c) }
+    } else {
+        api_skip_contract_clauses(c, true)
+    }
+
+    let gen_str = if len(tps) > 0 { "[" + join_strings(tps, ", ") + "]" } else { "" }
+    let mut sig_params: list[str] = []
+    for p in params { sig_params.append(p.name + ": " + p.type_text) }
+    let signature = "fn " + name + gen_str + "(" + join_strings(sig_params, ", ") + ") -> " + ret_text
+    let identity = owner_prefix + "#" + kind + "/" + name
+    let sym = new ApiSymbol(identity, name, kind, signature, module_id, package_id)
+    sym.type_parameters = tps
+    sym.parameters = params
+    sym.return_type = ret_text
+    sym.has_error_channel = has_err
+    sym.error_channel = err_text
+    api_set_doc(sym, lines, decl_line)
+    return sym
+}
+
+fn api_extract_module(src: str, file_path: str, module_id: str, package_id: str) -> ApiModuleRecord {
+    let rec = new ApiModuleRecord(module_id)
+    let tokens = tokenize(src, file_path)
+    let lines = schema_split_lines(src)
+    let c = new SchemaTokCursor(tokens)
+    let mut depth = 0
+    let mut is_pub = false
+    let mut is_extern = false
+    while schema_cur_kind(c) != "EOF" {
+        let k = schema_cur_kind(c)
+        let v = schema_cur_val(c)
+        if depth > 0 {
+            if k == "LBRACE" { depth = depth + 1 }
+            elif k == "RBRACE" { depth = depth - 1 }
+            c.pos = c.pos + 1
+            continue
+        }
+        if k == "IMPORT" and c.pos + 1 < len(c.tokens) and c.tokens[c.pos + 1].kind == "STR" {
+            rec.imports.append(c.tokens[c.pos + 1].val)
+            c.pos = c.pos + 2
+            if schema_cur_kind(c) == "AS" and c.pos + 1 < len(c.tokens) { c.pos = c.pos + 2 }
+            is_pub = false
+            is_extern = false
+            continue
+        }
+        if k == "IDENT" and v == "from" and c.pos + 3 < len(c.tokens) and c.tokens[c.pos + 1].kind == "STR" and c.tokens[c.pos + 2].kind == "IDENT" and c.tokens[c.pos + 2].val == "use" {
+            rec.imports.append(c.tokens[c.pos + 1].val)
+            c.pos = c.pos + 3
+            if schema_cur_kind(c) == "LBRACE" { schema_skip_brace_block(c) }
+            is_pub = false
+            is_extern = false
+            continue
+        }
+        if k == "PUB" {
+            is_pub = true
+            c.pos = c.pos + 1
+            continue
+        }
+        if k == "IDENT" and v == "async" {
+            c.pos = c.pos + 1
+            continue
+        }
+        if k == "EXTERN" {
+            is_extern = true
+            c.pos = c.pos + 1
+            if schema_cur_kind(c) == "STR" { c.pos = c.pos + 1 }
+            continue
+        }
+        if k == "STRUCT" and c.pos + 1 < len(c.tokens) and c.tokens[c.pos + 1].kind == "IDENT" {
+            let line_1 = c.tokens[c.pos].line
+            c.pos = c.pos + 1
+            let name = schema_cur_val(c)
+            c.pos = c.pos + 1
+            let _tps = api_skip_generics_names(c)
+            schema_skip_newlines(c)
+            let sym = new ApiSymbol(module_id + "#struct/" + name, name, "struct", "struct " + name, module_id, package_id)
+            api_set_doc(sym, lines, line_1)
+            if schema_cur_kind(c) == "LBRACE" {
+                c.pos = c.pos + 1
+                while schema_cur_kind(c) != "RBRACE" and schema_cur_kind(c) != "EOF" {
+                    while schema_cur_kind(c) == "NEWLINE" or schema_cur_kind(c) == "COMMA" { c.pos = c.pos + 1 }
+                    if schema_cur_kind(c) == "RBRACE" or schema_cur_kind(c) == "EOF" { break }
+                    if schema_cur_kind(c) == "IDENT" {
+                        let fname = schema_cur_val(c)
+                        c.pos = c.pos + 1
+                        if schema_cur_kind(c) == "COLON" {
+                            c.pos = c.pos + 1
+                            let ftype = schema_type_text(schema_parse_type(c))
+                            sym.fields.append(new ApiField(fname, ftype))
+                            while schema_cur_kind(c) != "NEWLINE" and schema_cur_kind(c) != "COMMA" and schema_cur_kind(c) != "RBRACE" and schema_cur_kind(c) != "EOF" {
+                                c.pos = c.pos + 1
+                            }
+                            continue
+                        }
+                    }
+                    c.pos = c.pos + 1
+                }
+                if schema_cur_kind(c) == "RBRACE" { c.pos = c.pos + 1 }
+            }
+            if is_pub { rec.symbols.append(sym) }
+            is_pub = false
+            is_extern = false
+            continue
+        }
+        if k == "ENUM" and c.pos + 1 < len(c.tokens) and c.tokens[c.pos + 1].kind == "IDENT" {
+            let line_1 = c.tokens[c.pos].line
+            c.pos = c.pos + 1
+            let name = schema_cur_val(c)
+            c.pos = c.pos + 1
+            let _tps = api_skip_generics_names(c)
+            schema_skip_newlines(c)
+            let sym = new ApiSymbol(module_id + "#enum/" + name, name, "enum", "enum " + name, module_id, package_id)
+            api_set_doc(sym, lines, line_1)
+            if schema_cur_kind(c) == "LBRACE" {
+                c.pos = c.pos + 1
+                while schema_cur_kind(c) != "RBRACE" and schema_cur_kind(c) != "EOF" {
+                    while schema_cur_kind(c) == "NEWLINE" or schema_cur_kind(c) == "COMMA" { c.pos = c.pos + 1 }
+                    if schema_cur_kind(c) == "RBRACE" or schema_cur_kind(c) == "EOF" { break }
+                    if schema_cur_kind(c) == "IDENT" {
+                        let vname = schema_cur_val(c)
+                        c.pos = c.pos + 1
+                        let vari = new ApiVariant(vname)
+                        if schema_cur_kind(c) == "LPAREN" {
+                            c.pos = c.pos + 1
+                            while schema_cur_kind(c) != "RPAREN" and schema_cur_kind(c) != "EOF" {
+                                vari.payloads.append(schema_type_text(schema_parse_type(c)))
+                                if schema_cur_kind(c) == "COMMA" { c.pos = c.pos + 1 } else { break }
+                            }
+                            if schema_cur_kind(c) == "RPAREN" { c.pos = c.pos + 1 }
+                        }
+                        sym.variants.append(vari)
+                        continue
+                    }
+                    c.pos = c.pos + 1
+                }
+                if schema_cur_kind(c) == "RBRACE" { c.pos = c.pos + 1 }
+            }
+            if is_pub { rec.symbols.append(sym) }
+            is_pub = false
+            is_extern = false
+            continue
+        }
+        if k == "INTERFACE" and c.pos + 1 < len(c.tokens) and c.tokens[c.pos + 1].kind == "IDENT" {
+            let line_1 = c.tokens[c.pos].line
+            c.pos = c.pos + 1
+            let name = schema_cur_val(c)
+            c.pos = c.pos + 1
+            let _tps = api_skip_generics_names(c)
+            while schema_cur_kind(c) != "LBRACE" and schema_cur_kind(c) != "EOF" { c.pos = c.pos + 1 }
+            let owner = module_id + "#interface/" + name
+            let sym = new ApiSymbol(owner, name, "interface", "interface " + name, module_id, package_id)
+            api_set_doc(sym, lines, line_1)
+            if schema_cur_kind(c) == "LBRACE" {
+                c.pos = c.pos + 1
+                while schema_cur_kind(c) != "RBRACE" and schema_cur_kind(c) != "EOF" {
+                    let mk = schema_cur_kind(c)
+                    if mk == "FN" and c.pos + 1 < len(c.tokens) and c.tokens[c.pos + 1].kind == "IDENT" {
+                        let m = api_parse_fn_symbol(c, lines, owner, "method", module_id, package_id, false)
+                        sym.methods.append(m)
+                        continue
+                    }
+                    if mk == "LBRACE" { schema_skip_brace_block(c) continue }
+                    c.pos = c.pos + 1
+                }
+                if schema_cur_kind(c) == "RBRACE" { c.pos = c.pos + 1 }
+            }
+            if is_pub { rec.symbols.append(sym) }
+            is_pub = false
+            is_extern = false
+            continue
+        }
+        if k == "CLASS" and c.pos + 1 < len(c.tokens) and c.tokens[c.pos + 1].kind == "IDENT" {
+            let line_1 = c.tokens[c.pos].line
+            c.pos = c.pos + 1
+            let name = schema_cur_val(c)
+            c.pos = c.pos + 1
+            let _tps = api_skip_generics_names(c)
+            while schema_cur_kind(c) != "LBRACE" and schema_cur_kind(c) != "EOF" { c.pos = c.pos + 1 }
+            let owner = module_id + "#class/" + name
+            let sym = new ApiSymbol(owner, name, "class", "class " + name, module_id, package_id)
+            api_set_doc(sym, lines, line_1)
+            if schema_cur_kind(c) == "LBRACE" {
+                c.pos = c.pos + 1
+                let mut member_public = true
+                while schema_cur_kind(c) != "RBRACE" and schema_cur_kind(c) != "EOF" {
+                    let mk = schema_cur_kind(c)
+                    let mv = schema_cur_val(c)
+                    if mk == "NEWLINE" { c.pos = c.pos + 1 continue }
+                    if mk == "PUBLIC" or mk == "PUB" { member_public = true c.pos = c.pos + 1 continue }
+                    if mk == "PRIVATE" { member_public = false c.pos = c.pos + 1 continue }
+                    if mk == "IDENT" and mv == "async" { c.pos = c.pos + 1 continue }
+                    if mk == "FN" and c.pos + 1 < len(c.tokens) and c.tokens[c.pos + 1].kind == "IDENT" {
+                        let m = api_parse_fn_symbol(c, lines, owner, "method", module_id, package_id, true)
+                        if member_public { sym.methods.append(m) }
+                        member_public = true
+                        continue
+                    }
+                    if mk == "LBRACE" {
+                        schema_skip_brace_block(c)
+                        member_public = true
+                        continue
+                    }
+                    if mk == "IDENT" {
+                        while schema_cur_kind(c) != "NEWLINE" and schema_cur_kind(c) != "RBRACE" and schema_cur_kind(c) != "EOF" {
+                            if schema_cur_kind(c) == "LBRACE" { schema_skip_brace_block(c) }
+                            else { c.pos = c.pos + 1 }
+                        }
+                        member_public = true
+                        continue
+                    }
+                    c.pos = c.pos + 1
+                }
+                if schema_cur_kind(c) == "RBRACE" { c.pos = c.pos + 1 }
+            }
+            if is_pub { rec.symbols.append(sym) }
+            is_pub = false
+            is_extern = false
+            continue
+        }
+        if k == "FN" and c.pos + 1 < len(c.tokens) and c.tokens[c.pos + 1].kind == "IDENT" {
+            if is_extern or not is_pub {
+                c.pos = c.pos + 1
+                api_skip_contract_clauses(c, true)
+                if schema_cur_kind(c) == "LBRACE" { schema_skip_brace_block(c) }
+            } else {
+                let fn_sym = api_parse_fn_symbol(c, lines, module_id, "function", module_id, package_id, true)
+                rec.symbols.append(fn_sym)
+            }
+            is_pub = false
+            is_extern = false
+            continue
+        }
+        if k == "LBRACE" { depth = depth + 1 }
+        if k != "NEWLINE" {
+            is_pub = false
+            is_extern = false
+        }
+        c.pos = c.pos + 1
+    }
+    return rec
+}
+
+fn api_symbol_gt(a: ApiSymbol, b: ApiSymbol) -> bool {
+    if a.kind != b.kind { return tool_str_gt(a.kind, b.kind) }
+    return tool_str_gt(a.name, b.name)
+}
+
+fn api_sort_symbols(xs: list[ApiSymbol]) -> list[ApiSymbol] {
+    let mut out: list[ApiSymbol] = []
+    for item in xs { out.append(item) }
+    let n = len(out)
+    for i in 0..n {
+        for j in (i + 1)..n {
+            if api_symbol_gt(out[i], out[j]) {
+                let tmp = out[i]
+                out[i] = out[j]
+                out[j] = tmp
+            }
+        }
+    }
+    return out
+}
+
+fn api_sort_modules(xs: list[ApiModuleRecord]) -> list[ApiModuleRecord] {
+    let mut out: list[ApiModuleRecord] = []
+    for item in xs { out.append(item) }
+    let n = len(out)
+    for i in 0..n {
+        for j in (i + 1)..n {
+            if tool_str_gt(out[i].identity, out[j].identity) {
+                let tmp = out[i]
+                out[i] = out[j]
+                out[j] = tmp
+            }
+        }
+    }
+    return out
+}
+
+fn api_str_list_json(xs: list[str]) -> str {
+    let mut parts: list[str] = ["["]
+    for i in 0..len(xs) {
+        if i > 0 { parts.append(",") }
+        parts.append(diag_json_quote(xs[i]))
+    }
+    parts.append("]")
+    return join_strings(parts, "")
+}
+
+fn api_symbol_json(s: ApiSymbol) -> str {
+    let doc_json = if s.has_doc { diag_json_quote(s.documentation) } else { "null" }
+    let avail = api_availability_json(s.module_id)
+    let mut parts: list[str] = ["{"]
+    parts.append("\"identity\":" + diag_json_quote(s.identity))
+    parts.append(",\"name\":" + diag_json_quote(s.name))
+    parts.append(",\"kind\":" + diag_json_quote(s.kind))
+    parts.append(",\"visibility\":\"public\"")
+    parts.append(",\"signature\":" + diag_json_quote(s.signature))
+    if s.kind == "function" or s.kind == "method" {
+        parts.append(",\"type_parameters\":" + api_str_list_json(s.type_parameters))
+        let mut p_parts: list[str] = ["["]
+        for i in 0..len(s.parameters) {
+            if i > 0 { p_parts.append(",") }
+            p_parts.append("{\"name\":" + diag_json_quote(s.parameters[i].name) + ",\"type\":" + diag_json_quote(s.parameters[i].type_text) + "}")
+        }
+        p_parts.append("]")
+        parts.append(",\"parameters\":" + join_strings(p_parts, ""))
+        parts.append(",\"return_type\":" + diag_json_quote(s.return_type))
+        parts.append(",\"error_channel\":" + (if s.has_error_channel { diag_json_quote(s.error_channel) } else { "null" }))
+    } elif s.kind == "struct" {
+        let mut f_parts: list[str] = ["["]
+        for i in 0..len(s.fields) {
+            if i > 0 { f_parts.append(",") }
+            f_parts.append("{\"name\":" + diag_json_quote(s.fields[i].name) + ",\"type\":" + diag_json_quote(s.fields[i].type_text) + "}")
+        }
+        f_parts.append("]")
+        parts.append(",\"fields\":" + join_strings(f_parts, ""))
+    } elif s.kind == "enum" {
+        let mut v_parts: list[str] = ["["]
+        for i in 0..len(s.variants) {
+            if i > 0 { v_parts.append(",") }
+            v_parts.append("{\"name\":" + diag_json_quote(s.variants[i].name) + ",\"payload\":" + api_str_list_json(s.variants[i].payloads) + "}")
+        }
+        v_parts.append("]")
+        parts.append(",\"variants\":" + join_strings(v_parts, ""))
+    } elif s.kind == "interface" or s.kind == "class" {
+        let mut m_parts: list[str] = ["["]
+        for i in 0..len(s.methods) {
+            if i > 0 { m_parts.append(",") }
+            m_parts.append(api_symbol_json(s.methods[i]))
+        }
+        m_parts.append("]")
+        parts.append(",\"methods\":" + join_strings(m_parts, ""))
+    }
+    parts.append(",\"effects\":\"unknown\"")
+    parts.append(",\"documentation\":" + doc_json)
+    parts.append(",\"ownership\":\"unknown\"")
+    parts.append(",\"availability\":" + avail)
+    parts.append(",\"package\":" + diag_json_quote(s.package_id))
+    parts.append("}")
+    return join_strings(parts, "")
+}
+
+fn api_module_json(rec: ApiModuleRecord) -> str {
+    let sorted_syms = api_sort_symbols(rec.symbols)
+    let mut parts: list[str] = ["{\"identity\":" + diag_json_quote(rec.identity) + ",\"symbols\":["]
+    for i in 0..len(sorted_syms) {
+        if i > 0 { parts.append(",") }
+        parts.append(api_symbol_json(sorted_syms[i]))
+    }
+    parts.append("]}")
+    return join_strings(parts, "")
+}
+
+fn api_collect_stdlib_file(acc: ApiIndexCollector, resolved_path: str, module_id: str) -> unit {
+    let canon = module_canonical(resolved_path)
+    if tool_str_contains(acc.visited, canon) { return }
+    acc.visited.append(canon)
+    let src = read_file(canon) else err { return }
+    let rec = api_extract_module(src, canon, module_id, "wysna-stdlib@0.8.0")
+    acc.modules.append(rec)
+    for imp in rec.imports {
+        if len(imp) >= 4 and slice(imp, 0, 4) == "std/" {
+            let sub = api_resolve_stdlib_module(acc.stdlib_root, imp)
+            if sub[0] == "1" {
+                let rel = slice(imp, 4, len(imp))
+                let clean_rel = if proj_str_ends_with(rel, ".wysna") { slice(rel, 0, len(rel) - 6) } else { rel }
+                api_collect_stdlib_file(acc, sub[1], "std/" + clean_rel)
+            }
+        }
+    }
+}
+
+fn api_strip_ext_rel(abs_file: str, abs_root: str) -> str {
+    let prefix = if abs_root == "/" { "/" } else { abs_root + "/" }
+    let rel = if len(abs_file) > len(prefix) and slice(abs_file, 0, len(prefix)) == prefix {
+        slice(abs_file, len(prefix), len(abs_file))
+    } else {
+        tool_basename(abs_file)
+    }
+    if proj_str_ends_with(rel, ".wysna") { return slice(rel, 0, len(rel) - 6) }
+    return rel
+}
+
+fn api_emit_error_and_exit(code: str, msg: str) -> unit {
+    let diag = diag_record_json(code, if code == "W5002" { "usage" } else { "filesystem" }, "error", msg, "<api>", 1, 1, "")
+    let exit_c = if code == "W5002" { 2 } else { 1 }
+    let status = if code == "W5002" { "usage_error" } else { "diagnostic_error" }
+    diag_write_output(diag_tool_envelope_json("api", status, exit_c, "[" + diag + "]", "", "", "[]"))
+    exit(exit_c)
+}
+
+fn tool_handle_api(args: list[str], _json_mode: bool) -> unit {
+    let mut mod_arg = ""
+    let mut has_mod = false
+    let mut manifest_arg = ""
+    let mut i = 1
+    while i < len(args) {
+        let a = args[i]
+        if a == "--output-format=json-v1" {
+            i = i + 1
+        } elif a == "--output-format" and i + 1 < len(args) {
+            if args[i + 1] != "json-v1" { api_emit_error_and_exit("W5002", "unsupported output format: " + args[i + 1]) }
+            i = i + 2
+        } elif a == "--manifest" and i + 1 < len(args) {
+            manifest_arg = args[i + 1]
+            i = i + 2
+        } elif len(a) > 0 and a[0] != "-" and not has_mod {
+            mod_arg = a
+            has_mod = true
+            i = i + 1
+        } else {
+            api_emit_error_and_exit("W5002", "unknown or invalid option for api: " + a)
+        }
+    }
+
+    let stdlib_root = api_find_stdlib_root()
+
+    if manifest_arg != "" {
+        if has_mod {
+            api_emit_error_and_exit("W5002", "a project API index includes its resolved module graph; omit the module name")
+        }
+        let m = proj_load_manifest(manifest_arg)
+        if not m.ok {
+            api_emit_error_and_exit(m.err_code, m.err_msg)
+        }
+        let tidx = proj_find_target_idx(m, "app")
+        if tidx < 0 {
+            api_emit_error_and_exit("W5002", "project API index requires a target named 'app'")
+        }
+        let entry_path = m.root + "/" + m.targets[tidx].entry
+        let src = read_file(entry_path) else err {
+            api_emit_error_and_exit("W5004", "cannot read project entry: " + err.message)
+            ""
+        }
+        let mut dep_aliases: list[str] = []
+        let mut dep_roots: list[str] = []
+        for d in m.deps {
+            dep_aliases.append(d.alias)
+            dep_roots.append(d.source_root_abs)
+        }
+        let loader = new ModuleLoader()
+        loader.project_sources_root = m.source_root_abs
+        loader.dep_aliases = dep_aliases
+        loader.dep_roots = dep_roots
+        module_expand(loader, src, entry_path, true)
+        loader.output.append(Token { kind: "EOF", val: "", line: 1, col: 1, file: module_canonical(entry_path) })
+        let _checked = check_program(loader.output, module_canonical(entry_path), true)
+
+        let mut mods: list[ApiModuleRecord] = []
+        for mod_path in loader.paths {
+            let msrc = read_file(mod_path) else err { "" }
+            let mut mid = ""
+            let mut owner = ""
+            if module_is_confined_under(mod_path, stdlib_root) {
+                let srel = api_strip_ext_rel(mod_path, stdlib_root)
+                mid = "std/" + srel
+                owner = "wysna-stdlib@0.8.0"
+            } else {
+                let mut found_owner = m.name + "@" + m.version
+                let mut found_src_root = m.source_root_abs
+                for d in m.deps {
+                    if module_is_confined_under(mod_path, d.abs_root) {
+                        found_owner = d.package_id
+                        found_src_root = d.source_root_abs
+                    }
+                }
+                let prel = api_strip_ext_rel(mod_path, found_src_root)
+                mid = found_owner + "/" + prel
+                owner = found_owner
+            }
+            mods.append(api_extract_module(msrc, mod_path, mid, owner))
+        }
+        let sorted_mods = api_sort_modules(mods)
+        let mut mparts: list[str] = ["["]
+        for k in 0..len(sorted_mods) {
+            if k > 0 { mparts.append(",") }
+            mparts.append(api_module_json(sorted_mods[k]))
+        }
+        mparts.append("]")
+        let proj_obj = "{\"name\":" + diag_json_quote(m.name) + ",\"version\":" + diag_json_quote(m.version) + "}"
+        let payload = "{\"schema_version\":\"wysna.api-index/1\",\"compiler_version\":\"0.8.0\",\"stdlib_version\":\"0.8.0\",\"project\":" + proj_obj + ",\"modules\":" + join_strings(mparts, "") + "}"
+        diag_write_output(diag_tool_envelope_json("api", "ok", 0, "[]", "result", payload, "[]"))
+        exit(0)
+    }
+
+    let acc = new ApiIndexCollector(stdlib_root)
+    if has_mod {
+        let resolved = api_resolve_stdlib_module(stdlib_root, mod_arg)
+        if resolved[0] != "1" {
+            api_emit_error_and_exit("W5002", resolved[1])
+        }
+        let rel = if len(mod_arg) >= 4 and slice(mod_arg, 0, 4) == "std/" { slice(mod_arg, 4, len(mod_arg)) } else { mod_arg }
+        let clean_rel = if proj_str_ends_with(rel, ".wysna") { slice(rel, 0, len(rel) - 6) } else { rel }
+        api_collect_stdlib_file(acc, resolved[1], "std/" + clean_rel)
+    } else {
+        let known: list[str] = ["algorithms", "async", "buffer", "bytes", "crypto", "environment", "files", "fs", "http", "io", "json", "parse", "path", "process", "resources", "test", "text", "time"]
+        for name in known {
+            let resolved = api_resolve_stdlib_module(stdlib_root, name)
+            if resolved[0] == "1" {
+                api_collect_stdlib_file(acc, resolved[1], "std/" + name)
+            }
+        }
+    }
+
+    let sorted_mods = api_sort_modules(acc.modules)
+    let mut mparts: list[str] = ["["]
+    for k in 0..len(sorted_mods) {
+        if k > 0 { mparts.append(",") }
+        mparts.append(api_module_json(sorted_mods[k]))
+    }
+    mparts.append("]")
+    let payload = "{\"schema_version\":\"wysna.api-index/1\",\"compiler_version\":\"0.8.0\",\"stdlib_version\":\"0.8.0\",\"modules\":" + join_strings(mparts, "") + "}"
+    diag_write_output(diag_tool_envelope_json("api", "ok", 0, "[]", "result", payload, "[]"))
+    exit(0)
+}

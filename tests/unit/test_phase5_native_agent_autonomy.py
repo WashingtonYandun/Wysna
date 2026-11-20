@@ -387,7 +387,7 @@ class Phase5NativeAgentAutonomyTests(unittest.TestCase):
                     names,
                     {
                         "wysna_check", "wysna_fix", "wysna_fmt", "wysna_explain",
-                        "wysna_schema", "wysna_capabilities", "wysna_graph",
+                        "wysna_schema", "wysna_api", "wysna_capabilities", "wysna_graph",
                         "wysna_inspect", "wysna_patch", "wysna_skills",
                     },
                 )

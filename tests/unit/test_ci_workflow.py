@@ -52,7 +52,10 @@ def test_ci_workflow_contracts():
     assert "pip install --retries 10 --timeout 30 'aiohttp>=3.14.5,<4'" in performance_source
     assert 'cache: pip' in performance_source and 'cache-dependency-path: pyproject.toml' in performance_source
     llvm = jobs['llvm-smoke']
-    assert 'runs-on: ubuntu-latest' in llvm
+    assert 'os: [ubuntu-latest, macos-latest]' in llvm
+    assert 'fail-fast: false' in llvm
+    assert 'runs-on: ${{ matrix.os }}' in llvm
+    assert "if: runner.os == 'Linux'" in llvm
     assert 'needs: wheel-build' in llvm
     assert 'python -m tests.unit.test_llvm_backend -v' in llvm
     assert 'python tools/validate_llvm_install.py' in llvm

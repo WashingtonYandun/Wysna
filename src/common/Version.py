@@ -1,2 +1,2 @@
-WYSNA_VERSION = "0.7.0"
+WYSNA_VERSION = "0.8.0"
 

@@ -1,0 +1,34 @@
+import "audit.wysna" as audit
+
+fn demo_payload() -> str {
+    return (
+        "[" +
+        "{\"service\":\"maby-router\",\"status_code\":200,\"latency_ms\":85,\"token_cost\":420}," +
+        "{\"service\":\"wyedge-odds\",\"status_code\":429,\"latency_ms\":520,\"token_cost\":180}," +
+        "{\"service\":\"wysna-agent\",\"status_code\":503,\"latency_ms\":1800,\"token_cost\":900}," +
+        "{\"service\":\"billing-sync\",\"status_code\":201,\"latency_ms\":110,\"token_cost\":150}" +
+        "]"
+    )
+}
+
+fn main() -> unit {
+    let cli = args()
+    let mut raw = demo_payload()
+    if len(cli) > 1 and cli[1] != "--demo" {
+        raw = read_file(cli[1]) else err {
+            eprint("wysofia-ops: cannot read input file '" + cli[1] + "': " + err.message)
+            exit(2)
+            ""
+        }
+    }
+    let fallback: list[audit.AuditEvent] = []
+    let events = audit.parse_events_json(raw) else err {
+        eprint("wysofia-ops: invalid audit batch: " + err.reason)
+        exit(1)
+        fallback
+    }
+    let summary = audit.evaluate_batch(events)
+    print(audit.render_summary_json(summary))
+}
+
+main()

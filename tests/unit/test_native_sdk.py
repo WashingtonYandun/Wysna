@@ -91,7 +91,7 @@ class NativeSdkContractTests(unittest.TestCase):
         root = Path(__file__).resolve().parents[2]
         driver = (root / 'packaging/native/driver.c').read_text(encoding='utf-8')
         self.assertIn('#define SDK_COMPILE_TIMEOUT_MS 600000', driver)
-        self.assertEqual(driver.count('SDK_COMPILE_TIMEOUT_MS'), 3)
+        self.assertEqual(driver.count('SDK_COMPILE_TIMEOUT_MS'), 4)
         self.assertNotIn('engine_arguments, 120000', driver)
 
     def test_existing_installation_is_preserved_before_any_download(self):

@@ -2,8 +2,8 @@
 
 Wysna is an experimental language for predictable automation written by people and
 AI agents. CLI tools and scripting are the first product workflow; general-purpose
-use remains the direction. Version 0.7.0 is published as a pre-1.0 release; it is
-not a security guarantee, and language contracts may evolve before 1.0.
+use remains the direction. Version 0.8.0 is published as a pre-1.0 line (with 0.7.0
+tagged desktop installers); it is not a security guarantee, and language contracts may evolve before 1.0.
 
 ## One recommended installation
 

@@ -14,7 +14,7 @@
     <img src="https://github.com/WashingtonYandun/Wysna/actions/workflows/ci.yml/badge.svg?branch=main" alt="CI status on main" />
   </a>
   <a href="https://github.com/WashingtonYandun/Wysna/releases/tag/v0.7.0">
-    <img src="https://img.shields.io/badge/release-v0.7.0-blue?style=flat-square" alt="Latest release v0.7.0" />
+    <img src="https://img.shields.io/badge/release-v0.7.0_installers_%7C_v0.8.0_main-blue?style=flat-square" alt="Latest release v0.7.0 / v0.8.0 main" />
   </a>
   <a href="docs/ENGINE_PARITY_MATRIX.md">
     <img src="https://img.shields.io/badge/corpus_parity-209%2F209_(100%25)-22c55e?style=flat-square" alt="4-Engine Corpus Parity 209/209" />
@@ -46,7 +46,7 @@
 Wysna is an independent, statically typed programming language built from first principles for **deterministic systems engineering** and **autonomous AI code generation**. It compiles through a verified intermediate representation (HIR/MIR) to portable native C99 (default) and experimental LLVM IR, pairing predictable memory ownership with machine-verifiable tooling.
 
 > [!NOTE]
-> **Release & Line Status:** The current tagged installer release is [**v0.7.0**](https://github.com/WashingtonYandun/Wysna/releases/tag/v0.7.0) (pre-1.0, unsigned desktop installers). It delivers the unified 8-byte `WVal` ABI v3, lock-free atomic ARC, stackless CPS `async fn`, compiled C99 capability sandbox (`--sandbox`), constrained OOP generics in Selfhost, native Agent-First CLI tools, and a Python-free Stage-3 LSP (`wysna lsp`) — see [CHANGELOG.md](CHANGELOG.md). Review [scope and limits](docs/SCOPE.md) before relying on Wysna in production.
+> **Release & Line Status:** The current tagged installer release is [**v0.7.0**](https://github.com/WashingtonYandun/Wysna/releases/tag/v0.7.0) (pre-1.0, unsigned desktop installers), while `main` advances to **0.8.0** with full Python-free native SDK autonomy (`wysna api`, `wysna project check|build|run|test`, 11/11 `wysna mcp`), parameterized generic interfaces in Selfhost, an ~8x Selfhost MIR temporary-scope CoW speedup, multi-OS `llvm-smoke` CI, and `examples/wysofia-ops/` — see [CHANGELOG.md](CHANGELOG.md). Review [scope and limits](docs/SCOPE.md) before relying on Wysna in production.
 
 | Architectural Pillar | What It Delivers |
 | :--- | :--- |
@@ -243,7 +243,7 @@ print(crypto.constant_time_eq(opened, "agent-payload"))
 print(slice(digest, 0, 16))
 ```
 
-Explore standalone programs in [examples/language](examples/language) and FFI pilots in [FFI validation](docs/FFI_VALIDATION.md).
+Explore standalone programs in [examples/language](examples/language), the operational JSON/SQLite audit dogfooding app in [examples/wysofia-ops](examples/wysofia-ops), and FFI pilots in [FFI validation](docs/FFI_VALIDATION.md).
 
 ---
 
@@ -262,7 +262,7 @@ flowchart LR
 ```
 
 - **Wysna Seed (`src/`):** Canonical Python reference compiler, runtime interpreter, project/manifest toolchain (`wysna.toml` / `wysna.lock`), MCP server, JSON Schema extractor, WASI/LLVM drivers, and differential AST C99 oracle.
-- **Wysna Compiler (`selfhost/` + `packaging/native/driver.c`):** 3-stage bootstrapped self-hosted compiler emitting C99 via verified MIR (`native-core-v1`, 31 modules / 13,583 bundled lines) with a **Python-free native driver** for `check`, `fmt`, `run`, `build`, multi-file `test`, Agent-First tools (`graph`, `inspect`, `patch`, `explain`, `schema`, `fix`, `skills`, `capabilities`), stdio **MCP server (`wysna mcp`)**, and **Stage-3 native LSP (`wysna lsp`)**.
+- **Wysna Compiler (`selfhost/` + `packaging/native/driver.c`):** 3-stage bootstrapped self-hosted compiler emitting C99 via verified MIR (`native-core-v1`, 33 modules / 15,795 bundled lines) with a **Python-free native driver** for `check`, `fmt`, `run`, `build`, multi-file `test`, `project check|build|run|test`, `api`, Agent-First tools (`graph`, `inspect`, `patch`, `explain`, `schema`, `fix`, `skills`, `capabilities`), stdio **MCP server (`wysna mcp`, 11 tools)**, and **Stage-3 native LSP (`wysna lsp`)**.
 
 ### Tested 4-Engine Parity (`tools/ci_conformance.py --profile=release`)
 
@@ -281,7 +281,7 @@ See [engine parity matrix](docs/ENGINE_PARITY_MATRIX.md) for the SHA-pinned evid
 | :--- | :--- | :--- |
 | Core language, contracts, ABI v3, CPS `async fn`, C99 builds, Stage-3 LSP | **Supported** | Bounded by [docs/SCOPE.md](docs/SCOPE.md) and [docs/KNOWN_LIMITS.md](docs/KNOWN_LIMITS.md). |
 | Seed distribution (private CPython + Zig) | **v0.7.0 Release** | Unsigned installers per platform (`.exe`, `.pkg`, `.deb`, `.rpm`). |
-| Native SDK (`wysna` Python-free Stage-2/3 binary) | **Supported (`native-core-v1`)** | Supports native compilation, parameterized classes and interfaces, Agent CLI (`graph`/`inspect`/`patch`/`explain`/`schema`/`fix`/`skills`/`capabilities`), `mcp`, `test`, and `lsp`. |
+| Native SDK (`wysna` Python-free Stage-2/3 binary) | **Supported (`native-core-v1`)** | Supports native compilation, `project check\|build\|run\|test`, `api`, parameterized classes/interfaces, Agent CLI, 11-tool `mcp`, `test`, and `lsp`. |
 | WASI (`wasi-command`) | **Declared target** | Wasmtime boundary with preopens, fuel, and linear-memory limits. |
 | LLVM backend & Browser WASM library | **Experimental** | Opt-in via `--backend=llvm-experimental` or Emscripten workflow. |
 | Remote package registry, preemptive cross-thread shared graphs, OS kernel sandbox | **Not implemented** | Local/vendor `wysna.toml` manifests and snapshot closures are documented in [KNOWN_LIMITS.md](docs/KNOWN_LIMITS.md). |

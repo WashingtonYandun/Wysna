@@ -138,3 +138,26 @@ installed dependency contracts and an explicit later decision. Seed LLVM require
 Python while Wysna Compiler does not; successful LLVM qualification alone cannot
 satisfy that distribution requirement. No speed, size or AI-usability superiority
 is asserted.
+
+## Measured Darwin arm64 Campaign (`release` profile, v0.8.0)
+
+Measured via `tools/qualify_llvm.py --profiles release` (**209 / 209** passed, 0 failed, 0 unsupported) followed by `tools/benchmark_llvm.py --profiles release --compile-samples 3 --runtime-samples 5` on Apple Silicon (`Darwin` `arm64`, Python `3.14.7`). Result: `candidate_status = "qualified-opt-in"`, `backend_default = "c99"`, `automatic_promotion = false`.
+
+| Case | C99 Run (ms) | LLVM Run (ms) | Ratio | C99 Cold (ms) | LLVM Cold (ms) | C99 Warm (ms) | LLVM Warm (ms) | C99 Size (B) | LLVM Size (B) |
+| :--- | :---: | :---: | :---: | :---: | :---: | :---: | :---: | :---: | :---: |
+| `arithmetic.wysna` | 2.67 | 2.71 | 1.016x | 355.0 | 910.4 | 110.0 | 153.0 | 37,560 | 55,496 |
+| `function_calls.wysna` | 2.89 | 2.59 | 0.897x | 406.9 | 905.7 | 118.9 | 166.2 | 37,560 | 55,496 |
+| `list_iteration.wysna` | 2.63 | 3.00 | 1.143x | 463.1 | 905.1 | 118.0 | 155.7 | 59,272 | 73,880 |
+| `list_copy.wysna` | 2.81 | 2.99 | 1.065x | 444.7 | 936.0 | 116.6 | 158.3 | 58,840 | 91,816 |
+| `list_mutation.wysna` | 3.18 | 2.90 | 0.912x | 575.2 | 913.5 | 116.3 | 158.4 | 76,744 | 91,944 |
+| `nested_cow.wysna` | 3.07 | 3.44 | 1.121x | 653.4 | 911.2 | 115.7 | 155.8 | 77,672 | 92,168 |
+| `string_unicode.wysna` | 2.77 | 2.92 | 1.053x | 511.0 | 932.9 | 113.3 | 155.6 | 59,144 | 91,528 |
+| `structs.wysna` | 3.28 | 3.05 | 0.929x | 448.6 | 911.3 | 121.0 | 164.5 | 56,712 | 73,848 |
+| `objects.wysna` | 2.89 | 3.11 | 1.077x | 533.8 | 914.5 | 121.8 | 158.8 | 76,552 | 75,000 |
+| `dynamic_dispatch.wysna` | 2.90 | 3.74 | 1.289x | 404.5 | 930.9 | 125.2 | 161.8 | 57,656 | 74,904 |
+| `startup.wysna` | 2.50 | 2.53 | 1.015x | 361.8 | 899.1 | 111.8 | 148.5 | 37,560 | 55,224 |
+| `steady_state.wysna` | 40.17 | 64.68 | 1.610x | 703.9 | 999.5 | 172.8 | 188.1 | 77,432 | 92,856 |
+
+Notice that while LLVM executes faster on isolated call/mutation/struct microbenchmarks (`0.897x`–`0.929x`), C99 wins on `steady_state.wysna` (`1.610x` faster runtime under C99), `cold_compile` (`1.39x`–`2.56x` faster), `warm_compile` (`1.09x`–`1.40x` faster), and executable size on 11 of 12 cases, confirming why C99 stays default while `llvm-smoke` CI covers both `ubuntu-latest` and `macos-latest`.
+
+Separately, tightening MIR temporary lifetimes around `if` conditions, `let` initializers, non-tail expression statements, short-circuit `and`/`or` RHS, and direct `for` ranges eliminated quadratic CoW `list.append` detaches in the C99/MIR pipeline, keeping full 33-module Selfhost Stage-2 checks around `5.51s` (`--check`), `5.80s` (`--check-mir`), and `5.96s` (`--emit-c-mir`).

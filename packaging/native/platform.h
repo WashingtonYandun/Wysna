@@ -250,6 +250,26 @@ static int sdk_list_wysna_tests(const char* root_dir, char*** files_out, size_t*
     *files_out = list; *count_out = count;
     return 1;
 }
+static int sdk_mkdir_p(const char* path) {
+    if (!path || !path[0]) return 0;
+    char* copy = (char*)malloc(SDK_PATH_CAP);
+    if (!copy || !sdk_copy(copy, path)) { free(copy); return 0; }
+    for (char* p = copy; *p; p++) {
+        if (*p == '/' || *p == '\\') {
+            char saved = *p; *p = 0;
+            if (copy[0] && !(strlen(copy) == 2 && copy[1] == ':')) {
+                wchar_t* wide = wysna_host_process_wide(copy);
+                if (wide) { CreateDirectoryW(wide, NULL); free(wide); }
+            }
+            *p = saved;
+        }
+    }
+    wchar_t* final_wide = wysna_host_process_wide(copy);
+    if (final_wide) { CreateDirectoryW(final_wide, NULL); free(final_wide); }
+    int ok = sdk_is_directory(copy);
+    free(copy);
+    return ok;
+}
 #else
 static int sdk_absolute(char* output, const char* input, int existing) {
     if (existing) {
@@ -347,6 +367,22 @@ static int sdk_list_wysna_tests(const char* root_dir, char*** files_out, size_t*
     if (count > 1) qsort(list, count, sizeof(char*), sdk_string_cmp);
     *files_out = list; *count_out = count;
     return 1;
+}
+static int sdk_mkdir_p(const char* path) {
+    if (!path || !path[0]) return 0;
+    char* copy = (char*)malloc(SDK_PATH_CAP);
+    if (!copy || !sdk_copy(copy, path)) { free(copy); return 0; }
+    for (char* p = copy + 1; *p; p++) {
+        if (*p == '/') {
+            *p = 0;
+            if (mkdir(copy, 0755) != 0 && errno != EEXIST && !sdk_is_directory(copy)) { free(copy); return 0; }
+            *p = '/';
+        }
+    }
+    if (mkdir(copy, 0755) != 0 && errno != EEXIST && !sdk_is_directory(copy)) { free(copy); return 0; }
+    int ok = sdk_is_directory(copy);
+    free(copy);
+    return ok;
 }
 #endif
 #endif /* WYSNA_SDK_PLATFORM_H */

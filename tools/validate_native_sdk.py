@@ -350,6 +350,32 @@ def validate(sdk, report, strict_source=False, compiler_source=None):
         sch_res = run('agent-schema-json-v1', ['schema', '--output-format=json-v1', source])
         sch_env = json.loads(sch_res.stdout.decode('utf-8'))
         require(sch_env.get('status') == 'ok' and sch_env.get('result', {}).get('schema_version') == 'wysna.schema/1', sch_env)
+
+        api_res = run('agent-api-json-v1', ['api', 'std/json', '--output-format=json-v1'])
+        api_env = json.loads(api_res.stdout.decode('utf-8'))
+        require(api_env.get('status') == 'ok' and api_env.get('result', {}).get('schema_version') == 'wysna.api-index/1', api_env)
+        require(any(m.get('identity') == 'std/json' for m in api_env.get('result', {}).get('modules', [])), api_env)
+
+        proj_dir = work / 'native_project_smoke'
+        (proj_dir / 'src').mkdir(parents=True)
+        (proj_dir / 'tests').mkdir(parents=True)
+        (proj_dir / 'wysna.toml').write_text(
+            'manifest_version = 1\n\n[package]\nname = "native-smoke"\nversion = "0.1.0"\n'
+            'language = "0.8"\n\n[toolchain]\ncompiler = "0.8.0"\nstdlib = "bundled"\n\n'
+            '[sources]\nroot = "src"\n\n[targets.app]\nentry = "src/main.wysna"\nprofile = "native-cli"\n\n'
+            '[[tests]]\nname = "unit-smoke"\nentry = "tests/smoke_test.wysna"\ntimeout_ms = 10000\n',
+            encoding='utf-8',
+        )
+        (proj_dir / 'src' / 'logic.wysna').write_text('pub fn greet(who: str) -> str { return "hi " + who }\n', encoding='utf-8')
+        (proj_dir / 'src' / 'main.wysna').write_text('import "logic.wysna" as logic\nprint(logic.greet("native"))\n', encoding='utf-8')
+        (proj_dir / 'tests' / 'smoke_test.wysna').write_text('import "logic.wysna" as logic\nif logic.greet("ok") != "hi ok" { exit(1) }\n', encoding='utf-8')
+        pcheck = run('project-check-json-v1', ['project', 'check', '--manifest', proj_dir / 'wysna.toml', '--output-format=json-v1'])
+        require(json.loads(pcheck.stdout.decode('utf-8')).get('status') == 'ok', pcheck.stdout)
+        pout = proj_dir / ('app' + suffix)
+        run('project-build', ['project', 'build', '--manifest', proj_dir / 'wysna.toml', '-o', pout])
+        require(pout.is_file(), 'Missing project build binary')
+        run('project-run', ['project', 'run', '--manifest', proj_dir / 'wysna.toml'], stdout=b'hi native\n')
+        run('project-test', ['project', 'test', '--manifest', proj_dir / 'wysna.toml'])
         if compiler_source:
             require(digest(Path(compiler_source)) == manifest["compiler_source_sha256"], "Selfbuild source does not match SDK provenance")
             fixture = project / 'compiler.wysna'

@@ -23,7 +23,11 @@ from compiler.Bootstrap import bootstrap_fingerprint, ensure_selfhost_compiler_b
 from tools.package_components import download, extract, sha256
 
 COMPONENTS = json.loads((ROOT / "packaging/native/components.json").read_text(encoding="utf-8"))
-COMMANDS = ["check", "emit-c", "emit-mir", "build", "run", "test", "fmt"]
+COMMANDS = [
+    "check", "emit-c", "emit-mir", "build", "run", "test", "fmt",
+    "graph", "inspect", "patch", "explain", "schema", "fix",
+    "skills", "capabilities", "api", "project", "mcp", "lsp",
+]
 # Cold release compilation of the compiler itself needs the SDK build budget.
 SDK_COMPONENT_BUILD_TIMEOUT_SECONDS = 600
 
