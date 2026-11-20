@@ -293,7 +293,7 @@ jobs:
   integration-conformance:
     name: Integration conformance (${{ matrix.os }}, ${{ matrix.cc }})
     runs-on: ${{ matrix.os }}
-    timeout-minutes: 35
+    timeout-minutes: 30
     strategy:
       fail-fast: false
       matrix:
