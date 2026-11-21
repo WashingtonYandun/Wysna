@@ -318,7 +318,7 @@ static inline WYSNA_NORETURN void wysna_panic_exit(int status) {
 #endif
 }
 
-static inline void wysna_runtime_fail(const char* code, const char* format, ...) {
+static inline WYSNA_NORETURN void wysna_runtime_fail(const char* code, const char* format, ...) {
     if (wysna_g_source_file && wysna_g_source_file[0] != '\0' && wysna_g_source_line > 0) {
         fprintf(stderr, "[%s] %s:%" PRId32 ":%" PRId32 " - ",
                 code, wysna_g_source_file, wysna_g_source_line, wysna_g_source_col);
