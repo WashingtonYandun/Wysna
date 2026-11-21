@@ -272,7 +272,7 @@ class Phase4NativeLspTests(unittest.TestCase):
 
                 fmt_resp = client.request("textDocument/formatting", {"textDocument": {"uri": m_uri}})
                 self.assertEqual(len(fmt_resp["result"]), 1)
-                self.assertIn("    let g = new ConsoleGreeter(\"x\")", fmt_resp["result"][0]["newText"])
+                self.assertIn("    let g = ConsoleGreeter(\"x\")", fmt_resp["result"][0]["newText"])
 
                 # Unsaved dependency break in contracts.wysna propagates into main.wysna without writing to disk!
                 client.notify("textDocument/didChange", {

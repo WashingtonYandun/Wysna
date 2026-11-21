@@ -91,3 +91,67 @@ def test_seed_type_mismatch_demangles_imported_types_in_message_and_data(tmp_pat
     assert diag["data"].get("kind") == "type_mismatch"
     assert "__wysna_module_" not in diag["data"].get("expected", "")
     assert "__wysna_module_" not in diag["data"].get("found", "")
+
+
+def test_selfhost_formatter_matches_seed_on_inline_spacing_new_and_multiline_strings(tmp_path):
+    from compiler.Bootstrap import ensure_selfhost_compiler_binary
+
+    selfhost_bin = ensure_selfhost_compiler_binary(str(ROOT))
+    parity_target = tmp_path / "fmt_parity.wysna"
+    parity_source = (
+        "class Counter {\n"
+        "    public value: int\n"
+        "    public fn init(v: int) -> unit {\n"
+        "        this.value = v\n"
+        "    }\n"
+        "}\n"
+        "\n"
+        "fn add(a:int,b:int)->int{\n"
+        "    let x=1+2\n"
+        "    let neg = -5\n"
+        "    let rng=0..10\n"
+        "    let c = new Counter(1)\n"
+        "    let mut total = x + neg + c.value + a + b\n"
+        "    for i in rng {\n"
+        "        total = total + i\n"
+        "    }\n"
+        "    return total\n"
+        "}\n"
+    )
+    parity_target.write_text(parity_source, encoding="utf-8")
+    seed_res = subprocess.run(
+        [sys.executable, str(ROOT / "main.py"), "fmt", "--engine=seed", str(parity_target)],
+        capture_output=True, text=True, check=True, cwd=str(ROOT),
+    )
+    comp_res = subprocess.run(
+        [selfhost_bin, "--stdlib-root", str(ROOT / "stdlib"), "fmt", str(parity_target)],
+        capture_output=True, text=True, check=True, cwd=str(ROOT),
+    )
+    for out in (seed_res.stdout, comp_res.stdout):
+        assert "fn add(a: int, b: int) -> int {" in out
+        assert "    let x = 1 + 2" in out
+        assert "    let neg = -5" in out
+        assert "    let rng = 0..10" in out
+        assert "    let c = Counter(1)" in out
+        assert "new Counter" not in out
+    assert comp_res.stdout.rstrip() == seed_res.stdout.rstrip()
+
+    ml_target = tmp_path / "fmt_multiline.wysna"
+    ml_source = (
+        'fn banner() -> str {\n'
+        'let x=1+2\n'
+        'let msg = """\n'
+        '  a+b = untouched\n'
+        '    keep indent\n'
+        '"""\n'
+        'return msg + str(x)\n'
+        '}\n'
+    )
+    ml_target.write_text(ml_source, encoding="utf-8")
+    ml_comp = subprocess.run(
+        [selfhost_bin, "--stdlib-root", str(ROOT / "stdlib"), "fmt", str(ml_target)],
+        capture_output=True, text=True, check=True, cwd=str(ROOT),
+    )
+    assert "    let x = 1 + 2\n" in ml_comp.stdout
+    assert '    let msg = """\n  a+b = untouched\n    keep indent\n"""\n' in ml_comp.stdout
+
