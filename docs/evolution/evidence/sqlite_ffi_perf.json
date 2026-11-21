@@ -1,0 +1,287 @@
+{
+  "rows": 1000,
+  "samples": 3,
+  "sanitize": false,
+  "platform": "darwin",
+  "compiler": "Apple clang version 21.0.0 (clang-2100.4.1.1)\nTarget: arm64-apple-darwin25.6.0\nThread model: posix\nInstalledDir: /Applications/Xcode.app/Contents/Developer/Toolchains/XcodeDefault.xctoolchain/usr/bin\n",
+  "flags": [
+    "-std=c99",
+    "-O2",
+    "-g",
+    "-I/Users/washingtonyandun/Documents/ChatGPT/w_lang_compiler"
+  ],
+  "bootstrap_seconds": 0.0842528339708224,
+  "memory_method": "one isolated child ru_maxrss; Darwin bytes, Linux KiB converted to bytes",
+  "engines": {
+    "c": {
+      "sqlite_version_number": 3051000,
+      "build_seconds": 0.08436387509573251,
+      "run_seconds": [
+        0.005213125026784837,
+        0.005262334016151726,
+        0.005124084069393575
+      ],
+      "median_run_seconds": 0.005213125026784837,
+      "user_seconds": [
+        0.0013959999999999999,
+        0.001403,
+        0.001383
+      ],
+      "system_seconds": [
+        0.0020109999999999998,
+        0.001981,
+        0.001973
+      ],
+      "runtime_memory": null,
+      "peak_memory_bytes": [
+        1949696,
+        1966080,
+        1966080
+      ],
+      "median_peak_memory_bytes": 1966080,
+      "binary_bytes": 37488,
+      "input_bytes": 15900,
+      "persisted_rows": 1000,
+      "persisted_total": 4294972291000,
+      "live_adapter_resources": 0,
+      "dry_run_rollback": true,
+      "transactional_journal": true,
+      "status_command": true,
+      "failure_cases": [
+        "duplicate_batch",
+        "duplicate_persisted",
+        "bad_decimal",
+        "overflow",
+        "sum_overflow",
+        "header",
+        "columns",
+        "empty_value",
+        "nul",
+        "unicode_digit",
+        "no_rows",
+        "row_limit",
+        "open",
+        "missing_file"
+      ],
+      "link_command": [
+        "cc",
+        "-std=c99",
+        "-O2",
+        "-g",
+        "-I/Users/washingtonyandun/Documents/ChatGPT/w_lang_compiler",
+        "/Users/washingtonyandun/Documents/ChatGPT/w_lang_compiler/examples/ffi/sqlite/import_reference.c",
+        "/var/folders/1d/zj02r88x5m356mpg0yw6cqm00000gn/T/wysna-sqlite-import-pur5h4tv/adapter.o",
+        "-lsqlite3",
+        "-o",
+        "/var/folders/1d/zj02r88x5m356mpg0yw6cqm00000gn/T/wysna-sqlite-import-pur5h4tv/c"
+      ]
+    },
+    "ast": {
+      "sqlite_version_number": 3051000,
+      "build_seconds": 0.8419507920043543,
+      "run_seconds": [
+        0.008581749978475273,
+        0.008780541946180165,
+        0.009640124975703657
+      ],
+      "median_run_seconds": 0.008780541946180165,
+      "user_seconds": [
+        0.004429,
+        0.004543999999999999,
+        0.0044529999999999995
+      ],
+      "system_seconds": [
+        0.002156,
+        0.002309,
+        0.002363
+      ],
+      "runtime_memory": {
+        "alloc": 28787,
+        "free": 28787,
+        "retain": 63600,
+        "release": 92387,
+        "live": 0
+      },
+      "peak_memory_bytes": [
+        2064384,
+        2064384,
+        2064384
+      ],
+      "median_peak_memory_bytes": 2064384,
+      "binary_bytes": 129664,
+      "input_bytes": 15900,
+      "persisted_rows": 1000,
+      "persisted_total": 4294972291000,
+      "live_adapter_resources": 0,
+      "dry_run_rollback": true,
+      "transactional_journal": true,
+      "status_command": true,
+      "failure_cases": [
+        "duplicate_batch",
+        "duplicate_persisted",
+        "bad_decimal",
+        "overflow",
+        "sum_overflow",
+        "header",
+        "columns",
+        "empty_value",
+        "nul",
+        "unicode_digit",
+        "no_rows",
+        "row_limit",
+        "open",
+        "missing_file"
+      ],
+      "link_command": [
+        "cc",
+        "-std=c99",
+        "-O2",
+        "-g",
+        "-I/Users/washingtonyandun/Documents/ChatGPT/w_lang_compiler",
+        "/var/folders/1d/zj02r88x5m356mpg0yw6cqm00000gn/T/wysna-sqlite-import-pur5h4tv/ast.c",
+        "/var/folders/1d/zj02r88x5m356mpg0yw6cqm00000gn/T/wysna-sqlite-import-pur5h4tv/adapter.o",
+        "-lsqlite3",
+        "-o",
+        "/var/folders/1d/zj02r88x5m356mpg0yw6cqm00000gn/T/wysna-sqlite-import-pur5h4tv/ast"
+      ]
+    },
+    "hir": {
+      "sqlite_version_number": 3051000,
+      "build_seconds": 1.13940637500491,
+      "run_seconds": [
+        0.006496375077404082,
+        0.006670666043646634,
+        0.006378707941621542
+      ],
+      "median_run_seconds": 0.006496375077404082,
+      "user_seconds": [
+        0.002549,
+        0.0026449999999999998,
+        0.002547
+      ],
+      "system_seconds": [
+        0.002039,
+        0.002124,
+        0.00203
+      ],
+      "runtime_memory": {
+        "alloc": 3007,
+        "free": 3007,
+        "retain": 4,
+        "release": 3011,
+        "live": 0
+      },
+      "peak_memory_bytes": [
+        2031616,
+        2048000,
+        2031616
+      ],
+      "median_peak_memory_bytes": 2031616,
+      "binary_bytes": 112656,
+      "input_bytes": 15900,
+      "persisted_rows": 1000,
+      "persisted_total": 4294972291000,
+      "live_adapter_resources": 0,
+      "dry_run_rollback": true,
+      "transactional_journal": true,
+      "status_command": true,
+      "failure_cases": [
+        "duplicate_batch",
+        "duplicate_persisted",
+        "bad_decimal",
+        "overflow",
+        "sum_overflow",
+        "header",
+        "columns",
+        "empty_value",
+        "nul",
+        "unicode_digit",
+        "no_rows",
+        "row_limit",
+        "open",
+        "missing_file"
+      ],
+      "link_command": [
+        "cc",
+        "-std=c99",
+        "-O2",
+        "-g",
+        "-I/Users/washingtonyandun/Documents/ChatGPT/w_lang_compiler",
+        "/var/folders/1d/zj02r88x5m356mpg0yw6cqm00000gn/T/wysna-sqlite-import-pur5h4tv/hir.c",
+        "/var/folders/1d/zj02r88x5m356mpg0yw6cqm00000gn/T/wysna-sqlite-import-pur5h4tv/adapter.o",
+        "-lsqlite3",
+        "-o",
+        "/var/folders/1d/zj02r88x5m356mpg0yw6cqm00000gn/T/wysna-sqlite-import-pur5h4tv/hir"
+      ]
+    },
+    "selfhost": {
+      "sqlite_version_number": 3051000,
+      "build_seconds": 0.8715522909769788,
+      "run_seconds": [
+        0.0067841659765690565,
+        0.006611666991375387,
+        0.006534749991260469
+      ],
+      "median_run_seconds": 0.006611666991375387,
+      "user_seconds": [
+        0.0028989999999999997,
+        0.0028699999999999997,
+        0.002937
+      ],
+      "system_seconds": [
+        0.001993,
+        0.001916,
+        0.001966
+      ],
+      "runtime_memory": {
+        "alloc": 3007,
+        "free": 3007,
+        "retain": 63600,
+        "release": 66607,
+        "live": 0
+      },
+      "peak_memory_bytes": [
+        2031616,
+        2031616,
+        2015232
+      ],
+      "median_peak_memory_bytes": 2031616,
+      "binary_bytes": 112552,
+      "input_bytes": 15900,
+      "persisted_rows": 1000,
+      "persisted_total": 4294972291000,
+      "live_adapter_resources": 0,
+      "dry_run_rollback": true,
+      "transactional_journal": true,
+      "status_command": true,
+      "failure_cases": [
+        "duplicate_batch",
+        "duplicate_persisted",
+        "bad_decimal",
+        "overflow",
+        "sum_overflow",
+        "header",
+        "columns",
+        "empty_value",
+        "nul",
+        "unicode_digit",
+        "no_rows",
+        "row_limit",
+        "open",
+        "missing_file"
+      ],
+      "link_command": [
+        "cc",
+        "-std=c99",
+        "-O2",
+        "-g",
+        "-I/Users/washingtonyandun/Documents/ChatGPT/w_lang_compiler",
+        "/var/folders/1d/zj02r88x5m356mpg0yw6cqm00000gn/T/wysna-sqlite-import-pur5h4tv/selfhost.c",
+        "/var/folders/1d/zj02r88x5m356mpg0yw6cqm00000gn/T/wysna-sqlite-import-pur5h4tv/adapter.o",
+        "-lsqlite3",
+        "-o",
+        "/var/folders/1d/zj02r88x5m356mpg0yw6cqm00000gn/T/wysna-sqlite-import-pur5h4tv/selfhost"
+      ]
+    }
+  }
+}

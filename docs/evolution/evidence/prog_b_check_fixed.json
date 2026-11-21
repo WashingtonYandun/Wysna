@@ -1,0 +1,1 @@
+{"schema_version":"wysna.tool-result/1","command":"check","status":"ok","invocation_id":"81c98362-78f3-4747-949f-60fc8a741aa2","tool_exit_code":0,"process_exit_code":0,"execution":null,"toolchain":{"compiler":"0.8.0"},"target":{"profile":"native-cli","triple":null},"diagnostics":[],"artifacts":[],"telemetry":null}

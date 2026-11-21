@@ -1,0 +1,8 @@
+parse_ms=751.25
+check_parsed_ms=1495.11 (checker.check alone was ~1467ms; difference is clone_syntax in check_parsed + CheckedProgram.__init__)
+single_checked.ast_clone_ms=640.40
+analyze_reference_cycles_ms=1893.18 (calls checked.ast 3 times!)
+lint_discarded_expressions_ms=727.10 (calls checked.ast 1 more time!)
+mir_lower_unopt_ms=2523.71 (includes 1 verify)
+single_mir_verify_ms=578.84
+mir_optimize_ms=6474.66 (includes 7 full-module Verifier.verify calls = ~4051.88ms!)

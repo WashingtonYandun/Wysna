@@ -1,0 +1,24 @@
+import "std/json"
+
+pub fn encode_Item(value: Item) -> json.Value {
+    let mut _fields: dict[str, json.Value] = {}
+    _fields["id"] = json.from_int(value.id)
+    _fields["title"] = json.from_str(value.title)
+    _fields["amount_cents"] = json.from_int(value.amount_cents)
+    return json.object(_fields)
+}
+
+pub fn to_json_Item(value: Item) -> str ! json.JsonError {
+    return json.stringify(encode_Item(value))
+}
+
+pub fn decode_Item(raw_val: json.Value) -> Item ! json.JsonError {
+    let _f_id = json.get_int(raw_val, "id")?
+    let _f_title = json.get_str(raw_val, "title")?
+    let _f_amount_cents = json.get_int(raw_val, "amount_cents")?
+    return Item { id: _f_id, title: _f_title, amount_cents: _f_amount_cents }
+}
+
+pub fn from_json_Item(raw: str) -> Item ! json.JsonError {
+    return decode_Item(json.parse(raw)?)
+}

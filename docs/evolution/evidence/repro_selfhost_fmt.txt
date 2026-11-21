@@ -1,0 +1,18 @@
+=== Seed wysna fmt ===
+let x = 1 + 2
+let msg = "\nkeep_zero_indent {\nstill_zero_indent\n}\n"
+print(x, msg)
+=== Native selfhost fmt ===
+let x=1+2
+let msg = """
+keep_zero_indent {
+    still_zero_indent
+}
+"""
+print(x, msg)
+=== Run before selfhost fmt ===
+3 
+keep_zero_indent {
+still_zero_indent
+}
+

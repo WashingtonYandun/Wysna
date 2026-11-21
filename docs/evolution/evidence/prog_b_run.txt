@@ -1,0 +1,14 @@
+GET /health -> 200: "{\"ok\":true}"
+POST /items -> 201: "{\"amount_cents\":2500,\"id\":1,\"title\":\"Starter Plan\"}"
+POST /items -> 409: "{\"error\":\"duplicate_id\",\"message\":\"Item 1 already exists\"}"
+POST /items -> 422: "{\"error\":\"validation_failed\",\"message\":\"id > 0, non-empty title, and amount_cents >= 0 required\"}"
+GET /items -> 200: "{\"count\":1,\"items\":[{\"amount_cents\":2500,\"id\":1,\"title\":\"Starter Plan\"}]}"
+GET /not-found -> 404: "{\"error\":\"not_found\",\"message\":\"No route for GET /not-found\"}"
+SERVER STDOUT: Wysna service pilot listening on http://127.0.0.1:18924 (4 workers, queue 32)
+GET /health -> 200: {"ok":true}
+POST /items -> 201: {"amount_cents":2500,"id":1,"title":"Starter Plan"}
+POST /items -> 409: {"error":"duplicate_id","message":"Item 1 already exists"}
+POST /items -> 422: {"error":"validation_failed","message":"id > 0, non-empty title, and amount_cents >= 0 required"}
+GET /items -> 200: {"count":1,"items":[{"amount_cents":2500,"id":1,"title":"Starter Plan"}]}
+GET /not-found -> 404: {"error":"not_found","message":"No route for GET /not-found"}
+SERVER STDOUT: Wysna service pilot listening on http://127.0.0.1:18924 (4 workers, queue 32)

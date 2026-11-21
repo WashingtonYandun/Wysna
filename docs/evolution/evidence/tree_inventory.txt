@@ -1,0 +1,280 @@
+src          | files:  142 | lines:   39527
+selfhost     | files:   35 | lines:   35822
+runtime      | files:   35 | lines:   18124
+stdlib       | files:   20 | lines:    2723
+tests        | files:  522 | lines:   30894
+tools        | files:   29 | lines:    5766
+bench        | files:   30 | lines:    6175
+docs         | files:   59 | lines:    3932
+examples     | files:   63 | lines:    3358
+packaging    | files:   11 | lines:    1938
+editors      | files:    5 | lines:     338
+=== src ===
+  checker                              | files:  24 | lines:   9070
+  tooling                              | files:  24 | lines:   7876
+  mir                                  | files:  16 | lines:   4788
+  compiler                             | files:  18 | lines:   4481
+  hir                                  | files:   7 | lines:   2785
+  codegen                              | files:   8 | lines:   1908
+  parser                               | files:   2 | lines:   1628
+  common                               | files:  18 | lines:   1587
+  node                                 | files:   2 | lines:   1175
+  wysna.egg-info                       | files:   6 | lines:    869
+  lexer                                | files:   2 | lines:    855
+  formatter                            | files:   3 | lines:    688
+  project                              | files:   5 | lines:    684
+  run_conformance.py                   | files:   1 | lines:    684
+  error                                | files:   2 | lines:    287
+  tokens                               | files:   3 | lines:    146
+  main.py                              | files:   1 | lines:     16
+=== selfhost ===
+  compiler.wysna                       | files:   1 | lines:  17911
+  src                                  | files:  34 | lines:  17911
+=== runtime ===
+  wysna_unicode_tables.h               | files:   1 | lines:   3974
+  wysna_host.h                         | files:   1 | lines:   2213
+  HostAbi.py                           | files:   1 | lines:   1487
+  wysna_runtime_memory.h               | files:   1 | lines:   1420
+  wysna_host_crypto.h                  | files:   1 | lines:    902
+  Interpreter.py                       | files:   1 | lines:    866
+  wysna_runtime_builtins.h             | files:   1 | lines:    738
+  Values.py                            | files:   1 | lines:    666
+  ExpressionRules.py                   | files:   1 | lines:    646
+  wysna_runtime_core.h                 | files:   1 | lines:    579
+  wysna_runtime_values.h               | files:   1 | lines:    564
+  Environment.py                       | files:   1 | lines:    464
+  wysna_runtime_format.h               | files:   1 | lines:    393
+  wysna_host_process.h                 | files:   1 | lines:    376
+  wysna_runtime_access.h               | files:   1 | lines:    343
+  wysna_runtime_operators.h            | files:   1 | lines:    306
+  wysna_runtime_equality.h             | files:   1 | lines:    244
+  wysna_host_system.h                  | files:   1 | lines:    211
+  wysna_host_unicode.h                 | files:   1 | lines:    211
+  wysna_runtime_collections.h          | files:   1 | lines:    207
+  wysna_llvm_runtime.c                 | files:   1 | lines:    187
+  wysna_runtime_text.h                 | files:   1 | lines:    179
+  EffectTrace.py                       | files:   1 | lines:    164
+  wysna_host_project.h                 | files:   1 | lines:    157
+  WasiRunner.py                        | files:   1 | lines:    131
+  wysna_process_tree.h                 | files:   1 | lines:     80
+  ExecutionContext.py                  | files:   1 | lines:     77
+  wysna_host_paths.h                   | files:   1 | lines:     71
+  ForeignAbi.py                        | files:   1 | lines:     64
+  wysna_llvm_operations.def            | files:   1 | lines:     54
+  wysna_llvm_abi.h                     | files:   1 | lines:     49
+  wysna_runtime.h                      | files:   1 | lines:     49
+  InteractiveExecution.py              | files:   1 | lines:     42
+  wysna_runtime.c                      | files:   1 | lines:     10
+  __init__.py                          | files:   1 | lines:      0
+=== stdlib ===
+  json.wysna                           | files:   1 | lines:    780
+  http.wysna                           | files:   1 | lines:    409
+  crypto.wysna                         | files:   1 | lines:    227
+  time.wysna                           | files:   1 | lines:    216
+  text.wysna                           | files:   1 | lines:    204
+  algorithms.wysna                     | files:   1 | lines:    192
+  async.wysna                          | files:   1 | lines:    192
+  buffer.wysna                         | files:   1 | lines:     70
+  process.wysna                        | files:   1 | lines:     61
+  io.wysna                             | files:   1 | lines:     60
+  parse.wysna                          | files:   1 | lines:     57
+  files.wysna                          | files:   1 | lines:     55
+  resources.wysna                      | files:   1 | lines:     49
+  environment.wysna                    | files:   1 | lines:     44
+  path.wysna                           | files:   1 | lines:     30
+  bytes.wysna                          | files:   1 | lines:     29
+  fs.wysna                             | files:   1 | lines:     22
+  test.wysna                           | files:   1 | lines:     20
+  result.wysna                         | files:   1 | lines:      5
+  __init__.py                          | files:   1 | lines:      1
+=== tests ===
+  unit                                 | files: 118 | lines:  25101
+  runtime                              | files: 199 | lines:   2325
+  fuzz                                 | files:   5 | lines:    795
+  types                                | files:  77 | lines:    590
+  differential                         | files:   7 | lines:    552
+  stdlib                               | files:  12 | lines:    377
+  engine_harness.py                    | files:   1 | lines:    266
+  parser                               | files:  30 | lines:    196
+  regressions                          | files:  21 | lines:    110
+  modules                              | files:   6 | lines:     93
+  lexer                                | files:  20 | lines:     85
+  functions                            | files:  10 | lines:     73
+  engine_profiles.json                 | files:   1 | lines:     71
+  emit_ast_oracle.py                   | files:   1 | lines:     56
+  ffi                                  | files:   3 | lines:     51
+  formatter_contract.py                | files:   1 | lines:     35
+  browser_library_smoke.mjs            | files:   1 | lines:     33
+  errors                               | files:   2 | lines:     21
+  generic_oop                          | files:   3 | lines:     21
+  formatter                            | files:   2 | lines:     18
+  memory                               | files:   1 | lines:     15
+  __init__.py                          | files:   1 | lines:     10
+=== tools ===
+  measure_service.py                   | files:   1 | lines:    883
+  validate_native_sdk.py               | files:   1 | lines:    460
+  package_components.py                | files:   1 | lines:    366
+  package_installers.py                | files:   1 | lines:    271
+  prepare_release_assets.py            | files:   1 | lines:    263
+  ci_conformance.py                    | files:   1 | lines:    260
+  benchmark_llvm.py                    | files:   1 | lines:    257
+  validate_wheel.py                    | files:   1 | lines:    243
+  package_measurement_pilot.py         | files:   1 | lines:    232
+  validate_distribution.py             | files:   1 | lines:    222
+  validate_installed_application.py    | files:   1 | lines:    218
+  validate_sqlite_import.py            | files:   1 | lines:    201
+  package_llvm_sdk.py                  | files:   1 | lines:    189
+  validate_llvm_sdk.py                 | files:   1 | lines:    184
+  package_distribution.py              | files:   1 | lines:    167
+  package_native.py                    | files:   1 | lines:    156
+  qualify_llvm.py                      | files:   1 | lines:    147
+  validate_unix_lifecycle.py           | files:   1 | lines:    141
+  validate_sqlite_ffi.py               | files:   1 | lines:    127
+  validate_windows_install.py          | files:   1 | lines:    122
+  validate_windows_lifecycle.ps1       | files:   1 | lines:    115
+  measurement_ingest.py                | files:   1 | lines:     99
+  gen_unicode_tables.py                | files:   1 | lines:     97
+  package_windows.py                   | files:   1 | lines:     90
+  bundle_selfhost.py                   | files:   1 | lines:     88
+  measure_tokenizer.py                 | files:   1 | lines:     62
+  bootstrap_from_native.sh             | files:   1 | lines:     48
+  validate_llvm_install.py             | files:   1 | lines:     30
+  measure_process.py                   | files:   1 | lines:     28
+=== selfhost/src ===
+  01_ast.wysna                         | lines:    28
+  01_diagnostics.wysna                 | lines:   278
+  02_lexer.wysna                       | lines:   798
+  03_modules.wysna                     | lines:   683
+  03_syntax.wysna                      | lines:    46
+  05_foreign.wysna                     | lines:    23
+  08_c99_literals.wysna                | lines:    28
+  08_checked.wysna                     | lines:   226
+  08_checked_records.wysna             | lines:   105
+  08_checked_verify.wysna              | lines:   237
+  08_checker.wysna                     | lines:    84
+  08_generics.wysna                    | lines:   135
+  08_mir.wysna                         | lines:   545
+  08_mir_c99.wysna                     | lines:   561
+  08_mir_channels.wysna                | lines:   177
+  08_mir_classes.wysna                 | lines:   151
+  08_mir_collections.wysna             | lines:   113
+  08_mir_foreign.wysna                 | lines:    89
+  08_mir_functions.wysna               | lines:    95
+  08_mir_lowering.wysna                | lines:   405
+  08_mir_nominals.wysna                | lines:   226
+  08_mir_patterns.wysna                | lines:   169
+  08_mir_places.wysna                  | lines:    78
+  08_mir_verifier.wysna                | lines:   448
+  08_semantics.wysna                   | lines:  3244
+  09_agent_tools.wysna                 | lines:  1697
+  09_api.wysna                         | lines:   785
+  09_fix.wysna                         | lines:   808
+  09_lsp.wysna                         | lines:  1576
+  09_main.wysna                        | lines:   208
+  09_mcp.wysna                         | lines:   709
+  09_project.wysna                     | lines:  1562
+  09_project_lock.wysna                | lines:   190
+  09_schema.wysna                      | lines:  1404
+=== src/checker ===
+  AccessRules.py                       | lines:   561
+  CallRules.py                         | lines:   720
+  ClosureConversion.py                 | lines:   181
+  CollectionRules.py                   | lines:   280
+  ConstructorFlow.py                   | lines:   185
+  ControlFlowRules.py                  | lines:   292
+  DeclarationPass.py                   | lines:   547
+  ExpressionRules.py                   | lines:   101
+  GenericState.py                      | lines:   172
+  Generics.py                          | lines:   247
+  LayoutGraph.py                       | lines:   458
+  Lints.py                             | lines:    78
+  OopGenerics.py                       | lines:    94
+  PatternCoverage.py                   | lines:   100
+  ResultRules.py                       | lines:   151
+  ScalarRules.py                       | lines:   310
+  Specialization.py                    | lines:   525
+  Suggestions.py                       | lines:   134
+  SymbolTable.py                       | lines:   133
+  TypeChecker.py                       | lines:  1952
+  TypeInterner.py                      | lines:  1312
+  TypeRelations.py                     | lines:   150
+  WysnaType.py                         | lines:   386
+  __init__.py                          | lines:     1
+=== src/tooling ===
+  AgentGraphCLI.py                     | lines:   525
+  ApiIndex.py                          | lines:   375
+  CLI.py                               | lines:   836
+  CapabilityPolicy.py                  | lines:   113
+  DiagnosticRender.py                  | lines:    88
+  ExplainCLI.py                        | lines:   211
+  FixCLI.py                            | lines:   179
+  LanguageServer.py                    | lines:   967
+  LlvmCommand.py                       | lines:    75
+  McpServer.py                         | lines:   420
+  MirCLI.py                            | lines:   113
+  ProjectCLI.py                        | lines:   701
+  ProjectImpact.py                     | lines:   113
+  ReplSession.py                       | lines:   125
+  RunReport.py                         | lines:    44
+  SchemaCLI.py                         | lines:   737
+  ServiceCLI.py                        | lines:    71
+  ServiceHost.py                       | lines:   529
+  SourceCommand.py                     | lines:   688
+  SourceWrite.py                       | lines:    98
+  TargetValidation.py                  | lines:   159
+  TestRunner.py                        | lines:   204
+  ToolResult.py                        | lines:   504
+  __init__.py                          | lines:     1
+=== src/mir ===
+  AsyncLowering.py                     | lines:   106
+  CCodeGen.py                          | lines:   786
+  Debug.py                             | lines:    44
+  Exchange.py                          | lines:   229
+  LlvmAbi.py                           | lines:    28
+  LlvmCodeGen.py                       | lines:   688
+  LlvmDebug.py                         | lines:   122
+  LlvmManaged.py                       | lines:   248
+  LlvmProfile.py                       | lines:    19
+  LlvmText.py                          | lines:     4
+  Lowering.py                          | lines:   850
+  Nodes.py                             | lines:   115
+  Optimizer.py                         | lines:   537
+  Ownership.py                         | lines:   431
+  Verifier.py                          | lines:   580
+  __init__.py                          | lines:     1
+=== src/compiler ===
+  ArtifactCache.py                     | lines:    69
+  Bootstrap.py                         | lines:   221
+  BrowserLibraryToolchain.py           | lines:   182
+  CObjectCache.py                      | lines:    62
+  CheckedProgram.py                    | lines:   302
+  CompilationSession.py                | lines:   729
+  CompilerService.py                   | lines:   301
+  EffectAnalysis.py                    | lines:   469
+  EffectModel.py                       | lines:   122
+  LlvmForeign.py                       | lines:    14
+  LlvmSdk.py                           | lines:   149
+  LlvmToolchain.py                     | lines:   331
+  ModuleNames.py                       | lines:   128
+  NativeExecution.py                   | lines:    55
+  NativeToolchain.py                   | lines:   275
+  SemanticGraph.py                     | lines:   977
+  WasiToolchain.py                     | lines:    94
+  __init__.py                          | lines:     1
+=== src/hir ===
+  HirBindings.py                       | lines:   363
+  HirBuilder.py                        | lines:  1073
+  HirCCodeGen.py                       | lines:    44
+  HirDump.py                           | lines:   236
+  HirNodes.py                          | lines:   778
+  HirVerifier.py                       | lines:   275
+  __init__.py                          | lines:    16
+=== src/codegen ===
+  BrowserBindings.py                   | lines:   260
+  CCodeGen.py                          | lines:   943
+  CStrings.py                          | lines:     7
+  ExpressionRules.py                   | lines:   596
+  ForeignAbi.py                        | lines:    27
+  RangeLoop.py                         | lines:    25
+  VirtualDispatch.py                   | lines:    49
+  __init__.py                          | lines:     1

@@ -1,0 +1,30 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <title>Wysna Browser Library — Cart Evaluator</title>
+</head>
+<body>
+  <h1>Wysna Wasm Cart Evaluator</h1>
+  <pre id="output">Loading Wasm...</pre>
+  <script type="module">
+    import { createWysna } from "./build/web.mjs";
+
+    const out = document.getElementById("output");
+    const lib = await createWysna();
+    try {
+      const discount = lib.exports.compute_discount_cents(12500n, 2n);
+      const summaryJson = lib.exports.evaluate_cart_json(
+        JSON.stringify({ customer: "WySofia", subtotal_cents: 12500, tier_code: 2 })
+      );
+      out.textContent = JSON.stringify(
+        { discount_cents: discount.toString(), summary: JSON.parse(summaryJson) },
+        null,
+        2
+      );
+    } finally {
+      lib.destroy();
+    }
+  </script>
+</body>
+</html>
