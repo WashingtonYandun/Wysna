@@ -197,13 +197,18 @@ threads with shared mutable state into the core language model.
 | Chained assignment | HIR uses `HirAssignment`; the value is preserved and each index is evaluated once. The artificial depth limit was removed. |
 | Parser error recovery | Check and LSP recover up to 100 syntax diagnostics. JSON preserves the first error and adds `diagnostics`; recovered programs never execute. |
 | `wysna fmt` coverage | The gate checks idempotence and AST preservation across fixtures, runtime programs, recursive examples, the standard library, and self-hosted sources. It also runs generated trees before and after formatting. |
-| LSP | Both Seed (`src/tooling/LanguageServer.py`) and native Stage-3 Selfhost (`selfhost/src/09_lsp.wysna`, invoked via `wysna lsp`) support `initialize`, `didOpen/didChange/didClose` with UTF-16 ordered incremental edits and in-memory dependency overlays, `definition`, `implementation`, graph-enriched `hover`, `completion`, `references`, `textDocument/semanticTokens/full`, document formatting, and non-fatal `publishDiagnostics`. Seed additionally supports workspace-wide cross-file `rename`, `codeAction` (quickfixes), `signatureHelp`, and `W6001`/`W6002` warnings. |
+| LSP | Seed y el SDK nativo admiten ediciones incrementales UTF‑16, diagnósticos, navegación, autocompletado, formato, tokens semánticos, información de firma, correcciones rápidas y renombrado entre archivos. Seed incluye además avisos `W6001`/`W6002`. |
 
 | Capability policy | Capability policies are enforced across BOTH interpreted Seed (`wysna run --allow=...` / `--deny=...`, `W5006` static pre-execution gate) AND Seed-compiled C99 binaries (`wysna build --sandbox` / `wysna emit-c --sandbox` with optional `--allow=...` or `--deny=...`, compiling `#define WYSNA_DENY_CAP_*` compile-time guards directly into the C99 runtime ABI and tripping `[W5006]` on disallowed host operations). This provides in-process capability enforcement; it is not an OS kernel/container sandbox (seccomp/pledge/chroot) for external C libraries or raw FFI (`--link-lib` cannot be combined with `--sandbox`). |
 | Dictionary keys | `int`, `str`, `bool`, `enum`, and hashable `tuple` composites; `float`, collections, functions, classes, and composites containing non-hashable elements are rejected with `W2010`. |
 | Standard library scope | Includes text (with Unicode 16.0.0 UAX #15 `NFC`/`NFD`), paths, filesystem, file/buffer I/O, stdin/stdout streams, resources, algorithms (incl. parallel pools), UTF-8, JSON, `std/crypto` (SHA-256/HMAC + ChaCha20-Poly1305 AEAD + CSPRNG), `std/time` (calendar/ISO-8601), `std/environment`, `std/async` (timers + OS-thread `spawn`), process execution, and HTTP client; see [standard library](STDLIB.md) for contracts and platform limits. |
 
-LSP cross-file `rename` resolves all workspace `.wysna` files when `rootUri`/`workspaceFolders` are configured and refuses collisions or broken dependent modules; when no workspace root is configured, rename refuses exported symbols safely.
+El renombrado nativo cubre funciones de nivel superior dentro de `rootUri` o
+`workspaceFolders`, incluidos archivos cerrados e importaciones selectivas.
+Mantiene los alias explícitos, comprueba las referencias con el compilador y
+valida las ediciones en una copia de trabajo antes de devolverlas al editor.
+Las correcciones rápidas llevan la versión del documento y se ofrecen para
+la revisión del texto que produjo el diagnóstico.
 
 The CLI has POSIX and Windows adapters for cache locks, compiler processes, executable
 names and RSS telemetry. The Windows smoke job must pass on that host before support

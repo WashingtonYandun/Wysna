@@ -45,4 +45,5 @@ void wysna_llvm_invoke(void* out, const void* function, int32_t count, const voi
 void wysna_llvm_virtual(void* out, const void* receiver, int32_t slot, int32_t count, const void* arguments);
 void wysna_llvm_set_vtable(void* value, const void* table);
 int32_t wysna_llvm_entry_status(const void* value);
+int32_t wysna_llvm_integer_entry_status(int64_t value);
 #endif

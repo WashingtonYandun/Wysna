@@ -147,15 +147,15 @@ class Interpreter:
                         code="W4005",
                     )
 
-    def interpret(self, program: Program) -> WysnaValue:
+    def interpret(self, program: Program, *, process_entrypoint=False) -> WysnaValue:
         from runtime.HostAbi import set_effect_trace
         set_effect_trace(self.execution_context.effect_trace)
         try:
-            return self._interpret_inner(program)
+            return self._interpret_inner(program, process_entrypoint=process_entrypoint)
         finally:
             set_effect_trace(None)
 
-    def _interpret_inner(self, program: Program) -> WysnaValue:
+    def _interpret_inner(self, program: Program, *, process_entrypoint=False) -> WysnaValue:
         if not hasattr(program, "session") and any(isinstance(node, ImportDecl) for node in program.body):
             from checker.TypeChecker import TypeChecker
             TypeChecker(file=self.file).check(program)
@@ -220,10 +220,15 @@ class Interpreter:
             for stmt in program.body:
                 if not isinstance(stmt, (FnDecl, StructDecl, EnumDecl, InterfaceDecl, ClassDecl)):
                     last_val = self.eval_stmt(stmt, self.global_env)
+        last = non_decls[-1] if non_decls else None
+        invoked_main = (isinstance(last, ExprStmt) and isinstance(last.expr, CallExpr)
+                        and isinstance(last.expr.callee, IdentExpr) and last.expr.callee.name == "main"
+                        and not last.expr.args)
         if getattr(program, "call_entrypoint", not non_decls) and self.global_env.exists("main"):
             main_fn = self.global_env.lookup("main")
             if isinstance(main_fn, WysnaFunction):
                 last_val = self.call_function(main_fn, [])
+                invoked_main = True
 
         # A program whose module body ends in `main()` returns the entrypoint
         # Result through that expression statement. Wysna has no stack unwinding, so
@@ -236,6 +241,13 @@ class Interpreter:
                 code="W4003",
             )
 
+        if process_entrypoint and invoked_main:
+            status = last_val.value if isinstance(last_val, WysnaOk) else last_val
+            if isinstance(status, WysnaInt) and status.value != 0:
+                if not 0 <= status.value <= 255:
+                    raise WysnaRuntimeError(message="main returned an exit status outside 0..255",
+                                            file=self.file, code="W4003")
+                self.execution_context.terminate(status.value)
         return last_val
 
     @staticmethod

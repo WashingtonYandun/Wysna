@@ -60,7 +60,11 @@ fn module_read_text_or_overlay(path: str) -> list[str] {
 }
 
 # An import graph belongs to one source expansion.
+struct ModuleNameSite { source: Token, expanded: Token, import_site: bool, rewrite: bool }
+
 class ModuleLoader {
+    trace_names: bool
+    name_sites: list[ModuleNameSite]
     paths: list[str]
     states: list[int]
     public_names: list[list[str]]
@@ -76,6 +80,9 @@ class ModuleLoader {
     dep_aliases: list[str]
     dep_roots: list[str]
     fn init() {
+        this.trace_names = false
+        let initial_sites: list[ModuleNameSite] = []
+        this.name_sites = initial_sites
         let initial_paths: list[str] = []
         this.paths = initial_paths
         let initial_states: list[int] = []
@@ -448,6 +455,7 @@ fn module_expand(context: ModuleLoader, src: str, path: str, entry: bool) -> int
     let mut dependencies: list[int] = []
     let mut use_locals: list[str] = []
     let mut use_targets: list[str] = []
+    let mut use_aliased: list[bool] = []
     let mut body: list[Token] = []
     let mut position = 0
     let mut top_depth = 0
@@ -497,6 +505,7 @@ fn module_expand(context: ModuleLoader, src: str, path: str, entry: bool) -> int
                     let sym_tok = tokens[position + 1]
                     position = position + 2
                     let mut bound = sym_tok.val
+                    let aliased = position + 1 < len(tokens) and tokens[position].kind == "AS"
                     if position + 1 < len(tokens) and tokens[position].kind == "AS" {
                         if tokens[position + 1].kind != "IDENT" { report_error_at("W0006", tokens[position + 1], "expected alias identifier") }
                         bound = tokens[position + 1].val
@@ -511,11 +520,15 @@ fn module_expand(context: ModuleLoader, src: str, path: str, entry: bool) -> int
                         report_error_at("W1002", sym_tok, "imported symbol conflicts with declaration: " + bound)
                     }
                     use_locals.append(bound)
-                    use_targets.append(module_name(sub_dep, sym_tok.val))
+                    let target = module_name(sub_dep, sym_tok.val)
+                    use_targets.append(target)
+                    use_aliased.append(aliased)
+                    module_trace_name(context, sym_tok, sym_tok, target, true, true)
                     if public_use { context.public_names[index].append(bound) }
                 } else {
                     let sym_tok = first_tok
                     let mut bound = sym_tok.val
+                    let aliased = position + 1 < len(tokens) and tokens[position].kind == "AS"
                     if position + 1 < len(tokens) and tokens[position].kind == "AS" {
                         if tokens[position + 1].kind != "IDENT" { report_error_at("W0006", tokens[position + 1], "expected alias identifier") }
                         bound = tokens[position + 1].val
@@ -533,7 +546,10 @@ fn module_expand(context: ModuleLoader, src: str, path: str, entry: bool) -> int
                             report_error_at("W1002", sym_tok, "imported symbol conflicts with declaration: " + bound)
                         }
                         use_locals.append(bound)
-                        use_targets.append(module_name(base_dep, sym_tok.val))
+                        let target = module_name(base_dep, sym_tok.val)
+                        use_targets.append(target)
+                        use_aliased.append(aliased)
+                        module_trace_name(context, sym_tok, sym_tok, target, true, true)
                         if public_use { context.public_names[index].append(bound) }
                     } else {
                         let sub_req = base_req + "/" + sym_tok.val
@@ -588,11 +604,15 @@ fn module_expand(context: ModuleLoader, src: str, path: str, entry: bool) -> int
                     if nested_target >= 0 and position + 4 < len(body) and body[position + 3].kind == "DOT" {
                         let nested_member = body[position + 4]
                         if not module_contains(context.public_names[nested_target], nested_member.val) { report_error_at("W1001", nested_member, "member is not exported: " + nested_member.val) }
-                        context.output.append(Token { kind: "IDENT", val: module_name(nested_target, nested_member.val), line: token.line, col: token.col, file: token.file })
+                        let target = module_name(nested_target, nested_member.val)
+                        module_trace_name(context, nested_member, token, target, false, true)
+                        context.output.append(Token { kind: "IDENT", val: target, line: token.line, col: token.col, file: token.file })
                         position = position + 5
                     } else {
                         if not module_contains(context.public_names[dependency], member.val) { report_error_at("W1001", member, "member is not exported: " + member.val) }
-                        context.output.append(Token { kind: "IDENT", val: module_name(dependency, member.val), line: token.line, col: token.col, file: token.file })
+                        let target = module_name(dependency, member.val)
+                        module_trace_name(context, member, token, target, false, true)
+                        context.output.append(Token { kind: "IDENT", val: target, line: token.line, col: token.col, file: token.file })
                         position = position + 3
                     }
                     consumed = true
@@ -609,6 +629,7 @@ fn module_expand(context: ModuleLoader, src: str, path: str, entry: bool) -> int
                 if not field {
                     for u in 0..len(use_locals) {
                         if token.val == use_locals[u] {
+                            module_trace_name(context, token, token, use_targets[u], false, not use_aliased[u])
                             context.output.append(Token { kind: token.kind, val: use_targets[u], line: token.line, col: token.col, file: token.file })
                             consumed = true
                             position = position + 1
@@ -631,6 +652,12 @@ fn module_expand(context: ModuleLoader, src: str, path: str, entry: bool) -> int
     }
     context.states[index] = 2
     return index
+}
+
+fn module_trace_name(context: ModuleLoader, source: Token, anchor: Token, target: str, import_site: bool, rewrite: bool) -> unit {
+    if not context.trace_names { return }
+    let expanded = Token { kind: "IDENT", val: target, line: anchor.line, col: anchor.col, file: anchor.file }
+    context.name_sites.append(ModuleNameSite { source: source, expanded: expanded, import_site: import_site, rewrite: rewrite })
 }
 fn module_tokens_with_overlays(src: str, path: str, ov_paths: list[str], ov_texts: list[str]) -> list[Token] {
     let context = new ModuleLoader()

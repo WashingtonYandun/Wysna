@@ -160,7 +160,7 @@ class CCodeGen:
         non_decls = [s for s in program.body if not isinstance(s, (FnDecl, StructDecl, EnumDecl, InterfaceDecl, ClassDecl, ImportDecl))]
         if getattr(program, "call_entrypoint", not non_decls) and "wysna_fn_main" in self.fallible_fns:
             main_stmts.append("WVal _t_main = wysna_fn_main();")
-            self._emit_entrypoint_guard(main_stmts)
+            self._emit_entrypoint_status(main_stmts)
 
         self._pop_scope(main_stmts)
         self._emit_oop_dispatchers()
@@ -186,12 +186,13 @@ class CCodeGen:
 
         lines.append("int main(int argc, char** argv) {")
         lines.append("    wysna_init_args(argc, argv);")
+        lines.append("    int status = 0;")
         for s in main_stmts:
             lines.append(f"    {s}")
         for gv in reversed(self.global_vars):
             lines.append(f"    wysna_release({gv});")
         lines.append("    wysna_runtime_cleanup();")
-        lines.append("    return 0;")
+        lines.append("    return status;")
         lines.append("}")
         c_code_str = "\n".join(lines) + "\n"
         struct_count = sum(1 for s in program.body if isinstance(s, StructDecl))
@@ -388,24 +389,25 @@ class CCodeGen:
             elif isinstance(stmt, FnDecl):
                 self._emit_fn_decl(stmt, ns=ns)
 
-        for stmt in program.body:
-            if not isinstance(stmt, (FnDecl, StructDecl, EnumDecl, InterfaceDecl, ClassDecl, ImportDecl)):
-                if isinstance(stmt, LetDecl):
-                    gv_name = f"v_{ns}_{stmt.name}" if ns else f"v_{stmt.name}"
-                    if isinstance(stmt.initializer, ListExpr) and not stmt.initializer.elements:
-                        # A direct global store consumes the fresh constructor immediately.
-                        val_expr = "wysna_make_list(0, NULL)"
-                    else:
-                        val_expr = self.emit_expr(stmt.initializer, out_main_stmts)
-                    out_main_stmts.append(f"wysna_assign(&{gv_name}, {self._own_expr(val_expr)});")
-                elif ns == "" and self._is_entrypoint_call(stmt):
-                    # The module calls main() explicitly at top level. Its Result must
-                    # not be discarded, or a failed program would exit 0 silently.
-                    value = self.emit_expr(stmt.expr, out_main_stmts)
-                    out_main_stmts.append("WVal _t_main = " + self._own_expr(value) + ";")
-                    self._emit_entrypoint_guard(out_main_stmts)
+        executable = [stmt for stmt in program.body
+                      if not isinstance(stmt, (FnDecl, StructDecl, EnumDecl, InterfaceDecl, ClassDecl, ImportDecl))]
+        for stmt in executable:
+            if isinstance(stmt, LetDecl):
+                gv_name = f"v_{ns}_{stmt.name}" if ns else f"v_{stmt.name}"
+                if isinstance(stmt.initializer, ListExpr) and not stmt.initializer.elements:
+                    # A direct global store consumes the fresh constructor immediately.
+                    val_expr = "wysna_make_list(0, NULL)"
                 else:
-                    self.emit_stmt(stmt, out_main_stmts)
+                    val_expr = self.emit_expr(stmt.initializer, out_main_stmts)
+                out_main_stmts.append(f"wysna_assign(&{gv_name}, {self._own_expr(val_expr)});")
+            elif ns == "" and stmt is executable[-1] and self._is_entrypoint_call(stmt):
+                # The module calls main() explicitly at top level. Its Result must
+                # not be discarded, or a failed program would exit 0 silently.
+                value = self.emit_expr(stmt.expr, out_main_stmts)
+                out_main_stmts.append("WVal _t_main = " + self._own_expr(value) + ";")
+                self._emit_entrypoint_status(out_main_stmts)
+            else:
+                self.emit_stmt(stmt, out_main_stmts)
 
         self.current_ns = prev_ns
 
@@ -536,17 +538,8 @@ class CCodeGen:
                 and stmt.expr.callee.name == "main"
                 and not getattr(stmt.expr, "args", []))
 
-    def _emit_entrypoint_guard(self, out: List[str]) -> None:
-        """Emits the entrypoint Result check and the mandatory release of `_t_main`.
-
-        Wysna has no stack unwinding: a fallible entrypoint returns its error as a
-        value. Discarding it would make a failing program exit 0 with no output,
-        which is indistinguishable from success for make/CI/shell.
-        """
-        out.append(
-            "if (wysna_is_err(_t_main)) { wysna_report_entrypoint_error(wysna_as_box(_t_main)->val); "
-            "wysna_release(_t_main); wysna_runtime_cleanup(); return 1; }"
-        )
+    def _emit_entrypoint_status(self, out: List[str]) -> None:
+        out.append("status = wysna_entry_status(_t_main);")
         out.append("wysna_release(_t_main);")
 
     def emit_stmt(self, stmt: Stmt, out: List[str]) -> None:

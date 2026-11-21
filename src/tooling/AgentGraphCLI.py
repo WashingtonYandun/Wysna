@@ -109,7 +109,7 @@ def run_graph_command(argv) -> int:
                 write_tool_result(envelope, sys.stdout)
             else:
                 for entry in impact['entries']:
-                    status = 'affected' if entry['affected'] else 'no static path'
+                    status = entry['impact_status'].replace('-', ' ')
                     print(f"{entry['kind']} {entry['name']} ({entry['entry']}): {status}")
                     for path in entry['paths']:
                         chain = ''.join(f" --{edge['kind']}--> {edge['to']}" for edge in path['chain'])

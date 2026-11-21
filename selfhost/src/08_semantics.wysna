@@ -1221,7 +1221,8 @@ fn sem_prefix(context: SemanticContext, allow_struct: bool, statement: bool) -> 
         }
         let expected_tuple = context.expected_type
         let is_tuple_ctx = expected_tuple >= 0 and sem_kind(context, expected_tuple) == "tuple" and sem_group_is_tuple(context)
-        context.statement_context = statement and not sem_group_is_tuple(context)
+        context.statement_context = statement and not sem_group_is_tuple(context) and
+            not sem_delimited_expression_suffix(context.tokens, context.pos - 1, "LPAREN", "RPAREN")
         if is_tuple_ctx and len(context.types[expected_tuple].args) > 0 {
             context.expected_type = context.types[expected_tuple].args[0]
         }
@@ -1725,6 +1726,9 @@ fn sem_expression(context: SemanticContext, minimum: int, allow_struct: bool) ->
             if context.expected_type >= 0 and sem_kind(context, context.expected_type) == "result" and (result_kind == "ok" or result_kind == "err") and sem_assignable(context, actual, context.expected_type) {
                 left = sem_value(context.expected_type)
             } else { left = sem_value(actual) }
+            if sem_kind(context, callee.type_id) == "builtin" and context.types[callee.type_id].name == "exit" {
+                left.terminates = true
+            }
             if context.capture_nodes {
                 let target = context.nodes[callee.node]
                 let mut nodes = argument_nodes
@@ -2294,7 +2298,7 @@ fn sem_pattern_syntax(context: SemanticContext, subject: int, source: Token) -> 
     if owner != "" { report_error_at("W2001", source, "qualified enum pattern required") }
     return sem_binding_pattern(context, name, subject)
 }
-fn sem_match_expression(context: SemanticContext, statement: bool) -> SemValue {
+fn sem_match_expression(context: SemanticContext, statement_context: bool) -> SemValue {
     let source = sem_expect(context, "MATCH")
     # Preserve syntax-error priority before resolving an atomic subject's name.
     # A bare pattern followed by a block always lacks its required arrow.
@@ -2309,10 +2313,11 @@ fn sem_match_expression(context: SemanticContext, statement: bool) -> SemValue {
         }
     }
     let outer_expected = context.expected_type
-    let stmt_result_ctx = if statement and outer_expected >= 0 and sem_kind(context, outer_expected) == "result" and sem_unit_return(context, outer_expected) { outer_expected } else { -1 }
     context.expected_type = -1
     let subject_value = sem_expression(context, 0, false)
     let subject = subject_value.type_id
+    let statement = statement_context and not sem_delimited_expression_suffix(context.tokens, context.pos, "LBRACE", "RBRACE")
+    let stmt_result_ctx = if statement and outer_expected >= 0 and sem_kind(context, outer_expected) == "result" and sem_unit_return(context, outer_expected) { outer_expected } else { -1 }
     let mut arms: list[int] = []
     sem_expect(context, "LBRACE")
     let mut covered: list[list[int]] = []
@@ -2352,10 +2357,12 @@ fn sem_match_expression(context: SemanticContext, statement: bool) -> SemValue {
         if not branch.terminates {
             if live_branches == 0 { initialized = context.initialized } else { initialized = sem_intersect(initialized, context.initialized) }
             live_branches = live_branches + 1
-            if common >= 0 { sem_require_at(context, branch.type_id, common, "W2001", branch_source) }
-            else {
-                common = branch.type_id
-                if not statement and arm_expected < 0 and common != context.unit_type { arm_expected = common }
+            if not statement {
+                if common >= 0 { sem_require_at(context, branch.type_id, common, "W2001", branch_source) }
+                else {
+                    common = branch.type_id
+                    if arm_expected < 0 and common != context.unit_type { arm_expected = common }
+                }
             }
         }
         all_return = all_return and branch.terminates
@@ -2593,7 +2600,8 @@ fn sem_block(context: SemanticContext, statement: bool) -> SemFlow {
             terminates = true
             tail = context.unit_type
         } else {
-            context.statement_context = statement or not sem_tail_expression(context)
+            let result_match = statement_source.kind == "MATCH" and stmt_keep_expected >= 0
+            context.statement_context = (statement and not result_match) or not sem_tail_expression(context)
             context.expected_type = if context.statement_context { stmt_keep_expected } else { outer_expected }
             let expression = sem_expression(context, 0, true)
             tail = expression.type_id
@@ -3067,14 +3075,42 @@ fn sem_lambda(context: SemanticContext) -> SemValue {
     return sem_value(signature)
 }
 
+fn sem_expression_suffix(tokens: list[Token], start: int) -> bool {
+    if start >= len(tokens) { return false }
+    let mut cursor = start
+    while cursor < len(tokens) and tokens[cursor].kind == "NEWLINE" { cursor += 1 }
+    if cursor >= len(tokens) { return false }
+    let kind = tokens[cursor].kind
+    if kind == "DOT" { return true }
+    if kind == "ELSE" and cursor + 1 < len(tokens) {
+        return tokens[cursor + 1].kind == "LBRACE" or
+            (tokens[cursor + 1].kind == "IDENT" and cursor + 2 < len(tokens) and tokens[cursor + 2].kind == "LBRACE")
+    }
+    return cursor == start and
+        (op_precedence(kind) > 0 or kind == "LPAREN" or kind == "LBRACKET" or kind == "QUESTION")
+}
+
+fn sem_delimited_expression_suffix(tokens: list[Token], start: int, open_kind: str, close_kind: str) -> bool {
+    if start < 0 or start >= len(tokens) or tokens[start].kind != open_kind { return false }
+    let mut depth = 0
+    for i in start..len(tokens) {
+        if tokens[i].kind == open_kind { depth += 1 }
+        elif tokens[i].kind == close_kind {
+            depth -= 1
+            if depth == 0 { return sem_expression_suffix(tokens, i + 1) }
+        }
+    }
+    return false
+}
+
 fn sem_tail_expression(context: SemanticContext) -> bool {
     let mut position = context.pos
     let mut depth = 0
     while position < len(context.tokens) {
         let kind = context.tokens[position].kind
-        if kind == "LBRACE" { depth = depth + 1 }
-        elif kind == "RBRACE" {
-            if depth == 0 { return true }
+        if kind == "LBRACE" or kind == "LPAREN" or kind == "LBRACKET" { depth = depth + 1 }
+        elif kind == "RBRACE" or kind == "RPAREN" or kind == "RBRACKET" {
+            if depth == 0 { return kind == "RBRACE" }
             depth = depth - 1
             if depth == 0 {
                 let mut next_pos = position + 1
@@ -3082,7 +3118,8 @@ fn sem_tail_expression(context: SemanticContext) -> bool {
                     next_pos = next_pos + 1
                 }
                 let next = if next_pos < len(context.tokens) { context.tokens[next_pos].kind } else { "EOF" }
-                if next != "ELSE" and next != "ELIF" { return next == "RBRACE" }
+                if next != "ELSE" and next != "ELIF" and next != "LBRACE" and
+                   not sem_expression_suffix(context.tokens, position + 1) { return next == "RBRACE" }
             }
         }
         if depth == 0 and (kind == "LET" or kind == "RETURN") and position > context.pos { return false }

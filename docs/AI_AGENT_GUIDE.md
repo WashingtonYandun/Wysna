@@ -160,8 +160,12 @@ wysna graph --manifest examples/shared-browser-app/wysna.toml --symbol quote_val
 Agrega `--output-format=json-v1` para obtener el resultado `wysna.project-impact/1`.
 En MCP, usa `wysna_graph` con `manifest`, `symbol` y `relation: "impact"`.
 
-Cada entrada afectada incluye una cadena de relaciones hasta el símbolo.
-En una biblioteca web, el análisis parte de sus funciones públicas.
-Las llamadas desde JavaScript y el código C externo aparecen como fronteras
-fuera del análisis estático. Para distinguir símbolos homónimos, usa su ID
-cualificado.
+Cada entrada incluye `impact_status`. `affected` trae una cadena de relaciones hasta
+el símbolo, que puede incluir `references_function` si la función se pasa como valor.
+`uncertain` indica que hay una frontera sin resolver, como una llamada indirecta,
+JavaScript o código C externo. `no-static-path` indica que el grafo no encontró una
+ruta ni registró fronteras para esa entrada. El campo `affected` conserva su valor
+booleano para clientes existentes.
+
+En una biblioteca web, el análisis parte de sus funciones públicas. Para distinguir
+símbolos homónimos, usa su ID cualificado.

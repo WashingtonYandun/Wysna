@@ -525,6 +525,12 @@ static inline WVal wysna_builtin_write_file(WVal path, WVal content) {
  * Error structs that expose a `message: str` field print that field; anything
  * else prints through the ordinary value formatter.
  */
+static inline int wysna_integer_entry_status(int64_t value) {
+    if (value >= 0 && value <= 255) return (int)value;
+    fprintf(stderr, "[W4003] RuntimeError: main returned an exit status outside 0..255\n");
+    return 1;
+}
+
 static inline void wysna_report_entrypoint_error(WVal error) {
     if (wysna_hi(error) == WVAL_HI_STRUCT) {
         WStructBuf* st = wysna_as_struct(error);
@@ -544,6 +550,16 @@ static inline void wysna_report_entrypoint_error(WVal error) {
     fprintf(stderr, "[W4003] RuntimeError: unhandled error returned by main: %s\n", rendered);
     free(rendered);
 }
+
+static inline int wysna_entry_status(WVal value) {
+    if (wysna_is_err(value)) {
+        wysna_report_entrypoint_error(wysna_as_box(value)->val);
+        return 1;
+    }
+    if (wysna_is_ok(value)) value = wysna_as_box(value)->val;
+    return wysna_tag(value) == W_INT ? wysna_integer_entry_status(wysna_as_int(value)) : 0;
+}
+
 
 #ifdef _WIN32
 static inline void wysna_init_args(int argc, char** argv) {

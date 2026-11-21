@@ -53,6 +53,18 @@ def _write_json_v1(command, status, exit_code, *, errors=(), source_by_file=None
 
 
 
+def _native_diagnostics(output, detail, filename):
+    """Preserve native diagnostic codes, source spans and suggested fixes."""
+    try:
+        payload = json.loads(output)
+    except ValueError:
+        payload = None
+    if isinstance(payload, dict) and isinstance(payload.get("diagnostics"), list):
+        return payload["diagnostics"]
+    return [diagnostic_record("W5004", "toolchain", detail or "Native compiler emitted no diagnostics",
+                              filename=filename)]
+
+
 def _warning_records(cycle_warnings, lint_warnings, file_name, sources):
     """Protocol records for non-blocking findings of a successful check."""
     records = []
@@ -193,20 +205,18 @@ def run_pipeline(
             selfhost_bin = ensure_selfhost_compiler_binary(repo_root)
             toolchain = NativeToolchain(repo_root)
             try:
-                out, check_ms = toolchain.check_compiler(selfhost_bin, file_name, json_output=json_v1 or json_diagnostics)
+                out, check_ms = toolchain.check_compiler(
+                    selfhost_bin, file_name, json_output="json-v1" if json_v1 else json_diagnostics,
+                )
             except NativeCompilationError as exc:
                 if json_v1:
-                    diagnostic = diagnostic_record("W2001", "typecheck", exc.stderr.strip() or str(exc))
-                    _write_json_v1(tool_command, "type_error", 1, diagnostics=[diagnostic])
+                    diagnostics = _native_diagnostics(exc.stdout, exc.stderr.strip(), file_name)
+                    _write_json_v1(tool_command, "diagnostic_error", 1, extra_diagnostics=diagnostics)
                     return 1
                 print(exc.stderr.strip() or str(exc), file=sys.stderr)
                 return 1
             if json_v1:
-                try:
-                    payload = json.loads(out)
-                    _write_json_v1(tool_command, "ok", 0, data=payload.get("data", {}))
-                except Exception:
-                    _write_json_v1(tool_command, "ok", 0)
+                write_tool_result(json.loads(out), sys.stdout)
                 return 0
             if json_diagnostics:
                 print(out.strip())
@@ -231,11 +241,11 @@ def run_pipeline(
             selfhost_bin = ensure_selfhost_compiler_binary(repo_root)
             toolchain = NativeToolchain(repo_root)
             try:
-                toolchain.check_compiler(selfhost_bin, file_name)
+                toolchain.check_compiler(selfhost_bin, file_name, json_output="json-v1" if json_v1 else False)
             except NativeCompilationError as exc:
                 if json_v1:
-                    diagnostic = diagnostic_record("W1001", "syntax", exc.stderr.strip() or str(exc))
-                    _write_json_v1(tool_command, "type_error", 1, diagnostics=[diagnostic])
+                    diagnostics = _native_diagnostics(exc.stdout, exc.stderr.strip(), file_name)
+                    _write_json_v1(tool_command, "diagnostic_error", 1, extra_diagnostics=diagnostics)
                     return 1
                 print(exc.stderr.strip() or str(exc), file=sys.stderr)
                 return 1
@@ -530,7 +540,7 @@ def run_pipeline(
                 }
             }, indent=2), file=sys.stderr)
         res = service.interpret(checked, foreign_libraries=link_libraries,
-                                execution_context=execution_context)
+                                execution_context=execution_context, process_entrypoint=file_name != "<stdin>")
 
         if not isinstance(res, WysnaUnit) and file_name == "<stdin>":
             print(res)

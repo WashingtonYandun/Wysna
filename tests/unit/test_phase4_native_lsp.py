@@ -305,6 +305,105 @@ class Phase4NativeLspTests(unittest.TestCase):
                 proc.stdout.close()
                 proc.stderr.close()
 
+    def test_native_workspace_rename_signature_help_and_quickfix(self):
+        with tempfile.TemporaryDirectory(prefix="wysna-lsp-edits-") as temporary:
+            root = Path(temporary).resolve()
+            library = root / "scores.wysna"
+            client_file = root / "main.wysna"
+            unopened = root / "batch.wysna"
+            homonym = root / "other.wysna"
+            library.write_text('pub fn score(points: int, tag: str) -> int { points }\n', encoding="utf-8")
+            source = (
+                'import "scores.wysna" as scores\n'
+                'let result = scores.score((2 + 3), "😀,ok")\n'
+                'print("score", result)\n'
+            )
+            client_file.write_text(source, encoding="utf-8")
+            unopened.write_text('from "scores.wysna" use score as keep\nprint(keep(1, "audit"))\n',
+                                encoding="utf-8")
+            homonym.write_text('fn score() -> int { 0 }\nprint(score())\n', encoding="utf-8")
+            proc, client = self._spawn_lsp([self.compiler_bin, "--stdlib-root", str(ROOT / "stdlib"), "lsp"])
+            try:
+                capabilities = client.request("initialize", {"rootUri": root.as_uri()})["result"]["capabilities"]
+                self.assertTrue(capabilities["renameProvider"])
+                self.assertIn("quickfix", capabilities["codeActionProvider"]["codeActionKinds"])
+                self.assertIn(",", capabilities["signatureHelpProvider"]["triggerCharacters"])
+                uri = client_file.as_uri()
+                client.notify("textDocument/didOpen", {"textDocument": {
+                    "uri": uri, "version": 3, "languageId": "wysna", "text": source,
+                }})
+                self.assertEqual(client.wait_diagnostics(uri), [])
+                params = {"textDocument": {"uri": uri}}
+                signature = client.request("textDocument/signatureHelp", {
+                    **params, "position": {"line": 1, "character": 36},
+                })["result"]
+                self.assertEqual(signature["activeParameter"], 1)
+                self.assertEqual(signature["signatures"][0]["parameters"],
+                                 [{"label": "points: int"}, {"label": "tag: str"}])
+
+                rename = {**params, "position": {"line": 1, "character": 21}, "newName": "calculate_score"}
+                result = client.request("textDocument/rename", rename)["result"]
+                edits = {change["textDocument"]["uri"]: change for change in result["documentChanges"]}
+                self.assertEqual(set(edits), {library.as_uri(), uri, unopened.as_uri()})
+                self.assertEqual(edits[uri]["textDocument"]["version"], 3)
+                for path in (library, client_file, unopened):
+                    self.assertEqual(len(edits[path.as_uri()]["edits"]), 1)
+                    edit = edits[path.as_uri()]["edits"][0]
+                    line = edit["range"]["start"]["line"]
+                    start = edit["range"]["start"]["character"]
+                    end = edit["range"]["end"]["character"]
+                    self.assertEqual(path.read_text().splitlines()[line][start:end], "score")
+                    self.assertEqual(edit["newText"], "calculate_score")
+                rejected = client.request("textDocument/rename", {**rename, "newName": "result"})
+                self.assertIsNone(rejected["result"])
+
+                alias_uri = unopened.as_uri()
+                alias_source = unopened.read_text(encoding="utf-8")
+                client.notify("textDocument/didOpen", {"textDocument": {
+                    "uri": alias_uri, "version": 1, "languageId": "wysna", "text": alias_source,
+                }})
+                self.assertEqual(client.wait_diagnostics(alias_uri), [])
+                self.assertEqual(client.wait_diagnostics(uri), [])
+                client.notify("textDocument/didChange", {
+                    "textDocument": {"uri": alias_uri, "version": 2},
+                    "contentChanges": [{"text": alias_source[:alias_source.index('"audit"')]}],
+                })
+                self.assertTrue(client.wait_diagnostics(alias_uri))
+                self.assertEqual(client.wait_diagnostics(uri), [])
+                alias_help = client.request("textDocument/signatureHelp", {
+                    "textDocument": {"uri": alias_uri}, "position": {"line": 1, "character": 14},
+                })["result"]
+                self.assertEqual(alias_help["activeParameter"], 1)
+                self.assertEqual(alias_help["signatures"][0]["parameters"], signature["signatures"][0]["parameters"])
+
+                typo = 'let priority = 1\nprint("😀", priorit)\n'
+                client.notify("textDocument/didChange", {
+                    "textDocument": {"uri": uri, "version": 4},
+                    "contentChanges": [{"text": typo}],
+                })
+                diagnostics = client.wait_diagnostics(uri)
+                self.assertEqual(diagnostics[0]["code"], "W1001")
+                action_params = {**params, "range": diagnostics[0]["range"],
+                                 "context": {"diagnostics": diagnostics, "only": ["quickfix"]}}
+                edit_action, = client.request("textDocument/codeAction", action_params)["result"]
+                self.assertTrue(edit_action["isPreferred"])
+                doc_change, = edit_action["edit"]["documentChanges"]
+                self.assertEqual(doc_change["textDocument"], {"uri": uri, "version": 4})
+                fix, = doc_change["edits"]
+                self.assertEqual(fix["newText"], "priority")
+                self.assertEqual(fix["range"]["start"], {"line": 1, "character": 12})
+                self.assertEqual(fix["range"]["end"], {"line": 1, "character": 19})
+                client.request("shutdown")
+                client.notify("exit")
+                self.assertEqual(proc.wait(timeout=15), 0, proc.stderr.read())
+            finally:
+                if proc.poll() is None:
+                    proc.kill()
+                    proc.wait(timeout=5)
+                proc.stdin.close()
+                proc.stdout.close()
+                proc.stderr.close()
+
     def test_native_driver_c_lsp_passthrough_without_python(self):
         with tempfile.TemporaryDirectory(prefix="wysna_p4_sdk_lsp_") as tmp:
             tmp_path = Path(tmp).resolve()

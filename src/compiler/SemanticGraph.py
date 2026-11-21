@@ -554,6 +554,14 @@ def build_semantic_graph(checked, *, effects_report=None) -> dict:
             edge['line'] = line
         edges.append(edge)
 
+    def is_indirect_call(call):
+        if getattr(call, 'indirect_call', False):
+            return True
+        if isinstance(call.callee, A.MemberExpr):
+            receiver = getattr(call.callee.object, 'inferred_type', None)
+            return getattr(receiver, 'kind', None) == 'InterfaceType'
+        return False
+
     def record_type_usage(src_id: str, type_name: str, file: str, line: int, context: str) -> None:
         target_id = resolve_node_id(type_name, ('interface', 'class', 'struct', 'enum'))
         if target_id is None:
@@ -661,6 +669,8 @@ def build_semantic_graph(checked, *, effects_report=None) -> dict:
                 elif isinstance(expr, A.StructInitExpr):
                     record_instantiation(node_id, expr.struct_name, stmt_file, expr_line)
                 elif isinstance(expr, A.CallExpr):
+                    if is_indirect_call(expr):
+                        nodes[node_id]['indirect_call'] = True
                     callee = expr.callee
                     if isinstance(callee, A.IdentExpr):
                         sym = getattr(callee, 'resolved_symbol', None)
@@ -686,6 +696,10 @@ def build_semantic_graph(checked, *, effects_report=None) -> dict:
                                 if owner_type_id:
                                     record_type_usage(node_id, base_type, stmt_file, expr_line, 'call_receiver')
 
+                reference = getattr(expr, 'function_reference', None)
+                if reference:
+                    target = resolve_node_id(reference, ('fn', 'extern'))
+                    add_edge(node_id, target, 'references_function', file=stmt_file, line=expr_line)
                 inferred = getattr(expr, 'inferred_type', None)
                 if inferred is not None and getattr(inferred, 'kind', '') in ('ClassType', 'InterfaceType', 'StructType', 'EnumType'):
                     for type_token in _extract_type_names_from_type_string(getattr(inferred, 'display', '')):
@@ -695,6 +709,8 @@ def build_semantic_graph(checked, *, effects_report=None) -> dict:
     entry_program = unit_programs.get(entry_file, checked.program)
     script_node_id = 'fn:__entry__'
     top_calls = []
+    top_references = []
+    top_indirect_call = False
     top_instantiations = []
     top_type_usages = []
     for stmt in getattr(entry_program, 'body', ()):
@@ -702,6 +718,9 @@ def build_semantic_graph(checked, *, effects_report=None) -> dict:
             continue
         for expr in _walk_expressions(stmt):
             expr_line = getattr(expr, 'line', getattr(stmt, 'line', 1))
+            reference = getattr(expr, 'function_reference', None)
+            if reference:
+                top_references.append((reference, expr_line))
             if isinstance(expr, A.LetDecl) and expr.type_ann is not None:
                 for type_ref in _extract_type_names_from_annotation(expr.type_ann):
                     top_type_usages.append((type_ref, expr.line, 'local'))
@@ -711,6 +730,7 @@ def build_semantic_graph(checked, *, effects_report=None) -> dict:
             elif isinstance(expr, A.StructInitExpr):
                 top_instantiations.append((expr.struct_name, expr_line))
             elif isinstance(expr, A.CallExpr):
+                top_indirect_call |= is_indirect_call(expr)
                 callee = expr.callee
                 if isinstance(callee, A.IdentExpr):
                     sym = getattr(callee, 'resolved_symbol', None)
@@ -726,7 +746,7 @@ def build_semantic_graph(checked, *, effects_report=None) -> dict:
                         if base_type:
                             top_calls.append(('method_lookup', (base_type, callee.property), expr_line))
 
-    if top_calls or top_instantiations or top_type_usages:
+    if top_calls or top_instantiations or top_type_usages or top_references or top_indirect_call:
         nodes[script_node_id] = {
             'id': script_node_id,
             'name': '__entry__',
@@ -743,6 +763,11 @@ def build_semantic_graph(checked, *, effects_report=None) -> dict:
             'instantiates': [],
             'uses_types': [],
         }
+        if top_indirect_call:
+            nodes[script_node_id]['indirect_call'] = True
+        for reference, expr_line in top_references:
+            target = resolve_node_id(reference, ('fn', 'extern'))
+            add_edge(script_node_id, target, 'references_function', file=entry_file, line=expr_line)
         for type_ref, expr_line, ctx in top_type_usages:
             record_type_usage(script_node_id, type_ref, entry_file, expr_line, ctx)
         for type_ref, expr_line in top_instantiations:

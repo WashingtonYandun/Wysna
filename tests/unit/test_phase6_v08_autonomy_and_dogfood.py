@@ -287,6 +287,53 @@ class Phase6V08AutonomyAndDogfoodTests(unittest.TestCase):
             self.assertFalse(reply["isError"], reply)
             self.assertEqual(json.loads(reply["content"][0]["text"])["result"], payload)
 
+    def test_project_impact_distinguishes_callbacks_from_unknown_paths(self):
+        with tempfile.TemporaryDirectory(prefix="wysna-impact-callbacks-") as temporary:
+            project = Path(temporary).resolve()
+            sources = project / "src"
+            sources.mkdir()
+            manifest = project / "wysna.toml"
+            manifest.write_text('''manifest_version = 1
+[package]
+name = "callbacks"
+version = "0.1.0"
+language = "0.8"
+[toolchain]
+compiler = "0.8.0"
+stdlib = "bundled"
+[sources]
+root = "src"
+[targets.app]
+entry = "src/main.wysna"
+profile = "native-cli"
+''', encoding="utf-8")
+            (sources / "rules.wysna").write_text('''
+pub fn rule(value: int) -> int { value + 1 }
+pub fn unrelated(value: int) -> int { value }
+''', encoding="utf-8")
+            (sources / "main.wysna").write_text('''
+import "rules.wysna"
+fn apply(callback: fn(int) -> int) -> int { callback(7) }
+fn main() { print(apply(rules.rule)) }
+''', encoding="utf-8")
+            for symbol, status in (("rule", "affected"), ("unrelated", "uncertain")):
+                args = ["graph", "--manifest", str(manifest), "--symbol", symbol,
+                        "--rel", "impact", "--output-format=json-v1"]
+                seed = subprocess.run([sys.executable, str(ROOT / "main.py"), *args],
+                                      cwd=project, capture_output=True, text=True, timeout=60)
+                native = self._run_sdk(args, project, project)
+                for engine, completed in (("seed", seed), ("native", native)):
+                    with self.subTest(engine=engine, symbol=symbol):
+                        self.assertEqual(completed.returncode, 0, completed.stderr + completed.stdout)
+                        entry, = json.loads(completed.stdout)["result"]["entries"]
+                        self.assertEqual(entry["impact_status"], status, entry)
+                        self.assertIn("indirect-call", entry["unanalyzed_boundaries"], entry)
+                        if status == "affected":
+                            kinds = {edge["kind"] for path in entry["paths"] for edge in path["chain"]}
+                            self.assertIn("references_function", kinds)
+                        else:
+                            self.assertFalse(entry["affected"])
+
     def test_native_api_cli_stdlib_and_manifest(self):
         with tempfile.TemporaryDirectory(prefix="wysna_p6_api_") as tmp:
             scratch = Path(tmp).resolve() / "_scratch"
@@ -300,6 +347,7 @@ class Phase6V08AutonomyAndDogfoodTests(unittest.TestCase):
             identities = {m["identity"] for m in all_env["result"]["modules"]}
             self.assertGreaterEqual(len(identities), 18)
             self.assertIn("std/json", identities)
+            self.assertIn("std/result", identities)
 
             json_res = self._run_sdk(["api", "std/json", "--output-format=json-v1"], ROOT, scratch)
             self.assertEqual(json_res.returncode, 0, json_res.stderr)

@@ -47,6 +47,18 @@ flowchart LR
 
 ## 2. Estructura Léxica y Gramática Base
 
+Para código nuevo, usa `from ... use ...` cuando necesitas pocos símbolos,
+e `import ... as ...` para APIs que se entienden mejor bajo un espacio de nombres.
+Usa `pub` para exportar declaraciones del módulo, `public` para miembros de
+clases, `Type(...)` para construir clases y `_` para el patrón comodín.
+Reserva las anotaciones explícitas para firmas, tipos que aclaran la intención
+y casos ambiguos como las colecciones vacías.
+
+Cuando varios argumentos del mismo tipo representan opciones distintas, un
+`struct` con campos nombrados permite leer la llamada sin consultar la firma.
+Por ejemplo, `SearchOptions { max_results: 20, timeout_ms: 500 }` deja explícitos
+el significado de cada valor y las unidades.
+
 ### 2.1 Comentarios
 Wysna admite comentarios de línea con `#` (y comentarios de documentación con `##`), además de comentarios de bloque anidables `/* ... */`:
 
@@ -377,6 +389,15 @@ enum ConnectionState[T] {
 ```
 
 ### 7.2 Coincidencia de Patrones (`match`)
+
+Cuando `match` es una sentencia, cada brazo ejecuta sus efectos y descarta su
+valor final. Un brazo que termina en `count += amount` puede convivir con un
+brazo vacío. Si usas el resultado de `match` en una asignación o como retorno,
+los brazos que producen el valor deben tener tipos compatibles.
+
+Un enum importado admite tanto `module.State.Ready(value)` como
+`State.Ready(value)` cuando `State` se importó por separado. La misma
+calificación sirve para construir y para reconocer una variante.
 La sentencia `match` evalúa exhaustivamente todas las variantes de un enum, uniones de errores (`ParseErr(e) => ...`), tuplas o valores primitivos. Si una variante no está contemplada y no se define el comodín canónico `_ =>`, el compilador genera un error estático `W2003` (el formateador normaliza `else =>` a `_ =>`):
 
 ```wysna
@@ -607,7 +628,7 @@ let rev = alg.reverse([1, 2, 3])
 | :--- | :--- | :--- |
 | `print(value)` | `(any) -> unit` | Imprime el valor a la salida estándar (`stdout`) seguido de salto de línea. |
 | `eprint(value)` | `(any) -> unit` | Imprime el valor a la salida de errores (`stderr`) seguido de salto de línea. |
-| `exit(code)` | `(int) -> unit` | Termina el proceso inmediatamente con el código de salida especificado. |
+| `exit(code)` | `(int) -> unit` | Termina el proceso de inmediato. Una llamada directa cierra la rama y puede ser la última instrucción de un manejador `else` sin valor de respaldo. |
 | `len(collection)` | `(str \| list[T] \| dict[K, V] \| tuple[...]) -> int` | Retorna la cantidad de escalares Unicode o elementos de la colección. |
 | `int(value)` | `(any) -> int` | Convierte strings o flotantes a entero de 64 bits. |
 | `float(value)` | `(any) -> float` | Convierte enteros o strings a número de coma flotante IEEE-754. |

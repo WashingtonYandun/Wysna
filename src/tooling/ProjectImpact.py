@@ -57,8 +57,10 @@ def _location(node):
 def _trace(path, profile, graph, exports, location, project_root):
     nodes = {node["id"]: node for node in graph["nodes"]}
     reverse = defaultdict(list)
+    forward = defaultdict(set)
     for edge in graph["edges"]:
         reverse[edge["to"]].append(edge)
+        forward[edge["from"]].add(edge["to"])
     roots = set()
     boundaries = []
     for node in nodes.values():
@@ -75,6 +77,15 @@ def _trace(path, profile, graph, exports, location, project_root):
     if any(node["kind"] == "extern" and Path(node["file"]).is_relative_to(project_root)
            for node in nodes.values()):
         boundaries.append("c-ffi")
+
+    reachable = roots.copy()
+    pending = deque(roots)
+    while pending:
+        successors = forward[pending.popleft()] - reachable
+        reachable.update(successors)
+        pending.extend(successors)
+    if any(nodes[node_id].get("indirect_call") for node_id in reachable):
+        boundaries.append("indirect-call")
 
     target = next((node["id"] for node in nodes.values() if _location(node) == location), None)
     predecessors = {}
@@ -97,4 +108,6 @@ def _trace(path, profile, graph, exports, location, project_root):
             chain.append({key: edge[key] for key in ("from", "to", "kind")})
             cursor = edge["to"]
         paths.append({"entry_symbol": root, "chain": chain})
-    return {"affected": bool(paths), "paths": paths, "unanalyzed_boundaries": boundaries}
+    status = "affected" if paths else "uncertain" if boundaries else "no-static-path"
+    return {"affected": bool(paths), "impact_status": status,
+            "paths": paths, "unanalyzed_boundaries": sorted(boundaries)}

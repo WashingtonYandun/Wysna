@@ -323,6 +323,10 @@ class Lowering:
         self.return_value(result, declaration)
         self.finish()
 
+    @staticmethod
+    def _is_exit(node):
+        return isinstance(node, H.HirBuiltinCall) and node.builtin_name == 'exit'
+
     def block(self, block):
         type_id = block.tail_expr.type_id if block.tail_expr is not None else TYPE_UNIT
         result = self.slot(type_id)
@@ -332,7 +336,10 @@ class Lowering:
             self.stmt(statement)
         if self.current is not None and block.tail_expr is not None:
             value = self.expr(block.tail_expr)
-            self.store(result, value)
+            if self._is_exit(block.tail_expr) and self.current is not None:
+                self.terminate('unreachable', node=block.tail_expr)
+            if self.current is not None:
+                self.store(result, value)
         self.pop()
         return result
 
@@ -342,6 +349,8 @@ class Lowering:
         if isinstance(node, H.HirExprStmt):
             self.push_temp()
             self.expr(node.expr)
+            if self._is_exit(node.expr) and self.current is not None:
+                self.terminate('unreachable', node=node)
             self.pop_temp()
         elif isinstance(node, (H.HirLet, H.HirBindTemp)):
             self.push_temp()

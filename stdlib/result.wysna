@@ -1,0 +1,5 @@
+## Translate an error explicitly while preserving a successful value.
+pub fn map_error[T, E, F](value: T ! E, convert: fn(E) -> F) -> T ! F {
+    let payload = value else error { return Err(convert(error)) }
+    return Ok(payload)
+}

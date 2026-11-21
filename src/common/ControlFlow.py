@@ -26,6 +26,12 @@ def exits(node, match_is_exhaustive):
         return {NORMAL}
     if isinstance(node, (A.FnDecl, A.MethodDecl, A.LambdaExpr)):
         return {NORMAL}
+    if (isinstance(node, A.CallExpr)
+            and getattr(getattr(node.callee, 'resolved_symbol', None), 'kind', None) == 'builtin'
+            and node.callee.name == 'exit'):
+        return sequence(node.args, match_is_exhaustive) - {NORMAL}
+    if isinstance(node, H.HirBuiltinCall) and node.builtin_name == 'exit':
+        return sequence(node.args, match_is_exhaustive) - {NORMAL}
     if isinstance(node, (A.ReturnStmt, H.HirReturn)):
         value = node.value if isinstance(node, A.ReturnStmt) else node.value_expr
         evaluated = exits(value, match_is_exhaustive)

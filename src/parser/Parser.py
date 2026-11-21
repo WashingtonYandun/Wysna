@@ -363,7 +363,11 @@ class Parser:
             # Constructor-shaped syntax is resolved by the checker. Error-union
             # alternatives become ErrorTypePattern once the subject type is known.
             if self.match(TokenType.DOT):
+                owner = [first_name]
                 variant_tok = self.expect(TokenType.IDENTIFIER, code="W0001", msg="Expected enum variant name after '.'")
+                while self.match(TokenType.DOT):
+                    owner.append(variant_tok.value)
+                    variant_tok = self.expect(TokenType.IDENTIFIER, code="W0001", msg="Expected enum variant name after '.'")
                 pat_type_args = None
                 if self.check(TokenType.LBRACKET):
                     saved_pat = self.pos
@@ -381,7 +385,7 @@ class Parser:
                                 break
                             payload_args.append(self.parse_pattern(allow_tuple=False))
                     self.expect(TokenType.RPAREN, code="W0006", msg="Expected ')' after pattern arguments")
-                return EnumPattern(enum_name=first_name, variant=variant_tok.value, args=payload_args, line=token.line, col=token.col, type_args=pat_type_args)
+                return EnumPattern(enum_name=".".join(owner), variant=variant_tok.value, args=payload_args, line=token.line, col=token.col, type_args=pat_type_args)
 
             # Check for generic error/enum pattern: Name[T](x)
             pat_type_args = None

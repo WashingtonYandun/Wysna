@@ -1,4 +1,5 @@
 import "std/algorithms"
+import "std/parse" as numeric
 
 pub enum Value { Null, Bool(bool), Number(str), String(str), Array(list[Value]), Object(dict[str, Value]) }
 
@@ -583,31 +584,46 @@ pub fn from_str(value: str) -> Value {
     return Value.String(value)
 }
 
+fn value_kind(value: Value) -> str {
+    return match value {
+        Value.Null => "null",
+        Value.Bool(_) => "boolean",
+        Value.Number(_) => "number",
+        Value.String(_) => "string",
+        Value.Array(_) => "array",
+        Value.Object(_) => "object",
+    }
+}
+
+fn type_mismatch(value: Value, expected: str) -> JsonError {
+    return error(0, f"expected JSON {expected}, found JSON {value_kind(value)}")
+}
+
 pub fn to_str(value: Value) -> str ! JsonError {
     return match value {
         Value.String(result) => Ok(result),
-        else => Err(JsonError { offset: 0, message: "expected JSON string" }),
+        else => Err(type_mismatch(value, "string")),
     }
 }
 
 pub fn to_bool(value: Value) -> bool ! JsonError {
     return match value {
         Value.Bool(result) => Ok(result),
-        else => Err(JsonError { offset: 0, message: "expected JSON boolean" }),
+        else => Err(type_mismatch(value, "boolean")),
     }
 }
 
 pub fn to_array(value: Value) -> list[Value] ! JsonError {
     return match value {
         Value.Array(result) => Ok(result),
-        else => Err(JsonError { offset: 0, message: "expected JSON array" }),
+        else => Err(type_mismatch(value, "array")),
     }
 }
 
 pub fn to_object(value: Value) -> dict[str, Value] ! JsonError {
     return match value {
         Value.Object(result) => Ok(result),
-        else => Err(JsonError { offset: 0, message: "expected JSON object" }),
+        else => Err(type_mismatch(value, "object")),
     }
 }
 
@@ -618,13 +634,16 @@ pub fn to_int(value: Value) -> int ! JsonError {
             for index in 0..len(validated) {
                 let ch = validated[index]
                 if ch == "." or ch == "e" or ch == "E" {
-                    return Err(JsonError { offset: index, message: "expected JSON integer without fractional or exponent part" })
+                    return Err(error(index, "expected JSON integer, found JSON number with a fractional or exponent part"))
                 }
             }
-            return Ok(int(validated))
+            let integer = numeric.parse_int(validated) else issue {
+                return Err(error(issue.offset, issue.message))
+            }
+            return Ok(integer)
         },
         else => {
-            return Err(JsonError { offset: 0, message: "expected JSON integer" })
+            return Err(type_mismatch(value, "integer"))
         },
     }
 }
@@ -636,7 +655,7 @@ pub fn to_float(value: Value) -> float ! JsonError {
             return Ok(float(validated))
         },
         else => {
-            return Err(JsonError { offset: 0, message: "expected JSON number" })
+            return Err(type_mismatch(value, "number"))
         },
     }
 }
@@ -647,29 +666,49 @@ pub fn get_required(value: Value, key: str) -> Value ! JsonError {
             let found = fields.get(key)
             return match found {
                 Some(item) => Ok(item),
-                None => Err(JsonError { offset: 0, message: "missing required JSON field '" + key + "'" }),
+                None => Err(error(0, field_label(key) + ": missing required JSON field")),
             }
         },
         else => {
-            return Err(JsonError { offset: 0, message: "expected JSON object" })
+            let issue = type_mismatch(value, "object")
+            return Err(error(issue.offset, field_label(key) + ": " + issue.message))
         },
     }
 }
 
+fn field_label(key: str) -> str {
+    if len(key) == 0 { return "[" + quote_string(key) + "]" }
+    for index in 0..len(key) {
+        let ch = key[index]
+        let code = ord(ch)
+        if not ((code >= 65 and code <= 90) or (code >= 97 and code <= 122) or
+                (index > 0 and code >= 48 and code <= 57) or ch == "_") {
+            return "[" + quote_string(key) + "]"
+        }
+    }
+    return key
+}
+
+fn convert_field[T](field: Value, key: str, convert: fn(Value) -> T ! JsonError) -> T ! JsonError {
+    return convert(field) else issue {
+        return Err(error(issue.offset, field_label(key) + ": " + issue.message))
+    }
+}
+
 pub fn get_str(value: Value, key: str) -> str ! JsonError {
-    return to_str(get_required(value, key)?)
+    return convert_field(get_required(value, key)?, key, to_str)
 }
 
 pub fn get_int(value: Value, key: str) -> int ! JsonError {
-    return to_int(get_required(value, key)?)
+    return convert_field(get_required(value, key)?, key, to_int)
 }
 
 pub fn get_float(value: Value, key: str) -> float ! JsonError {
-    return to_float(get_required(value, key)?)
+    return convert_field(get_required(value, key)?, key, to_float)
 }
 
 pub fn get_bool(value: Value, key: str) -> bool ! JsonError {
-    return to_bool(get_required(value, key)?)
+    return convert_field(get_required(value, key)?, key, to_bool)
 }
 
 pub fn get_optional_str(value: Value, key: str) -> str? ! JsonError {
@@ -683,7 +722,7 @@ pub fn get_optional_str(value: Value, key: str) -> str? ! JsonError {
             if is_null(inner) {
                 return Ok(empty)
             }
-            let parsed: str? = Some(to_str(inner)?)
+            let parsed: str? = Some(convert_field(inner, key, to_str)?)
             return Ok(parsed)
         },
     }
@@ -700,7 +739,7 @@ pub fn get_optional_int(value: Value, key: str) -> int? ! JsonError {
             if is_null(inner) {
                 return Ok(empty)
             }
-            let parsed: int? = Some(to_int(inner)?)
+            let parsed: int? = Some(convert_field(inner, key, to_int)?)
             return Ok(parsed)
         },
     }
@@ -717,7 +756,7 @@ pub fn get_optional_float(value: Value, key: str) -> float? ! JsonError {
             if is_null(inner) {
                 return Ok(empty)
             }
-            let parsed: float? = Some(to_float(inner)?)
+            let parsed: float? = Some(convert_field(inner, key, to_float)?)
             return Ok(parsed)
         },
     }
@@ -734,7 +773,7 @@ pub fn get_optional_bool(value: Value, key: str) -> bool? ! JsonError {
             if is_null(inner) {
                 return Ok(empty)
             }
-            let parsed: bool? = Some(to_bool(inner)?)
+            let parsed: bool? = Some(convert_field(inner, key, to_bool)?)
             return Ok(parsed)
         },
     }
