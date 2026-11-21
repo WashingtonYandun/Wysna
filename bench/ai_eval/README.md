@@ -11,7 +11,7 @@ This benchmark implements the canonical evaluation protocol defined in **[SPEC-0
 3. **Multi-Turn Repair Loop ($\le 3$ Repairs):**
    - **Attempt 0 (Initial Generation):** Measures direct authoring capability (`Pass@1`).
    - **Attempts 1–3 (Diagnostic Feedback):** If the program fails static check (`wysna check --json`) or functional execution, compiler diagnostics (error code, file, line, span, and message) are fed back to the model.
-   - **Repair Gate (`Pass@3`):** Target threshold is $\ge 80\%$ functional pass within three repair cycles.
+   - **Effectiveness gate:** 90% raw functional Pass@1, 95% functional Pass@1 including deterministic autofix, and median repair submissions <= 1.5 on the full 30-task corpus. See `acceptance.py`. Mock reports cannot satisfy this gate.
 4. **Zero Collateral Repository Impact:** All evaluation workspaces run inside isolated temporary directories (`tempfile.TemporaryDirectory()`). The compiler under test is treated as a black-box toolchain via CLI.
 
 ---
@@ -29,8 +29,8 @@ This benchmark implements the canonical evaluation protocol defined in **[SPEC-0
 
 ## 3. Metrics Recorded
 
-- **`Pass@1`:** First-try success rate without compiler intervention.
-- **`Pass@3`:** Multi-turn repair success rate (Attempt $\le 4$).
+- **`raw_pass_at_1_rate`:** First-response functional success without autofix. `pass_at_1_rate` includes deterministic autofix but no additional model response.
+- **`Pass@3`:** Functional success within three total model responses. The default budget allows four total responses: initial generation plus three repairs; `resolved_rate` reports success within that whole budget.
 - **Taxonomy of Failures:**
   - `syntax`: Parser error or invalid token sequence.
   - `type`: Type checker failure (mismatch, missing field, unhandled error union).
@@ -68,6 +68,27 @@ python3 bench/ai_eval/run_eval.py \
   --model="qwen2.5-coder-7b-instruct" \
   --output=bench/ai_eval/results/local_baseline.json
 ```
+
+### Resumable Real-Model Evaluation
+
+Pass `--checkpoint` to persist each completed task atomically. If the process
+stops because of a provider quota, interruption, or network failure, rerun the
+same command with the same checkpoint path. The runner resumes only when the
+model, endpoint, task corpus, source revision/tree, task filter, and repair
+budget still match. Use a different path for `--output`; the final JSON report
+is written after the remaining tasks finish.
+
+```bash
+python3 bench/ai_eval/run_eval.py \
+  --provider=openai \
+  --base-url=https://openrouter.ai/api/v1 \
+  --model=nvidia/nemotron-3.5-super-vl:free \
+  --checkpoint=bench/ai_eval/results/nemotron_30.checkpoint.json \
+  --output=bench/ai_eval/results/nemotron_30.json
+```
+
+The API key is read from `OPENROUTER_API_KEY` (or can be provided through the
+provider's supported configuration). Do not use a paid model for this run.
 
 ---
 
@@ -121,3 +142,21 @@ pruebas inciertas, omisiones, tiempo del grafo y tiempo de las pruebas
 seleccionadas. La selección incluye las entradas inciertas. La comparación del
 contexto usa tokens léxicos como aproximación. Los tokens facturados y el
 tiempo del modelo se miden con el proveedor real en el ensayo A/B.
+
+## Campañas aplazadas y verificación sin red
+
+Las campañas reales están aplazadas por decisión del mantenedor, sin presupuesto ni credenciales. No se programa una ejecución al reiniciarse la cuota. Los proveedores simulados verifican oráculos, recuperación y métricas; no estiman la eficacia de un modelo real.
+
+Ambos runners aceptan `--checkpoint` y guardan cada tarea/condición terminada. La condición en curso se repite si el proceso falla dentro de ella. No existe recuperación a mitad de una respuesta del proveedor. Repetir el mismo comando conserva las condiciones terminadas, sus intentos y sus diagnósticos. Cambios en corpus, revisión/árbol, modelo, endpoint o parámetros invalidan el checkpoint. No mezclar puntos de control de revisión 2 con la revisión 3 del oráculo de imports.
+
+OpenRouter admite exclusivamente IDs terminados en `:free`. Un error diario `free-models-per-day` detiene la corrida sin reintentos; los límites transitorios mantienen backoff. No hay fallback a modelos de pago. Las credenciales no se guardan en checkpoints.
+
+La suite `import-style` tiene tres tareas (suma, producto y máximo), con casos de entrada diferentes por tarea. A requiere importación por namespace y B importación selectiva. El oráculo comprueba las declaraciones reales del AST. La suite `default` mide contexto semántico sobre seis tareas. `--interactive-tools` mide consultas elegidas por el modelo; ninguna de estas opciones implementa todavía la comparación específica de `patch --symbol`.
+
+Para validar el protocolo localmente, sin contactar servicios:
+
+    python3 -m pytest -q bench/ai_eval/tests/
+    python3 bench/ai_eval/run_eval.py --provider=mock --checkpoint=/tmp/mock30.checkpoint.json --output=/tmp/mock30.json
+    python3 bench/ai_eval/ab_cohort.py --provider=mock --suite=import-style --repetitions=3 --checkpoint=/tmp/mock-imports.checkpoint.json --output=/tmp/mock-imports.json
+
+Las respuestas de fallback del mock no resuelven el corpus completo; sus tasas no representan la calidad de Wysna ni de un modelo.

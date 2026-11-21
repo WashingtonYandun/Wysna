@@ -8,6 +8,7 @@ Usage:
 import argparse
 import json
 import os
+from pathlib import Path
 import sys
 
 # Load both the benchmark package and the compiler from the source checkout.
@@ -17,6 +18,18 @@ sys.path[:0] = [REPO_ROOT, os.path.join(REPO_ROOT, "src")]
 from bench.ai_eval.harness import EvaluationHarness
 from bench.ai_eval.models import Task
 from bench.ai_eval.providers import GeminiProvider, MockProvider, OpenAICompatibleProvider
+from bench.ai_eval.checkpoint import load_checkpoint, save_checkpoint, run_config
+from bench.ai_eval.acceptance import evaluate_acceptance
+
+
+def _checkpoint_config(args, model_name: str, tasks_file: Path) -> dict:
+    return run_config(
+        Path(REPO_ROOT), provider=args.provider, model=model_name, base_url=args.base_url,
+        corpus=json.loads(tasks_file.read_text(encoding="utf-8")),
+        parameters={"task_filter": args.task, "max_repair_cycles": args.max_repair_cycles,
+                    "temperature": 0.2, "max_tokens": 8192 if args.provider == "openai" else 4096},
+        output_paths=(args.checkpoint, args.output),
+    )
 
 
 def format_markdown_table(summary: dict) -> str:
@@ -84,13 +97,18 @@ def main() -> int:
     )
     parser.add_argument("--task", type=str, default=None, help="Filter for single task ID or domain")
     parser.add_argument("--output", type=str, default=None, help="Path to write JSON results file")
+    parser.add_argument("--checkpoint", type=Path, default=None,
+                        help="Atomically save each completed task and resume matching runs")
+    parser.add_argument("--max-repair-cycles", type=int, default=3,
+                        help="Maximum diagnostic repair submissions per task")
     parser.add_argument("--base-url", type=str, default="http://localhost:1234/v1", help="OpenAI-compatible base URL")
     parser.add_argument("--api-key", type=str, default=None, help="API key for provider")
 
     args = parser.parse_args()
 
     # Load tasks
-    with open(args.tasks_file, "r", encoding="utf-8") as f:
+    tasks_file = Path(args.tasks_file).resolve()
+    with tasks_file.open("r", encoding="utf-8") as f:
         corpus_data = json.load(f)
 
     tasks = [Task.from_dict(t) for t in corpus_data.get("tasks", [])]
@@ -113,7 +131,24 @@ def main() -> int:
         print(f"Unknown provider: {args.provider}", file=sys.stderr)
         return 1
 
-    harness = EvaluationHarness(repo_root=REPO_ROOT)
+    if args.max_repair_cycles < 0:
+        parser.error("--max-repair-cycles must be non-negative")
+    if args.checkpoint and args.output and args.checkpoint.resolve() == Path(args.output).resolve():
+        parser.error("--checkpoint and --output must use different files")
+
+    selected_tasks = [
+        task for task in tasks
+        if not args.task or task.id == args.task or args.task in task.domain
+    ]
+    completed_results = []
+    checkpoint_config = _checkpoint_config(args, model_name, tasks_file)
+    if args.checkpoint:
+        selected_ids = {task.id for task in selected_tasks}
+        completed_results = load_checkpoint(args.checkpoint, checkpoint_config, selected_ids)
+        save_checkpoint(args.checkpoint, checkpoint_config, completed_results)
+        print(f"Checkpoint: {len(completed_results)}/{len(selected_tasks)} tasks already complete")
+
+    harness = EvaluationHarness(repo_root=REPO_ROOT, max_repair_cycles=args.max_repair_cycles)
     print(f"=== Starting Wysna AI Benchmark ({len(tasks)} tasks loaded) ===")
     print(f"Provider: {args.provider} | Model: {model_name}")
 
@@ -123,9 +158,15 @@ def main() -> int:
         provider_name=args.provider,
         model_name=model_name,
         task_filter=args.task,
+        completed_results=completed_results,
+        on_task_complete=(
+            lambda _result, results: save_checkpoint(args.checkpoint, checkpoint_config, results)
+        ) if args.checkpoint else None,
     )
 
     summary_dict = summary.to_dict()
+    summary_dict["evaluation_config"] = checkpoint_config
+    summary_dict["acceptance"] = evaluate_acceptance(summary_dict)
     md_output = format_markdown_table(summary_dict)
     print("\n" + md_output)
 
@@ -141,4 +182,8 @@ def main() -> int:
 if __name__ == "__main__":
     # Redirected Windows streams may not represent every character in a task report.
     sys.stdout.reconfigure(errors="backslashreplace")
-    sys.exit(main())
+    try:
+        sys.exit(main())
+    except (RuntimeError, ValueError) as error:
+        print(f"Evaluation stopped: {error}", file=sys.stderr)
+        sys.exit(2)

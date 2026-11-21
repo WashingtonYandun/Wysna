@@ -14,12 +14,23 @@ import time
 import urllib.request
 import urllib.error
 import threading
+from urllib.parse import urlsplit
 from abc import ABC, abstractmethod
 from typing import Any, Dict, List, Optional, Tuple
 
 
 _openrouter_rate_lock = threading.Lock()
 _openrouter_next_request_at = 0.0
+
+
+class DailyQuotaExceeded(RuntimeError):
+    """A daily free-tier limit cannot be recovered by short retry delays."""
+
+    def __init__(self, reset_at: Optional[str] = None):
+        self.reset_at = reset_at
+        super().__init__("OpenRouter free daily quota exhausted; checkpoint preserved. "
+                         + (f"Reset: {reset_at}. " if reset_at else "")
+                         + "Resume after the daily reset.")
 
 
 def _build_ssl_context():
@@ -243,7 +254,9 @@ class OpenAICompatibleProvider(LlmProvider):
         min_interval_sec: Optional[float] = None,
     ):
         self.base_url = base_url.rstrip("/")
-        self.is_openrouter = "openrouter.ai" in self.base_url.lower()
+        self.is_openrouter = urlsplit(self.base_url).hostname == "openrouter.ai"
+        if self.is_openrouter and not model.endswith(":free"):
+            raise ValueError("OpenRouter evaluation accepts only explicit :free model IDs.")
         environment_key = os.getenv("OPENROUTER_API_KEY") if self.is_openrouter else os.getenv("OPENAI_API_KEY")
         self.api_key = api_key or environment_key or ("" if self.is_openrouter else "not-needed")
         if self.is_openrouter and not self.api_key:
@@ -305,6 +318,18 @@ class OpenAICompatibleProvider(LlmProvider):
                     break
             except urllib.error.HTTPError as e:
                 err_msg = e.read().decode("utf-8", errors="replace")
+                if self.is_openrouter and e.code == 429:
+                    try:
+                        detail = json.loads(err_msg).get("error", {})
+                        metadata = detail.get("metadata") or {}
+                        daily_limit = (metadata.get("limit_source") == "openrouter_free_tier_daily"
+                                       or "free-models-per-day" in detail.get("message", ""))
+                    except (ValueError, AttributeError, TypeError):
+                        daily_limit = False
+                        metadata = {}
+                    if daily_limit:
+                        reset = (metadata.get("headers") or {}).get("X-RateLimit-Reset")
+                        raise DailyQuotaExceeded(reset) from e
                 if e.code in (429, 502, 503, 504) and attempt < max_retries - 1:
                     delay = backoff_schedule[min(attempt, len(backoff_schedule) - 1)]
                     retry_after = e.headers.get("Retry-After") if e.headers else None

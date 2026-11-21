@@ -235,7 +235,7 @@ Tal como establecen las reglas de este plan, **los conteos de tokens por sí sol
 - **Compatibilidad y migración:** Preserva los campos existentes del esquema `wysna.ai-eval/2` y `wysna.ai-eval-ab/1` añadiendo los desgloses nuevos.
 - **Componentes afectados:** `bench/ai_eval/harness.py`, `bench/ai_eval/tasks.py`, `bench/ai_eval/ab_cohort.py`, `bench/ai_eval/README.md`, `bench/ai_eval/tests/test_harness.py`.
 - **Depende de:** `AGT-02`, `AGT-04`, `AGT-05`.
-- **Criterio de aceptación:** `python3 bench/ai_eval/run_eval.py --provider=mock` y `python3 bench/ai_eval/ab_cohort.py --interactive-tools --provider=mock` pasan al 100%, el reporte JSON incluye `raw_pass_at_1`, `post_fix_pass_at_1` y `unintended_regression_count`, y un test unitario valida con `wysna check` todas las construcciones sintácticas del `SYSTEM_PROMPT`.
+- **Criterio de aceptación del evaluador:** sus pruebas deterministas pasan y los runners `--provider=mock` completan el protocolo, sin exigir 100% de autoría a las respuestas de fallback, el reporte JSON incluye `raw_pass_at_1`, `post_fix_pass_at_1` y `unintended_regression_count`, y un test unitario valida con `wysna check` todas las construcciones sintácticas del `SYSTEM_PROMPT`.
 - **Requiere aprobación:** no.
 - **Estado:** implementado.
 
@@ -245,5 +245,5 @@ Tal como establecen las reglas de este plan, **los conteos de tokens por sí sol
 
 ### `AGT-R01` · Hipótesis: `wysna patch --symbol` reduce errores de edición de agentes frente a reemplazo de líneas estándar en archivos de `>300` LOC
 
-- **Estado:** **Sin medir con modelos reales.**
-- **Cómo falsificarla:** Una vez implementado **`AGT-06`**, ejecutar `bench/ai_eval/ab_cohort.py --interactive-tools` con un modelo real (por ejemplo, Gemini 2.5 Flash o Qwen 2.5 Coder) comparando edición vía `wysna_patch` frente a edición directa validada con `wysna_check` sobre las tareas multi-módulo. Si `wysna_patch` no reduce la tasa de fallos de edición ni los turnos de reparación, se congela `wysna patch` y se deja de recomendar en `docs/AI_AGENT_GUIDE.md` como paso primario de edición.
+- **Estado:** **La hipótesis concreta sigue sin medir.** El piloto exploratorio del protocolo conjunto midió prefetch semántico, no el uso de wysna patch --symbol; sus resultados no permiten aceptar ni descartar esta hipótesis.
+- **Cómo falsificarla:** implementar y ejecutar la comparación delimitada en [AGT-R01-patch-protocol.md](research/AGT-R01-patch-protocol.md). El runner actual solo ofrece lectura, graph e inspect; `--interactive-tools` no compara las dos formas de editar. La ejecución con modelos queda aplazada por decisión del mantenedor.

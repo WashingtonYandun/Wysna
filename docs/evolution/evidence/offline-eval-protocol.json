@@ -1,0 +1,26 @@
+{
+  "schema": "wysna.offline-eval-protocol/1",
+  "real_model_measurement": false,
+  "benchmark": {
+    "tasks_completed": 30,
+    "supported_tasks": 30,
+    "resumed_completed_tasks": 30,
+    "acceptance": {
+      "state": "not_measured_with_real_model",
+      "thresholds": {
+        "raw_pass_at_1_rate_min": 0.9,
+        "pass_at_1_rate_min": 0.95,
+        "median_repair_submissions_max": 1.5,
+        "required_tasks": 30
+      }
+    }
+  },
+  "imports": {
+    "tasks": 3,
+    "conditions_completed": 18,
+    "repetitions": 3,
+    "oracle_revision": 3,
+    "decision": "inconclusive"
+  },
+  "note": "Mock fallback responses exercise the protocol and do not measure language or model quality."
+}

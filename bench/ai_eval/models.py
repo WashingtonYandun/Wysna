@@ -110,6 +110,8 @@ class AttemptRecord:
     autofix_applied: bool = False
     provider_latency_ms: float = 0.0
     wall_time_ms: float = 0.0
+    response: str = ""
+    files: Dict[str, str] = field(default_factory=dict)
 
     def to_dict(self) -> Dict[str, Any]:
         return {
@@ -130,7 +132,13 @@ class AttemptRecord:
             "wall_time_ms": round(self.wall_time_ms, 2),
             "prompt_tokens": self.prompt_tokens,
             "completion_tokens": self.completion_tokens,
+            "response": self.response,
+            "files": self.files,
         }
+
+    @classmethod
+    def from_dict(cls, data: Dict[str, Any]) -> AttemptRecord:
+        return cls(**{name: data[name] for name in cls.__dataclass_fields__ if name in data})
 
 
 @dataclass
@@ -175,6 +183,12 @@ class TaskEvaluationResult:
             "total_tokens": self.total_tokens,
             "final_error_category": self.final_error_category,
         }
+
+    @classmethod
+    def from_dict(cls, data: Dict[str, Any]) -> TaskEvaluationResult:
+        values = {name: data[name] for name in cls.__dataclass_fields__ if name in data and name != "attempts"}
+        values["attempts"] = [AttemptRecord.from_dict(item) for item in data.get("attempts", [])]
+        return cls(**values)
 
 
 @dataclass

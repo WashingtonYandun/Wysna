@@ -1,0 +1,37 @@
+{
+  "schema": "wysna.ops-workflow/1",
+  "success": true,
+  "sdk_source_commit": "81fe638da141b3b2042147f52c2a1de158692257",
+  "checks": [
+    {
+      "name": "valid",
+      "seed_native_equal": true,
+      "preserves_output_on_rejection": false
+    },
+    {
+      "name": "empty",
+      "seed_native_equal": true,
+      "preserves_output_on_rejection": false
+    },
+    {
+      "name": "invalid-status",
+      "seed_native_equal": true,
+      "preserves_output_on_rejection": true
+    },
+    {
+      "name": "negative-cost",
+      "seed_native_equal": true,
+      "preserves_output_on_rejection": true
+    },
+    {
+      "name": "malformed",
+      "seed_native_equal": true,
+      "preserves_output_on_rejection": true
+    },
+    {
+      "name": "missing-input",
+      "seed_native_equal": true,
+      "preserves_output_on_rejection": true
+    }
+  ]
+}

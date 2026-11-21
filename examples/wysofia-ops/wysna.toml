@@ -20,6 +20,10 @@ profile = "native-cli"
 entry = "src/sqlite_cli.wysna"
 profile = "native-cli"
 
+[targets.ingest]
+entry = "src/ingest.wysna"
+profile = "native-cli"
+
 [[tests]]
 name = "audit-domain-contracts"
 entry = "tests/audit_test.wysna"

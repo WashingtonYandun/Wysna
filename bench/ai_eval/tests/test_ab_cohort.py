@@ -178,7 +178,7 @@ def test_ab_cohort_cli_runs_isolated_mock_smoke(tmp_path):
     assert proc.returncode == 0, proc.stderr
     payload = json.loads(out.read_text(encoding="utf-8"))
     assert payload["schema_version"] == COHORT_SCHEMA_VERSION
-    assert payload["oracle_revision"] == 2
+    assert payload["oracle_revision"] == 3
     assert payload["families_covered"] == sorted(TASK_FAMILIES)
     assert payload["decision"] == "inconclusive"
     assert len(payload["runs"]) == 12  # 6 cohort tasks * 2 conditions
@@ -213,31 +213,50 @@ def test_multifile_over_300_loc_task_and_import_style_ab_suite():
         max_repair_cycles=0,
     )
     assert all(r["passed"] and r["collateral_lines_changed"] == 0 for r in report["runs"]), report["runs"]
+    assert "validator.wysna" in report["runs"][0]["task_result"]["attempts"][0]["files"]
 
     import_tasks = build_import_style_ab_tasks()
-    assert [t.task.id for t in import_tasks] == ["LANG-R01-IMPORT-AS", "LANG-R01-FROM-USE"]
-    sol_as = (
-        '```wysna\nimport "std/parse" as parse\nfn main() {\n'
-        '    let parts = "4,5".split(",")\n'
-        '    let a = parse.parse_int(parts[0]) else _err { 0 }\n'
-        '    let b = parse.parse_int(parts[1]) else _err { 0 }\n'
-        '    print("sum=" + str(a + b))\n}\nmain()\n```'
-    )
-    sol_use = (
-        '```wysna\nfrom "std/parse" use { parse_int }\nfn main() {\n'
-        '    let parts = "4,5".split(",")\n'
-        '    let a = parse_int(parts[0]) else _err { 0 }\n'
-        '    let b = parse_int(parts[1]) else _err { 0 }\n'
-        '    print("sum=" + str(a + b))\n}\nmain()\n```'
-    )
+    assert len(import_tasks) == 3
+    assert dict(import_tasks[0].condition_instructions) == {
+        "A": 'Use `import "std/parse" as parse` and call `parse.parse_int(...)`.',
+        "B": 'Use `from "std/parse" use { parse_int }` and call `parse_int(...)`.',
+    }
+    lang_providers = {}
+
+    def lang_factory(condition):
+        responses = {}
+        for task in import_tasks:
+            selective = condition == "B"
+            declaration = 'from "std/parse" use { parse_int }' if selective else 'import "std/parse" as parse'
+            parse_name = "parse_int" if selective else "parse.parse_int"
+            label, expression = ("sum", "a + b")
+            if "PRODUCT" in task.task.id:
+                label, expression = "product", "a * b"
+            elif "MAX" in task.task.id:
+                label, expression = "max", "if a > b { a } else { b }"
+            solution = (f"{declaration}\nlet parts = args()[1].split(\",\")\n"
+                        f"let a = {parse_name}(parts[0]) else _err {{ 0 }}\n"
+                        f"let b = {parse_name}(parts[1]) else _err {{ 0 }}\n"
+                        f"let value = {expression}\nprint(\"{label}=\" + str(value))\n")
+            responses[task.task.id] = [solution]
+        provider = MockProvider(responses)
+        lang_providers[condition] = provider
+        return provider
+
     lang_report = run_ab_cohort(
         import_tasks,
-        lambda _c: MockProvider({"LANG-R01-IMPORT-AS": [sol_as], "LANG-R01-FROM-USE": [sol_use]}),
+        lang_factory,
         repo_root=REPO_ROOT,
         repetitions=1,
         max_repair_cycles=0,
+        comparison_axis="import-style",
     )
     assert all(r["passed"] for r in lang_report["runs"]), lang_report["runs"]
+    assert [r["condition"] for r in lang_report["runs"]] == ["A", "B"] * 3
+    assert lang_report["context_mode"] == "none"
+    assert lang_report["comparison_axis"] == "import-style"
+    assert 'Use `import "std/parse" as parse`' in lang_providers["A"].call_history[0]["user_prompt"]
+    assert 'Use `from "std/parse" use { parse_int }`' in lang_providers["B"].call_history[0]["user_prompt"]
 
 
 def test_interactive_cohort_uses_model_selected_queries_and_counts_extra_turns():
@@ -344,9 +363,20 @@ def test_openrouter_rate_limit_is_shared_between_provider_instances(monkeypatch)
     monkeypatch.setattr(providers.time, "sleep", fake_sleep)
     monkeypatch.setattr(providers.urllib.request, "urlopen", lambda *args, **kwargs: FakeResp())
 
-    first = providers.OpenAICompatibleProvider(base_url="https://openrouter.ai/api/v1")
-    second = providers.OpenAICompatibleProvider(base_url="https://openrouter.ai/api/v1")
+    first = providers.OpenAICompatibleProvider(base_url="https://openrouter.ai/api/v1", model="fixture:free")
+    second = providers.OpenAICompatibleProvider(base_url="https://openrouter.ai/api/v1", model="fixture:free")
     first.generate("system", "first")
     second.generate("system", "second")
 
     assert delays == [3.5]
+
+
+def test_import_style_oracle_rejects_correct_output_without_assigned_import(tmp_path):
+    harness = ConditionHarness("B", repo_root=REPO_ROOT, required_import_style="selective")
+    source = tmp_path / "main.wysna"
+    source.write_text('## from "std/parse" use { parse_int }\nprint("sum=9")\n', encoding="utf-8")
+    passed, error = harness.run_oracle_tests(str(tmp_path), source.name, [])
+    assert not passed and "Import style invariant" in error
+    source.write_text('import "std/parse" as parse\nprint("sum=9")\n', encoding="utf-8")
+    passed, error = harness.run_oracle_tests(str(tmp_path), source.name, [])
+    assert not passed and "selective" in error
