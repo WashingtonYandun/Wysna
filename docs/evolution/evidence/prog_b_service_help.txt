@@ -1,0 +1,8 @@
+Usage: wysna service serve --worker PATH --database PATH [options]
+Options:
+  --host ADDRESS              Loopback IP address (default: 127.0.0.1)
+  --port PORT                 Listen port (default: 8080; 0 selects an available port)
+  --workers COUNT             Isolated worker processes (default: 4; max: 8)
+  --queue-size COUNT          Waiting requests (default: 32; max: 32)
+  --request-timeout-ms MS     End-to-end worker budget (default: 15000)
+This experimental server is local-only and does not provide TLS or authentication.

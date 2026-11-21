@@ -31,7 +31,28 @@ extern "C" fn wysna_host_buffer_new() -> opaque
 extern "C" fn wysna_host_buffer_append(handle: opaque, value: int) -> int
 extern "C" fn wysna_host_buffer_get(handle: opaque, index: int) -> int
 extern "C" fn wysna_host_crypto_sha256(input_handle: opaque, output_handle: opaque) -> int
+extern "C" fn wysna_host_crypto_random_bytes(output_handle: opaque, count: int) -> int
 extern "C" fn wysna_host_close(handle: opaque) -> int
+
+fn diag_uuid4() -> str {
+    let buf = wysna_host_buffer_new()
+    let st = wysna_host_crypto_random_bytes(buf, 16)
+    if st != 0 {
+        wysna_host_close(buf)
+        return "native"
+    }
+    let mut parts: list[str] = []
+    for i in 0..16 {
+        let mut b = wysna_host_buffer_get(buf, i)
+        if b < 0 { b = 0 }
+        if i == 6 { b = (b % 16) + 64 }
+        elif i == 8 { b = (b % 64) + 128 }
+        parts.append(diag_hex_digit((b / 16) % 16) + diag_hex_digit(b % 16))
+        if i == 3 or i == 5 or i == 7 or i == 9 { parts.append("-") }
+    }
+    wysna_host_close(buf)
+    return join_strings(parts, "")
+}
 
 fn diag_hex_digit(n: int) -> str {
     let digits = "0123456789abcdef"
@@ -171,7 +192,7 @@ fn diag_primary_span_json(file: str, line: int, col: int, src: str) -> str {
 
 fn diag_record_json(code: str, stage: str, severity: str, msg: str, file: str, line: int, col: int, src: str) -> str {
     let span_json = diag_primary_span_json(file, line, col, src)
-    let data_json = if code == "W2001" { fix_mismatch_data_json(msg) } else { "{}" }
+    let data_json = if stage == "type" { fix_mismatch_data_json(msg) } else { "{}" }
     let fixes_json = if span_json != "null" { fix_diagnostic_edits_json(code, msg, file, src, line, col) } else { "[]" }
     return "{\"code\":" + diag_json_quote(code) + ",\"severity\":" + diag_json_quote(severity) + ",\"stage\":" + diag_json_quote(stage) + ",\"message\":" + diag_json_quote(msg) + ",\"primary_span\":" + span_json + ",\"related\":[],\"data\":" + data_json + ",\"fixes\":" + fixes_json + "}"
 }
@@ -180,7 +201,7 @@ fn diag_tool_envelope_json(command: str, status: str, exit_code: int, diagnostic
     let mut parts: list[str] = ["{\"schema_version\":\"wysna.tool-result/1\""]
     parts.append(",\"command\":" + diag_json_quote(command))
     parts.append(",\"status\":" + diag_json_quote(status))
-    parts.append(",\"invocation_id\":\"native\"")
+    parts.append(",\"invocation_id\":" + diag_json_quote(diag_uuid4()))
     parts.append(",\"tool_exit_code\":" + str(exit_code))
     parts.append(",\"process_exit_code\":" + str(exit_code))
     parts.append(",\"execution\":null")
@@ -2469,6 +2490,13 @@ fn sem_simple(context: SemanticContext, kind: str) -> int {
 }
 fn sem_wrap(context: SemanticContext, kind: str, child: int) -> int { return sem_intern(context, kind, "", [child]) }
 fn sem_kind(context: SemanticContext, type_id: int) -> str { return context.types[type_id].kind }
+fn sem_unwrap_expected_payload(context: SemanticContext, expected: int) -> int {
+    let mut current = expected
+    while current >= 0 and (sem_kind(context, current) == "result" or sem_kind(context, current) == "optional") {
+        current = context.types[current].args[0]
+    }
+    return current
+}
 fn sem_error_type_name(context: SemanticContext, type_id: int) -> str {
     let type_ = context.types[type_id]
     if type_.kind == "int" { return "int" }
@@ -2761,11 +2789,22 @@ fn sem_external_async_signature(context: SemanticContext, fn_tid: int) -> int {
     parts.append(sem_resolve_async_task_type(context, fn_t.args[len(fn_t.args) - 1]))
     return sem_intern(context, "function", "", parts)
 }
+fn sem_demangle_name(raw: str) -> str {
+    let prefix = "__wysna_module_"
+    if len(raw) > len(prefix) and slice(raw, 0, len(prefix)) == prefix {
+        for i in len(prefix)..len(raw) - 1 {
+            if slice(raw, i, i + 2) == "__" {
+                return slice(raw, i + 2, len(raw))
+            }
+        }
+    }
+    return raw
+}
 fn sem_diagnostic_type(context: SemanticContext, type_id: int, depth: int) -> str {
     if type_id < 0 or type_id >= len(context.types) { return "?" }
     let type_ = context.types[type_id]
     let mut name = type_.kind
-    if type_.name != "" { name = type_.name }
+    if type_.name != "" { name = sem_demangle_name(type_.name) }
     if depth >= 8 { return name }
     if type_.kind == "optional" and len(type_.args) == 1 {
         return sem_diagnostic_type(context, type_.args[0], depth + 1) + "?"
@@ -3534,13 +3573,23 @@ fn sem_member(context: SemanticContext, receiver: SemValue, name: str, location:
         elif name == "items" and type_.kind == "dict" { args = [sem_wrap(context, "list", sem_intern(context, "tuple", "", type_.args))] }
         elif name == "contains" and type_.kind == "dict" { args = [type_.args[0], context.boolean_type] }
         elif name == "is_empty" and type_.kind == "dict" { args = [context.boolean_type] }
-        else { report_error_at("W3002", location, "unknown collection method") }
+        elif name == "remove" and type_.kind == "dict" {
+            sem_mutable_at(context, receiver.root, location)
+            args = [type_.args[0], sem_wrap(context, "optional", type_.args[1])]
+        } elif name == "clear" and type_.kind == "dict" {
+            sem_mutable_at(context, receiver.root, location)
+            args = [context.unit_type]
+        } else { report_error_at("W3002", location, "unknown collection method") }
         return SemValue { type_id: sem_intern(context, "function", "", args), root: "#collection", writable: -1, terminates: false, node: -1 }
     }
     if receiver.type_id == context.string_type {
         let mut args: list[int] = []
         if name == "contains" { args = [context.string_type, context.boolean_type] }
         elif name == "is_empty" { args = [context.boolean_type] }
+        elif name == "trim" or name == "to_lower" or name == "to_upper" { args = [context.string_type] }
+        elif name == "split" { args = [context.string_type, sem_wrap(context, "list", context.string_type)] }
+        elif name == "starts_with" or name == "ends_with" { args = [context.string_type, context.boolean_type] }
+        elif name == "replace" { args = [context.string_type, context.string_type, context.string_type] }
         else { report_error_at("W3002", location, "unknown string method: " + name) }
         return SemValue { type_id: sem_intern(context, "function", "", args), root: "#collection", writable: -1, terminates: false, node: -1 }
     }
@@ -3643,7 +3692,8 @@ fn sem_prefix(context: SemanticContext, allow_struct: bool, statement: bool) -> 
             let empty: list[int] = []
             return sem_expr(context, "tuple", sem_value(sem_intern(context, "tuple", "", empty)), source, "", [], -1, -1)
         }
-        let expected_tuple = context.expected_type
+        let outer_expected_group = context.expected_type
+        let expected_tuple = sem_unwrap_expected_payload(context, context.expected_type)
         let is_tuple_ctx = expected_tuple >= 0 and sem_kind(context, expected_tuple) == "tuple" and sem_group_is_tuple(context)
         context.statement_context = statement and not sem_group_is_tuple(context) and
             not sem_delimited_expression_suffix(context.tokens, context.pos - 1, "LPAREN", "RPAREN")
@@ -3667,21 +3717,22 @@ fn sem_prefix(context: SemanticContext, allow_struct: bool, statement: bool) -> 
                 elem_idx = elem_idx + 1
                 if not sem_match(context, "COMMA") { break }
             }
-            context.expected_type = expected_tuple
+            context.expected_type = outer_expected_group
             sem_expect(context, "RPAREN")
             return sem_expr(context, "tuple", sem_value(sem_intern(context, "tuple", "", types)), source, "", values, -1, -1)
         }
-        context.expected_type = expected_tuple
+        context.expected_type = outer_expected_group
         sem_expect(context, "RPAREN")
         return first
     }
     if sem_match(context, "LBRACKET") {
         if sem_match(context, "RBRACKET") {
-            let expected = context.expected_type
+            let expected = sem_unwrap_expected_payload(context, context.expected_type)
             let type_id = if expected >= 0 and sem_kind(context, expected) == "list" { expected } else { sem_wrap(context, "list", sem_simple(context, "any")) }
             return sem_expr(context, "list", sem_value(type_id), source, "", [], -1, -1)
         }
-        let expected_container = context.expected_type
+        let outer_expected_list = context.expected_type
+        let expected_container = sem_unwrap_expected_payload(context, context.expected_type)
         let mut element = -1
         if expected_container >= 0 and sem_kind(context, expected_container) == "list" { element = context.types[expected_container].args[0] }
         context.expected_type = element
@@ -3698,16 +3749,17 @@ fn sem_prefix(context: SemanticContext, allow_struct: bool, statement: bool) -> 
             values.append(next.node)
         }
         sem_expect(context, "RBRACKET")
-        context.expected_type = expected_container
+        context.expected_type = outer_expected_list
         return sem_expr(context, "list", sem_value(sem_wrap(context, "list", first)), source, "", values, -1, -1)
     }
     if sem_match(context, "LBRACE") {
         if sem_match(context, "RBRACE") {
-            let expected = context.expected_type
+            let expected = sem_unwrap_expected_payload(context, context.expected_type)
             let type_id = if expected >= 0 and sem_kind(context, expected) == "dict" { expected } else { sem_intern(context, "dict", "", [sem_simple(context, "any"), sem_simple(context, "any")]) }
             return sem_expr(context, "dict", sem_value(type_id), source, "", [], -1, -1)
         }
-        let expected_container = context.expected_type
+        let outer_expected_dict = context.expected_type
+        let expected_container = sem_unwrap_expected_payload(context, context.expected_type)
         let mut expected_key = -1
         let mut expected_value = -1
         if expected_container >= 0 and sem_kind(context, expected_container) == "dict" {
@@ -3748,6 +3800,7 @@ fn sem_prefix(context: SemanticContext, allow_struct: bool, statement: bool) -> 
             sem_require_at(context, next_value, value, "W2001", next_value_source)
         }
         sem_expect(context, "RBRACE")
+        context.expected_type = outer_expected_dict
         let type_id = if expected_key >= 0 { expected_container } else { sem_intern(context, "dict", "", [key, value]) }
         return sem_expr(context, "dict", sem_value(type_id), source, "", values, -1, -1)
     }
@@ -3886,6 +3939,7 @@ fn sem_prefix(context: SemanticContext, allow_struct: bool, statement: bool) -> 
             let mut initialized: list[str] = []
             let mut values: list[int] = []
             while not sem_is(context, "RBRACE") {
+                if sem_match(context, "NEWLINE") { continue }
                 if sem_is(context, "DOT_DOT") {
                     let dot_tok = sem_take(context)
                     if has_spread { report_error_at("W0006", dot_tok, "multiple spread expressions in struct literal") }
@@ -3912,6 +3966,7 @@ fn sem_prefix(context: SemanticContext, allow_struct: bool, statement: bool) -> 
                         }
                     }
                     sem_match(context, "COMMA")
+                    while sem_match(context, "NEWLINE") {}
                     continue
                 }
                 let field_token = sem_at(context)
@@ -3933,6 +3988,7 @@ fn sem_prefix(context: SemanticContext, allow_struct: bool, statement: bool) -> 
                 let expected = sem_substitute_type(context, context.fields[field].type_id, unification.names, unification.types)
                 sem_require_at(context, actual, expected, "W2001", field_value_source)
                 sem_match(context, "COMMA")
+                while sem_match(context, "NEWLINE") {}
             }
             sem_expect(context, "RBRACE")
             if generic_type >= 0 and selected_type < 0 {
@@ -6624,7 +6680,7 @@ fn mir_collection(context: MirBuilder, node: CheckedNode) -> int {
 }
 fn mir_collection_call(context: MirBuilder, node: CheckedNode) -> int {
     let source = node.source
-    if node.text == "append" or node.text == "pop" or node.text == "clear" {
+    if node.text == "append" or node.text == "pop" or node.text == "clear" or node.text == "remove" {
         let place = mir_place(context, node.children[0])
         let mut arguments: list[int] = []
         for i in 1..len(node.children) { arguments.append(mir_expression(context, node.children[i])) }
@@ -6644,6 +6700,9 @@ fn mir_collection_call(context: MirBuilder, node: CheckedNode) -> int {
         let length = mir_op(context, "runtime", 3, args_, "wysna_builtin_len", mir_literal_unit(), source)
         let zero = mir_constant(context, mir_literal_int(0), 3, source)
         return mir_op(context, "runtime", mir_type(context, node.type_id, source), [length, zero], "wysna_equal", mir_literal_unit(), source)
+    }
+    if node.text == "trim" or node.text == "split" or node.text == "to_lower" or node.text == "to_upper" or node.text == "starts_with" or node.text == "ends_with" or node.text == "replace" {
+        return mir_op(context, "runtime", mir_type(context, node.type_id, source), args_, "wysna_str_" + node.text, mir_literal_unit(), source)
     }
     if node.text == "items" {
         return mir_op(context, "runtime", mir_type(context, node.type_id, source), args_, "wysna_builtin_dict_items", mir_literal_unit(), source)
@@ -7870,6 +7929,104 @@ fn mir_lower_function(context: MirBuilder, function: CheckedFunction) {
     mir_finish(context, if function.closure { "wysna_" + function.name } else { mir_abi_name(function.name) }, function.source)
 }
 
+fn mir_optimize_function_param_reads(fn_: MirFunction) -> MirFunction {
+    if fn_.is_async { return fn_ }
+    let slot_count = len(fn_.slots)
+    let mut definitions: list[int] = []
+    let mut replacement: list[int] = []
+    let mut protected: list[bool] = []
+    let mut is_str_param: list[bool] = []
+    for _i in 0..slot_count {
+        definitions.append(0)
+        replacement.append(-1)
+        protected.append(false)
+        is_str_param.append(false)
+    }
+    for p in fn_.params {
+        if p >= 0 and p < slot_count and fn_.slots[p].type_id == 5 {
+            is_str_param[p] = true
+        }
+    }
+    for block in fn_.blocks {
+        if block.terminator.value >= 0 and block.terminator.value < slot_count {
+            protected[block.terminator.value] = true
+        }
+        for op in block.operations {
+            if op.result >= 0 and op.result < slot_count {
+                definitions[op.result] = definitions[op.result] + 1
+            }
+            if mir_consumes(op) or op.opcode == "mutate" {
+                for a in op.args {
+                    if a >= 0 and a < slot_count { protected[a] = true }
+                }
+            }
+            if op.place.root >= 0 and op.place.root < slot_count {
+                protected[op.place.root] = true
+            }
+            for proj in op.place.projections {
+                if proj.kind == "index" and proj.index >= 0 and proj.index < slot_count {
+                    protected[proj.index] = true
+                }
+            }
+        }
+    }
+    let mut changed = false
+    for block in fn_.blocks {
+        for op in block.operations {
+            if op.opcode == "clone" and len(op.args) == 1 and op.result >= 0 {
+                let src_slot = op.args[0]
+                let dst_slot = op.result
+                if is_str_param[src_slot] and definitions[dst_slot] == 1 and not protected[dst_slot] {
+                    replacement[dst_slot] = src_slot
+                    changed = true
+                }
+            }
+        }
+    }
+    if not changed { return fn_ }
+    let mut new_blocks: list[MirBlock] = []
+    for block in fn_.blocks {
+        let mut new_ops: list[MirOperation] = []
+        for op in block.operations {
+            if op.opcode == "clone" and op.result >= 0 and replacement[op.result] >= 0 {
+                continue
+            }
+            if op.opcode == "release" and len(op.args) == 1 and replacement[op.args[0]] >= 0 {
+                continue
+            }
+            let mut new_args: list[int] = []
+            for a in op.args {
+                if a >= 0 and a < slot_count and replacement[a] >= 0 {
+                    new_args.append(replacement[a])
+                } else {
+                    new_args.append(a)
+                }
+            }
+            new_ops.append(MirOperation {
+                owner_type: op.owner_type,
+                labels: op.labels,
+                place: op.place,
+                opcode: op.opcode,
+                result: op.result,
+                args: new_args,
+                name: op.name,
+                value: op.value,
+                source: op.source
+            })
+        }
+        new_blocks.append(MirBlock { operations: new_ops, terminator: block.terminator })
+    }
+    return MirFunction { name: fn_.name, return_type: fn_.return_type, slots: fn_.slots, blocks: new_blocks, params: fn_.params, source: fn_.source, is_async: fn_.is_async, async_return_type: fn_.async_return_type }
+}
+
+fn mir_optimize_parameter_reads(module: MirModule) -> MirModule {
+    let mut optimized: list[MirFunction] = []
+    for fn_ in module.functions {
+        optimized.append(mir_optimize_function_param_reads(fn_))
+    }
+    return MirModule { file: module.file, functions: optimized, globals: module.globals, records: module.records, virtual_slots: module.virtual_slots, externs: module.externs, types: module.types, source: module.source }
+}
+
 fn mir_build(program: CheckedProgram) -> MirModule {
     checked_verify(program)
     let context = new MirBuilder(program)
@@ -7907,7 +8064,8 @@ fn mir_build(program: CheckedProgram) -> MirModule {
         mir_return(context, value, source)
     }
     mir_finish(context, "wysna_program", source)
-    return MirModule { file: program.file, functions: context.functions, globals: context.globals, records: context.records, virtual_slots: context.virtual_slots, externs: context.externs, types: context.types, source: source }
+    let raw_module = MirModule { file: program.file, functions: context.functions, globals: context.globals, records: context.records, virtual_slots: context.virtual_slots, externs: context.externs, types: context.types, source: source }
+    return mir_optimize_parameter_reads(raw_module)
 }
 
 fn mir_module_json(module: MirModule) -> str {
@@ -8021,12 +8179,22 @@ fn mir_verify_runtime(module: MirModule, operation: MirOperation, slots: list[Mi
         if name == "wysna_not" { return type_ == 2 and returned == 2 }
         if name == "wysna_builtin_int" { return type_ >= 2 and type_ <= 6 and returned == 3 }
         if name == "wysna_builtin_float" { return type_ >= 2 and type_ <= 6 and returned == 4 }
+        if name == "wysna_str_trim" or name == "wysna_str_to_lower" or name == "wysna_str_to_upper" { return type_ == 5 and returned == 5 }
         if name == "wysna_await" { return true }
+        return false
+    }
+    if len(operation.args) == 3 {
+        let a0 = slots[operation.args[0]].type_id
+        let a1 = slots[operation.args[1]].type_id
+        let a2 = slots[operation.args[2]].type_id
+        if name == "wysna_str_replace" { return a0 == 5 and a1 == 5 and a2 == 5 and returned == 5 }
         return false
     }
     if len(operation.args) != 2 { return false }
     let first = slots[operation.args[0]].type_id
     let second = slots[operation.args[1]].type_id
+    if name == "wysna_str_split" { return first == 5 and second == 5 and module.types[returned].kind == "list" and module.types[returned].args[0] == 5 }
+    if name == "wysna_str_starts_with" or name == "wysna_str_ends_with" { return first == 5 and second == 5 and returned == 2 }
     if name == "wysna_index_get_owned_at" {
         if first == 5 { return second == 3 and returned == 5 }
         let input = module.types[first]
@@ -8189,6 +8357,12 @@ fn mir_verify_shape(module: MirModule, function: MirFunction) {
                         if operation.name == "pop" { valid = type_ == descriptor.args[0] and len(operation.args) == 0 }
                         elif operation.name == "clear" { valid = type_ == 1 and len(operation.args) == 0 }
                         elif operation.name == "append" { valid = type_ == 1 and len(operation.args) == 1 if valid { valid = function.slots[operation.args[0]].type_id == descriptor.args[0] } }
+                    } elif descriptor.kind == "dict" {
+                        if operation.name == "clear" { valid = type_ == 1 and len(operation.args) == 0 }
+                        elif operation.name == "remove" {
+                            valid = len(operation.args) == 1 and mir_is_optional(module.types, type_) and module.types[type_].args[0] == descriptor.args[1]
+                            if valid { valid = mir_compatible(module.types, module.records, function.slots[operation.args[0]].type_id, descriptor.args[0]) }
+                        }
                     }
                 } elif operation.opcode == "global_load" {
                     let global = operation.value.integer
@@ -8502,8 +8676,10 @@ fn mir_c_operation(module: MirModule, function: MirFunction, operation: MirOpera
     }
     if kind == "mutate" {
         let reference = mir_c_place(module, function, operation.place)
-        let mut call = "wysna_list_" + operation.name + "(" + reference
-        if operation.name == "pop" { call = "wysna_list_pop_at(" + reference + ", " + escape_c_str(operation.source.file) + ", " + str(operation.source.line) + ", " + str(operation.source.col) }
+        let target_tid = mir_place_type(module, function, operation.place, operation.source)
+        let prefix = if module.types[target_tid].kind == "dict" { "wysna_dict_" } else { "wysna_list_" }
+        let mut call = prefix + operation.name + "(" + reference
+        if prefix == "wysna_list_" and operation.name == "pop" { call = "wysna_list_pop_at(" + reference + ", " + escape_c_str(operation.source.file) + ", " + str(operation.source.line) + ", " + str(operation.source.col) }
         for argument in arguments { call = call + ", " + argument }
         return mir_c_write_consume(function, result, call + ")", true)
     }
@@ -8594,10 +8770,8 @@ fn mir_c_operation(module: MirModule, function: MirFunction, operation: MirOpera
         let mut value = "wysna_make_" + category + "(" + str(len(arguments)) + ", " + mir_c_array(arguments) + ")"
         if category == "struct" or category == "object" {
             let record = mir_find_record(module.records, operation.value.integer, operation.source)
-            let mut keys = "(const char*[]){"
-            for i in 0..len(record.fields) { if i > 0 { keys = keys + ", " } keys = keys + escape_c_str(record.fields[i].name) }
-            keys = if len(record.fields) == 0 { "NULL" } else { keys + "}" }
-            value = "wysna_make_" + category + "(" + escape_c_str(module.types[record.type_id].name) + ", " + str(len(arguments)) + ", " + keys + ", " + mir_c_array(arguments) + ")"
+            let keys = if len(record.fields) == 0 { "NULL" } else { "wysna_rec_keys_" + str(record.type_id) }
+            value = "wysna_make_" + category + "_static(" + escape_c_str(module.types[record.type_id].name) + ", " + str(len(arguments)) + ", " + keys + ", " + mir_c_array(arguments) + ")"
         }
         if category == "dict" {
             let mut keys: list[str] = []
@@ -8900,6 +9074,19 @@ fn mir_c_async_function(module: MirModule, function: MirFunction) -> str {
     return join_strings(parts, "")
 }
 
+fn mir_c_display_fn_name(name: str) -> str {
+    let mut raw = if len(name) > 9 and slice(name, 0, 9) == "wysna_fn_" { slice(name, 9, len(name)) } else { name }
+    let prefix = "__wysna_module_"
+    if len(raw) > len(prefix) and slice(raw, 0, len(prefix)) == prefix {
+        for i in len(prefix)..len(raw) - 1 {
+            if slice(raw, i, i + 2) == "__" {
+                return slice(raw, i + 2, len(raw))
+            }
+        }
+    }
+    return raw
+}
+
 fn mir_c_function(module: MirModule, function: MirFunction) -> str {
     if function.is_async { return mir_c_async_function(module, function) }
     let mut parts: list[str] = [mir_c_signature(function) + " {\n"]
@@ -8926,9 +9113,14 @@ fn mir_c_function(module: MirModule, function: MirFunction) -> str {
         }
         return join_strings(parts, "") + "    return " + parallel_helper + "(" + p0 + ", " + p1 + ");\n}\n"
     }
+    let track_frame = len(function.name) > 9 and slice(function.name, 0, 9) == "wysna_fn_"
     for i in 0..len(function.slots) {
         let slot = function.slots[i]
         if not slot.parameter { parts.append("    " + mir_c_type(slot.type_id) + " " + mir_c_name(i) + " = " + (if mir_value_storage(slot.type_id) { "wysna_unit()" } else { "0" }) + ";\n") }
+    }
+    if track_frame {
+        let ffile = if function.source.file != "" { function.source.file } else { "<unknown>" }
+        parts.append("    wysna_runtime_push_frame(" + escape_c_str(mir_c_display_fn_name(function.name)) + ", " + escape_c_str(ffile) + ", " + str(function.source.line) + ");\n")
     }
     parts.append("    goto bb0;\n")
     for i in 0..len(function.blocks) {
@@ -8941,6 +9133,7 @@ fn mir_c_function(module: MirModule, function: MirFunction) -> str {
         elif term.kind == "return" {
             let name = mir_c_name(term.value)
             let expression = if mir_value_storage(function.return_type) { "wysna_move(&" + name + ")" } else { name }
+            if track_frame { parts.append("    wysna_runtime_pop_frame();\n") }
             parts.append("    return " + expression + ";\n")
         }
         else { parts.append("    wysna_runtime_fail(\"W9999\", \"Unreachable MIR block executed\");\n") }
@@ -8953,7 +9146,14 @@ fn mir_emit_c(module: MirModule) -> str {
     let mut parts: list[str] = []
     for external in module.externs { if external.native == "wysna_host_http_request" { parts.append("#define WYSNA_HAS_HTTP 1\n") } }
     parts.append("#include \"runtime/wysna_runtime.h\"\n/* Verified Compiler MIR: explicit CFG and ownership. */\n")
-    for record in module.records { if module.types[record.type_id].kind == "class" { parts.append("static const WClassVTable wysna_vtable_" + module.types[record.type_id].name + ";\n") } }
+    for record in module.records {
+        if len(record.fields) > 0 {
+            let mut kparts: list[str] = []
+            for field in record.fields { kparts.append(escape_c_str(field.name)) }
+            parts.append("static const char* const wysna_rec_keys_" + str(record.type_id) + "[" + str(len(record.fields)) + "] = { " + join_strings(kparts, ", ") + " };\n")
+        }
+        if module.types[record.type_id].kind == "class" { parts.append("static const WClassVTable wysna_vtable_" + module.types[record.type_id].name + ";\n") }
+    }
     for global in module.globals { parts.append("static WVal " + global.name + ";\n") }
     for function in module.functions { parts.append(mir_c_signature(function) + ";\n") }
     parts.append(mir_c_externs(module))
@@ -9666,6 +9866,7 @@ fn tool_build_graph_with_overlays(src: str, file: str, ov_paths: list[str], ov_t
 fn tool_build_checked_graph(src: str, canonical: str, expanded: list[Token], program: CheckedProgram, ov_paths: list[str], ov_texts: list[str], include_entry: bool) -> ToolGraph {
     let graph = new ToolGraph(canonical, src)
     graph.mod_names.append(canonical)
+    let mut mod_hashes: list[str] = [canonical + "=" + diag_sha256_hex(src)]
     tool_scan_decl_nodes(graph, program, src, canonical)
     for etok in expanded {
         if etok.file != "" and etok.file != "<unknown>" and not tool_str_contains(graph.mod_names, etok.file) {
@@ -9673,6 +9874,7 @@ fn tool_build_checked_graph(src: str, canonical: str, expanded: list[Token], pro
             let ext_res = module_read_with_overlays(etok.file, ov_paths, ov_texts)
             let ext_src = if ext_res[0] == "1" { ext_res[1] } else { "" }
             if ext_src != "" {
+                mod_hashes.append(etok.file + "=" + diag_sha256_hex(ext_src))
                 tool_scan_decl_nodes(graph, program, ext_src, etok.file)
             }
         }
@@ -9772,20 +9974,8 @@ fn tool_build_checked_graph(src: str, canonical: str, expanded: list[Token], pro
         }
     }
 
-    # Compute deterministic canonical graph_hash
-    let mut payload_parts: list[str] = ["src:", diag_sha256_hex(src), "|nodes:"]
-    let mut node_sigs: list[str] = []
-    for n in graph.nodes {
-        node_sigs.append(n.id + "@" + str(n.start_byte) + ":" + str(n.end_byte) + ":" + n.signature + ":" + tool_str_list_json(n.implements_list) + ":" + n.super_class + (if n.indirect_call { ":indirect" } else { "" }))
-    }
-    payload_parts.append(join_strings(tool_sort_strings(node_sigs), ";"))
-    payload_parts.append("|edges:")
-    let mut edge_sigs: list[str] = []
-    for e in graph.edges {
-        edge_sigs.append(e.from_id + "->" + e.to_id + ":" + e.kind + "@" + str(e.line))
-    }
-    payload_parts.append(join_strings(tool_sort_strings(edge_sigs), ";"))
-    graph.graph_hash = "graph:" + slice(diag_sha256_hex(join_strings(payload_parts, "")), 0, 16)
+    # Compute deterministic canonical graph_hash shared across engines
+    graph.graph_hash = "graph:" + slice(diag_sha256_hex(join_strings(tool_sort_strings(mod_hashes), "\n")), 0, 16)
     return graph
 }
 
@@ -10333,8 +10523,7 @@ fn tool_handle_check_v1(file: str, legacy_json: bool, json_v1: bool) -> unit {
     mir_verify(module)
     let fn_count = str(len(module.functions))
     if json_v1 {
-        let artifacts_json = "[{\"kind\":\"checked_program\",\"media_type\":\"application/json\",\"file\":" + diag_json_quote(file) + ",\"functions\":" + fn_count + "}]"
-        diag_write_output(diag_tool_envelope_json("check", "ok", 0, "[]", "", "", artifacts_json))
+        diag_write_output(diag_tool_envelope_json("check", "ok", 0, "[]", "", "", "[]"))
     } elif legacy_json {
         diag_write_output("{\"schema_version\":\"wysna.cli.result/1\",\"compiler_version\":\"0.8.0\",\"command\":\"check\",\"ok\":true,\"exit_code\":0,\"diagnostics\":[],\"data\":{\"file\":" + diag_json_quote(file) + ",\"functions\":" + fn_count + "}}")
     } else {
@@ -10367,6 +10556,382 @@ fn selfhost_trim_line(line: str) -> str {
     return slice(line, start, end)
 }
 
+struct FmtInlineTok {
+    kind: str,
+    text: str,
+}
+
+fn selfhost_fmt_is_delim_or_op(text: str) -> bool {
+    return text == "(" or text == "[" or text == "{" or text == "," or text == ":" or text == ".." or text == "..=" or text == "==" or text == "!=" or text == "<" or text == "<=" or text == ">" or text == ">=" or text == "+=" or text == "-=" or text == "*=" or text == "/=" or text == "%=" or text == "??" or text == "->" or text == "=>" or text == "=" or text == "+" or text == "-" or text == "*" or text == "/" or text == "%" or text == "!" or text == "|" or text == "return" or text == "and" or text == "or" or text == "not" or text == "in" or text == "if" or text == "elif" or text == "else" or text == "while" or text == "match" or text == "requires" or text == "ensures"
+}
+
+fn selfhost_fmt_is_binary_op(kind: str, text: str) -> bool {
+    if kind == "OP" {
+        if text == "==" or text == "!=" or text == "<=" or text == ">=" or text == "+=" or text == "-=" or text == "*=" or text == "/=" or text == "%=" or text == "??" or text == "->" or text == "=>" or text == "=" or text == "+" or text == "-" or text == "*" or text == "/" or text == "%" or text == "<" or text == ">" or text == "|" or text == "!" {
+            return true
+        }
+    }
+    return false
+}
+
+fn selfhost_fmt_is_stmt_kw_before_paren(text: str) -> bool {
+    return text == "if" or text == "elif" or text == "while" or text == "for" or text == "return" or text == "match" or text == "in" or text == "and" or text == "or" or text == "not" or text == "else" or text == "requires" or text == "ensures"
+}
+
+fn selfhost_fmt_is_dict_prefix(text: str) -> bool {
+    return text == "=" or text == "(" or text == "[" or text == "," or text == ":" or text == "return" or text == "=>" or text == "??" or text == "!=" or text == "=="
+}
+
+fn selfhost_fmt_looks_like_dict_brace(tokens: list[FmtInlineTok], open_idx: int) -> bool {
+    if open_idx > 0 and not selfhost_fmt_is_dict_prefix(tokens[open_idx - 1].text) {
+        return false
+    }
+    let n = len(tokens)
+    let mut i = open_idx + 1
+    let mut bdepth = 1
+    let mut pdepth = 0
+    while i < n and bdepth > 0 {
+        let t = tokens[i].text
+        if t == "let" and bdepth == 1 and pdepth == 0 {
+            return false
+        } elif t == "{" {
+            bdepth = bdepth + 1
+        } elif t == "}" {
+            bdepth = bdepth - 1
+        } elif t == "(" or t == "[" {
+            pdepth = pdepth + 1
+        } elif t == ")" or t == "]" {
+            if pdepth > 0 { pdepth = pdepth - 1 }
+        } elif t == ":" and bdepth == 1 and pdepth == 0 {
+            return true
+        }
+        i = i + 1
+    }
+    return false
+}
+
+fn selfhost_fmt_is_lambda_prefix(text: str) -> bool {
+    return text == "=" or text == "(" or text == "[" or text == "{" or text == "," or text == ":" or text == "return" or text == "=>" or text == "->" or text == "??"
+}
+
+fn selfhost_fmt_skip_to_paren_after_new(tokens: list[FmtInlineTok], idx: int) -> bool {
+    let n = len(tokens)
+    if idx + 1 >= n { return false }
+    if tokens[idx + 1].kind != "WORD" { return false }
+    let target = tokens[idx + 1].text
+    if target == "fn" or target == "let" or target == "if" or target == "return" or target == "class" or target == "struct" {
+        return false
+    }
+    let mut pos = idx + 2
+    if pos < n and tokens[pos].text == "[" {
+        let mut bracket_depth = 1
+        pos = pos + 1
+        while pos < n and bracket_depth > 0 {
+            if tokens[pos].text == "[" { bracket_depth = bracket_depth + 1 }
+            elif tokens[pos].text == "]" { bracket_depth = bracket_depth - 1 }
+            pos = pos + 1
+        }
+        if bracket_depth != 0 { return false }
+    }
+    return pos < n and tokens[pos].text == "("
+}
+
+fn selfhost_fmt_tokenize(line: str) -> list[FmtInlineTok] {
+    let mut out: list[FmtInlineTok] = []
+    let n = len(line)
+    let mut i = 0
+    while i < n {
+        let c = ord(line[i])
+        if c == 32 or c == 9 {
+            i = i + 1
+            continue
+        }
+        if c == 35 {
+            out.append(FmtInlineTok { kind: "COMMENT", text: slice(line, i, n) })
+            break
+        }
+        if c == 47 and i + 1 < n and ord(line[i + 1]) == 42 {
+            let start = i
+            i = i + 2
+            let mut bdepth = 1
+            while i < n and bdepth > 0 {
+                if ord(line[i]) == 47 and i + 1 < n and ord(line[i + 1]) == 42 {
+                    bdepth = bdepth + 1
+                    i = i + 2
+                } elif ord(line[i]) == 42 and i + 1 < n and ord(line[i + 1]) == 47 {
+                    bdepth = bdepth - 1
+                    i = i + 2
+                } else {
+                    i = i + 1
+                }
+            }
+            out.append(FmtInlineTok { kind: "COMMENT", text: slice(line, start, i) })
+            continue
+        }
+        if c == 34 and i + 2 < n and ord(line[i + 1]) == 34 and ord(line[i + 2]) == 34 {
+            let start = i
+            i = i + 3
+            let mut esc = false
+            while i < n {
+                let sc = ord(line[i])
+                if esc {
+                    esc = false
+                    i = i + 1
+                } elif sc == 92 {
+                    esc = true
+                    i = i + 1
+                } elif sc == 34 and i + 2 < n and ord(line[i + 1]) == 34 and ord(line[i + 2]) == 34 {
+                    i = i + 3
+                    break
+                } else {
+                    i = i + 1
+                }
+            }
+            out.append(FmtInlineTok { kind: "STR", text: slice(line, start, i) })
+            continue
+        }
+        if c == 34 or c == 39 {
+            let quote = c
+            let start = i
+            i = i + 1
+            let mut esc = false
+            while i < n {
+                let sc = ord(line[i])
+                if esc {
+                    esc = false
+                    i = i + 1
+                } elif sc == 92 {
+                    esc = true
+                    i = i + 1
+                } elif sc == quote {
+                    i = i + 1
+                    break
+                } else {
+                    i = i + 1
+                }
+            }
+            out.append(FmtInlineTok { kind: "STR", text: slice(line, start, i) })
+            continue
+        }
+        if is_alpha(c) {
+            let start = i
+            i = i + 1
+            while i < n and is_alnum(ord(line[i])) {
+                i = i + 1
+            }
+            out.append(FmtInlineTok { kind: "WORD", text: slice(line, start, i) })
+            continue
+        }
+        if is_digit(c) {
+            let start = i
+            i = i + 1
+            while i < n {
+                let nc = ord(line[i])
+                if is_alnum(nc) {
+                    i = i + 1
+                } elif nc == 46 and i + 1 < n and is_digit(ord(line[i + 1])) {
+                    i = i + 1
+                } elif (nc == 43 or nc == 45) and i > start and (ord(line[i - 1]) == 101 or ord(line[i - 1]) == 69) and (i >= 2 and is_digit(ord(line[i - 2])) or (i >= 2 and ord(line[i - 2]) == 95)) {
+                    i = i + 1
+                } else {
+                    break
+                }
+            }
+            out.append(FmtInlineTok { kind: "NUM", text: slice(line, start, i) })
+            continue
+        }
+        if i + 2 < n and slice(line, i, i + 3) == "..=" {
+            out.append(FmtInlineTok { kind: "RANGE", text: "..=" })
+            i = i + 3
+            continue
+        }
+        if i + 1 < n {
+            let two = slice(line, i, i + 2)
+            if two == ".." {
+                out.append(FmtInlineTok { kind: "RANGE", text: ".." })
+                i = i + 2
+                continue
+            }
+            if two == "==" or two == "!=" or two == "<=" or two == ">=" or two == "+=" or two == "-=" or two == "*=" or two == "/=" or two == "%=" or two == "??" or two == "->" or two == "=>" {
+                out.append(FmtInlineTok { kind: "OP", text: two })
+                i = i + 2
+                continue
+            }
+        }
+        let ch = slice(line, i, i + 1)
+        i = i + 1
+        if ch == "(" or ch == ")" or ch == "[" or ch == "]" or ch == "{" or ch == "}" or ch == "," or ch == ":" or ch == "." or ch == "?" {
+            out.append(FmtInlineTok { kind: "PUNCT", text: ch })
+        } elif ch == "+" or ch == "-" or ch == "*" or ch == "/" or ch == "%" or ch == "<" or ch == ">" or ch == "=" or ch == "!" or ch == "|" {
+            out.append(FmtInlineTok { kind: "OP", text: ch })
+        } else {
+            out.append(FmtInlineTok { kind: "OTHER", text: ch })
+        }
+    }
+    return out
+}
+
+fn selfhost_fmt_need_space(p: FmtInlineTok, c: FmtInlineTok, p_role: str, c_role: str) -> bool {
+    if c.kind == "COMMENT" {
+        return p.text != "(" and p.text != "[" and p.text != "{"
+    }
+    if p.kind == "COMMENT" {
+        return c.text != "," and c.text != ")" and c.text != "]" and c.text != ":" and c.text != ";"
+    }
+    if p.text == "(" or p.text == "[" or p.text == "." {
+        return false
+    }
+    if p_role == "UNARY" or p_role == "LAMBDA_OPEN" or p_role == "EMPTY_LBRACE" or p_role == "DICT_LBRACE" {
+        return false
+    }
+    if p.kind == "RANGE" {
+        return false
+    }
+    if c.text == ")" or c.text == "]" or c.text == "," or c.text == ":" or c.text == "." or c.text == "?" {
+        return false
+    }
+    if c_role == "LAMBDA_CLOSE" or c_role == "EMPTY_RBRACE" or c_role == "DICT_RBRACE" {
+        return false
+    }
+    if c.kind == "RANGE" {
+        return p_role == "BLOCK_LBRACE" or p_role == "DICT_LBRACE" or p.text == "{"
+    }
+    if c.text == "{" {
+        return p.text != "(" and p.text != "[" and p.text != "{"
+    }
+    if p_role == "BLOCK_LBRACE" or c_role == "BLOCK_RBRACE" {
+        return true
+    }
+    if c.text == "(" {
+        if p.text == "," or p.text == ":" or p.text == "{" or p_role == "BLOCK_LBRACE" { return true }
+        if p_role == "LAMBDA_OPEN" or p_role == "LAMBDA_CLOSE" { return false }
+        if selfhost_fmt_is_binary_op(p.kind, p.text) and p_role != "UNARY" { return true }
+        if p.kind == "WORD" { return selfhost_fmt_is_stmt_kw_before_paren(p.text) }
+        return false
+    }
+    if c.text == "[" {
+        if p.text == "," or p.text == ":" or p.text == "{" or p_role == "BLOCK_LBRACE" { return true }
+        if selfhost_fmt_is_binary_op(p.kind, p.text) and p_role != "UNARY" { return true }
+        if p.kind == "WORD" { return selfhost_fmt_is_stmt_kw_before_paren(p.text) or p.text == "return" }
+        return false
+    }
+    if p.text == "," or p.text == ":" {
+        return true
+    }
+    if c_role == "LAMBDA_OPEN" {
+        return true
+    }
+    if p_role == "LAMBDA_CLOSE" {
+        return true
+    }
+    if p_role == "BINOP" or c_role == "BINOP" or c_role == "UNARY" {
+        return true
+    }
+    if p.text == "?" or p.text == ")" or p.text == "]" or p.text == "}" {
+        return true
+    }
+    return true
+}
+
+fn selfhost_format_inline(line: str) -> str {
+    let raw_tokens = selfhost_fmt_tokenize(line)
+    if len(raw_tokens) == 0 {
+        return ""
+    }
+    let mut tokens: list[FmtInlineTok] = []
+    let raw_len = len(raw_tokens)
+    let mut k = 0
+    while k < raw_len {
+        let tok = raw_tokens[k]
+        if tok.kind == "WORD" and tok.text == "new" and (k == 0 or raw_tokens[k - 1].text != ".") and selfhost_fmt_skip_to_paren_after_new(raw_tokens, k) {
+            k = k + 1
+            continue
+        }
+        tokens.append(tok)
+        k = k + 1
+    }
+
+    let n = len(tokens)
+    if n == 0 { return "" }
+
+    let mut roles: list[str] = []
+    let mut brace_stack: list[str] = []
+    let mut in_lambda_params = false
+    let mut in_error_union = false
+    let mut i = 0
+    while i < n {
+        let tok = tokens[i]
+        let mut role = tok.kind
+        if tok.kind == "WORD" {
+            if tok.text == "requires" or tok.text == "ensures" {
+                in_error_union = false
+            }
+        } elif tok.kind == "COMMENT" {
+            in_error_union = false
+        } elif tok.text == "!" {
+            in_error_union = true
+            role = "BINOP"
+        } elif tok.text == "=" {
+            in_error_union = false
+            role = "BINOP"
+        } elif tok.text == "{" {
+            in_error_union = false
+            if i + 1 < n and tokens[i + 1].text == "}" {
+                role = "EMPTY_LBRACE"
+                brace_stack.append("E")
+            } elif selfhost_fmt_looks_like_dict_brace(tokens, i) {
+                role = "DICT_LBRACE"
+                brace_stack.append("D")
+            } else {
+                role = "BLOCK_LBRACE"
+                brace_stack.append("B")
+            }
+        } elif tok.text == "}" {
+            in_error_union = false
+            let mut bmode = "B"
+            if len(brace_stack) > 0 {
+                bmode = brace_stack.pop()
+            }
+            if bmode == "E" { role = "EMPTY_RBRACE" }
+            elif bmode == "D" { role = "DICT_RBRACE" }
+            else { role = "BLOCK_RBRACE" }
+        } elif tok.text == "|" {
+            if in_error_union {
+                role = "BINOP"
+            } elif in_lambda_params {
+                in_lambda_params = false
+                role = "LAMBDA_CLOSE"
+            } elif i == 0 or selfhost_fmt_is_lambda_prefix(tokens[i - 1].text) {
+                in_lambda_params = true
+                role = "LAMBDA_OPEN"
+            } else {
+                role = "BINOP"
+            }
+        } elif tok.text == "-" {
+            if i == 0 or selfhost_fmt_is_delim_or_op(tokens[i - 1].text) {
+                role = "UNARY"
+            } else {
+                role = "BINOP"
+            }
+        } elif selfhost_fmt_is_binary_op(tok.kind, tok.text) {
+            role = "BINOP"
+        }
+        roles.append(role)
+        i = i + 1
+    }
+
+    let mut out = tokens[0].text
+    let mut idx = 1
+    while idx < n {
+        if selfhost_fmt_need_space(tokens[idx - 1], tokens[idx], roles[idx - 1], roles[idx]) {
+            out = out + " "
+        }
+        out = out + tokens[idx].text
+        idx = idx + 1
+    }
+    return out
+}
+
 fn selfhost_format_body(source: str, in_path: str) -> str {
     let module = mir_build(check_source(source, in_path))
     mir_verify(module)
@@ -10395,8 +10960,77 @@ fn selfhost_format_body(source: str, in_path: str) -> str {
     let mut out_lines: list[str] = []
     let mut depth = 0
     let mut block_depth = 0
+    let mut in_ml_str = false
     let mut prev_blank = true
     for raw in raw_lines {
+        if in_ml_str {
+            out_lines.append(raw)
+            prev_blank = false
+            let rlen = len(raw)
+            let mut idx = 0
+            let mut escaped = false
+            let mut in_str = false
+            while idx < rlen {
+                let c = ord(raw[idx])
+                if in_ml_str {
+                    if escaped {
+                        escaped = false
+                        idx = idx + 1
+                    } elif c == 92 {
+                        escaped = true
+                        idx = idx + 1
+                    } elif idx + 2 < rlen and c == 34 and ord(raw[idx + 1]) == 34 and ord(raw[idx + 2]) == 34 {
+                        in_ml_str = false
+                        idx = idx + 3
+                    } else {
+                        idx = idx + 1
+                    }
+                } elif block_depth > 0 {
+                    if c == 47 and idx + 1 < rlen and ord(raw[idx + 1]) == 42 {
+                        block_depth = block_depth + 1
+                        idx = idx + 2
+                    } elif c == 42 and idx + 1 < rlen and ord(raw[idx + 1]) == 47 {
+                        block_depth = block_depth - 1
+                        idx = idx + 2
+                    } else {
+                        idx = idx + 1
+                    }
+                } elif in_str {
+                    if escaped {
+                        escaped = false
+                    } elif c == 92 {
+                        escaped = true
+                    } elif c == 34 {
+                        in_str = false
+                    }
+                    idx = idx + 1
+                } else {
+                    if c == 35 {
+                        break
+                    } elif c == 47 and idx + 1 < rlen and ord(raw[idx + 1]) == 42 {
+                        block_depth = block_depth + 1
+                        idx = idx + 2
+                    } elif idx + 2 < rlen and c == 34 and ord(raw[idx + 1]) == 34 and ord(raw[idx + 2]) == 34 {
+                        in_ml_str = true
+                        escaped = false
+                        idx = idx + 3
+                    } elif c == 34 {
+                        in_str = true
+                        escaped = false
+                        idx = idx + 1
+                    } elif c == 123 {
+                        depth = depth + 1
+                        idx = idx + 1
+                    } elif c == 125 {
+                        if depth > 0 { depth = depth - 1 }
+                        idx = idx + 1
+                    } else {
+                        idx = idx + 1
+                    }
+                }
+            }
+            continue
+        }
         if block_depth > 0 {
             out_lines.append(raw)
             let rlen = len(raw)
@@ -10418,13 +11052,14 @@ fn selfhost_format_body(source: str, in_path: str) -> str {
             }
             continue
         }
-        let trimmed = selfhost_trim_line(raw)
-        if len(trimmed) == 0 {
+        let raw_trimmed = selfhost_trim_line(raw)
+        if len(raw_trimmed) == 0 {
             if not prev_blank {
                 out_lines.append("")
                 prev_blank = true
             }
         } else {
+            let trimmed = selfhost_format_inline(raw_trimmed)
             prev_blank = false
             let tlen = len(trimmed)
             let mut leading_closes = 0
@@ -10448,7 +11083,20 @@ fn selfhost_format_body(source: str, in_path: str) -> str {
             let mut idx = 0
             while idx < tlen {
                 let c = ord(trimmed[idx])
-                if block_depth > 0 {
+                if in_ml_str {
+                    if escaped {
+                        escaped = false
+                        idx = idx + 1
+                    } elif c == 92 {
+                        escaped = true
+                        idx = idx + 1
+                    } elif idx + 2 < tlen and c == 34 and ord(trimmed[idx + 1]) == 34 and ord(trimmed[idx + 2]) == 34 {
+                        in_ml_str = false
+                        idx = idx + 3
+                    } else {
+                        idx = idx + 1
+                    }
+                } elif block_depth > 0 {
                     if c == 47 and idx + 1 < tlen and ord(trimmed[idx + 1]) == 42 {
                         block_depth = block_depth + 1
                         idx = idx + 2
@@ -10473,8 +11121,13 @@ fn selfhost_format_body(source: str, in_path: str) -> str {
                     } elif c == 47 and idx + 1 < tlen and ord(trimmed[idx + 1]) == 42 {
                         block_depth = block_depth + 1
                         idx = idx + 2
+                    } elif idx + 2 < tlen and c == 34 and ord(trimmed[idx + 1]) == 34 and ord(trimmed[idx + 2]) == 34 {
+                        in_ml_str = true
+                        escaped = false
+                        idx = idx + 3
                     } elif c == 34 {
                         in_str = true
+                        escaped = false
                         idx = idx + 1
                     } elif c == 123 {
                         opens = opens + 1
@@ -12271,6 +12924,7 @@ class SchemaBound {
     has_max_len: bool
     max_len: int
     x_requires: list[str]
+    req_tokens: list[list[Token]]
 
     fn init() {
         this.has_bound = false
@@ -12286,6 +12940,8 @@ class SchemaBound {
         this.max_len = 0
         let reqs: list[str] = []
         this.x_requires = reqs
+        let rtok_list: list[list[Token]] = []
+        this.req_tokens = rtok_list
     }
 }
 
@@ -13015,6 +13671,7 @@ fn schema_collect_decls(tokens: list[Token], out: SchemaDeclSet) -> unit {
                                 }
                                 if len(rtoks) > 0 {
                                     fbound.x_requires.append(schema_format_tok_slice(rtoks))
+                                    fbound.req_tokens.append(rtoks)
                                     let tnames: list[str] = [fname]
                                     let tbounds: list[SchemaBound] = [fbound]
                                     schema_apply_tokens_to_targets(rtoks, 0, len(rtoks), tnames, tbounds)
@@ -13358,6 +14015,28 @@ fn schema_tool_json(f: SchemaFn, lines: list[str], known_defs: list[str], graph:
     return join_strings(obj, "")
 }
 
+fn schema_rewrite_req_tokens(toks: list[Token], field_names: list[str]) -> str {
+    let mut out: list[Token] = []
+    let n = len(toks)
+    let mut i = 0
+    while i < n {
+        let t = toks[i]
+        let is_self_prefix = t.kind == "THIS" or (t.kind == "IDENT" and t.val == "self")
+        if is_self_prefix and i + 2 < n and toks[i + 1].kind == "DOT" and toks[i + 2].kind == "IDENT" and tool_str_contains(field_names, toks[i + 2].val) {
+            let ft = toks[i + 2]
+            out.append(Token { kind: "IDENT", val: "_f_" + ft.val, line: ft.line, col: ft.col, file: ft.file })
+            i = i + 3
+        } elif t.kind == "IDENT" and tool_str_contains(field_names, t.val) and (i == 0 or toks[i - 1].kind != "DOT") and (i + 1 >= n or toks[i + 1].kind != "LPAREN") {
+            out.append(Token { kind: "IDENT", val: "_f_" + t.val, line: t.line, col: t.col, file: t.file })
+            i = i + 1
+        } else {
+            out.append(t)
+            i = i + 1
+        }
+    }
+    return schema_format_tok_slice(out)
+}
+
 fn schema_encode_scalar(expr: str, t: SchemaType, known_defs: list[str]) -> str {
     if t.kind != "named" { return "" }
     if t.name == "int" { return "json.from_int(" + expr + ")" }
@@ -13499,6 +14178,16 @@ fn schema_generate_codecs(structs: list[SchemaStruct], enums: list[SchemaEnum], 
             break
         }
         if not supported { continue }
+        let mut st_field_names: list[str] = []
+        for f in st.fields { st_field_names.append(f.name) }
+        for f in st.fields {
+            for ridx in 0..len(f.bound.req_tokens) {
+                let cond_src = schema_rewrite_req_tokens(f.bound.req_tokens[ridx], st_field_names)
+                let raw_req = if ridx < len(f.bound.x_requires) { f.bound.x_requires[ridx] } else { cond_src }
+                let msg_q = diag_json_quote(name + "." + f.name + ": failed contract '" + raw_req + "'")
+                dec_lines.append("    if not (" + cond_src + ") {\n        return Err(json.error(0, " + msg_q + "))\n    }")
+            }
+        }
         enc_lines.append("    return json.object(_fields)")
         blocks.append("pub fn encode_" + name + "(value: " + name + ") -> json.Value {\n" + join_strings(enc_lines, "\n") + "\n}")
         blocks.append("pub fn to_json_" + name + "(value: " + name + ") -> str ! json.JsonError {\n    return json.stringify(encode_" + name + "(value))\n}")
@@ -14945,6 +15634,12 @@ fn proj_find_target_idx(m: ProjectManifest, name: str) -> int {
     return -1
 }
 
+fn proj_resolve_target_name(m: ProjectManifest, target_arg: str) -> str {
+    if target_arg != "" { return target_arg }
+    if proj_find_target_idx(m, "app") >= 0 or len(m.targets) != 1 { return "app" }
+    return m.targets[0].name
+}
+
 fn proj_fail(m: ProjectManifest, code: str, msg: str) -> ProjectManifest {
     m.ok = false
     m.err_code = code
@@ -15759,7 +16454,7 @@ fn tool_handle_project(args: list[str], json_mode_in: bool) -> unit {
     }
 
     if subcmd == "check" {
-        let tname = if target_arg != "" { target_arg } else { "app" }
+        let tname = proj_resolve_target_name(m, target_arg)
         let tidx = proj_find_target_idx(m, tname)
         if tidx < 0 {
             proj_emit_error_and_exit("check", json_mode, "W5002", "unknown target '" + tname + "'")
@@ -15805,7 +16500,7 @@ fn tool_handle_project(args: list[str], json_mode_in: bool) -> unit {
     }
 
     if subcmd == "build" or subcmd == "run" {
-        let tname = if target_arg != "" { target_arg } else { "app" }
+        let tname = proj_resolve_target_name(m, target_arg)
         let tidx = proj_find_target_idx(m, tname)
         if tidx < 0 {
             proj_emit_error_and_exit(subcmd, json_mode, "W5002", "unknown target '" + tname + "'")
@@ -16362,7 +17057,7 @@ fn api_resolve_stdlib_module(stdlib_root: str, relative_in: str) -> list[str] {
 fn api_availability_json(module_id: str) -> str {
     let mut interp = "supported"
     let mut nat = "supported"
-    let mut selfhost = "unknown"
+    let mut selfhost = "supported"
     let mut wasm = "supported"
     if module_id == "std/http" or (len(module_id) >= 9 and slice(module_id, 0, 9) == "std/http/") {
         interp = "requires-pycurl-extra"
@@ -16830,20 +17525,21 @@ fn api_module_json(rec: ApiModuleRecord) -> str {
     return join_strings(parts, "")
 }
 
-fn api_collect_stdlib_file(acc: ApiIndexCollector, resolved_path: str, module_id: str) -> unit {
+fn api_collect_stdlib_file(acc: ApiIndexCollector, resolved_path: str, module_id: str, recurse: bool) -> unit {
     let canon = module_canonical(resolved_path)
     if tool_str_contains(acc.visited, canon) { return }
     acc.visited.append(canon)
     let src = read_file(canon) else err { return }
     let rec = api_extract_module(src, canon, module_id, "wysna-stdlib@0.8.0")
     acc.modules.append(rec)
+    if not recurse { return }
     for imp in rec.imports {
         if len(imp) >= 4 and slice(imp, 0, 4) == "std/" {
             let sub = api_resolve_stdlib_module(acc.stdlib_root, imp)
             if sub[0] == "1" {
                 let rel = slice(imp, 4, len(imp))
                 let clean_rel = if proj_str_ends_with(rel, ".wysna") { slice(rel, 0, len(rel) - 6) } else { rel }
-                api_collect_stdlib_file(acc, sub[1], "std/" + clean_rel)
+                api_collect_stdlib_file(acc, sub[1], "std/" + clean_rel, true)
             }
         }
     }
@@ -16871,6 +17567,7 @@ fn api_emit_error_and_exit(code: str, msg: str) -> unit {
 fn tool_handle_api(args: list[str], _json_mode: bool) -> unit {
     let mut mod_arg = ""
     let mut has_mod = false
+    let mut include_deps = false
     let mut manifest_arg = ""
     let mut i = 1
     while i < len(args) {
@@ -16880,6 +17577,9 @@ fn tool_handle_api(args: list[str], _json_mode: bool) -> unit {
         } elif a == "--output-format" and i + 1 < len(args) {
             if args[i + 1] != "json-v1" { api_emit_error_and_exit("W5002", "unsupported output format: " + args[i + 1]) }
             i = i + 2
+        } elif a == "--with-deps" or a == "--include-deps" {
+            include_deps = true
+            i = i + 1
         } elif a == "--manifest" and i + 1 < len(args) {
             manifest_arg = args[i + 1]
             i = i + 2
@@ -16902,7 +17602,10 @@ fn tool_handle_api(args: list[str], _json_mode: bool) -> unit {
         if not m.ok {
             api_emit_error_and_exit(m.err_code, m.err_msg)
         }
-        let tidx = proj_find_target_idx(m, "app")
+        let mut tidx = proj_find_target_idx(m, "app")
+        if tidx < 0 and len(m.targets) == 1 {
+            tidx = 0
+        }
         if tidx < 0 {
             api_emit_error_and_exit("W5002", "project API index requires a target named 'app'")
         }
@@ -16970,13 +17673,13 @@ fn tool_handle_api(args: list[str], _json_mode: bool) -> unit {
         }
         let rel = if len(mod_arg) >= 4 and slice(mod_arg, 0, 4) == "std/" { slice(mod_arg, 4, len(mod_arg)) } else { mod_arg }
         let clean_rel = if proj_str_ends_with(rel, ".wysna") { slice(rel, 0, len(rel) - 6) } else { rel }
-        api_collect_stdlib_file(acc, resolved[1], "std/" + clean_rel)
+        api_collect_stdlib_file(acc, resolved[1], "std/" + clean_rel, include_deps)
     } else {
-        let known: list[str] = ["algorithms", "async", "buffer", "bytes", "crypto", "environment", "files", "fs", "http", "io", "json", "parse", "path", "process", "resources", "result", "test", "text", "time"]
+        let known: list[str] = ["algorithms", "async", "buffer", "bytes", "crypto", "csv", "environment", "files", "fs", "http", "io", "json", "parse", "path", "process", "resources", "result", "test", "text", "time"]
         for name in known {
             let resolved = api_resolve_stdlib_module(stdlib_root, name)
             if resolved[0] == "1" {
-                api_collect_stdlib_file(acc, resolved[1], "std/" + name)
+                api_collect_stdlib_file(acc, resolved[1], "std/" + name, true)
             }
         }
     }

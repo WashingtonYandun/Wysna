@@ -41,6 +41,13 @@ def bind_foreign(declaration, libraries=(), execution_context=None):
             cwd=execution_context.cwd if execution_context is not None else None,
             env=execution_context.env if execution_context is not None else None,
         )
+    elif name == 'wysna_host_process_capture':
+        from runtime.HostAbi import process_capture
+        function = lambda executable, arguments, timeout_ms, max_output_bytes, stdout_h, stderr_h: process_capture(
+            executable, arguments, timeout_ms, max_output_bytes, stdout_h, stderr_h,
+            cwd=execution_context.cwd if execution_context is not None else None,
+            env=execution_context.env if execution_context is not None else None,
+        )
     if not internal:
         function.argtypes = [C_TYPES[t] for t in signature]
         function.restype = C_TYPES[returned]

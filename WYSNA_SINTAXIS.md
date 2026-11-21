@@ -176,8 +176,8 @@ graph TD
 * **`none`:** Representa la ausencia de valor (utilizado con tipos opcionales `T?`).
 
 ### 3.2 Colecciones Copy-on-Write y Tuplas
-* **`list[T]`:** Lista dinámica redimensionable.
-  * **Optimización Escalar:** `list[int]`, `list[bool]` y `list[float]` son automáticamente asignadas como búferes contiguos C sin encajonar (`unboxed scalar buffers`), con desprendimiento $O(1)$ vía `memcpy`.
+* **`list[T]`:** Lista dinámica redimensionable con semántica Copy-on-Write (`WListBuf`).
+  * **Representación en memoria:** Los elementos se almacenan en un arreglo contiguo de palabras NaN-boxed `WVal` de 8 bytes (donde `int`, `float` y `bool` se empaquetan en 8 bytes sin asignaciones individuales en heap para escalares estándar) con desprendimiento CoW vía `memcpy` cuando el refcount > 1; en MIR, las variables locales escalares (`int64_t`, `double`, `bool`) operan desenpaquetadas en registros nativos.
 * **`dict[K, V]`:** Tabla hash asociativa. Las claves (`K`) deben ser tipos comparables (`int`, `str`, `bool`, `enum` o tuplas hashables).
 * **`tuple[T1, T2, ...]` (atajo `(T1, T2, ...)`):** Producto heterogéneo inmutable de tamaño fijo (su tipo se anota como `tuple[int, str]` o `(int, str)`, sus elementos se leen posicionalmente con `pair.0`, `nested.0.1`, y se desestructura directamente en `let (a, b) = pair`, `match` o `for a, b in ...`).
 
@@ -317,7 +317,7 @@ async fn run_flow() -> int {
 Para interoperar con bibliotecas nativas de C mediante la interfaz FFI:
 
 ```wysna
-extern "C" fn puts(message: str) -> int
+extern "C" fn c_puts(message: opaque) -> int
 extern "C" fn sqrt(val: float) -> float
 ```
 
@@ -470,8 +470,8 @@ class BankAccount {
     }
 }
 
-# Instanciación mediante 'new'
-let account = new BankAccount("Washo", 500)
+# Instanciación canónica de clase (`new` se acepta solo como alias heredado)
+let account = BankAccount("Washo", 500)
 account.deposit(200)
 print(account.get_balance())  # 700
 ```

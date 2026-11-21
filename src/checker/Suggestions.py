@@ -84,6 +84,17 @@ def suggest_mutable(error, sym, file: str):
 _EXPECTED_FOUND = re.compile(r"expected '([^']+)', found '([^']+)'")
 _ASSIGN_MISMATCH = re.compile(r"cannot assign value of type '([^']+)' to variable '[^']+' of type '([^']+)'")
 _MISSING_FIELD = re.compile(r"Missing required field '([^']+)' in struct initialization of '([^']+)'")
+_MANGLED_SYMBOL = re.compile(r"__wysna_module_([0-9a-f]+)__([A-Za-z_][A-Za-z0-9_]*)")
+
+
+def _demangle_type_text(text: str) -> str:
+    def replace(match):
+        try:
+            origin = bytes.fromhex(match.group(1)).decode("utf-8", errors="replace")
+        except ValueError:
+            return match.group(2)
+        return f"{origin}::{match.group(2)}"
+    return _MANGLED_SYMBOL.sub(replace, text)
 _SCALAR_CASTS = {
     ("str", "int"): "str(...)",
     ("str", "float"): "str(...)",
@@ -96,6 +107,8 @@ _SCALAR_CASTS = {
 
 
 def _annotate_mismatch(error, expected: str, found: str):
+    expected = _demangle_type_text(expected)
+    found = _demangle_type_text(found)
     error.with_data(kind="type_mismatch", expected=expected, found=found)
     if (expected, found) in _SCALAR_CASTS:
         error.with_data(conversion_hint=_SCALAR_CASTS[(expected, found)])

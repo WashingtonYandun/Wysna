@@ -760,13 +760,16 @@ class NewExpr(Expr):
         self.args = args
 
     def to_dict(self) -> dict:
-        return {
+        data = {
             "kind": "NewExpr",
             "class_name": self.class_name,
             "args": [a.to_dict() for a in self.args],
             "line": self.line,
-            "col": self.col
+            "col": self.col,
         }
+        if getattr(self, "type_args", None):
+            data["type_args"] = [t.to_dict() for t in self.type_args]
+        return data
 
 class UnaryExpr(Expr):
     def __init__(self, op: str, operand: Expr, line: int = 1, col: int = 1):

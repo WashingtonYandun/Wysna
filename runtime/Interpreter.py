@@ -59,6 +59,23 @@ class Interpreter:
         self.max_heap_bytes: Optional[int] = self.execution_context.max_heap_bytes
         self.struct_decls: Dict[str, StructDecl] = {}
         self._quota_lock = threading.Lock()
+        self._tls = threading.local()
+
+    def _get_call_stack(self) -> List[Tuple[str, str, int]]:
+        stack = getattr(self._tls, "call_stack", None)
+        if stack is None:
+            stack = []
+            self._tls.call_stack = stack
+        return stack
+
+    def _attach_call_stack(self, error: WysnaRuntimeError) -> WysnaRuntimeError:
+        stack = self._get_call_stack()
+        if len(stack) > 1 and not getattr(error, "call_stack", None):
+            error.call_stack = [
+                (fn_name, fpath or "<unknown>", lineno)
+                for fn_name, fpath, lineno in reversed(stack)
+            ]
+        return error
 
     def parallel_worker_dispatch(self, func: Any, items: List[WysnaValue]) -> List[WysnaValue]:
         if not items:
@@ -540,42 +557,52 @@ class Interpreter:
         for param, arg in zip(method_decl.params, args):
             call_env.declare(param.name, arg, is_mut=False)
 
-        for req_expr in getattr(method_decl, "requires", ()):
-            req_val = self.eval_expr(req_expr, call_env)
-            if not isinstance(req_val, WysnaBool) or not req_val.value:
-                raise WysnaRuntimeError(
-                    message=f"Contract violation: requires clause failed in '{defining_cls.name}.{method_decl.name}'",
-                    line=req_expr.line,
-                    col=req_expr.col,
-                    file=self.file,
-                    code="W4005",
-                )
-
-        ret_val: WysnaValue
+        stack = self._get_call_stack()
+        fn_label = f"{defining_cls.name}.{method_decl.name}"
+        fn_file = getattr(method_decl, "source_file", None) or self.file
+        stack.append((fn_label, fn_file, method_decl.line))
         try:
-            ret_val = self.eval_block(method_decl.body, call_env)
-        except ReturnSignal as ret:
-            ret_val = ret.value
-        except PropagationSignal as prop:
-            ret_val = prop.value
-
-        wrapped = self._wrap_result_value(ret_val, method_decl.return_type)
-        ensures_list = getattr(method_decl, "ensures", ())
-        if ensures_list and not isinstance(wrapped, WysnaErr):
-            ens_env = Environment(parent=call_env)
-            result_binding = wrapped.value if isinstance(wrapped, WysnaOk) else wrapped
-            ens_env.declare("result", result_binding, is_mut=False)
-            for ens_expr in ensures_list:
-                ens_val = self.eval_expr(ens_expr, ens_env)
-                if not isinstance(ens_val, WysnaBool) or not ens_val.value:
+            for req_expr in getattr(method_decl, "requires", ()):
+                req_val = self.eval_expr(req_expr, call_env)
+                if not isinstance(req_val, WysnaBool) or not req_val.value:
                     raise WysnaRuntimeError(
-                        message=f"Contract violation: ensures clause failed in '{defining_cls.name}.{method_decl.name}'",
-                        line=ens_expr.line,
-                        col=ens_expr.col,
+                        message=f"Contract violation: requires clause failed in '{defining_cls.name}.{method_decl.name}'",
+                        line=req_expr.line,
+                        col=req_expr.col,
                         file=self.file,
                         code="W4005",
                     )
-        return wrapped
+
+            ret_val: WysnaValue
+            try:
+                ret_val = self.eval_block(method_decl.body, call_env)
+            except ReturnSignal as ret:
+                ret_val = ret.value
+            except PropagationSignal as prop:
+                ret_val = prop.value
+
+            wrapped = self._wrap_result_value(ret_val, method_decl.return_type)
+            ensures_list = getattr(method_decl, "ensures", ())
+            if ensures_list and not isinstance(wrapped, WysnaErr):
+                ens_env = Environment(parent=call_env)
+                result_binding = wrapped.value if isinstance(wrapped, WysnaOk) else wrapped
+                ens_env.declare("result", result_binding, is_mut=False)
+                for ens_expr in ensures_list:
+                    ens_val = self.eval_expr(ens_expr, ens_env)
+                    if not isinstance(ens_val, WysnaBool) or not ens_val.value:
+                        raise WysnaRuntimeError(
+                            message=f"Contract violation: ensures clause failed in '{defining_cls.name}.{method_decl.name}'",
+                            line=ens_expr.line,
+                            col=ens_expr.col,
+                            file=self.file,
+                            code="W4005",
+                        )
+            return wrapped
+        except WysnaRuntimeError as err:
+            self._attach_call_stack(err)
+            raise
+        finally:
+            stack.pop()
 
     def _wrap_result_value(self, ret_val: WysnaValue, ret_type: Any) -> WysnaValue:
         from node.NodeType import ResultType as AstResultType
@@ -621,43 +648,52 @@ class Interpreter:
         return self._execute_fn_body(func, call_env)
 
     def _execute_fn_body(self, func: WysnaFunction, call_env: Environment) -> WysnaValue:
-
-        for req_expr in getattr(func.decl, "requires", ()):
-            req_val = self.eval_expr(req_expr, call_env)
-            if not isinstance(req_val, WysnaBool) or not req_val.value:
-                raise WysnaRuntimeError(
-                    message=f"Contract violation: requires clause failed in '{func.decl.name}'",
-                    line=req_expr.line,
-                    col=req_expr.col,
-                    file=self.file,
-                    code="W4005",
-                )
-
-        ret_val: WysnaValue
+        stack = self._get_call_stack()
+        fn_label = getattr(func.decl, "source_name", None) or func.decl.name
+        fn_file = getattr(func.decl, "source_file", None) or self.file
+        stack.append((fn_label, fn_file, func.decl.line))
         try:
-            ret_val = self.eval_block(func.decl.body, call_env)
-        except ReturnSignal as ret:
-            ret_val = ret.value
-        except PropagationSignal as prop:
-            ret_val = prop.value
-
-        wrapped = self._wrap_result_value(ret_val, func.decl.return_type)
-        ensures_list = getattr(func.decl, "ensures", ())
-        if ensures_list and not isinstance(wrapped, WysnaErr):
-            ens_env = Environment(parent=call_env)
-            result_binding = wrapped.value if isinstance(wrapped, WysnaOk) else wrapped
-            ens_env.declare("result", result_binding, is_mut=False)
-            for ens_expr in ensures_list:
-                ens_val = self.eval_expr(ens_expr, ens_env)
-                if not isinstance(ens_val, WysnaBool) or not ens_val.value:
+            for req_expr in getattr(func.decl, "requires", ()):
+                req_val = self.eval_expr(req_expr, call_env)
+                if not isinstance(req_val, WysnaBool) or not req_val.value:
                     raise WysnaRuntimeError(
-                        message=f"Contract violation: ensures clause failed in '{func.decl.name}'",
-                        line=ens_expr.line,
-                        col=ens_expr.col,
+                        message=f"Contract violation: requires clause failed in '{fn_label}'",
+                        line=req_expr.line,
+                        col=req_expr.col,
                         file=self.file,
                         code="W4005",
                     )
-        return wrapped
+
+            ret_val: WysnaValue
+            try:
+                ret_val = self.eval_block(func.decl.body, call_env)
+            except ReturnSignal as ret:
+                ret_val = ret.value
+            except PropagationSignal as prop:
+                ret_val = prop.value
+
+            wrapped = self._wrap_result_value(ret_val, func.decl.return_type)
+            ensures_list = getattr(func.decl, "ensures", ())
+            if ensures_list and not isinstance(wrapped, WysnaErr):
+                ens_env = Environment(parent=call_env)
+                result_binding = wrapped.value if isinstance(wrapped, WysnaOk) else wrapped
+                ens_env.declare("result", result_binding, is_mut=False)
+                for ens_expr in ensures_list:
+                    ens_val = self.eval_expr(ens_expr, ens_env)
+                    if not isinstance(ens_val, WysnaBool) or not ens_val.value:
+                        raise WysnaRuntimeError(
+                            message=f"Contract violation: ensures clause failed in '{fn_label}'",
+                            line=ens_expr.line,
+                            col=ens_expr.col,
+                            file=self.file,
+                            code="W4005",
+                        )
+            return wrapped
+        except WysnaRuntimeError as err:
+            self._attach_call_stack(err)
+            raise
+        finally:
+            stack.pop()
 
 
     def call_bound_method(self, bound: WysnaBoundMethod, args: List[WysnaValue]) -> WysnaValue:
@@ -711,6 +747,16 @@ class Interpreter:
                 return WysnaBool(receiver.get(args[0]) is not None)
             if method == "is_empty":
                 return WysnaBool(len(receiver.storage.data) == 0)
+            if method == "remove":
+                if len(args) != 1:
+                    raise WysnaRuntimeError("remove() takes 1 argument", file=self.file)
+                removed = receiver.remove(args[0])
+                return WysnaEnumValue("Option", "Some", [removed]) if removed is not None else WysnaNone()
+            if method == "clear":
+                if len(args) != 0:
+                    raise WysnaRuntimeError("clear() takes 0 arguments", file=self.file)
+                receiver.clear()
+                return WysnaUnit()
 
         if isinstance(receiver, WysnaStr):
             if method == "contains":
@@ -719,6 +765,37 @@ class Interpreter:
                 return WysnaBool(args[0].value in receiver.value)
             if method == "is_empty":
                 return WysnaBool(len(receiver.value) == 0)
+            if method == "trim":
+                if len(args) != 0:
+                    raise WysnaRuntimeError("str.trim() takes 0 arguments", file=self.file)
+                return WysnaStr(receiver.value.strip(" \t\n\r\x0b\x0c"))
+            if method == "split":
+                if len(args) != 1 or not isinstance(args[0], WysnaStr):
+                    raise WysnaRuntimeError("str.split() takes 1 str argument", file=self.file)
+                sep = args[0].value
+                parts = [WysnaStr(c) for c in receiver.value] if sep == "" else [WysnaStr(p) for p in receiver.value.split(sep)]
+                return WysnaList(elements=parts)
+            if method == "to_lower":
+                if len(args) != 0:
+                    raise WysnaRuntimeError("str.to_lower() takes 0 arguments", file=self.file)
+                return WysnaStr("".join(chr(ord(c) + 32) if "A" <= c <= "Z" else c for c in receiver.value))
+            if method == "to_upper":
+                if len(args) != 0:
+                    raise WysnaRuntimeError("str.to_upper() takes 0 arguments", file=self.file)
+                return WysnaStr("".join(chr(ord(c) - 32) if "a" <= c <= "z" else c for c in receiver.value))
+            if method == "starts_with":
+                if len(args) != 1 or not isinstance(args[0], WysnaStr):
+                    raise WysnaRuntimeError("str.starts_with() takes 1 str argument", file=self.file)
+                return WysnaBool(receiver.value.startswith(args[0].value))
+            if method == "ends_with":
+                if len(args) != 1 or not isinstance(args[0], WysnaStr):
+                    raise WysnaRuntimeError("str.ends_with() takes 1 str argument", file=self.file)
+                return WysnaBool(receiver.value.endswith(args[0].value))
+            if method == "replace":
+                if len(args) != 2 or not isinstance(args[0], WysnaStr) or not isinstance(args[1], WysnaStr):
+                    raise WysnaRuntimeError("str.replace() takes 2 str arguments", file=self.file)
+                old_s, new_s = args[0].value, args[1].value
+                return WysnaStr(receiver.value if old_s == "" else receiver.value.replace(old_s, new_s))
 
         raise WysnaRuntimeError(f"Method '{method}' not found on '{receiver}'", file=self.file)
 

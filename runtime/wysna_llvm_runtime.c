@@ -112,7 +112,8 @@ void wysna_llvm_mutate(void* out, void* value, const void* argument, int32_t ope
     switch (operation) {
     case 0: result = wysna_list_append(value, *(const WVal*)argument); break;
     case 1: result = wysna_list_pop_at(value, file, line, col); break;
-    case 2: result = wysna_list_clear(value); break;
+    case 2: result = (wysna_hi(*(const WVal*)value) == WVAL_HI_DICT) ? wysna_dict_clear(value) : wysna_list_clear(value); break;
+    case 3: result = wysna_dict_remove(value, *(const WVal*)argument); break;
     default: wysna_runtime_fail("W9999", "Invalid LLVM mutation kind");
     }
     wysna_assign(out, result);

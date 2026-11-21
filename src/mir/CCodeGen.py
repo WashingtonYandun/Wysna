@@ -8,8 +8,9 @@ from mir.Verifier import Verifier
 
 
 class CCodeGen:
-    def __init__(self, interner):
+    def __init__(self, interner, *, emit_line_directives=False):
         self.interner = interner
+        self.emit_line_directives = bool(emit_line_directives)
         self.abi_exports = []
 
     def generate(self, module):
@@ -21,6 +22,13 @@ class CCodeGen:
         classes = [layout for layout in module.layouts.values() if layout.kind == 'class']
         lines = ['#include "runtime/wysna_runtime.h"', '/* Verified MIR: explicit CFG, places and ownership. */', '']
         lines += [f'static WVal {slot.name};' for slot in module.globals]
+        self.layout_key_symbols = {}
+        for idx, (layout_id, layout) in enumerate(module.layouts.items()):
+            if layout.kind in ('struct', 'class') and layout.fields:
+                sym = f'wysna_keys_{idx}'
+                self.layout_key_symbols[layout_id] = sym
+                keys_literal = ', '.join(quote(name) for name, _ in layout.fields)
+                lines.append(f'static const char* const {sym}[{len(layout.fields)}] = {{ {keys_literal} }};')
         lines += [f'static const WClassVTable wysna_vtable_{layout.name};' for layout in classes]
         for function in module.functions:
             params = ', '.join(self.ctype(function.slots[index].type_id) + ' ' + function.slots[index].name for index in function.params) or 'void'
@@ -309,6 +317,15 @@ class CCodeGen:
                 return 'wysna_spawn_take_option'
         return None
 
+    @staticmethod
+    def _display_fn_name(name):
+        raw = name[9:] if name.startswith('wysna_fn_') else name
+        if raw.startswith('__wysna_module_'):
+            end = raw.find('__', 15)
+            if end >= 0:
+                raw = raw[end + 2:]
+        return raw
+
     def function(self, function):
         if getattr(function, 'is_async', False):
             return self._async_function(function)
@@ -345,12 +362,21 @@ class CCodeGen:
                 lines.append(f'    return {parallel_helper}({p_names[0]}, {p_names[1]});')
             lines.extend(['}', ''])
             return lines
+        track_frame = function.name.startswith('wysna_fn_')
         for slot in function.slots:
             if slot.parameter:
                 continue
             type_ = {'value': 'WVal', 'predicate': 'bool', 'counter': 'int32_t', 'integer': 'int64_t', 'float': 'double', 'boolean': 'bool'}[slot.storage]
             initial = 'wysna_unit()' if slot.storage == 'value' else '0'
             lines.append(f'    {type_} {self.name(slot.id)} = {initial};')
+        if track_frame:
+            fn_src = getattr(function, 'source', None)
+            fn_file = getattr(fn_src, 'file', '') or '<unknown>'
+            fn_line = int(getattr(fn_src, 'line', 0) or 0)
+            lines.append(
+                f'    wysna_runtime_push_frame({quote(self._display_fn_name(function.name))}, '
+                f'{quote(fn_file)}, {fn_line});'
+            )
         lines.append('    goto bb0;')
         back_edge_targets = {
             target
@@ -358,11 +384,21 @@ class CCodeGen:
             for target in b.terminator.targets
             if target <= b.id
         }
+        last_source = None
         for block in function.blocks:
             lines.append(f'bb{block.id}:;')
             if block.id == 0 or block.id in back_edge_targets:
                 lines.append('    wysna_step_tick();')
             for operation in block.operations:
+                if self.emit_line_directives:
+                    src = getattr(operation, 'source', None)
+                    src_file = getattr(src, 'file', '') if src is not None else ''
+                    src_line = int(getattr(src, 'line', 0) or 0) if src is not None else 0
+                    if src_line > 0 and src_file and src_file != '<unknown>':
+                        key = (src_file, src_line)
+                        if key != last_source:
+                            lines.append(f'#line {src_line} {quote(src_file)}')
+                            last_source = key
                 lines.extend('    ' + line for line in self.operation(operation))
             term = block.terminator
             if term.kind == 'goto':
@@ -377,6 +413,8 @@ class CCodeGen:
                     expression = f'wysna_move(&{self.name(term.value)})'
                 else:
                     expression = self.name(term.value)
+                if track_frame:
+                    lines.append('    wysna_runtime_pop_frame();')
                 lines.append(f'    return {expression};')
             else:
                 lines.append('    wysna_runtime_fail("W9999", "Unreachable MIR block executed");')
@@ -689,9 +727,10 @@ class CCodeGen:
         if kind == 'construct':
             category = data['kind']
             if category in ('struct', 'object'):
-                layout = self.layouts[data['layout']]
-                keys = '(const char*[]){ ' + ', '.join(quote(name) for name, _ in layout.fields) + ' }' if layout.fields else 'NULL'
-                call = f'wysna_make_{category}({quote(layout.name)}, {len(args)}, {keys}, {self.array(args)})'
+                layout_id = data['layout']
+                layout = self.layouts[layout_id]
+                keys = self.layout_key_symbols.get(layout_id, 'NULL')
+                call = f'wysna_make_{category}_static({quote(layout.name)}, {len(args)}, {keys}, {self.array(args)})'
             elif category == 'dict':
                 call = f'wysna_make_dict({len(args) // 2}, {self.array(args[::2])}, {self.array(args[1::2])})'
             else:
@@ -717,12 +756,15 @@ class CCodeGen:
                 return [self.write(place.root, args[0], consume=moved_box)]
             return [f'wysna_assign({self.place(place, source)}, {args[0]});']
         if kind == 'mutate':
-            reference = self.place(data['place'], source)
+            place = data['place']
+            reference = self.place(place, source)
             method = data['method']
-            if method == 'pop':
+            target_tid = place.projections[-1].type_id if place.projections else self.slots[place.root].type_id
+            prefix = 'wysna_dict' if self.interner.get_entry(target_tid).tag == 'dict' else 'wysna_list'
+            if prefix == 'wysna_list' and method == 'pop':
                 call = f'wysna_list_pop_at({reference}, {quote(source.file)}, {source.line}, {source.col})'
             else:
-                call = f'wysna_list_{method}(' + ', '.join([reference] + args) + ')'
+                call = f'{prefix}_{method}(' + ', '.join([reference] + args) + ')'
             return [self.write(result, call, consume=True)]
         if kind == 'function':
             environment = args[0] if args else 'wysna_unit()'

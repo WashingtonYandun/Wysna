@@ -1,6 +1,6 @@
 # Wysna Language Specification
 
-> **Status:** This specification defines Wysna `0.7.0`. Sections 1–11 describe the normative grammar; sections 12–14 describe implementation contracts.
+> **Status:** This specification defines Wysna `0.8.0`. Sections 1–11 describe the normative grammar; sections 12–14 describe implementation contracts.
 >
 > **Implementations:** `Wysna Seed` is the reference implementation that determines whether a program is valid. `Wysna Compiler` is an independent self-hosted compiler; its supported subset is measured against the public release corpus. The parity matrix documents this boundary in [docs/ENGINE_PARITY_MATRIX.md](docs/ENGINE_PARITY_MATRIX.md).
 >
@@ -22,8 +22,8 @@
 The language defines the following reserved keywords:
 
 ```text
-DECLARATIONS (8):
-fn        let       mut       struct    enum      import    from      use
+DECLARATIONS (10):
+fn        let       mut       struct    enum      import    from      use       pub       extern
 
 OBJECT-ORIENTED (9):
 class     interface extends   implements new       this      super     public    private
@@ -145,8 +145,7 @@ line returns that expression, and the value may span lines.
     force every dictionary read through unwrapping ceremony.
 * `tuple[T1, T2, ...]` / `(T1, T2, ...)`: Fixed-size heterogeneous immutable product type. Tuple type annotations accept both `tuple[int, str]` and shorthand `(int, str)` (and `()` / `tuple[]` for empty tuples). Elements are accessed positionally (`pair.0`, `nested.0.1`) or destructured irrefutably with `let (a, b) = pair`, `match`, or `for`.
 * **Membership (`in` / `.contains` / `.is_empty`):** `item in xs`, `key in d`, and `sub in s` evaluate to `bool` using `xs.contains(item)`, `d.contains(key)`, and `s.contains(sub)`. All three also provide `.is_empty() -> bool`.
-  - **Key Domain & `float` Restriction (`W2010`):** Dictionary keys `K` must belong to Wysna's predictable key domain (`int`, `str`, `bool`, or `enum`). While some languages permit floating-point dictionary keys by defining custom canonicalization rules for `NaN` bit patterns and signed zeros (`+0.0` vs `-0.0`), Wysna deliberately restricts the dictionary key model for predictability and rejects `float` (and any composite type containing `float`) as a key type `K` at compile time with diagnostic `W2010` (`INVALID_DICT_KEY_TYPE`).
-* `tuple[T1, T2, ...]`: Fixed-size heterogeneous immutable product type (`(1, "ok", true)`).
+  - **Key Domain & `float` Restriction (`W2010`):** Dictionary keys `K` must belong to Wysna's predictable key domain (`int`, `str`, `bool`, `enum`, or `tuple` of valid key types). While some languages permit floating-point dictionary keys by defining custom canonicalization rules for `NaN` bit patterns and signed zeros (`+0.0` vs `-0.0`), Wysna deliberately restricts the dictionary key model for predictability and rejects `float` (and any composite type containing `float`) as a key type `K` at compile time with diagnostic `W2010` (`INVALID_DICT_KEY_TYPE`).
 
 ### 4.4 Sum Types (`enum`)
 Closed enumerations for modeling variant states:
@@ -235,22 +234,23 @@ print(d.describe())
 
 ## 5. Expressions, Operators, Precedence & Evaluation Order
 
-Evaluation follows an explicit 12-level precedence hierarchy:
+Evaluation follows an explicit 14-level precedence hierarchy matching the Pratt + postfix parser:
 
 | Level | Operator | Description | Associativity |
 | :---: | :--- | :--- | :---: |
-| **1** | `()` | Grouping, function calls | Left |
-| **2** | `.` `[]` | Member access, indexing | Left |
-| **3** | `-` `not` | Unary negation, logical NOT | Right |
-| **4** | `*` `/` `%` | Multiplicative | Left |
-| **5** | `+` `-` | Additive, string concatenation | Left |
-| **6** | `..` `..=` | Exclusive range, inclusive range | Left (chained ranges are accepted; a range is a value, not a comparator) |
-| **7** | `<` `<=` `>` `>=` `in` | Relational comparisons & membership (`x in container`) | Left |
-| **8** | `==` `!=` | Equality comparisons | Left |
-| **9** | `and` | Short-circuit logical AND | Left |
-| **10** | `or` | Short-circuit logical OR | Left |
-| **11** | `??` | Null-coalescing (`a ?? fallback`) | Right |
-| **12** | `=` | Assignment | Right |
+| **1** | `()` | Grouping, tuple literals | Left |
+| **2** | `.` `[]` `()` `?` `else { ... }` / `else err { ... }` | Member access, indexing, call, postfix try (`?`), inline recovery (`else`) *(note: inside `await <op>`, `?` and `else` apply to the outer `await` result)* | Left |
+| **3** | `await` | Unary await prefix (`await f()` parses as `await (f())`; `await f()?` parses as `(await f())?`) | Right |
+| **4** | `-` `not` | Unary negation, logical NOT | Right |
+| **5** | `*` `/` `%` | Multiplicative | Left |
+| **6** | `+` `-` | Additive, string concatenation | Left |
+| **7** | `..` `..=` | Exclusive range, inclusive range | Left (chained ranges are accepted; a range is a value, not a comparator) |
+| **8** | `<` `<=` `>` `>=` `in` | Relational comparisons & membership (`x in container`) | Left |
+| **9** | `==` `!=` | Equality comparisons | Left |
+| **10** | `and` | Short-circuit logical AND | Left |
+| **11** | `or` | Short-circuit logical OR | Left |
+| **12** | `??` | Null-coalescing (`a ?? fallback`) | Right |
+| **13** | `=` `+=` `-=` `*=` | Assignment and compound assignments | Right |
 
 ### 5.1 Deterministic Left-to-Right Evaluation Order
 Wysna guarantees **strict left-to-right ($L \rightarrow R$) evaluation order** across all composite expressions, independent of target C compiler argument ordering:
@@ -419,9 +419,11 @@ fn parse() -> Config ! ParseError | IoError
 
 The union exists only in the error channel of `T ! E`; it is not a general union type.
 It must contain at least two distinct alternatives. Supported alternatives are `int`,
-`float`, `bool`, `str`, and non-generic `struct` or `enum` types. Classes, generic types,
-and composite types whose concrete identity cannot be distinguished in the runtime value
-are rejected. Duplicate alternatives are canonicalized.
+`float`, `bool`, `str`, concrete `struct` (including `Struct[T]`), concrete `enum`
+(including `Enum[T]`), and `class` types (`Selfhost` covers scalars, non-generic
+`struct`/`enum`, and non-generic `class`). Collection (`list`, `dict`), tuple, and
+function types whose concrete identity is not tagged in the error union are rejected.
+Duplicate alternatives are canonicalized.
 
 `?` propagates the original error value without conversion when every source alternative
 belongs to the destination set. For example, `ParseError` can propagate to
@@ -485,8 +487,10 @@ Default non-optional weak class fields are independent empty expired handles;
 optional weak fields default to None. Empty handles compare equal to their copies
 and never upgrade. There is no implicit Weak[Derived]-to-Weak[Base] conversion.
 
-Strong references still form unreclaimed cycles. Use weak back-references or
-explicitly clear strong edges. The native control block outlives object destruction
+Strong reference cycles are not reclaimed immediately upon scope exit without weak
+back-references or explicit edge clearing; runtime trial-deletion collection
+(`wysna_collect_cycles()`) runs under heap quota pressure or when `WYSNA_COLLECT_CYCLES=1`
+at cleanup. The native control block outlives object destruction
 until the last weak handle is released, and invalidates the object before field
 cleanup. This runtime is single-threaded.
 
@@ -705,7 +709,7 @@ pub import "std/path"
      "tool_exit_code": 0,
      "process_exit_code": 0,
      "execution": null,
-     "toolchain": {"compiler": "0.7.0"},
+     "toolchain": {"compiler": "0.8.0"},
      "target": {"profile": "native-cli", "triple": null},
      "diagnostics": [],
      "artifacts": [],

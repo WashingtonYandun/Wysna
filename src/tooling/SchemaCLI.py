@@ -176,6 +176,39 @@ def _apply_expr_to_schemas(expr, prop_schemas):
                         schema[max_key] = bound - 1
 
 
+def _rewrite_contract_field_refs(expr, field_names):
+    from copy import deepcopy
+    from node.NodeType import CallExpr, IdentExpr, MemberExpr, Node, ThisExpr
+
+    cloned = deepcopy(expr)
+
+    def _transform(node):
+        if isinstance(node, MemberExpr):
+            obj_is_self = isinstance(node.object, ThisExpr) or (
+                isinstance(node.object, IdentExpr) and node.object.name == "self"
+            )
+            if obj_is_self and node.property in field_names:
+                return IdentExpr(name=f"_f_{node.property}", line=node.line, col=node.col)
+            node.object = _transform(node.object)
+            return node
+        if isinstance(node, CallExpr):
+            if not isinstance(node.callee, IdentExpr):
+                node.callee = _transform(node.callee)
+            node.args = [_transform(arg) for arg in node.args]
+            return node
+        if isinstance(node, IdentExpr) and node.name in field_names:
+            return IdentExpr(name=f"_f_{node.name}", line=node.line, col=node.col)
+        if isinstance(node, Node):
+            for key, val in vars(node).items():
+                if isinstance(val, Node):
+                    setattr(node, key, _transform(val))
+                elif isinstance(val, list):
+                    setattr(node, key, [_transform(item) if isinstance(item, Node) else item for item in val])
+        return node
+
+    return _transform(cloned)
+
+
 def _format_contracts(exprs):
     if not exprs:
         return []
@@ -577,6 +610,22 @@ def generate_codecs_source(declarations) -> str:
 
         if not supported:
             continue
+
+        field_names = {f.name for f in decl.fields}
+        contract_fields = [f for f in decl.fields if getattr(f, "requires", None)]
+        if contract_fields:
+            from formatter.Formatter import Formatter
+            fmt = Formatter()
+            for field in contract_fields:
+                for req in field.requires:
+                    rewritten = _rewrite_contract_field_refs(req, field_names)
+                    cond_src = fmt.format_expr(rewritten, 0)
+                    orig_src = fmt.format_expr(req, 0).replace("\\", "\\\\").replace('"', '\\"')
+                    dec_lines.append(
+                        f'    if not ({cond_src}) {{\n'
+                        f'        return Err(json.error(0, "{name}.{field.name}: failed contract \'{orig_src}\'"))\n'
+                        f'    }}'
+                    )
 
         enc_lines.append("    return json.object(_fields)")
         blocks.append(

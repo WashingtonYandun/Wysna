@@ -1,0 +1,2 @@
+SQLite CSV: C/AST/HIR/direct selfhost passed; 1000 rows, atomic rollback, persistence, zero live handles
+Report: docs/evolution/evidence/sqlite_ffi_perf.json

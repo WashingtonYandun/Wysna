@@ -26,7 +26,10 @@ def _print_help() -> None:
     print("  --port PORT                 Listen port (default: 8080; 0 selects an available port)")
     print(f"  --workers COUNT             Isolated worker processes (default: {DEFAULT_WORKERS}; max: 8)")
     print(f"  --queue-size COUNT          Waiting requests (default: {DEFAULT_QUEUE_SIZE}; max: 32)")
-    print(f"  --request-timeout-ms MS     End-to-end worker budget (default: {DEFAULT_REQUEST_TIMEOUT_MS})")
+    print("  --request-timeout-ms MS     End-to-end worker budget (default: " + str(DEFAULT_REQUEST_TIMEOUT_MS) + ")")
+    print("Worker JSON contract (frozen experimental pilot, ADR-00):")
+    print("  Request file (args()[1]): {\"method\": str, \"path\": str, \"headers\": dict[str, str], \"body\": str}")
+    print("  Stdout response:          {\"status\": int, \"body\": json.Value}")
     print("This experimental server is local-only and does not provide TLS or authentication.")
 
 

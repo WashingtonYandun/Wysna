@@ -26,6 +26,7 @@ class SchemaBound {
     has_max_len: bool
     max_len: int
     x_requires: list[str]
+    req_tokens: list[list[Token]]
 
     fn init() {
         this.has_bound = false
@@ -41,6 +42,8 @@ class SchemaBound {
         this.max_len = 0
         let reqs: list[str] = []
         this.x_requires = reqs
+        let rtok_list: list[list[Token]] = []
+        this.req_tokens = rtok_list
     }
 }
 
@@ -770,6 +773,7 @@ fn schema_collect_decls(tokens: list[Token], out: SchemaDeclSet) -> unit {
                                 }
                                 if len(rtoks) > 0 {
                                     fbound.x_requires.append(schema_format_tok_slice(rtoks))
+                                    fbound.req_tokens.append(rtoks)
                                     let tnames: list[str] = [fname]
                                     let tbounds: list[SchemaBound] = [fbound]
                                     schema_apply_tokens_to_targets(rtoks, 0, len(rtoks), tnames, tbounds)
@@ -1113,6 +1117,28 @@ fn schema_tool_json(f: SchemaFn, lines: list[str], known_defs: list[str], graph:
     return join_strings(obj, "")
 }
 
+fn schema_rewrite_req_tokens(toks: list[Token], field_names: list[str]) -> str {
+    let mut out: list[Token] = []
+    let n = len(toks)
+    let mut i = 0
+    while i < n {
+        let t = toks[i]
+        let is_self_prefix = t.kind == "THIS" or (t.kind == "IDENT" and t.val == "self")
+        if is_self_prefix and i + 2 < n and toks[i + 1].kind == "DOT" and toks[i + 2].kind == "IDENT" and tool_str_contains(field_names, toks[i + 2].val) {
+            let ft = toks[i + 2]
+            out.append(Token { kind: "IDENT", val: "_f_" + ft.val, line: ft.line, col: ft.col, file: ft.file })
+            i = i + 3
+        } elif t.kind == "IDENT" and tool_str_contains(field_names, t.val) and (i == 0 or toks[i - 1].kind != "DOT") and (i + 1 >= n or toks[i + 1].kind != "LPAREN") {
+            out.append(Token { kind: "IDENT", val: "_f_" + t.val, line: t.line, col: t.col, file: t.file })
+            i = i + 1
+        } else {
+            out.append(t)
+            i = i + 1
+        }
+    }
+    return schema_format_tok_slice(out)
+}
+
 fn schema_encode_scalar(expr: str, t: SchemaType, known_defs: list[str]) -> str {
     if t.kind != "named" { return "" }
     if t.name == "int" { return "json.from_int(" + expr + ")" }
@@ -1254,6 +1280,16 @@ fn schema_generate_codecs(structs: list[SchemaStruct], enums: list[SchemaEnum], 
             break
         }
         if not supported { continue }
+        let mut st_field_names: list[str] = []
+        for f in st.fields { st_field_names.append(f.name) }
+        for f in st.fields {
+            for ridx in 0..len(f.bound.req_tokens) {
+                let cond_src = schema_rewrite_req_tokens(f.bound.req_tokens[ridx], st_field_names)
+                let raw_req = if ridx < len(f.bound.x_requires) { f.bound.x_requires[ridx] } else { cond_src }
+                let msg_q = diag_json_quote(name + "." + f.name + ": failed contract '" + raw_req + "'")
+                dec_lines.append("    if not (" + cond_src + ") {\n        return Err(json.error(0, " + msg_q + "))\n    }")
+            }
+        }
         enc_lines.append("    return json.object(_fields)")
         blocks.append("pub fn encode_" + name + "(value: " + name + ") -> json.Value {\n" + join_strings(enc_lines, "\n") + "\n}")
         blocks.append("pub fn to_json_" + name + "(value: " + name + ") -> str ! json.JsonError {\n    return json.stringify(encode_" + name + "(value))\n}")

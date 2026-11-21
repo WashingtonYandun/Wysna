@@ -478,6 +478,10 @@ def run_toolkit_tests():
     test_standard_file_cleanup_runs_on_runtime_panic()
     test_resource_duplicate_owner_is_rejected_without_disposal()
     test_stdin_io_decodes_valid_empty_and_invalid_utf8_across_four_engines()
+    test_str_methods_and_dict_remove_across_four_engines()
+    test_directory_listing_file_kinds_and_path_ext_across_four_engines()
+    test_process_capture_stdout_stderr_and_bounds_across_four_engines()
+    test_csv_parse_records_and_stringify_across_four_engines()
     return True
 
 
@@ -628,6 +632,133 @@ fn main() -> unit {
                 assert (result.returncode, result.stdout.replace(b'\r\n', b'\n'), result.stderr) == (0, expected, b''), (
                     engine, payload, result.returncode, result.stdout, result.stderr
                 )
+
+
+def test_str_methods_and_dict_remove_across_four_engines():
+    selfhost_bin = ensure_selfhost_compiler_binary(str(ROOT))
+    source = '''fn main() -> unit {
+    let text = "  Wysna Lang  ".trim()
+    print(text, text.split(" "), text.to_upper(), text.to_lower())
+    print(text.starts_with("Wy"), text.ends_with("ng"), text.replace("Lang", "v0.8"))
+    let base = {"a": 1, "b": 2}
+    let mut alias = base
+    let removed = alias.remove("a")
+    let missing = alias.remove("missing")
+    let mut cleared = base
+    cleared.clear()
+    print(base["a"], len(alias), len(cleared))
+    match removed {
+        Some(v) => print("removed", v),
+        None => print("removed-none"),
+    }
+    match missing {
+        Some(v) => print("missing-some", v),
+        None => print("missing-none"),
+    }
+}
+'''
+    expected = 'Wysna Lang ["Wysna", "Lang"] WYSNA LANG wysna lang\ntrue true Wysna v0.8\n1 1 0\nremoved 1\nmissing-none\n'
+    with tempfile.TemporaryDirectory() as directory:
+        results = [
+            run_engine(engine, source, 'str-dict-methods', selfhost_bin, directory,
+                       sanitize=os.environ.get('WYSNA_SANITIZE') == '1')
+            for engine in ('interpreter', 'ast', 'hir', 'selfhost')
+        ]
+        ok, detail = compare(results, expected)
+        assert ok, detail
+
+
+def test_directory_listing_file_kinds_and_path_ext_across_four_engines():
+    selfhost_bin = ensure_selfhost_compiler_binary(str(ROOT))
+    with tempfile.TemporaryDirectory() as directory:
+        root_dir = Path(directory) / 'workspace'
+        root_dir.mkdir()
+        (root_dir / 'z.txt').write_text('z', encoding='utf-8')
+        (root_dir / 'a.json').write_text('{}', encoding='utf-8')
+        (root_dir / '.env').write_text('k=v', encoding='utf-8')
+        (root_dir / 'sub.dir').mkdir()
+        source = f'''import "std/fs"
+import "std/path"
+fn main() -> unit {{
+    print(path.ext("report.json"), path.ext("a.tar.gz"), path.ext(".env"), path.ext("sub.dir/noext"))
+    let is_d = fs.is_dir({json.dumps(str(root_dir))}) else error {{ exit(2) return }}
+    let is_f = fs.is_file({json.dumps(str(root_dir / 'a.json'))}) else error {{ exit(2) return }}
+    let d_as_f = fs.is_file({json.dumps(str(root_dir))}) else error {{ exit(2) return }}
+    let f_as_d = fs.is_dir({json.dumps(str(root_dir / 'a.json'))}) else error {{ exit(2) return }}
+    let missing = fs.is_dir({json.dumps(str(root_dir / 'missing'))}) else error {{ exit(2) return }}
+    print(is_d, is_f, d_as_f, f_as_d, missing)
+    let names = fs.list_dir({json.dumps(str(root_dir))}) else error {{ exit(2) return }}
+    print(names)
+    match fs.list_dir({json.dumps(str(root_dir / 'a.json'))}) {{
+        Ok(items) => print("UNEXPECTED", len(items)),
+        Err(err) => print("LIST-ERR", err.operation),
+    }}
+}}
+'''
+        expected = '.json .gz  \ntrue true false false false\n[".env", "a.json", "sub.dir", "z.txt"]\nLIST-ERR list_dir\n'
+        results = [
+            run_engine(engine, source, 'fs-path-ext', selfhost_bin, directory,
+                       sanitize=os.environ.get('WYSNA_SANITIZE') == '1')
+            for engine in ('interpreter', 'ast', 'hir', 'selfhost')
+        ]
+        ok, detail = compare(results, expected)
+        assert ok, detail
+
+
+def test_process_capture_stdout_stderr_and_bounds_across_four_engines():
+    selfhost_bin = ensure_selfhost_compiler_binary(str(ROOT))
+    source = f'''import "std/process"
+fn main() -> unit {{
+    let out = process.capture({json.dumps(sys.executable)}, ["-c", "import sys; print(123); sys.stderr.write(str(456)); sys.exit(7)"], 5000, 4096) else error {{
+        exit(2)
+        return
+    }}
+    print(out.status, out.stdout.trim(), out.stderr.trim())
+    match process.capture({json.dumps(sys.executable)}, ["-c", "print(str(9) * 128)"], 5000, 32) {{
+        Ok(_) => print("UNEXPECTED-OVERFLOW"),
+        Err(err) => print("OVERFLOW", err.operation),
+    }}
+    match process.capture({json.dumps(sys.executable)}, ["-c", "import time; time.sleep(0.5)"], 60, 4096) {{
+        Ok(_) => print("UNEXPECTED-TIMEOUT"),
+        Err(err) => print("TIMEOUT", err.operation),
+    }}
+}}
+'''
+    expected = '7 123 456\nOVERFLOW capture\nTIMEOUT capture\n'
+    with tempfile.TemporaryDirectory() as directory:
+        results = [
+            run_engine(engine, source, 'process-capture', selfhost_bin, directory,
+                       sanitize=os.environ.get('WYSNA_SANITIZE') == '1')
+            for engine in ('interpreter', 'ast', 'hir', 'selfhost')
+        ]
+        ok, detail = compare(results, expected)
+        assert ok, detail
+
+
+def test_csv_parse_records_and_stringify_across_four_engines():
+    selfhost_bin = ensure_selfhost_compiler_binary(str(ROOT))
+    source = '''import "std/csv"
+fn main() -> unit {
+    let raw = "name,role,note\\r\\n\\"Ada, L.\\",\\"Chief \\"\\"AI\\"\\" Lead\\",\\"line1\\nline2\\"\\nWasho,Eng,ok\\n"
+    let recs = csv.parse_records(raw) else error { exit(2) return }
+    print(len(recs), recs[0]["name"], recs[0]["role"], recs[1]["name"])
+    let ser = csv.stringify([["a,b", "x\\"y"], ["plain", "1"]]) else error { exit(2) return }
+    print(ser)
+    match csv.parse("\\"unterminated") {
+        Ok(_) => print("UNEXPECTED"),
+        Err(err) => print("CSV-ERR", err.line, err.column),
+    }
+}
+'''
+    expected = '2 Ada, L. Chief "AI" Lead Washo\n"a,b","x""y"\nplain,1\nCSV-ERR 1 1\n'
+    with tempfile.TemporaryDirectory() as directory:
+        results = [
+            run_engine(engine, source, 'csv-codec', selfhost_bin, directory,
+                       sanitize=os.environ.get('WYSNA_SANITIZE') == '1')
+            for engine in ('interpreter', 'ast', 'hir', 'selfhost')
+        ]
+        ok, detail = compare(results, expected)
+        assert ok, detail
 
 
 if __name__ == '__main__':

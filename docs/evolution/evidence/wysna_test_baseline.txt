@@ -1,0 +1,254 @@
+__COW_CHECKPOINT__:exclusive_before
+__COW_CHECKPOINT__:exclusive_after
+__COW_CHECKPOINT__:matrix_aliased
+__COW_CHECKPOINT__:first_write
+__COW_CHECKPOINT__:second_write_same_row
+__COW_CHECKPOINT__:third_write_other_row
+__COW_CHECKPOINT__:struct_aliased
+__COW_CHECKPOINT__:struct_list_write
+__COW_CHECKPOINT__:dict_aliased
+__COW_CHECKPOINT__:dict_write
+__COW_CHECKPOINT__:class_in_list_aliased
+__COW_CHECKPOINT__:class_field_mutated
+__COW_CHECKPOINT__:class_field_mutated_again
+__COW_CHECKPOINT__:list_struct_aliased
+__COW_CHECKPOINT__:list_struct_write
+__COW_CHECKPOINT__:list_struct_repeat
+==================================================
+Wysna Conformance Runner (SPEC v0.1)
+==================================================
+Lexer valid:         13/13
+Lexer invalid:       7/7
+Parser valid:        21/21
+Parser invalid:      9/9
+Types valid:         15/15
+Types invalid:       62/62
+Error handling:      2/2
+Formatter idempotent:185/185
+Typed HIR Lowering:  107/107
+Runtime execution:   99/99
+Wysna Compiler profile: 98 supported, 0 unsupported (see tests/engine_profiles.json)
+==================================================
+Wysna Self-Hosted Compiler Split Conformance Suite
+==================================================
+  [PASS] Module 01_ast.wysna (28 lines)
+  [PASS] Module 01_diagnostics.wysna (278 lines)
+  [PASS] Module 02_lexer.wysna (798 lines)
+  [PASS] Module 03_syntax.wysna (46 lines)
+  [PASS] Module 03_modules.wysna (683 lines)
+  [PASS] Module 05_foreign.wysna (23 lines)
+  [PASS] Module 08_checked.wysna (226 lines)
+  [PASS] Module 08_checked_records.wysna (105 lines)
+  [PASS] Module 08_checked_verify.wysna (237 lines)
+  [PASS] Module 08_semantics.wysna (3244 lines)
+  [PASS] Module 08_generics.wysna (135 lines)
+  [PASS] Module 08_checker.wysna (84 lines)
+  [PASS] Module 08_mir.wysna (545 lines)
+  [PASS] Module 08_mir_channels.wysna (177 lines)
+  [PASS] Module 08_mir_collections.wysna (113 lines)
+  [PASS] Module 08_mir_places.wysna (78 lines)
+  [PASS] Module 08_mir_nominals.wysna (226 lines)
+  [PASS] Module 08_mir_classes.wysna (151 lines)
+  [PASS] Module 08_mir_foreign.wysna (89 lines)
+  [PASS] Module 08_mir_patterns.wysna (169 lines)
+  [PASS] Module 08_mir_functions.wysna (95 lines)
+  [PASS] Module 08_mir_lowering.wysna (405 lines)
+  [PASS] Module 08_mir_verifier.wysna (448 lines)
+  [PASS] Module 08_c99_literals.wysna (28 lines)
+  [PASS] Module 08_mir_c99.wysna (561 lines)
+  [PASS] Module 09_agent_tools.wysna (1697 lines)
+  [PASS] Module 09_lsp.wysna (1576 lines)
+  [PASS] Module 09_schema.wysna (1404 lines)
+  [PASS] Module 09_fix.wysna (808 lines)
+  [PASS] Module 09_project.wysna (1562 lines)
+  [PASS] Module 09_project_lock.wysna (190 lines)
+  [PASS] Module 09_api.wysna (785 lines)
+  [PASS] Module 09_mcp.wysna (709 lines)
+  [PASS] Module 09_main.wysna (208 lines)
+  [PASS] All 34 modules combine to exactly 17911 lines matching selfhost/compiler.wysna (100% loss-less).
+==================================================
+Generic Hardening & Code Bloat Metrics Conformance
+==================================================
+  [PASS] GenericInstanceKey hashing and equality
+  [PASS] Canonical deduplication telemetry
+  [PASS] Unbounded expansion depth budget (W2011)
+  [PASS] Direct struct recursion cycle detection (W2011)
+  [PASS] CLI --stats JSON output and telemetry verification
+  [PASS] Compound types, finite recursion, cache boundary, immutable keys, and C metrics
+  [PASS] Run stats preserve program stdout; check stats remain JSON
+  [PASS] Structural, control-flow, operand/result and collection metadata invariants
+F03 type and pattern contracts: 13 passed
+Phase A platform=darwin compiler=cc
+  [PASS] Phase A identity, grouped types, propagation, strings and ASan/UBSan regressions
+B01 platform=darwin compiler=cc
+  [PASS] B01 ast: stdout, ASan/UBSan and balanced allocations
+  [PASS] B01 hir: stdout, ASan/UBSan and balanced allocations
+  [PASS] B01 selfhost: stdout, ASan/UBSan and balanced allocations
+[Wysna Compiler] Compiled /Users/washingtonyandun/Documents/ChatGPT/w_lang_compiler/tests/runtime/cow_telemetry.wysna -> /var/folders/1d/zj02r88x5m356mpg0yw6cqm00000gn/T/tmpepq_ffr2/selfhost.c
+F03 ownership: four engines, managed payloads, guards, CoW and cleanup passed
+  [PASS] Weak strong/weak counts, upgrade, expiration, identity and destruction order
+  [PASS] B03 ast/weak_references: zero leaks
+  [PASS] B03 hir/weak_references: zero leaks
+  [PASS] B03 selfhost/weak_references: zero leaks
+  [PASS] B03 ast/class_cycle_limitation: zero leaks
+  [PASS] B03 hir/class_cycle_limitation: zero leaks
+  [PASS] B03 selfhost/class_cycle_limitation: zero leaks
+  [PASS] B03 ast/strong_cycle: expected isolated leak
+  [PASS] B03 hir/strong_cycle: expected isolated leak
+  [PASS] B03 selfhost/strong_cycle: expected isolated leak
+==================================================
+Wysna B02 CoW Telemetry & Asymptotics Suite
+==================================================
+[1/4] Testing Wysna Seed Python Interpreter...
+  -> Interpreter passed output & checkpoints validated.
+  [PASS] CoW opt-in output, import lifetime and native ABI/capacity accounting
+[2/4] Testing Wysna Seed AST C99 (Clang ASan + UBSan + WYSNA_MEM_CHECK)...
+  -> AST C99 passed output & checkpoints validated.
+[3/4] Testing Wysna Seed HIR C99 (Clang ASan + UBSan + WYSNA_MEM_CHECK)...
+  -> HIR C99 passed output & checkpoints validated.
+[4/4] Testing Wysna Compiler Stage 2 (Clang ASan + UBSan + WYSNA_MEM_CHECK)...
+  -> Wysna Compiler Stage 2 passed output & checkpoints validated.
+  [PASS] B02 constructor retention cost: AST 1 detach/2 slots; MIR and interpreter 0
+  [PASS] B02 independent N/M matrix sizes, three aliases and repeated writes on four engines
+
+[SUCCESS] B02 CoW Telemetry & Asymptotic Scaling verified across all 4 execution targets!
+C01 shared arenas, checked reuse, diamond imports, generic exports, identity, invalidation and diagnostics passed
+Compiler service: snapshots, isolation, generation checks, consumers and CLI passed
+Native toolchain: execution, dependency, SDK, cleanup and ABI adapter cases passed
+==================================================
+Wysna C02 Fully Resolved HIR Invariant Tests
+==================================================
+  [PASS] SymbolId tracking and resolution across scopes
+  [PASS] Native HirPattern hierarchy verification
+  [PASS] Explicit CallTarget and FieldId annotations
+  [PASS] Shadowing disambiguation, HirCoerce, and C99 native execution
+==================================================
+ALL C02 RESOLVED HIR TESTS PASSED.
+==================================================
+==================================================
+Wysna C03 Generic Specialization & Mangling
+==================================================
+  [PASS] Collision freedom between user '__' identifiers and generic specializations
+  [PASS] Reserved compiler prefix (_WYSNA_, __wysna_internal_) protection
+  [PASS] Regular recursion termination with cache-first lookup
+  [PASS] Direct and mutual structural expansion cycle detection with chain diagnostics
+  [PASS] Deterministic topological sorting and PYTHONHASHSEED invariance
+  [PASS] Native C99 execution through AST oracle and verified HIR/MIR with AddressSanitizer
+==================================================
+ALL C03 GENERIC SPECIALIZATION TESTS PASSED.
+==================================================
+==================================================
+Wysna C04 Recursive ADTs & Layout Graph Suite
+==================================================
+  [PASS] LayoutGraph SCC correctly separates inline and indirect edges
+  [PASS] Rejection of direct, mutual, and tuple struct layout cycles with [W2011]
+  [PASS] TypeInterner preserves enum variant payloads in EnumDef
+  [PASS] Match guards do not bypass exhaustiveness checking (W2003 enforced)
+  [PASS] Native C99 execution through AST oracle and verified HIR/MIR with AddressSanitizer
+==================================================
+ALL C04 ADT & LAYOUT GRAPH TESTS PASSED.
+==================================================
+==================================================
+Wysna C05 Types, Invariance & Inference Suite
+==================================================
+  [PASS] Declaration order independence (Permutation Invariance)
+  [PASS] Container and compound type invariance
+  [PASS] Contextless inference protection & ?? context propagation
+  [PASS] Conflicting generic inference detection (W2001)
+  [PASS] Generic enum argument preservation in EnumDef and TypeInterner
+  [PASS] Native C99 execution through AST oracle and verified HIR/MIR with AddressSanitizer
+==================================================
+ALL C05 TYPES & INFERENCE TESTS PASSED.
+==================================================
+==================================================
+Wysna Compiler Engine and Output Target Contract Suite
+==================================================
+  [TEST] Default Seed engine emits C99 through verified HIR/MIR...
+  [TEST] Explicit compiler engine and output backend contracts...
+  [TEST] Unit function tail expression normalization...
+  [TEST] Native C99 execution through default Seed HIR/MIR under ASan + UBSan...
+==================================================
+ALL ENGINE AND OUTPUT TARGET CONTRACT TESTS PASSED.
+==================================================
+==================================================
+Wysna D01 Parity Matrix Suite
+==================================================
+  [TEST] Fixture accounting and profile freshness...
+  [TEST] Explicit tracking reasons for unsupported engine features...
+  [TEST] Standalone Wysna Compiler execution contracts (core and generic compilation)...
+  [TEST] ci_conformance.py --matrix generator...
+  [TEST] Documentation consistency in docs/ENGINE_PARITY_MATRIX.md...
+==================================================
+ALL D01 PARITY MATRIX TESTS PASSED.
+==================================================
+==================================================
+Wysna D04 Semantic Fuzzing & Determinism Suite
+==================================================
+  [TEST] Typed valid program generation & C99 determinism across hash seeds...
+  [TEST] Semantic negative mutations and diagnostic code generation...
+  [TEST] Delta-debugging failure reducer...
+  [TEST] Preservation of existing frontend smoke fuzzer (0 tracebacks)...
+Compiler Fuzz Suite: 50/50 (base_seed=9500, 0 internal tracebacks invariant)
+==================================================
+Wysna D04 Semantic Fuzzing & Determinism
+==================================================
+  [CONFIG] Base seed: 7900, Iterations: 5
+  [PHASE 1] Valid typed programs differential fuzzing & C determinism...
+  [PHASE 2] Negative semantic mutations fuzzing...
+  [RESULT] Passed 10/10 checks (100% Determinism & Parity)
+==================================================
+==================================================
+ALL D04 SEMANTIC FUZZING TESTS PASSED.
+==================================================
+==================================================
+Wysna D05 Telemetry & Benchmarks Suite
+==================================================
+  [TEST] CLI --stats telemetry structure and phase timings...
+  [TEST] Separation of stats from program stdout (oracle cleanliness)...
+  [TEST] Benchmark harness equivalence and execution...
+=========================================================================================================
+Wysna Benchmark Harness (Wysna Seed Interpreter vs Wysna Seed Typed HIR C99 vs Wysna Compiler C99)
+=========================================================================================================
+Benchmark            | Seed Interp(ms) | Seed Compile(ms) | Seed HIR C99(ms) | Compiler Cmp(ms) | Compiler C99(ms) | Bin (KB) |  vs HIR | vs Self
+-------------------------------------------------------------------------------------------------------------------------------------------------
+arithmetic.wysna     |          108.84 |           264.09 |             3.16 |           250.21 |             3.11 |     34.6 |   34.5x |   34.9x
+function_calls.wysna |          173.07 |           253.58 |             3.09 |           252.97 |             4.28 |     34.6 |   56.0x |   40.4x
+list_iteration.wysna |           55.41 |           318.41 |             2.75 |           306.29 |             2.98 |     53.7 |   20.1x |   18.6x
+list_copy.wysna      |           70.29 |           302.14 |             3.57 |           449.78 |             3.15 |     70.4 |   19.7x |   22.3x
+list_mutation.wysna  |           63.62 |           424.16 |             3.43 |           456.68 |             3.72 |     70.7 |   18.5x |   17.1x
+nested_cow.wysna     |           44.91 |           467.15 |             3.41 |           461.40 |             4.13 |     70.8 |   13.2x |   10.9x
+string_unicode.wysna |           16.24 |           374.93 |             3.15 |           436.91 |             3.26 |     70.6 |    5.2x |    5.0x
+structs.wysna        |           94.41 |           268.64 |             3.23 |           278.17 |             3.68 |     51.8 |   29.2x |   25.6x
+objects.wysna        |           70.95 |           392.85 |             3.21 |           402.19 |             3.27 |     70.3 |   22.1x |   21.7x
+dynamic_dispatch.wysna |           92.91 |           273.61 |             4.37 |           317.95 |             3.06 |     52.2 |   21.3x |   30.4x
+=========================================================================================================
+==================================================
+ALL D05 TELEMETRY & BENCHMARK TESTS PASSED.
+==================================================
+Expansion: function values, captures, ownership, modules, generic OOP, stdlib, FFI and LSP passed
+Audit regression and independent semantic property contracts passed
+MIR CFG, ownership, layout, narrowing and range contracts passed
+Audit completion: ASCII lifetime/allocation, formatter AST preservation, typed composition, enum pattern exhaustiveness and SPEC operator semantics passed
+Principal audit: patterns, closures, cyclic formatting, MIR signatures and recovery passed
+Seed C99 Native:     98/98
+Seed HIR C99:        98/98
+Compiler Stage-2:    98/98
+Compiler Modular:    1/1 (Loss-less verified)
+Generic Hardening:   1/1 (Canonical cache verified)
+CoW Telemetry (B02): 1/1 (Asymptotics verified)
+Compilation Session: 1/1
+Compiler Service:    1/1
+Native Toolchain:    1/1
+Resolved HIR (C02):  1/1
+Generic Specialization (C03): 1/1
+ADTs & Layout Graph (C04):    1/1
+Types & Inference (C05):      1/1
+Default Backend (C06):        1/1 (HIR default verified)
+Parity Matrix (D01):          1/1 (Matrix & limits verified)
+Semantic Fuzz (D04):          1/1 (Determinism verified)
+Telemetry & Bench(D05):       1/1 (Metrics verified)
+Expansion (E01-E04):          1/1
+Examples E2E Suite:  7/7
+Bootstrap FixedPoint:1/1 (SHA256 verified)
+==================================================
+ALL 843/843 CONFORMANCE, EXAMPLES & SELF-HOSTING TESTS PASSED (100%).

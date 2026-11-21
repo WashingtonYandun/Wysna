@@ -7,6 +7,7 @@ transitive impact ("blast radius") from immutable CheckedProgram snapshots.
 from collections import deque
 import hashlib
 import json
+from pathlib import Path
 import re
 
 from lexer.Lexer import Lexer
@@ -317,7 +318,7 @@ def build_semantic_graph(checked, *, effects_report=None) -> dict:
                     'start_byte': s_byte,
                     'end_byte': e_byte,
                     'end_line': e_line,
-                    'visibility': 'public' if raw_name in exports or is_entry else 'private',
+                    'visibility': 'public' if bool(getattr(stmt, 'is_exported', False)) or (not is_entry and raw_name in exports) else 'private',
                     'methods': method_list,
                     'implemented_by': [],
                     'used_by': [],
@@ -382,7 +383,7 @@ def build_semantic_graph(checked, *, effects_report=None) -> dict:
                     'start_byte': s_byte,
                     'end_byte': e_byte,
                     'end_line': e_line,
-                    'visibility': 'public' if raw_name in exports or is_entry else 'private',
+                    'visibility': 'public' if bool(getattr(stmt, 'is_exported', False)) or (not is_entry and raw_name in exports) else 'private',
                     'super_class': None,
                     'subclasses': [],
                     'implements': [],
@@ -410,7 +411,7 @@ def build_semantic_graph(checked, *, effects_report=None) -> dict:
                     'start_byte': s_byte,
                     'end_byte': e_byte,
                     'end_line': e_line,
-                    'visibility': 'public' if raw_name in exports or is_entry else 'private',
+                    'visibility': 'public' if bool(getattr(stmt, 'is_exported', False)) or (not is_entry and raw_name in exports) else 'private',
                     'fields': [
                         {'name': f.name, 'type': _format_type_ann(f.type_ann), 'line': f.line}
                         for f in stmt.fields
@@ -437,7 +438,7 @@ def build_semantic_graph(checked, *, effects_report=None) -> dict:
                     'start_byte': s_byte,
                     'end_byte': e_byte,
                     'end_line': e_line,
-                    'visibility': 'public' if raw_name in exports or is_entry else 'private',
+                    'visibility': 'public' if bool(getattr(stmt, 'is_exported', False)) or (not is_entry and raw_name in exports) else 'private',
                     'variants': [str(v) for v in stmt.variants],
                     'used_by': [],
                 }
@@ -482,7 +483,7 @@ def build_semantic_graph(checked, *, effects_report=None) -> dict:
                     'start_byte': s_byte,
                     'end_byte': e_byte,
                     'end_line': e_line,
-                    'visibility': 'public' if raw_name in exports or is_entry else 'private',
+                    'visibility': 'public' if bool(getattr(stmt, 'is_exported', False)) or (not is_entry and raw_name in exports) else 'private',
                     'is_async': bool(getattr(stmt, 'is_async', False)),
                     'signature': _format_fn_signature(stmt, short),
                     'requires_count': len(getattr(stmt, 'requires', ()) or ()),
@@ -811,15 +812,8 @@ def build_semantic_graph(checked, *, effects_report=None) -> dict:
         key=lambda e: (e['from'], e['to'], e['kind'], e.get('context', ''), e.get('line', 0)),
     )
 
-    hash_payload = json.dumps(
-        {
-            'sources': {k: sources[k].content_hash for k in sorted(sources)},
-            'nodes': sorted_nodes,
-            'edges': sorted_edges,
-        },
-        sort_keys=True,
-        separators=(',', ':'),
-    ).encode('utf-8')
+    source_pairs = sorted((str(Path(k).resolve()), sources[k].content_hash) for k in sources)
+    hash_payload = '\n'.join(f'{path}={digest}' for path, digest in source_pairs).encode('utf-8')
     graph_hash = 'graph:' + hashlib.sha256(hash_payload).hexdigest()[:16]
 
     return {

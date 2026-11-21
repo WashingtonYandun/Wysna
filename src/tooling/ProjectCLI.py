@@ -130,6 +130,14 @@ def _check_frozen(resolver, frozen):
         resolver.verify_lock()
 
 
+def _resolve_target_name(manifest, requested):
+    if requested:
+        return requested
+    if "app" in manifest.targets or len(manifest.targets) != 1:
+        return "app"
+    return next(iter(manifest.targets))
+
+
 def _run_check(resolver, target_name, json_mode):
     manifest = resolver.manifest
     target = manifest.targets.get(target_name)
@@ -670,12 +678,13 @@ def run_project_command(argv):
             print(f"[OK] Wrote {resolver.lock_path()}")
             return 0
         _check_frozen(resolver, options.frozen)
+        resolved_target = _resolve_target_name(resolver.manifest, options.target)
         if command == "check":
-            return _run_check(resolver, options.target or "app", json_mode)
+            return _run_check(resolver, resolved_target, json_mode)
         if command == "build":
-            return _run_build(resolver, options.target or "app", options.output, json_mode)
+            return _run_build(resolver, resolved_target, options.output, json_mode)
         if command == "run":
-            return _run_program(resolver, options.target or "app", options.entry, program_args,
+            return _run_program(resolver, resolved_target, options.entry, program_args,
                                 report_path=options.report_json)
         return _run_tests(resolver, options.filter, options.report_json, options.frozen)
     except ScaffoldError as error:

@@ -182,6 +182,10 @@ typedef struct WysnaRuntimeContext {
     const char* source_file;
     int32_t source_line;
     int32_t source_col;
+    const char* call_stack_fn[64];
+    const char* call_stack_file[64];
+    int32_t call_stack_line[64];
+    int32_t call_depth;
     int64_t alloc_count;
     int64_t free_count;
     int64_t retain_count;
@@ -287,6 +291,22 @@ static inline void wysna_runtime_set_position(const char* file, int32_t line, in
     wysna_g_source_col = col;
 }
 
+static inline void wysna_runtime_push_frame(const char* fn_name, const char* file, int32_t line) {
+    int32_t d = wysna_runtime_context.call_depth;
+    if (d >= 0 && d < 64) {
+        wysna_runtime_context.call_stack_fn[d] = fn_name;
+        wysna_runtime_context.call_stack_file[d] = file;
+        wysna_runtime_context.call_stack_line[d] = line;
+    }
+    wysna_runtime_context.call_depth = d + 1;
+}
+
+static inline void wysna_runtime_pop_frame(void) {
+    if (wysna_runtime_context.call_depth > 0) {
+        wysna_runtime_context.call_depth--;
+    }
+}
+
 #if defined(__SANITIZE_ADDRESS__)
 #define WYSNA_HAS_ASAN 1
 #elif defined(__has_feature)
@@ -330,6 +350,18 @@ static inline WYSNA_NORETURN void wysna_runtime_fail(const char* code, const cha
     vfprintf(stderr, format, args);
     va_end(args);
     fputc('\n', stderr);
+    if (wysna_runtime_context.call_depth > 1) {
+        int32_t top = wysna_runtime_context.call_depth < 64 ? wysna_runtime_context.call_depth : 64;
+        for (int32_t i = top - 1; i >= 0; i--) {
+            const char* fn_name = wysna_runtime_context.call_stack_fn[i];
+            const char* f_file = wysna_runtime_context.call_stack_file[i];
+            int32_t f_line = wysna_runtime_context.call_stack_line[i];
+            if (fn_name && fn_name[0] != '\0') {
+                fprintf(stderr, "  at %s (%s:%" PRId32 ")\n",
+                        fn_name, (f_file && f_file[0] != '\0') ? f_file : "<unknown>", f_line);
+            }
+        }
+    }
     wysna_panic_exit(1);
 }
 

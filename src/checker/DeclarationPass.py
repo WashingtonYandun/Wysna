@@ -130,7 +130,8 @@ def register_nominal_shells(checker: "TypeChecker", program: Program) -> None:
             mod_type = checker._resolve_import(stmt)
             checker.global_scope.define_symbol(
                 Symbol(stmt.namespace, mod_type, is_mut=False, kind="import", line=stmt.line, col=stmt.col),
-                file=checker.file
+                file=checker.file,
+                allow_builtin_override=True,
             )
 
 
@@ -144,7 +145,8 @@ def _bind_symbol_from_unit(checker: "TypeChecker", unit, name: str, bound_name: 
         checker.imported_symbol_names[bound_name] = sym.name
         checker.global_scope.define_symbol(
             Symbol(bound_name, sym.type, is_mut=False, kind=sym.kind, line=line, col=col),
-            file=checker.file
+            file=checker.file,
+            allow_builtin_override=True,
         )
         found = True
 
@@ -207,7 +209,8 @@ def resolve_use_declaration(checker: "TypeChecker", stmt: UseDecl) -> None:
                     mod_type.checked_module = sub_unit
                     checker.global_scope.define_symbol(
                         Symbol(bound_name, mod_type, is_mut=False, kind="import", line=sym_spec.line, col=sym_spec.col),
-                        file=checker.file
+                        file=checker.file,
+                        allow_builtin_override=True,
                     )
                 elif base_unit is not None:
                     avail = sorted(set(list(base_unit.exports.symbols.keys()) + list(base_unit.exports.types.keys())))

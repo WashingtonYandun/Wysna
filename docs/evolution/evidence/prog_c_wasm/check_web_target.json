@@ -1,0 +1,1 @@
+{"schema_version":"wysna.tool-result/1","command":"project.check","status":"ok","invocation_id":"4dfdef03-2c27-49f7-a4b5-3310c62e2659","tool_exit_code":0,"process_exit_code":0,"execution":null,"toolchain":{"compiler":"0.8.0"},"target":{"profile":"browser-library","triple":"wasm32-unknown-emscripten"},"diagnostics":[],"artifacts":[],"telemetry":null}

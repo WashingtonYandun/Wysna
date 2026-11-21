@@ -135,6 +135,7 @@ def run_pipeline(
     record_trace_path: Optional[str] = None,
     replay_trace_path: Optional[str] = None,
     warn_cycles: bool = False,
+    line_directives: bool = False,
 ) -> int:
     if tool_command is None:
         if check_only:
@@ -374,8 +375,7 @@ def run_pipeline(
                 print(f"warning[W-ARC]: {msg}", file=sys.stderr)
                 print(f"  advisory: {adv['advisory']}", file=sys.stderr)
         if check_only:
-            from checker.Lints import lint_discarded_expressions
-            lint_warnings = lint_discarded_expressions(checked.ast, file_name)
+            lint_warnings = service.lint_discarded_expressions(checked, file_name)
             lint_sources = _sources_for_diagnostics(file_name, source_code, service)
             for warning in lint_warnings:
                 print("warning" + render_diagnostic(warning, lint_sources, span_cache={}),
@@ -426,7 +426,7 @@ def run_pipeline(
                 emission = toolchain.emit_compiler(selfhost_bin, file_name)
                 c_code, codegen_ms = emission.source, emission.codegen_ms
             else:
-                emission = service.emit_c(checked)
+                emission = service.emit_c(checked, line_directives=line_directives)
                 c_code = emission.source
                 if sandbox and capability_policy is not None:
                     from tooling.CapabilityPolicy import generate_c_capability_guards

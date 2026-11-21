@@ -56,16 +56,28 @@ def bootstrap_fingerprint(repo_root):
     return hashlib.sha256(encoded).hexdigest(), provenance
 
 
+def _sync_selfhost_bundle(root: Path) -> str:
+    """Keep selfhost/compiler.wysna synchronized with selfhost/src when present."""
+    source_path = root / "selfhost/compiler.wysna"
+    source = source_path.read_text(encoding="utf-8")
+    src_dir = root / "selfhost/src"
+    bundler = root / "tools/bundle_selfhost.py"
+    if src_dir.is_dir() and bundler.is_file():
+        from tools.bundle_selfhost import bundle
+        expected_bundle = bundle(str(src_dir))
+        if expected_bundle != source:
+            source_path.write_text(expected_bundle, encoding="utf-8")
+            source = expected_bundle
+    return source
+
+
 def bootstrap_compiler(repo_root, output_directory):
     """Seed HIR/MIR builds a bootstrap executable; three native MIR emissions must agree."""
     root = Path(repo_root).resolve()
     directory = Path(output_directory).resolve()
     directory.mkdir(parents=True, exist_ok=True)
     source_path = root / "selfhost/compiler.wysna"
-    from tools.bundle_selfhost import bundle
-    source = source_path.read_text(encoding="utf-8")
-    if bundle(str(root / "selfhost/src")) != source:
-        raise RuntimeError("The compiler bundle is stale; run tools/bundle_selfhost.py")
+    source = _sync_selfhost_bundle(root)
     fingerprint, provenance = bootstrap_fingerprint(root)
     service = CompilerService()
     seed_source = service.emit_c(service.check(source, source_path)).source
@@ -204,6 +216,7 @@ def ensure_selfhost_compiler_binary(repo_root: str) -> str:
         raise WysnaTypeError("Wysna Compiler bootstrap requires a source checkout", file=str(source), code="W2013")
     cache = _bootstrap_cache_dir(root)
     with cache_lock(str(cache / "bootstrap.lock")):
+        _sync_selfhost_bundle(root)
         fingerprint, _ = bootstrap_fingerprint(root)
         destination, index_path = _resolve_cached_destination(cache, fingerprint)
         existing = _has_valid_cache(destination, fingerprint)

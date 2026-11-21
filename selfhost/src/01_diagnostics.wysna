@@ -3,7 +3,28 @@ extern "C" fn wysna_host_buffer_new() -> opaque
 extern "C" fn wysna_host_buffer_append(handle: opaque, value: int) -> int
 extern "C" fn wysna_host_buffer_get(handle: opaque, index: int) -> int
 extern "C" fn wysna_host_crypto_sha256(input_handle: opaque, output_handle: opaque) -> int
+extern "C" fn wysna_host_crypto_random_bytes(output_handle: opaque, count: int) -> int
 extern "C" fn wysna_host_close(handle: opaque) -> int
+
+fn diag_uuid4() -> str {
+    let buf = wysna_host_buffer_new()
+    let st = wysna_host_crypto_random_bytes(buf, 16)
+    if st != 0 {
+        wysna_host_close(buf)
+        return "native"
+    }
+    let mut parts: list[str] = []
+    for i in 0..16 {
+        let mut b = wysna_host_buffer_get(buf, i)
+        if b < 0 { b = 0 }
+        if i == 6 { b = (b % 16) + 64 }
+        elif i == 8 { b = (b % 64) + 128 }
+        parts.append(diag_hex_digit((b / 16) % 16) + diag_hex_digit(b % 16))
+        if i == 3 or i == 5 or i == 7 or i == 9 { parts.append("-") }
+    }
+    wysna_host_close(buf)
+    return join_strings(parts, "")
+}
 
 fn diag_hex_digit(n: int) -> str {
     let digits = "0123456789abcdef"
@@ -143,7 +164,7 @@ fn diag_primary_span_json(file: str, line: int, col: int, src: str) -> str {
 
 fn diag_record_json(code: str, stage: str, severity: str, msg: str, file: str, line: int, col: int, src: str) -> str {
     let span_json = diag_primary_span_json(file, line, col, src)
-    let data_json = if code == "W2001" { fix_mismatch_data_json(msg) } else { "{}" }
+    let data_json = if stage == "type" { fix_mismatch_data_json(msg) } else { "{}" }
     let fixes_json = if span_json != "null" { fix_diagnostic_edits_json(code, msg, file, src, line, col) } else { "[]" }
     return "{\"code\":" + diag_json_quote(code) + ",\"severity\":" + diag_json_quote(severity) + ",\"stage\":" + diag_json_quote(stage) + ",\"message\":" + diag_json_quote(msg) + ",\"primary_span\":" + span_json + ",\"related\":[],\"data\":" + data_json + ",\"fixes\":" + fixes_json + "}"
 }
@@ -152,7 +173,7 @@ fn diag_tool_envelope_json(command: str, status: str, exit_code: int, diagnostic
     let mut parts: list[str] = ["{\"schema_version\":\"wysna.tool-result/1\""]
     parts.append(",\"command\":" + diag_json_quote(command))
     parts.append(",\"status\":" + diag_json_quote(status))
-    parts.append(",\"invocation_id\":\"native\"")
+    parts.append(",\"invocation_id\":" + diag_json_quote(diag_uuid4()))
     parts.append(",\"tool_exit_code\":" + str(exit_code))
     parts.append(",\"process_exit_code\":" + str(exit_code))
     parts.append(",\"execution\":null")

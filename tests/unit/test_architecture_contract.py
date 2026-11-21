@@ -267,6 +267,21 @@ class ArchitectureContractTests(unittest.TestCase):
             self.assertEqual(checker.telemetry.to_dict(), telemetry)
             self.assertEqual(checker.monomorphized_struct_decls, [])
 
+    def test_stdlib_externs_registered_across_host_abi_and_effect_model(self):
+        import re
+        from compiler.EffectModel import HOST_EFFECTS
+        from runtime import HostAbi
+
+        externs = set()
+        pattern = re.compile(r'\bextern\s+"C"\s+fn\s+(wysna_host_[A-Za-z0-9_]+)\b')
+        for path in sorted((ROOT / 'stdlib').glob('*.wysna')):
+            externs.update(pattern.findall(path.read_text(encoding='utf-8')))
+        self.assertTrue(externs, 'expected stdlib/*.wysna to declare wysna_host_* externs')
+        self.assertEqual(externs - set(HostAbi.FUNCTIONS), set(),
+                         'stdlib wysna_host_* externs missing from HostAbi.FUNCTIONS')
+        self.assertEqual(externs - set(HOST_EFFECTS), set(),
+                         'stdlib wysna_host_* externs missing from EffectModel.HOST_EFFECTS')
+
 
 if __name__ == '__main__':
     unittest.main()

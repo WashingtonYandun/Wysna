@@ -191,3 +191,46 @@ def test_creation_failure_cleans_unchanged_files(tmp_path, monkeypatch):
     with pytest.raises(ScaffoldError):
         create_project("example", tmp_path)
     assert not (tmp_path / "example").exists()
+
+
+def test_sole_non_app_target_is_auto_selected(tmp_path):
+    pkg = tmp_path / "web-only"
+    (pkg / "src").mkdir(parents=True)
+    (pkg / "src/library.wysna").write_text("pub fn add(a: int, b: int) -> int { return a + b }\n", encoding="utf-8")
+    (pkg / "wysna.toml").write_text(
+        'manifest_version = 1\n\n[package]\nname = "web-only"\nversion = "0.1.0"\nlanguage = "0.8"\n\n'
+        '[toolchain]\ncompiler = "0.8.0"\nstdlib = "bundled"\n\n[sources]\nroot = "src"\n\n'
+        '[targets.web]\nentry = "src/library.wysna"\nprofile = "browser-library"\n',
+        encoding="utf-8",
+    )
+    checked = run_cli(pkg, "project", "check")
+    assert checked.returncode == 0, checked.stderr
+    api = run_cli(pkg, "api", "--manifest", str(pkg / "wysna.toml"))
+    assert api.returncode == 0, api.stderr
+
+    # Adding a second non-'app' target still requires explicit --target.
+    (pkg / "wysna.toml").write_text(
+        (pkg / "wysna.toml").read_text(encoding="utf-8")
+        + '\n[targets.cli]\nentry = "src/library.wysna"\nprofile = "native-cli"\n',
+        encoding="utf-8",
+    )
+    ambiguous = run_cli(pkg, "project", "check")
+    assert ambiguous.returncode == 2 and "unknown target 'app'" in ambiguous.stderr
+
+
+def test_wasi_toolchain_falls_back_to_zig_when_wasi_sdk_absent(tmp_path, monkeypatch):
+    from compiler.WasiToolchain import WasiCompilationError, WasiToolchain
+
+    monkeypatch.delenv("WASI_SDK_PATH", raising=False)
+    fake_zig = tmp_path / "toolchain" / "zig" / ("zig.exe" if sys.platform == "win32" else "zig")
+    fake_zig.parent.mkdir(parents=True)
+    fake_zig.write_text("", encoding="utf-8")
+
+    monkeypatch.setattr("compiler.WasiToolchain.subprocess.run", lambda *a, **kw: type("R", (), {"returncode": 0, "stdout": "0.14.0\n", "stderr": ""})())
+    compiler, sysroot, version, mode, used_sdk = WasiToolchain(tmp_path)._compiler()
+    assert compiler == fake_zig and sysroot is None and version == "zig 0.14.0" and mode == "zig" and used_sdk == fake_zig.parent
+
+    # Explicit WASI_SDK_PATH missing does not silently switch to zig.
+    monkeypatch.setenv("WASI_SDK_PATH", str(tmp_path / "missing-sdk"))
+    with pytest.raises(WasiCompilationError, match="WASI SDK was not found"):
+        WasiToolchain(tmp_path)._compiler()

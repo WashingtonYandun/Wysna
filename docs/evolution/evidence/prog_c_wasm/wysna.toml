@@ -1,0 +1,18 @@
+manifest_version = 1
+
+[package]
+name = "prog-c-wasm"
+version = "0.1.0"
+language = "0.8"
+
+[toolchain]
+compiler = "0.8.0"
+stdlib = "bundled"
+
+[sources]
+root = "src"
+
+[targets.web]
+entry = "src/library.wysna"
+profile = "browser-library"
+memory_limit_mb = 128

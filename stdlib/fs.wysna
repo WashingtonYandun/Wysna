@@ -1,5 +1,8 @@
+import "std/algorithms"
 import "std/buffer"
+import "std/bytes" as utf8
 extern "C" fn wysna_host_fs(first: opaque, second: opaque, operation: int) -> int
+extern "C" fn wysna_host_project_entries(path: opaque, output: opaque) -> int
 extern "C" fn wysna_host_last_error() -> int
 extern "C" fn wysna_host_last_error_domain() -> int
 pub struct FsError { operation: str, path: str, code: int, domain: int }
@@ -15,8 +18,55 @@ fn apply(path: str, target: str, operation: int, name: str) -> int ! FsError {
     if status < 0 { return Err(FsError { operation: name, path: path, code: code, domain: domain }) }
     return status
 }
+fn string_less(left: str, right: str) -> bool {
+    let limit = if len(left) < len(right) { len(left) } else { len(right) }
+    for index in 0..limit {
+        let lc = ord(left[index])
+        let rc = ord(right[index])
+        if lc != rc { return lc < rc }
+    }
+    return len(left) < len(right)
+}
 pub fn exists(path: str) -> bool ! FsError { return apply(path, "", 0, "exists")? == 1 }
+pub fn is_dir(path: str) -> bool ! FsError { return apply(path, "", 5, "is_dir")? == 1 }
+pub fn is_file(path: str) -> bool ! FsError { return apply(path, "", 6, "is_file")? == 1 }
 pub fn size(path: str) -> int ! FsError { return apply(path, "", 1, "size") }
 pub fn mkdir(path: str) -> unit ! FsError { let status = apply(path, "", 2, "mkdir")? }
 pub fn remove(path: str) -> unit ! FsError { let status = apply(path, "", 3, "remove")? }
 pub fn rename(path: str, target: str) -> unit ! FsError { let status = apply(path, target, 4, "rename")? }
+pub fn list_dir(path: str) -> list[str] ! FsError {
+    let target = buffer.from_text(path)
+    let output = new buffer.Bytes()
+    let count = wysna_host_project_entries(target.borrow(), output.borrow())
+    let code = wysna_host_last_error()
+    let domain = wysna_host_last_error_domain()
+    target.close()
+    if count < 0 {
+        output.close()
+        return Err(FsError { operation: "list_dir", path: path, code: code, domain: domain })
+    }
+    let mut names: list[str] = []
+    let mut index = 0
+    while index < count {
+        index = index + 1
+        let mut octets: list[int] = []
+        while index < count {
+            let value = output.get(index) else error {
+                output.close()
+                return Err(FsError { operation: "list_dir", path: path, code: 22, domain: 1 })
+            }
+            index = index + 1
+            if value == 0 {
+                break
+            }
+            octets.append(value)
+        }
+        let entry = utf8.decode(octets) else error {
+            output.close()
+            return Err(FsError { operation: "list_dir", path: path, code: 22, domain: 1 })
+        }
+        names.append(entry)
+    }
+    output.close()
+    return algorithms.sort[str](names, |left: str, right: str| { string_less(left, right) })
+}

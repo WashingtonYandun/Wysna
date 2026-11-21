@@ -1,0 +1,8 @@
+=== seed_run (rc=0) ===
+STDOUT: Wrote 2 alerts for region us-east-1 to docs/evolution/evidence/prog_a_output.json
+=== seed_build (rc=0) ===
+=== seed_bin_exec (rc=0) ===
+STDOUT: Wrote 2 alerts for region us-east-1 to docs/evolution/evidence/prog_a_output.json
+=== compiler_build (rc=0) ===
+=== compiler_bin_exec (rc=0) ===
+STDOUT: Wrote 2 alerts for region us-east-1 to docs/evolution/evidence/prog_a_output.json

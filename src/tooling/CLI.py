@@ -110,9 +110,9 @@ def print_help(prog: Optional[str] = None) -> None:
     print(f"  {prog} api [std/module] [--output-format=json-v1] # Discover standard-library APIs")
     print(f"  {prog} capabilities [--output-format=json-v1]   # Discover target availability and requirements")
     print(f"  {prog} repl                                    # Start interactive REPL")
-    print(f"  {prog} [run] [--stats] [--report-json <path>] [--invocation-id <id>] <file.wysna> [-- args...] # Execute Wysna source file")
-    print(f"  {prog} run --deny=<cap,...>|--allow=<cap,...> <file.wysna> # Static capability gate before interpretation")
-    print(f"  {prog} check [--engine=seed|compiler] [--json|--output-format=json-v1] [--warn-cycles] [--stats] <file.wysna>   # Static typecheck without execution")
+    print(f"  {prog} [run] [--stats] [--report-json <path>] [--invocation-id <id>] [-e CODE | <file.wysna>] [-- args...] # Execute Wysna source file or inline code")
+    print(f"  {prog} run --deny=<cap,...>|--allow=<cap,...> [-e CODE | <file.wysna>] # Static capability gate before interpretation")
+    print(f"  {prog} check [--engine=seed|compiler] [--json|--output-format=json-v1] [--warn-cycles] [--stats] [-e CODE | <file.wysna>]   # Static typecheck without execution")
     print(f"  {prog} fmt [--engine=seed|compiler] [--write] [--output-format=json-v1] <file.wysna> # Canonical deterministic formatter")
     print(f"  {prog} build [--engine=seed|compiler] [--backend=llvm-experimental] [--profile=dev|release|size] [--output-format=json-v1] <file.wysna> [-o <bin>] # Compile a native binary")
     print(f"  {prog} version                                   # Show compiler version")
@@ -229,7 +229,9 @@ def main(argv=None) -> None:
     show_mir = False
     subcmd: Optional[str] = None
     file_to_run: Optional[str] = None
+    eval_code: Optional[str] = None
     sanitize = False
+    line_directives = False
     link_libraries = []
 
     if args and args[0] in ("run", "check", "fmt", "ast", "mir", "tokens", "emit-c", "emit-llvm", "build", "test", "bench", "version", "repl"):
@@ -307,12 +309,26 @@ def main(argv=None) -> None:
                 test_sanitize = False
                 test_timeout_ms = 30000
                 test_targets = []
+                test_fast = False
+                test_suite = None
                 idx = 0
                 while idx < len(args):
                     arg = args[idx]
                     if arg in ("--sanitize", "-s"):
                         test_sanitize = True
                         os.environ["WYSNA_SANITIZE"] = "1"
+                        idx += 1
+                    elif arg == "--fast":
+                        test_fast = True
+                        idx += 1
+                    elif arg.startswith("--suite="):
+                        test_suite = arg.split("=", 1)[1]
+                        idx += 1
+                    elif arg == "--suite":
+                        idx += 1
+                        if idx >= len(args):
+                            usage_error("--suite requires a domain name")
+                        test_suite = args[idx]
                         idx += 1
                     elif arg == "--native":
                         test_engine = "compiler"
@@ -353,7 +369,7 @@ def main(argv=None) -> None:
                     sys.exit(run_tests(test_targets, engine=test_engine, sanitize=test_sanitize, timeout_ms=test_timeout_ms))
                 else:
                     from run_conformance import run_suite
-                    run_suite()
+                    run_suite(fast=test_fast, suite=test_suite)
                     return
         elif subcmd == "version":
             print(f"Wysna Language Compiler v{WYSNA_VERSION} (Wysna Seed + Wysna Compiler Self-Hosted C99)")
@@ -388,8 +404,27 @@ def main(argv=None) -> None:
             show_tokens = True
         elif arg == "--ast":
             usage_error("--ast is not a compiler backend; use 'wysna ast <file>' to inspect syntax")
+        elif arg in ("--eval", "-e") or arg.startswith("--eval="):
+            if eval_code is not None:
+                usage_error("-e/--eval may be specified only once")
+            if arg.startswith("--eval="):
+                eval_code = arg.split("=", 1)[1]
+            else:
+                i += 1
+                if i >= len(args):
+                    usage_error(f"{arg} requires a Wysna source string")
+                eval_code = args[i]
         elif arg in ("--check", "-c"):
-            check_only = True
+            if (arg == "-c" and subcmd in ("run", "check") and eval_code is None
+                    and file_to_run is None and i + 1 < len(args)
+                    and not args[i + 1].startswith("-")
+                    and not args[i + 1].endswith(".wysna") and not args[i + 1].endswith(".w")
+                    and not os.path.isfile(args[i + 1])
+                    and not any(not rem.startswith("-") for rem in args[i + 2:])):
+                i += 1
+                eval_code = args[i]
+            else:
+                check_only = True
         elif arg == "--warn-cycles":
             warn_cycles = True
         elif arg == "--json":
@@ -554,6 +589,8 @@ def main(argv=None) -> None:
             link_libraries.append(args[i])
         elif arg in ("--sanitize", "-s"):
             sanitize = True
+        elif arg == "--line-directives":
+            line_directives = True
         elif arg in ("--help", "-h"):
             if json_v1:
                 usage_error("--help cannot be combined with --output-format=json-v1")
@@ -622,6 +659,8 @@ def main(argv=None) -> None:
                 or emit_c_path is not None or json_diagnostics):
             usage_error("llvm-experimental does not support these diagnostic, C generation, or build options")
 
+    if line_directives and (subcmd not in ("emit-c", "build") or backend != "c99" or engine != "seed"):
+        usage_error("--line-directives is supported only by Seed emit-c and build")
     if requested_invocation_id is not None and report_json_path is None:
         usage_error("--invocation-id requires --report-json")
 
@@ -665,21 +704,42 @@ def main(argv=None) -> None:
             if check_only or fmt_only or fmt_write or emit_c_path is not None:
                 usage_error("build --output-format=json-v1 supports native compilation only")
 
-    if file_to_run:
-        if file_to_run.endswith(".w"):
-            if json_v1:
-                usage_error("'.w' files are no longer supported; rename the source to use the .wysna extension")
-            print(f"error: '.w' files are no longer supported. Rename '{file_to_run}' to '{file_to_run[:-2]}.wysna'", file=sys.stderr)
-            sys.exit(1)
+    if eval_code is not None:
+        if file_to_run is not None:
+            usage_error("cannot combine inline -e/--eval source with a file path")
+        if subcmd not in (None, "run", "check", "fmt", "ast", "mir", "tokens", "emit-c", "emit-llvm", "build"):
+            usage_error("-e/--eval is not supported by this command")
+        if fmt_write:
+            usage_error("--write cannot be used with inline -e/--eval source")
 
-        # Resolve file with extension fallback if omitted
-        if not os.path.isfile(file_to_run) and os.path.isfile(file_to_run + ".wysna"):
-            file_to_run = file_to_run + ".wysna"
+    if file_to_run or eval_code is not None:
+        is_eval = eval_code is not None
+        if not is_eval:
+            if file_to_run.endswith(".w"):
+                if json_v1:
+                    usage_error("'.w' files are no longer supported; rename the source to use the .wysna extension")
+                print(f"error: '.w' files are no longer supported. Rename '{file_to_run}' to '{file_to_run[:-2]}.wysna'", file=sys.stderr)
+                sys.exit(1)
+
+            # Resolve file with extension fallback if omitted
+            if not os.path.isfile(file_to_run) and os.path.isfile(file_to_run + ".wysna"):
+                file_to_run = file_to_run + ".wysna"
+        else:
+            file_to_run = "<eval>"
 
         def _strip_src_ext(p: str) -> str:
             if p.endswith(".wysna"):
                 return p[:-6]
             return p
+
+        if is_eval and subcmd in ("emit-c", "emit-llvm", "build"):
+            missing_out = (
+                (subcmd == "emit-c" and emit_c_path is None)
+                or (subcmd == "emit-llvm" and emit_llvm_path is None)
+                or (subcmd == "build" and build_bin_path is None)
+            )
+            if missing_out:
+                usage_error(f"{subcmd} with -e/--eval requires an explicit -o output path")
 
         if subcmd == "emit-c" and emit_c_path is None:
             emit_c_path = _strip_src_ext(file_to_run) + ".c"
@@ -691,7 +751,7 @@ def main(argv=None) -> None:
         report_state = None
         invocation_id = requested_invocation_id
         if report_json_path is not None:
-            if _same_file_path(report_json_path, file_to_run):
+            if not is_eval and _same_file_path(report_json_path, file_to_run):
                 usage_error("the report path must not overwrite the source file")
             pending = tool_result(
                 "run",
@@ -717,7 +777,7 @@ def main(argv=None) -> None:
                 "diagnostics": [],
             }
 
-        if json_v1 and subcmd in ("emit-c", "emit-llvm", "build"):
+        if not is_eval and json_v1 and subcmd in ("emit-c", "emit-llvm", "build"):
             output_path = {"emit-c": emit_c_path, "emit-llvm": emit_llvm_path, "build": build_bin_path}[subcmd]
             canonical_output = os.path.normcase(os.path.realpath(output_path))
             canonical_source = os.path.normcase(os.path.realpath(file_to_run))
@@ -728,38 +788,41 @@ def main(argv=None) -> None:
             if canonical_output == canonical_source or same_file:
                 usage_error("the output path must not overwrite the source file")
 
-        try:
-            with open(file_to_run, "r", encoding="utf-8",
-                      newline="" if json_v1 or report_state is not None else None) as f:
-                source = f.read()
-        except (OSError, UnicodeError) as e:
-            if report_state is not None:
-                diagnostic = diagnostic_record(
-                    "W5003", "filesystem",
-                    f"Unable to read source file '{file_to_run}': {e}",
-                    filename=file_to_run,
-                )
-                _set_run_report(report_state, "toolchain_error", 3, 3,
-                                diagnostics=[diagnostic])
+        if is_eval:
+            source = eval_code
+        else:
+            try:
+                with open(file_to_run, "r", encoding="utf-8",
+                          newline="" if json_v1 or report_state is not None else None) as f:
+                    source = f.read()
+            except (OSError, UnicodeError) as e:
+                if report_state is not None:
+                    diagnostic = diagnostic_record(
+                        "W5003", "filesystem",
+                        f"Unable to read source file '{file_to_run}': {e}",
+                        filename=file_to_run,
+                    )
+                    _set_run_report(report_state, "toolchain_error", 3, 3,
+                                    diagnostics=[diagnostic])
+                    print(f"Error reading file '{file_to_run}': {e}", file=sys.stderr)
+                    try:
+                        _write_run_report(report_json_path, invocation_id, report_state)
+                    except OSError as report_error:
+                        print(f"{prog}: unable to finalize JSON report: {report_error}", file=sys.stderr)
+                    raise SystemExit(3)
+                if json_v1:
+                    diagnostic = diagnostic_record(
+                        "W5003", "filesystem", f"Unable to read source file '{file_to_run}': {e}",
+                        filename=file_to_run,
+                    )
+                    write_tool_result(
+                        tool_result(command_for_output, "toolchain_error", 3,
+                                    diagnostics=[diagnostic]),
+                        sys.stdout,
+                    )
+                    sys.exit(3)
                 print(f"Error reading file '{file_to_run}': {e}", file=sys.stderr)
-                try:
-                    _write_run_report(report_json_path, invocation_id, report_state)
-                except OSError as report_error:
-                    print(f"{prog}: unable to finalize JSON report: {report_error}", file=sys.stderr)
-                raise SystemExit(3)
-            if json_v1:
-                diagnostic = diagnostic_record(
-                    "W5003", "filesystem", f"Unable to read source file '{file_to_run}': {e}",
-                    filename=file_to_run,
-                )
-                write_tool_result(
-                    tool_result(command_for_output, "toolchain_error", 3,
-                                diagnostics=[diagnostic]),
-                    sys.stdout,
-                )
-                sys.exit(3)
-            print(f"Error reading file '{file_to_run}': {e}", file=sys.stderr)
-            sys.exit(1)
+                sys.exit(1)
 
         code = run_pipeline(
             source_code=source,
@@ -796,6 +859,7 @@ def main(argv=None) -> None:
             ),
             json_v1=json_v1,
             warn_cycles=warn_cycles,
+            line_directives=line_directives,
             tool_command=command_for_output,
             report_state=report_state,
         )

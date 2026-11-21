@@ -87,7 +87,7 @@ def analyze_effects(module, interner, source_texts, trusted_externs=None):
                         affected.append(place.root)
                     if operation.result is not None:
                         affected.append(operation.result)
-                    if any(slot in slots and may_finalize_resource(slots[slot], interner) for slot in affected):
+                    if any(slot in slots and _may_finalize_opaque_resource(slots[slot], interner, module) for slot in affected):
                         selected.add('resource.finalize')
                         reason = reason or 'managed value may invoke a host resource finalizer'
                 if any(isinstance(argument, int) and argument < 0 for argument in operation.args):

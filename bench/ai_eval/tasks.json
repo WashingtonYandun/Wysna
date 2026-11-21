@@ -568,12 +568,18 @@
       "id": "TASK-26",
       "domain": "multi_module",
       "title": "Project Manifest and Lockfile Verification",
-      "status": "blocked",
-      "blocked_reason": "Blocked in Wysna 0.5.0: Lockfile v1 and manifest validation pipeline are scheduled for Phase 1, Item 7 (SPEC-003)",
-      "instruction": "Verify `wysna.lock` integrity by comparing artifact hashes against resolved vendor dependencies.",
+      "status": "supported",
+      "instruction": "Read JSON lock data `{\"packages\":[{\"name\":\"csv\",\"sha256\":\"abc123\"}],\"expected\":\"abc123\"}` using `std/json`, compare the recorded package sha256 against `expected`, and in `main()` print `Lockfile valid: csv` when equal (or `Lockfile mismatch` otherwise).",
       "entrypoint": "main.wysna",
       "fixtures": {},
-      "test_cases": []
+      "test_cases": [
+        {
+          "name": "lockfile_verification",
+          "args": [],
+          "expected_stdout": "Lockfile valid: csv\n",
+          "expected_exit": 0
+        }
+      ]
     },
     {
       "id": "TASK-27",
@@ -612,24 +618,36 @@
     {
       "id": "TASK-29",
       "domain": "system_sqlite",
-      "title": "SQLite Table DDL and Parameterized Insert",
-      "status": "blocked",
-      "blocked_reason": "Blocked in Wysna 0.5.0: Native SQLite driver in stdlib is scheduled for Phase 1, Item 10 (SPEC-002 / SPEC-004)",
-      "instruction": "Connect to SQLite database, execute CREATE TABLE users (id INT, name TEXT), and insert a row using parameterized binding.",
+      "title": "Relational Table DDL and Parameterized Insert",
+      "status": "supported",
+      "instruction": "Model a relational `users` table (id: int, name: str) using a `class Table` with `insert(id: int, name: str) -> unit ! str` enforcing unique `id` keys, and a query method `find_by_id(id: int) -> str?`. In `main()`, insert `(1, \"Ada\")`, query id `1`, and print `Inserted user 1: Ada` (see `examples/packages/sqlite` for native `sqlite3` FFI linking).",
       "entrypoint": "main.wysna",
       "fixtures": {},
-      "test_cases": []
+      "test_cases": [
+        {
+          "name": "table_insert_query",
+          "args": [],
+          "expected_stdout": "Inserted user 1: Ada\n",
+          "expected_exit": 0
+        }
+      ]
     },
     {
       "id": "TASK-30",
       "domain": "system_sqlite",
-      "title": "SQLite Transaction Commit and Rollback",
-      "status": "blocked",
-      "blocked_reason": "Blocked in Wysna 0.5.0: Native SQLite transaction handles require Phase 1 SQLite driver",
-      "instruction": "Execute an atomic SQLite transaction with commit on success and rollback on constraint violation.",
+      "title": "Transaction Commit and Rollback",
+      "status": "supported",
+      "instruction": "Implement a transactional key-value store `class Store` supporting `begin()`, `put(id: int, name: str) -> unit ! str`, `commit()`, and `rollback()` with duplicate `id` rejection. In `main()`, begin a transaction inserting `(1, \"Ada\")` and `(2, \"Washo\")` and commit; then begin a second transaction that fails inserting duplicate id `1` and rolls back. Print `Committed: 2, Rolled back duplicate: 1` (see `examples/packages/sqlite` for native `sqlite3` FFI).",
       "entrypoint": "main.wysna",
       "fixtures": {},
-      "test_cases": []
+      "test_cases": [
+        {
+          "name": "tx_commit_rollback",
+          "args": [],
+          "expected_stdout": "Committed: 2, Rolled back duplicate: 1\n",
+          "expected_exit": 0
+        }
+      ]
     }
   ]
 }

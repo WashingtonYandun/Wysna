@@ -2,10 +2,14 @@
 import argparse
 import json
 from dataclasses import asdict
+import os
 from pathlib import Path
+import shutil
+import subprocess
 import sys
 
 from common.Paths import get_repo_root
+from common.Platform import compiler_command
 from common.Version import WYSNA_VERSION
 from compiler.CompilerService import CompilerService
 from error.Error import WysnaError
@@ -75,17 +79,17 @@ def _availability(module_id):
         wasm = "unavailable"
         native = "supported"
         interpreter = "supported"
-        selfhost = "unknown"
+        selfhost = "supported"
     elif module_id in ("std/fs", "std/files"):
         wasm = "requires-declared-preopens"
         native = "supported"
         interpreter = "supported"
-        selfhost = "unknown"
+        selfhost = "supported"
     else:
         wasm = "supported"
         native = "supported"
         interpreter = "supported"
-        selfhost = "unknown"
+        selfhost = "supported"
     return {"interpreter": interpreter, "native": native,
             "selfhost": selfhost, "wasm": wasm}
 
@@ -223,7 +227,7 @@ def _resolve_stdlib_module(relative):
     return requested
 
 
-def _load_stdlib_index(module_filter=None):
+def _load_stdlib_index(module_filter=None, *, include_deps=False):
     files = sorted(_STDLIB_ROOT.glob("*.wysna")) if module_filter is None else []
     if module_filter is not None:
         relative = module_filter[4:] if module_filter.startswith("std/") else module_filter
@@ -239,9 +243,10 @@ def _load_stdlib_index(module_filter=None):
         module_id = _stdlib_module_id(path)
         symbols, imports = _module_records(source, path, module_id, _stdlib_owner(path))
         modules.append({"identity": module_id, "symbols": symbols})
-        for import_path in imports:
-            if import_path.startswith("std/"):
-                collect(_resolve_stdlib_module(import_path[4:]))
+        if module_filter is None or include_deps:
+            for import_path in imports:
+                if import_path.startswith("std/"):
+                    collect(_resolve_stdlib_module(import_path[4:]))
 
     for path in files:
         collect(path)
@@ -253,6 +258,8 @@ def _project_index(manifest_path):
     resolver = ProjectResolver.load(manifest_path)
     manifest = resolver.manifest
     target = manifest.targets.get("app")
+    if target is None and len(manifest.targets) == 1:
+        target = next(iter(manifest.targets.values()))
     if target is None:
         raise ManifestError("project API index requires a target named 'app'")
     service = CompilerService(project_root=manifest.root, project_resolver=resolver)
@@ -298,6 +305,7 @@ def run_api_command(argv):
     parser = _StrictArgumentParser(prog="wysna api")
     parser.add_argument("module", nargs="?")
     parser.add_argument("--manifest")
+    parser.add_argument("--with-deps", "--include-deps", action="store_true", dest="include_deps")
     parser.add_argument("--output-format", choices=("json-v1",))
     try:
         options = parser.parse_args(arguments)
@@ -307,10 +315,36 @@ def run_api_command(argv):
             payload = _project_index(options.manifest)
         else:
             payload = {"schema_version": "wysna.api-index/1", "compiler_version": WYSNA_VERSION,
-                       "stdlib_version": WYSNA_VERSION, "modules": _load_stdlib_index(options.module)}
+                       "stdlib_version": WYSNA_VERSION,
+                       "modules": _load_stdlib_index(options.module, include_deps=options.include_deps)}
         return _emit("api", payload=payload)
     except (ManifestError, OSError, ValueError, WysnaError) as error:
         return _emit("api", error=error)
+
+
+def _probe_host_dependencies():
+    repo_root = Path(get_repo_root())
+    try:
+        cc_cmd = compiler_command()[0]
+        cc_path = shutil.which(cc_cmd) or (cc_cmd if os.path.isfile(cc_cmd) else None)
+    except Exception:
+        cc_cmd, cc_path = None, None
+    curl_cfg = shutil.which("curl-config")
+    curl_ok = False
+    if curl_cfg:
+        try:
+            curl_ok = subprocess.run([curl_cfg, "--checkfor", "8.3.0"],
+                                     capture_output=True, text=True, timeout=5).returncode == 0
+        except Exception:
+            curl_ok = False
+    sqlite_bin = shutil.which("sqlite3")
+    selfhost_bin = repo_root / ".wysna_cache" / ("wysna_selfhost.exe" if os.name == "nt" else "wysna_selfhost")
+    return {
+        "c99_compiler": {"available": cc_path is not None, "command": cc_cmd},
+        "libcurl": {"available": curl_ok, "minimum_version": "8.3.0"},
+        "sqlite3": {"available": sqlite_bin is not None, "cli": sqlite_bin},
+        "selfhost_binary": {"available": selfhost_bin.is_file(), "path": str(selfhost_bin)},
+    }
 
 
 def run_capabilities_command(argv):
@@ -363,6 +397,7 @@ def run_capabilities_command(argv):
                             "browser-library exposes only generated scalar and UTF-8 exports; WVal and pointers remain internal",
                             "project dependencies are local paths only",
                             "project lockfiles do not claim bit-for-bit binary reproducibility"],
+            "host_dependencies": _probe_host_dependencies(),
         }
         root = _STDLIB_ROOT.parent
         if (root / 'installation.json').is_file() and (root / 'wysna_entry.py').is_file():

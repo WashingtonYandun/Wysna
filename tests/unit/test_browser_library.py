@@ -6,11 +6,12 @@ import tempfile
 from compiler.CompilerService import CompilerService
 from compiler.BrowserLibraryToolchain import (
     EMSCRIPTEN_RUNTIME_METHODS,
+    BrowserLibraryCompilationError,
     BrowserLibraryToolchain,
 )
 from error.Error import WysnaError
 from project.Manifest import Target
-from codegen.BrowserBindings import generate_browser_bindings
+from codegen.BrowserBindings import generate_browser_bindings, generate_zig_browser_runtime
 from tooling.TargetValidation import validate_checked_target
 from common.WasmModule import inspect_wasm
 
@@ -184,6 +185,74 @@ def test_browser_library_requires_bounded_private_wasm32_memory():
 
 def test_browser_toolchain_exports_the_memory_view_used_by_the_facade():
     assert EMSCRIPTEN_RUNTIME_METHODS == ("HEAPU8",)
+
+
+def test_zig_browser_runtime_generator_and_reactor_fallback():
+    import os
+    from unittest import mock
+
+    exports = [{"name": "add", "symbol": "wysna_web_call_0", "params": ["int", "int"], "return": "int"}]
+    runtime_js = generate_zig_browser_runtime("lib.runtime.wasm", exports)
+    assert "wasi_snapshot_preview1" in runtime_js
+    assert "get HEAPU8()" in runtime_js
+    assert "_wysna_web_init: () => exports.wysna_web_init()" in runtime_js
+    assert "_wysna_web_call_0: (...args) => exports.wysna_web_call_0(...args)" in runtime_js
+    assert "exports._initialize()" in runtime_js
+
+    required_exports = ("wysna_web_init", "wysna_web_destroy", "wysna_web_alloc", "wysna_web_free", "wysna_web_call_0")
+    export_payload = bytearray([len(required_exports)])
+    for index, name in enumerate(required_exports):
+        encoded = name.encode("utf-8")
+        export_payload.extend((len(encoded),))
+        export_payload.extend(encoded)
+        export_payload.extend((0, index))
+    bounded_wasm = b"\x00asm\x01\x00\x00\x00" + bytes((7, len(export_payload))) + bytes(export_payload) + b"\x05\x04\x01\x01\x01\x02"
+
+    with tempfile.TemporaryDirectory(prefix="wysna-browser-zig-") as temporary:
+        fake_root = Path(temporary) / "repo"
+        fake_zig = fake_root / "toolchain" / "zig" / ("zig.exe" if os.name == "nt" else "zig")
+        fake_zig.parent.mkdir(parents=True)
+        fake_zig.write_text("", encoding="utf-8")
+        recorded = []
+
+        def fake_run(cmd, **kwargs):
+            recorded.append(list(cmd))
+            if len(cmd) >= 2 and cmd[1] == "version":
+                return type("R", (), {"returncode": 0, "stdout": "0.15.2\n", "stderr": ""})()
+            if "-o" in cmd:
+                out_path = Path(cmd[cmd.index("-o") + 1])
+                out_path.write_bytes(bounded_wasm)
+            return type("R", (), {"returncode": 0, "stdout": "", "stderr": ""})()
+
+        with mock.patch.dict(os.environ, {}, clear=False):
+            os.environ.pop("EMCC", None)
+            os.environ.pop("WYSNA_EMCC", None)
+            with mock.patch("compiler.BrowserLibraryToolchain.shutil.which", return_value=None):
+                with mock.patch("compiler.BrowserLibraryToolchain.subprocess.run", side_effect=fake_run):
+                    toolchain = BrowserLibraryToolchain(fake_root)
+                    res = toolchain.build("int wysna_web_init(void){return 0;}", Path(temporary) / "dist" / "lib", exports, memory_limit_mb=32)
+        assert res.compiler_version == "zig 0.15.2"
+        assert Path(res.artifacts[0]).name == "lib.mjs"
+        assert Path(res.artifacts[1]).name == "lib.runtime.mjs"
+        assert Path(res.artifacts[2]).name == "lib.runtime.wasm"
+        assert "wasi_snapshot_preview1" in Path(res.artifacts[1]).read_text(encoding="utf-8")
+        build_cmd = recorded[-1]
+        assert "-target" in build_cmd and "wasm32-wasi" in build_cmd
+        assert "-mexec-model=reactor" in build_cmd
+        assert "-Wl,--export=wysna_web_call_0" in build_cmd
+
+        missing_root = Path(temporary) / "empty-repo"
+        missing_root.mkdir()
+        with mock.patch.dict(os.environ, {}, clear=False):
+            os.environ.pop("EMCC", None)
+            os.environ.pop("WYSNA_EMCC", None)
+            with mock.patch("compiler.BrowserLibraryToolchain.shutil.which", return_value=None):
+                try:
+                    BrowserLibraryToolchain(missing_root)._compiler()
+                except BrowserLibraryCompilationError as error:
+                    assert error.phase == "configuration" and "Zig" in str(error)
+                else:
+                    raise AssertionError("expected configuration error when neither emcc nor zig is installed")
 
 
 def test_browser_library_contract():

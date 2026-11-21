@@ -310,6 +310,189 @@ static inline WVal wysna_dict_values(WVal dict_val) {
     return wysna_make_list(d->len, d->vals);
 }
 
+static inline WVal wysna_dict_clear(WVal* dict_val) {
+    if (wysna_hi(*dict_val) != WVAL_HI_DICT) wysna_runtime_fail("W4003", "Dictionary intrinsic requires dict receiver");
+    wysna_dict_detach(dict_val);
+    WDictBuf* d = wysna_as_dict(*dict_val);
+    for (int32_t i = 0; i < d->len; i++) {
+        wysna_release(d->keys[i]);
+        wysna_release(d->vals[i]);
+    }
+    d->len = 0;
+    for (int32_t i = 0; i < d->bucket_count; i++) d->buckets[i] = -1;
+    return wysna_unit();
+}
+
+static inline WVal wysna_dict_remove(WVal* dict_val, WVal key) {
+    if (wysna_hi(*dict_val) != WVAL_HI_DICT) wysna_runtime_fail("W4003", "Dictionary intrinsic requires dict receiver");
+    WDictBuf* probe = wysna_as_dict(*dict_val);
+    if (!probe || probe->len == 0) return wysna_none();
+    int32_t found = wysna_dict_find(probe, key);
+    if (found < 0) return wysna_none();
+    wysna_dict_detach(dict_val);
+    WDictBuf* d = wysna_as_dict(*dict_val);
+    found = wysna_dict_find(d, key);
+    if (found < 0) return wysna_none();
+    WVal removed_key = d->keys[found];
+    WVal removed_val = d->vals[found];
+    int32_t last = d->len - 1;
+    if (found != last) {
+        memmove(&d->keys[found], &d->keys[found + 1], sizeof(WVal) * (size_t)(last - found));
+        memmove(&d->vals[found], &d->vals[found + 1], sizeof(WVal) * (size_t)(last - found));
+    }
+    d->len = last;
+    for (int32_t i = 0; i < d->bucket_count; i++) d->buckets[i] = -1;
+    for (int32_t i = 0; i < d->len; i++) wysna_dict_index_entry(d, i);
+    wysna_release(removed_key);
+    return wysna_enum_payload("Option", "Some", removed_val);
+}
+
+static inline WVal wysna_copy_str_n(const char* data, size_t length) {
+    if (!data || length == 0) return wysna_sso_from_n("", 0);
+    if (length <= 6) return wysna_sso_from_n(data, length);
+    char* copy = (char*)wysna_alloc_safe(length + 1);
+    memcpy(copy, data, length);
+    copy[length] = '\0';
+    return wysna_owned_str_n(copy, length);
+}
+
+static inline bool wysna_is_ascii_ws(unsigned char c) {
+    return c == ' ' || (c >= 9 && c <= 13);
+}
+
+static inline WVal wysna_str_trim(WVal s) {
+    char sb[7];
+    size_t len = 0;
+    const char* data = wysna_str_bytes(s, sb, &len);
+    size_t start = 0;
+    while (start < len && wysna_is_ascii_ws((unsigned char)data[start])) start++;
+    size_t end = len;
+    while (end > start && wysna_is_ascii_ws((unsigned char)data[end - 1])) end--;
+    return wysna_copy_str_n(data + start, end - start);
+}
+
+static inline WVal wysna_str_to_lower(WVal s) {
+    char sb[7];
+    size_t len = 0;
+    const char* data = wysna_str_bytes(s, sb, &len);
+    if (len == 0) return wysna_sso_from_n("", 0);
+    char* out = (char*)wysna_alloc_safe(len + 1);
+    for (size_t i = 0; i < len; i++) {
+        unsigned char c = (unsigned char)data[i];
+        out[i] = (c >= 'A' && c <= 'Z') ? (char)(c + 32) : (char)c;
+    }
+    out[len] = '\0';
+    return wysna_owned_str_n(out, len);
+}
+
+static inline WVal wysna_str_to_upper(WVal s) {
+    char sb[7];
+    size_t len = 0;
+    const char* data = wysna_str_bytes(s, sb, &len);
+    if (len == 0) return wysna_sso_from_n("", 0);
+    char* out = (char*)wysna_alloc_safe(len + 1);
+    for (size_t i = 0; i < len; i++) {
+        unsigned char c = (unsigned char)data[i];
+        out[i] = (c >= 'a' && c <= 'z') ? (char)(c - 32) : (char)c;
+    }
+    out[len] = '\0';
+    return wysna_owned_str_n(out, len);
+}
+
+static inline WVal wysna_str_starts_with(WVal s, WVal prefix) {
+    char sbs[7], sbp[7];
+    size_t slen = 0, plen = 0;
+    const char* sd = wysna_str_bytes(s, sbs, &slen);
+    const char* pd = wysna_str_bytes(prefix, sbp, &plen);
+    return wysna_bool(plen <= slen && (plen == 0 || memcmp(sd, pd, plen) == 0));
+}
+
+static inline WVal wysna_str_ends_with(WVal s, WVal suffix) {
+    char sbs[7], sbp[7];
+    size_t slen = 0, plen = 0;
+    const char* sd = wysna_str_bytes(s, sbs, &slen);
+    const char* pd = wysna_str_bytes(suffix, sbp, &plen);
+    return wysna_bool(plen <= slen && (plen == 0 || memcmp(sd + slen - plen, pd, plen) == 0));
+}
+
+static inline WVal wysna_str_split(WVal s, WVal sep) {
+    char sbs[7], sbsep[7];
+    size_t slen = 0, seplen = 0;
+    const char* sd = wysna_str_bytes(s, sbs, &slen);
+    const char* sepd = wysna_str_bytes(sep, sbsep, &seplen);
+    WListBuf* b = (WListBuf*)wysna_alloc_safe(sizeof(WListBuf));
+    b->refcount = 1;
+    b->len = 0;
+    b->cap = 8;
+    b->scalar_only = false;
+    b->data = (WVal*)wysna_alloc_safe(sizeof(WVal) * (size_t)b->cap);
+    wysna_mem_on_alloc();
+    #define W_SPLIT_PUSH(elem_val) do { \
+        if (b->len >= b->cap) { \
+            b->cap *= 2; \
+            b->data = (WVal*)wysna_realloc_safe(b->data, sizeof(WVal) * (size_t)b->cap); \
+        } \
+        b->data[b->len++] = (elem_val); \
+    } while (0)
+    if (seplen == 0) {
+        size_t pos = 0;
+        while (pos < slen) {
+            size_t step = 1;
+            wysna_utf8_valid_codepoint_at_n(sd, slen, pos, &step, NULL);
+            if (step == 0) step = 1;
+            W_SPLIT_PUSH(wysna_copy_str_n(sd + pos, step));
+            pos += step;
+        }
+    } else {
+        size_t start = 0;
+        size_t i = 0;
+        while (i + seplen <= slen) {
+            if (memcmp(sd + i, sepd, seplen) == 0) {
+                W_SPLIT_PUSH(wysna_copy_str_n(sd + start, i - start));
+                i += seplen;
+                start = i;
+            } else {
+                i++;
+            }
+        }
+        W_SPLIT_PUSH(wysna_copy_str_n(sd + start, slen - start));
+    }
+    #undef W_SPLIT_PUSH
+    return wysna_make_hi_ptr(WVAL_HI_LIST, b);
+}
+
+static inline WVal wysna_str_replace(WVal s, WVal old_sub, WVal new_sub) {
+    char sbs[7], sbo[7], sbn[7];
+    size_t slen = 0, olen = 0, nlen = 0;
+    const char* sd = wysna_str_bytes(s, sbs, &slen);
+    const char* od = wysna_str_bytes(old_sub, sbo, &olen);
+    const char* nd = wysna_str_bytes(new_sub, sbn, &nlen);
+    if (olen == 0) return wysna_copy_str_n(sd, slen);
+    size_t cap = slen + 16;
+    char* out = (char*)wysna_alloc_safe(cap);
+    size_t out_len = 0;
+    size_t i = 0;
+    while (i < slen) {
+        if (i + olen <= slen && memcmp(sd + i, od, olen) == 0) {
+            if (out_len + nlen + 1 > cap) {
+                while (out_len + nlen + 1 > cap) cap *= 2;
+                out = (char*)wysna_realloc_safe(out, cap);
+            }
+            if (nlen > 0) memcpy(out + out_len, nd, nlen);
+            out_len += nlen;
+            i += olen;
+        } else {
+            if (out_len + 2 > cap) {
+                cap *= 2;
+                out = (char*)wysna_realloc_safe(out, cap);
+            }
+            out[out_len++] = sd[i++];
+        }
+    }
+    out[out_len] = '\0';
+    return wysna_owned_str_n(out, out_len);
+}
+
 static inline WVal wysna_contains(WVal container, WVal item) {
     uint32_t hi = wysna_hi(container);
     if (hi == WVAL_HI_LIST) {

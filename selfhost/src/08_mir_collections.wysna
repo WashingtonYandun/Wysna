@@ -15,7 +15,7 @@ fn mir_collection(context: MirBuilder, node: CheckedNode) -> int {
 }
 fn mir_collection_call(context: MirBuilder, node: CheckedNode) -> int {
     let source = node.source
-    if node.text == "append" or node.text == "pop" or node.text == "clear" {
+    if node.text == "append" or node.text == "pop" or node.text == "clear" or node.text == "remove" {
         let place = mir_place(context, node.children[0])
         let mut arguments: list[int] = []
         for i in 1..len(node.children) { arguments.append(mir_expression(context, node.children[i])) }
@@ -35,6 +35,9 @@ fn mir_collection_call(context: MirBuilder, node: CheckedNode) -> int {
         let length = mir_op(context, "runtime", 3, args_, "wysna_builtin_len", mir_literal_unit(), source)
         let zero = mir_constant(context, mir_literal_int(0), 3, source)
         return mir_op(context, "runtime", mir_type(context, node.type_id, source), [length, zero], "wysna_equal", mir_literal_unit(), source)
+    }
+    if node.text == "trim" or node.text == "split" or node.text == "to_lower" or node.text == "to_upper" or node.text == "starts_with" or node.text == "ends_with" or node.text == "replace" {
+        return mir_op(context, "runtime", mir_type(context, node.type_id, source), args_, "wysna_str_" + node.text, mir_literal_unit(), source)
     }
     if node.text == "items" {
         return mir_op(context, "runtime", mir_type(context, node.type_id, source), args_, "wysna_builtin_dict_items", mir_literal_unit(), source)

@@ -158,6 +158,27 @@ class EffectAnalysisTests(unittest.TestCase):
             with redirect_stdout(io.StringIO()):
                 self.assertEqual(run_explain_command([str(outside),*arguments[1:]]),2)
 
+    def test_pure_user_classes_are_complete_and_all_stdlib_externs_are_modeled(self):
+        import re
+        from compiler.EffectModel import HOST_EFFECTS
+
+        report = self.report(
+            'class Counter {\n    value: int\n    fn init(value: int) { this.value = value }\n}\n'
+            'fn main() {\n    let c = Counter(1)\n    print(c.value)\n}\n'
+        )
+        self.assertTrue(report['program']['complete_within_model'], report)
+        self.assertEqual(report['program']['capabilities'], ['stdio'])
+        self.assertNotIn('resource.finalize', report['program']['transitive_effects'])
+
+        stdlib_dir = Path(__file__).resolve().parents[2] / 'stdlib'
+        stdlib_externs = set()
+        for path in sorted(stdlib_dir.glob('*.wysna')):
+            text = path.read_text(encoding='utf-8')
+            for match in re.finditer(r'extern\s+"C"\s+fn\s+([a-zA-Z0-9_]+)', text):
+                stdlib_externs.add(match.group(1))
+        missing = sorted(stdlib_externs - set(HOST_EFFECTS))
+        self.assertEqual(missing, [])
+
 
 if __name__ == '__main__':
     unittest.main()

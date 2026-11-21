@@ -20,6 +20,8 @@ Wysna distributes modules under `std/` imported via canonical paths such as `imp
   - `File.close() -> int`: close handle and release host descriptor.
 - `std/fs`: filesystem operations returning `FsError`.
   - `fs.exists(path) -> bool ! FsError`: check if path exists on the host filesystem.
+  - `fs.is_dir(path) -> bool ! FsError` / `fs.is_file(path) -> bool ! FsError`: test whether a path is a directory or regular file (`false` when absent).
+  - `fs.list_dir(path) -> list[str] ! FsError`: return direct child entry names sorted lexicographically (excluding `.` and `..`).
   - `fs.size(path) -> int ! FsError`: get file size in bytes.
   - `fs.mkdir(path) -> unit ! FsError`: create a directory.
   - `fs.remove(path) -> unit ! FsError`: remove a file.
@@ -35,9 +37,9 @@ Wysna distributes modules under `std/` imported via canonical paths such as `imp
   - The node budget counts the root and every array, object, and primitive value. Object member names do not count; values from duplicate members count before the last value wins.
   - `json.stringify(value) -> str ! JsonError`: serialize compact JSON with object keys sorted by Unicode scalar value.
   - `Value` supports null, boolean, number, string, array and object values. Numbers preserve their JSON source spelling as `str`, avoiding silent binary64 precision loss.
-  - `json.null()`, `boolean()`, `number()`, `string()`, `array()` and `object()` construct values. `number()` validates its input.
-  - `json.is_null()`, `as_bool()`, `as_number()`, `as_string()`, `as_array()`, `as_object()`, `get()` and `at()` inspect values; optional accessors return `none` for a type mismatch or missing index/key.
-  - Los accesos tipados `get_str`, `get_int`, `get_float`, `get_bool` y sus variantes `get_optional_*` indican el campo y los tipos esperado y recibido. Por ejemplo, `status_code: expected JSON integer, found JSON string`. Las claves con puntos se representan entre corchetes para diferenciarlas de una ruta anidada. `to_int` devuelve `JsonError` si el número supera el rango de un entero de 64 bits.
+  - `json.null()`, `boolean(bool)`, `number(str)`, `string(str)`, `array(list[Value])`, `object(dict[str, Value])` — plus typed convenience constructors `from_int(int)`, `from_float(float)`, `from_bool(bool)`, `from_str(str)` and `error(offset, message)` — construct values. `number()` validates its input.
+  - `json.is_null()`, `as_bool()`, `as_number()`, `as_string()`, `as_array()`, `as_object()`, `get(val, key)` and `at(val, idx)` inspect values; optional accessors return `none` for a type mismatch or missing index/key.
+  - Typed Result extractors `to_str(val)`, `to_bool(val)`, `to_int(val)`, `to_float(val)`, `to_array(val)`, `to_object(val)` and `get_required(val, key)` return `T ! JsonError` (`get_str`, `get_int`, `get_float`, `get_bool` and `get_optional_*` report field paths and expected vs actual types, e.g. `status_code: expected JSON integer, found JSON string`). Dotted keys are bracketed to distinguish them from nested paths. `to_int` returns `JsonError` when a number is out of 64-bit signed integer range.
   - Objects use string keys. Repeated keys during parsing keep the last value. Parsing rejects unpaired UTF-16 surrogates, malformed number syntax, trailing content and inputs beyond the selected budgets.
 - `std/text`: string manipulation, Unicode normalization, and query operations.
   - `text.join(parts, separator) -> str`: join string list with separator.
@@ -60,10 +62,15 @@ Wysna distributes modules under `std/` imported via canonical paths such as `imp
   - `path.join(base, child) -> str`: join paths with directory separator `/`.
   - `path.basename(path) -> str`: extract filename component.
   - `path.dirname(path) -> str`: extract directory component.
+  - `path.ext(path) -> str`: extract file extension including leading `.`, or `""` for dotfiles/extensionless paths.
+- `std/csv`: pure Wysna RFC 4180 CSV parser and serializer.
+  - `csv.parse(source) -> list[list[str]] ! CsvError`: parse CSV text supporting quoted fields, `""` escapes, and embedded newlines.
+  - `csv.parse_records(source) -> list[dict[str, str]] ! CsvError`: parse rows keyed by header column names, returning `CsvError` on column count mismatches.
+  - `csv.stringify(rows) -> str ! CsvError`: serialize rows to CSV text, quoting cells that contain commas, quotes, or newlines.
 - `std/io`: text file and stream convenience wrappers.
   - `io.read_text(path) -> str ! IoError`: read full UTF-8 file to string.
   - `io.write_text(path, content) -> unit ! IoError`: write full string to file.
-  - `io.read_line() -> str?` / `io.read_all() -> str` / `io.flush() -> bool`: read standard input line/stream and flush standard output.
+  - `io.read_line() -> Line ! IoError` / `io.read_all() -> str ! IoError` / `io.flush() -> unit ! IoError`: read standard input line/stream (`Line { text: str, eof: bool }`) and flush standard output.
 - `std/algorithms`: functional collection algorithms.
   - `algorithms.map[T, R]` `(values, fn(T) -> R) -> list[R]`: transform list elements.
   - `algorithms.filter[T]` `(values, fn(T) -> bool) -> list[T]`: filter list elements satisfying predicate.
@@ -99,11 +106,12 @@ Wysna distributes modules under `std/` imported via canonical paths such as `imp
   - `async.poll_events(timeout_ms) -> int`, `is_ready(task) -> bool`, `wait(task) -> T ! str`, `all(tasks) -> list[T] ! str`, `race(tasks) -> T ! str`: multiplex, await, and race tasks safely with automatic result hydration and exit cleanup.
 - `std/process`: bounded child-process execution.
   - `process.run(executable, arguments, timeout_ms) -> int ! ProcessError`: invoke an executable directly with an argument vector and no implicit shell. Child stdout/stderr inherit the parent streams. The timeout is 1–600,000 ms; at most 256 arguments are accepted, each up to 1 MiB, with a 16 MiB total encoded-argument limit.
+  - `process.capture(executable, arguments, timeout_ms, max_output_bytes) -> ProcessOutput ! ProcessError`: execute directly without a shell and capture bounded UTF-8 stdout/stderr (`ProcessOutput { status: int, stdout: str, stderr: str }`) up to `max_output_bytes` (`1..16777216`) per stream.
 - `std/http`: synchronous HTTP and HTTPS client for bounded JSON API calls.
   - `http.make_header(name, value) -> Header` constructs a request header.
   - `http.request(url, method, headers, body, timeout_ms, max_response_bytes) -> Response ! HttpError`: issue one request using `GET`, `POST`, `PUT`, `PATCH`, `DELETE`, or `HEAD`. `GET` and `HEAD` reject request bodies.
   - `http.get(url) -> Response ! HttpError`: issue a GET with a 30-second total timeout and 1 MiB response limit.
-  - `http.batch_get(urls: list[str], max_concurrency: int = 8) -> list[Response ! HttpError]`: dispatch parallel HTTP GET requests across a bounded worker pool while preserving input URL ordering.
+  - `http.batch_get(urls: list[str]) -> list[BatchItemResult]` / `http.batch_get_all(urls: list[str]) -> list[Response] ! HttpError`: dispatch parallel HTTP GET requests across a bounded worker pool while preserving input URL ordering.
   - `http.post_json(url, headers, payload) -> Response ! HttpError | JsonError`: serialize one JSON value and send it as `application/json`.
   - `http.header(response, name) -> str?`, `http.response_text(response) -> str ! HttpError`, and `http.response_json(response) -> json.Value ! HttpError | JsonError` inspect a response.
   - `Response` preserves the HTTP status, response headers and owned `buffer.Bytes` body. Close `response.body` when it is no longer needed. Statuses such as 401, 429, 302 and 503 are responses, not transport errors.

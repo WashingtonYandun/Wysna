@@ -1,4 +1,4 @@
-"""Generate the small JavaScript facade for an Emscripten Wysna library."""
+"""Generate lightweight JavaScript runtime and facade loaders for Wysna browser-library artifacts."""
 import json
 from pathlib import PurePosixPath
 
@@ -256,5 +256,105 @@ export async function createWysna() {{
   }}
 
   return Object.freeze({{ exports: operations, destroy }});
+}}
+'''
+
+
+def generate_zig_browser_runtime(wasm_filename, exports):
+    """Return a lightweight WASI-reactor ES module loader compatible with generate_browser_bindings."""
+    wasm_name = PurePosixPath(wasm_filename).name
+    symbol_names = sorted({item["symbol"] for item in exports})
+    forwarded = ",\n    ".join(
+        f"_{sym}: (...args) => exports.{sym}(...args)" for sym in symbol_names
+    )
+    extra_bindings = f",\n    {forwarded}" if forwarded else ""
+    return f'''const wasmFilename = {json.dumps(wasm_name)};
+
+export default async function createWysnaModule() {{
+  const wasmUrl = new URL(`./${{wasmFilename}}`, import.meta.url);
+  let bytes;
+  if (typeof process !== "undefined" && process.versions && process.versions.node) {{
+    const fs = await import("node:fs/promises");
+    bytes = await fs.readFile(wasmUrl);
+  }} else {{
+    const response = await fetch(wasmUrl);
+    if (!response.ok) {{
+      throw new Error(`Failed to fetch WebAssembly module ${{wasmFilename}}: ${{response.status}}`);
+    }}
+    bytes = new Uint8Array(await response.arrayBuffer());
+  }}
+
+  let instanceExports = null;
+  const decoder = new TextDecoder("utf-8");
+  const getView = () => new DataView(instanceExports.memory.buffer);
+  const wasi = {{
+    fd_write(fd, iovsPtr, iovsLen, nwrittenPtr) {{
+      if (!instanceExports || !instanceExports.memory) return 8;
+      const mem = new Uint8Array(instanceExports.memory.buffer);
+      const view = getView();
+      let written = 0;
+      let text = "";
+      for (let i = 0; i < iovsLen; i += 1) {{
+        const ptr = view.getUint32(iovsPtr + i * 8, true);
+        const len = view.getUint32(iovsPtr + i * 8 + 4, true);
+        written += len;
+        text += decoder.decode(mem.subarray(ptr, ptr + len), {{ stream: true }});
+      }}
+      text += decoder.decode();
+      if (text) {{
+        if (fd === 2) console.error(text.replace(/\\n$/, ""));
+        else console.log(text.replace(/\\n$/, ""));
+      }}
+      view.setUint32(nwrittenPtr, written, true);
+      return 0;
+    }},
+    fd_close: () => 0,
+    fd_seek: () => 0,
+    fd_fdstat_get: () => 0,
+    environ_sizes_get(countPtr, bufSizePtr) {{
+      const view = getView();
+      view.setUint32(countPtr, 0, true);
+      view.setUint32(bufSizePtr, 0, true);
+      return 0;
+    }},
+    environ_get: () => 0,
+    args_sizes_get(argcPtr, argvBufSizePtr) {{
+      const view = getView();
+      view.setUint32(argcPtr, 0, true);
+      view.setUint32(argvBufSizePtr, 0, true);
+      return 0;
+    }},
+    args_get: () => 0,
+    clock_time_get(_id, _precision, timePtr) {{
+      getView().setBigUint64(timePtr, BigInt(Date.now()) * 1000000n, true);
+      return 0;
+    }},
+    random_get(bufPtr, bufLen) {{
+      if (instanceExports && instanceExports.memory && typeof crypto !== "undefined" && crypto.getRandomValues) {{
+        crypto.getRandomValues(new Uint8Array(instanceExports.memory.buffer, bufPtr, bufLen));
+      }}
+      return 0;
+    }},
+    proc_exit(code) {{
+      throw new Error(`WASI proc_exit(${{code}})`);
+    }},
+  }};
+
+  const {{ instance }} = await WebAssembly.instantiate(bytes, {{ wasi_snapshot_preview1: wasi }});
+  instanceExports = instance.exports;
+  const exports = instanceExports;
+  if (typeof exports._initialize === "function") {{
+    exports._initialize();
+  }}
+
+  return {{
+    get HEAPU8() {{
+      return new Uint8Array(exports.memory.buffer);
+    }},
+    _wysna_web_init: () => exports.wysna_web_init(),
+    _wysna_web_destroy: () => exports.wysna_web_destroy(),
+    _wysna_web_alloc: (size) => exports.wysna_web_alloc(size),
+    _wysna_web_free: (ptr) => exports.wysna_web_free(ptr){extra_bindings}
+  }};
 }}
 '''

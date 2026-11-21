@@ -5,6 +5,7 @@ import errno
 import os
 from pathlib import Path
 import signal
+import stat
 import subprocess
 import threading
 import time
@@ -226,11 +227,11 @@ def filesystem(first, second, operation):
         return int(payload)
     path = Path(text)
     try:
-        if operation in (0, 1):
+        if operation in (0, 1, 5, 6):
             try:
                 status = path.stat()
-            except FileNotFoundError as error:
-                if operation == 0:
+            except (FileNotFoundError, NotADirectoryError) as error:
+                if operation in (0, 5, 6):
                     if _active_trace is not None and _active_trace.is_recording:
                         _active_trace.record('host.filesystem', [text, other, operation], ok=True, result=0)
                     return 0
@@ -238,7 +239,14 @@ def filesystem(first, second, operation):
                 if _active_trace is not None and _active_trace.is_recording:
                     _active_trace.record('host.filesystem', [text, other, operation], ok=False, error=str(error))
                 return res
-            ret = 1 if operation == 0 else status.st_size
+            if operation == 0:
+                ret = 1
+            elif operation == 1:
+                ret = status.st_size
+            elif operation == 5:
+                ret = 1 if stat.S_ISDIR(status.st_mode) else 0
+            else:
+                ret = 1 if stat.S_ISREG(status.st_mode) else 0
             if _active_trace is not None and _active_trace.is_recording:
                 _active_trace.record('host.filesystem', [text, other, operation], ok=True, result=ret)
             return ret
@@ -1025,34 +1033,44 @@ def http_request(url_handle, method_handle, request_headers_handle, request_body
     return status
 
 
-def process_run(executable_handle, arguments_handle, timeout_ms, *, cwd=None, env=None):
-    global _error_code, _error_domain
-    _error_code = 0
-    _error_domain = 0
+def _decode_process_request(executable_handle, arguments_handle, timeout_ms):
     executable_bytes = find(executable_handle, 'buffer')
     encoded_arguments = find(arguments_handle, 'buffer')
     if executable_bytes is None or encoded_arguments is None or not 1 <= timeout_ms <= 600000:
-        return failure(OSError(errno.EINVAL, 'invalid process request'))
+        return None, None, failure(OSError(errno.EINVAL, 'invalid process request'))
     if not executable_bytes or b'\x00' in executable_bytes:
-        return failure(OSError(errno.EINVAL, 'invalid executable path'))
+        return None, None, failure(OSError(errno.EINVAL, 'invalid executable path'))
     try:
         executable = executable_bytes.decode('utf-8')
         arguments = []
         offset = 0
         while offset < len(encoded_arguments):
             if len(arguments) >= 256 or offset + 4 > len(encoded_arguments):
-                return failure(OSError(errno.E2BIG, 'invalid argument block'))
+                return None, None, failure(OSError(errno.E2BIG, 'invalid argument block'))
             length = int.from_bytes(encoded_arguments[offset:offset + 4], 'big')
             offset += 4
             if length > 1048576 or offset + length > len(encoded_arguments):
-                return failure(OSError(errno.E2BIG, 'argument exceeds its limit'))
+                return None, None, failure(OSError(errno.E2BIG, 'argument exceeds its limit'))
             raw_argument = encoded_arguments[offset:offset + length]
             offset += length
             if b'\x00' in raw_argument:
-                return failure(OSError(errno.EINVAL, 'argument contains NUL'))
+                return None, None, failure(OSError(errno.EINVAL, 'argument contains NUL'))
             arguments.append(raw_argument.decode('utf-8'))
             if offset > 16777216:
-                return failure(OSError(errno.E2BIG, 'argument block exceeds its limit'))
+                return None, None, failure(OSError(errno.E2BIG, 'argument block exceeds its limit'))
+        return executable, arguments, 0
+    except (OSError, UnicodeError, ValueError) as error:
+        return None, None, failure(error)
+
+
+def process_run(executable_handle, arguments_handle, timeout_ms, *, cwd=None, env=None):
+    global _error_code, _error_domain
+    _error_code = 0
+    _error_domain = 0
+    executable, arguments, status = _decode_process_request(executable_handle, arguments_handle, timeout_ms)
+    if status != 0:
+        return status
+    try:
         if _active_trace is not None and _active_trace.is_replaying:
             ok, payload = _active_trace.replay('host.process_run', [executable, arguments, timeout_ms])
             if not ok:
@@ -1085,6 +1103,73 @@ def process_run(executable_handle, arguments_handle, timeout_ms, *, cwd=None, en
         res = failure(error)
         if _active_trace is not None and _active_trace.is_recording:
             _active_trace.record('host.process_run', [executable, arguments, timeout_ms], ok=False, error=str(error))
+        return res
+
+
+def process_capture(executable_handle, arguments_handle, timeout_ms, max_output_bytes,
+                    stdout_handle, stderr_handle, *, cwd=None, env=None):
+    global _error_code, _error_domain
+    _error_code = 0
+    _error_domain = 0
+    stdout_buf = find(stdout_handle, 'buffer')
+    stderr_buf = find(stderr_handle, 'buffer')
+    if (stdout_buf is None or stderr_buf is None or len(stdout_buf) or len(stderr_buf)
+            or not 1 <= max_output_bytes <= 16777216):
+        return failure(OSError(errno.EINVAL, 'invalid process capture request'))
+    executable, arguments, status = _decode_process_request(executable_handle, arguments_handle, timeout_ms)
+    if status != 0:
+        return status
+    try:
+        if _active_trace is not None and _active_trace.is_replaying:
+            ok, payload = _active_trace.replay('host.process_capture', [executable, arguments, timeout_ms, max_output_bytes])
+            if not ok:
+                return failure(OSError(errno.EIO, str(payload)))
+            stdout_buf.extend(bytes.fromhex(payload.get('stdout_hex', '')))
+            stderr_buf.extend(bytes.fromhex(payload.get('stderr_hex', '')))
+            return int(payload.get('status', 0))
+        process = subprocess.Popen(
+            [executable, *arguments], cwd=cwd,
+            env=dict(env) if env is not None else None,
+            stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+            start_new_session=(os.name != 'nt'),
+            creationflags=(subprocess.CREATE_NEW_PROCESS_GROUP if os.name == 'nt' else 0),
+        )
+        attach_process_tree(process)
+        try:
+            try:
+                stdout_data, stderr_data = process.communicate(timeout=timeout_ms / 1000)
+            except subprocess.TimeoutExpired:
+                terminate_process_tree(process, force_group=True)
+                process.communicate()
+                res = failure(TimeoutError(errno.ETIMEDOUT, 'process timed out'))
+                if _active_trace is not None and _active_trace.is_recording:
+                    _active_trace.record('host.process_capture', [executable, arguments, timeout_ms, max_output_bytes],
+                                         ok=False, error='process timed out')
+                return res
+            if len(stdout_data) > max_output_bytes or len(stderr_data) > max_output_bytes:
+                res = failure(OSError(errno.E2BIG, 'process output exceeded limit'))
+                if _active_trace is not None and _active_trace.is_recording:
+                    _active_trace.record('host.process_capture', [executable, arguments, timeout_ms, max_output_bytes],
+                                         ok=False, error='process output exceeded limit')
+                return res
+            stdout_buf.extend(stdout_data)
+            stderr_buf.extend(stderr_data)
+            exit_code = int(process.returncode)
+            final_code = 128 + abs(exit_code) if exit_code < 0 else exit_code
+            if _active_trace is not None and _active_trace.is_recording:
+                _active_trace.record(
+                    'host.process_capture', [executable, arguments, timeout_ms, max_output_bytes],
+                    ok=True,
+                    result={'status': final_code, 'stdout_hex': stdout_data.hex(), 'stderr_hex': stderr_data.hex()},
+                )
+            return final_code
+        finally:
+            release_process_tree(process)
+    except (OSError, UnicodeError, ValueError) as error:
+        res = failure(error)
+        if _active_trace is not None and _active_trace.is_recording:
+            _active_trace.record('host.process_capture', [executable, arguments, timeout_ms, max_output_bytes],
+                                 ok=False, error=str(error))
         return res
 
 
@@ -1469,6 +1554,7 @@ FUNCTIONS = {
     'wysna_host_fs': filesystem,
     'wysna_host_fs_canonical': canonical_path,
     'wysna_host_process_run': process_run,
+    'wysna_host_process_capture': process_capture,
     'wysna_host_http_request': http_request,
     'wysna_host_http_async_start': http_async_start,
     'wysna_host_http_async_poll': http_async_poll,

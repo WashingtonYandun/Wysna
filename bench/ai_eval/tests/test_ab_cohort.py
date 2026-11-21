@@ -15,6 +15,7 @@ from bench.ai_eval.ab_cohort import (
     ConditionHarness,
     TASK_FAMILIES,
     _build_default_cohort_tasks,
+    build_import_style_ab_tasks,
     evaluate_expansion_gate,
     run_ab_cohort,
 )
@@ -180,7 +181,63 @@ def test_ab_cohort_cli_runs_isolated_mock_smoke(tmp_path):
     assert payload["oracle_revision"] == 2
     assert payload["families_covered"] == sorted(TASK_FAMILIES)
     assert payload["decision"] == "inconclusive"
-    assert len(payload["runs"]) == 10  # 5 families * 2 conditions
+    assert len(payload["runs"]) == 12  # 6 cohort tasks * 2 conditions
+
+
+def test_multifile_over_300_loc_task_and_import_style_ab_suite():
+    multifile = next(item for item in _build_default_cohort_tasks() if item.task.id == "AB-MULTIFILE-06")
+    wysna_files = {k: v for k, v in multifile.task.fixtures.items() if k.endswith(".wysna")}
+    assert len(wysna_files) == 5
+    total_loc = sum(len(src.splitlines()) for src in wysna_files.values())
+    assert total_loc > 300, total_loc
+
+    fixed_validator = (
+        "### validator.wysna\n```wysna\n"
+        + wysna_files["validator.wysna"]
+        .replace(
+            "    if item.amount_cents <= 0 {\n        return false\n    }\n",
+            "    if item.amount_cents <= 0 or item.amount_cents > 50000 {\n        return false\n    }\n",
+        )
+        .replace(
+            "    if item.amount_cents <= 0 {\n        return item.sku + \":non_positive_amount\"\n    }\n",
+            "    if item.amount_cents <= 0 {\n        return item.sku + \":non_positive_amount\"\n    }\n"
+            "    if item.amount_cents > 50000 {\n        return item.sku + \":amount_exceeds_limit\"\n    }\n",
+        )
+        + "```"
+    )
+    report = run_ab_cohort(
+        [multifile],
+        lambda _c: MockProvider({"AB-MULTIFILE-06": [fixed_validator]}),
+        repo_root=REPO_ROOT,
+        repetitions=1,
+        max_repair_cycles=0,
+    )
+    assert all(r["passed"] and r["collateral_lines_changed"] == 0 for r in report["runs"]), report["runs"]
+
+    import_tasks = build_import_style_ab_tasks()
+    assert [t.task.id for t in import_tasks] == ["LANG-R01-IMPORT-AS", "LANG-R01-FROM-USE"]
+    sol_as = (
+        '```wysna\nimport "std/parse" as parse\nfn main() {\n'
+        '    let parts = "4,5".split(",")\n'
+        '    let a = parse.parse_int(parts[0]) else _err { 0 }\n'
+        '    let b = parse.parse_int(parts[1]) else _err { 0 }\n'
+        '    print("sum=" + str(a + b))\n}\nmain()\n```'
+    )
+    sol_use = (
+        '```wysna\nfrom "std/parse" use { parse_int }\nfn main() {\n'
+        '    let parts = "4,5".split(",")\n'
+        '    let a = parse_int(parts[0]) else _err { 0 }\n'
+        '    let b = parse_int(parts[1]) else _err { 0 }\n'
+        '    print("sum=" + str(a + b))\n}\nmain()\n```'
+    )
+    lang_report = run_ab_cohort(
+        import_tasks,
+        lambda _c: MockProvider({"LANG-R01-IMPORT-AS": [sol_as], "LANG-R01-FROM-USE": [sol_use]}),
+        repo_root=REPO_ROOT,
+        repetitions=1,
+        max_repair_cycles=0,
+    )
+    assert all(r["passed"] for r in lang_report["runs"]), lang_report["runs"]
 
 
 def test_interactive_cohort_uses_model_selected_queries_and_counts_extra_turns():

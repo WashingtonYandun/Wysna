@@ -1,0 +1,147 @@
+pub struct CsvError { line: int, column: int, message: str }
+
+fn needs_quoting(value: str) -> bool {
+    for index in 0..len(value) {
+        let ch = value[index]
+        if ch == "," or ch == "\"" or ch == "\n" or ch == "\r" {
+            return true
+        }
+    }
+    return false
+}
+
+pub fn parse(source: str) -> list[list[str]] ! CsvError {
+    let total = len(source)
+    if total == 0 {
+        return []
+    }
+    let mut rows: list[list[str]] = []
+    let mut index = 0
+    let mut line = 1
+    let mut col = 1
+
+    while index < total {
+        let mut row: list[str] = []
+        let mut expect_field = true
+        while expect_field {
+            expect_field = false
+            if index < total and source[index] == "\"" {
+                let start_line = line
+                let start_col = col
+                index = index + 1
+                col = col + 1
+                let mut parts: list[str] = []
+                let mut closed = false
+                while index < total {
+                    let ch = source[index]
+                    if ch == "\"" {
+                        if index + 1 < total and source[index + 1] == "\"" {
+                            parts.append("\"")
+                            index = index + 2
+                            col = col + 2
+                        } else {
+                            index = index + 1
+                            col = col + 1
+                            closed = true
+                            break
+                        }
+                    } else {
+                        let chunk_start = index
+                        while index < total and source[index] != "\"" {
+                            if source[index] == "\n" {
+                                line = line + 1
+                                col = 1
+                            } else {
+                                col = col + 1
+                            }
+                            index = index + 1
+                        }
+                        parts.append(slice(source, chunk_start, index))
+                    }
+                }
+                if not closed {
+                    return Err(CsvError { line: start_line, column: start_col, message: "unterminated quoted CSV field" })
+                }
+                row.append(join_strings(parts, ""))
+                if index < total and source[index] != "," and source[index] != "\n" and source[index] != "\r" {
+                    return Err(CsvError { line: line, column: col, message: "unexpected character after closing quote in CSV field" })
+                }
+            } else {
+                let field_start = index
+                while index < total {
+                    let ch = source[index]
+                    if ch == "\"" {
+                        return Err(CsvError { line: line, column: col, message: "unexpected quote inside unquoted CSV field" })
+                    }
+                    if ch == "," or ch == "\n" or ch == "\r" {
+                        break
+                    }
+                    index = index + 1
+                    col = col + 1
+                }
+                row.append(slice(source, field_start, index))
+            }
+
+            if index < total and source[index] == "," {
+                index = index + 1
+                col = col + 1
+                expect_field = true
+            } elif index < total and source[index] == "\r" {
+                index = index + 1
+                if index < total and source[index] == "\n" {
+                    index = index + 1
+                }
+                line = line + 1
+                col = 1
+            } elif index < total and source[index] == "\n" {
+                index = index + 1
+                line = line + 1
+                col = 1
+            }
+        }
+        rows.append(row)
+    }
+    return rows
+}
+
+pub fn parse_records(source: str) -> list[dict[str, str]] ! CsvError {
+    let rows = parse(source)?
+    if len(rows) == 0 {
+        return []
+    }
+    let headers = rows[0]
+    let header_count = len(headers)
+    let mut records: list[dict[str, str]] = []
+    for row_index in 1..len(rows) {
+        let row = rows[row_index]
+        if len(row) != header_count {
+            return Err(CsvError {
+                line: row_index + 1,
+                column: 1,
+                message: "CSV row has " + str(len(row)) + " columns, expected " + str(header_count),
+            })
+        }
+        let mut entry: dict[str, str] = {}
+        for col_index in 0..header_count {
+            entry[headers[col_index]] = row[col_index]
+        }
+        records.append(entry)
+    }
+    return records
+}
+
+pub fn stringify(rows: list[list[str]]) -> str ! CsvError {
+    let mut lines: list[str] = []
+    for row in rows {
+        let mut cells: list[str] = []
+        for field in row {
+            if needs_quoting(field) {
+                cells.append("\"" + field.replace("\"", "\"\"") + "\"")
+            } else {
+                cells.append(field)
+            }
+        }
+        lines.append(join_strings(cells, ","))
+    }
+    return join_strings(lines, "\n")
+}

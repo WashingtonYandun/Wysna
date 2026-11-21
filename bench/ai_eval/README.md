@@ -18,12 +18,12 @@ This benchmark implements the canonical evaluation protocol defined in **[SPEC-0
 
 ## 2. Corpus Taxonomy (30 Tasks)
 
-| Domain | Tasks | Scope | Supported in 0.5.0 |
+| Domain | Tasks | Scope | Supported in 0.8.0 |
 | :--- | :---: | :--- | :---: |
 | **CLI & Scripting** | 12 (`TASK-01` .. `TASK-12`) | Argument parsing (`args()`), subcommands, flags, exit codes, string formatting. | 12 / 12 |
 | **Data & Files** | 8 (`TASK-13` .. `TASK-20`) | JSON, CSV aggregation, key flattening, list merges, file I/O (`read_file`, `write_file`), byte checksums. | 8 / 8 |
-| **Multi-Module Projects** | 6 (`TASK-21` .. `TASK-26`) | Module imports (`pub fn`), cross-module structs, circular dependency resolution, type mismatch repairs. | 5 / 6 (1 blocked: lockfile v1) |
-| **System & SQLite** | 4 (`TASK-27` .. `TASK-30`) | Resource lifecycle safety, in-memory relational queries, native SQLite DDL/transactions. | 2 / 4 (2 blocked: SQLite driver) |
+| **Multi-Module Projects** | 6 (`TASK-21` .. `TASK-26`) | Module imports (`pub fn`), cross-module structs, circular dependency resolution, lockfile verification. | 6 / 6 |
+| **System & SQLite** | 4 (`TASK-27` .. `TASK-30`) | Resource lifecycle safety, in-memory relational queries, transactional commit/rollback (plus reusable C FFI in `examples/packages/sqlite`). | 4 / 4 |
 
 ---
 

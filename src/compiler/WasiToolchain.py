@@ -2,6 +2,7 @@
 from dataclasses import dataclass
 import os
 from pathlib import Path
+import shutil
 import subprocess
 import tempfile
 import time
@@ -38,30 +39,53 @@ class WasiToolchain:
 
     def __init__(self, repo_root, sdk_path=None):
         self.repo_root = Path(repo_root).resolve()
-        selected = sdk_path or os.environ.get("WASI_SDK_PATH") or "/opt/wasi-sdk"
+        explicit = sdk_path or os.environ.get("WASI_SDK_PATH")
+        self._explicit_sdk = bool(explicit)
+        selected = explicit or "/opt/wasi-sdk"
         self.sdk_path = Path(selected).expanduser().resolve()
+
+    def _find_zig(self):
+        exe = "zig.exe" if os.name == "nt" else "zig"
+        bundled = self.repo_root / "toolchain" / "zig" / exe
+        if bundled.is_file():
+            return bundled
+        found = shutil.which("zig")
+        return Path(found).resolve() if found else None
 
     def _compiler(self):
         compiler = self.sdk_path / "bin" / ("clang.exe" if os.name == "nt" else "clang")
         sysroot = self.sdk_path / "share" / "wasi-sysroot"
-        if not compiler.is_file() or not sysroot.is_dir():
-            raise WasiCompilationError(
-                "configuration",
-                "WASI SDK was not found. Install wasi-sdk 34 and set WASI_SDK_PATH to its directory.",
-            )
+        if compiler.is_file() and sysroot.is_dir():
+            mode = "wasi-sdk"
+            used_sdk = self.sdk_path
+            inspect_cmd = [str(compiler), "--version"]
+            version_prefix = ""
+        else:
+            zig = None if self._explicit_sdk else self._find_zig()
+            if zig is None:
+                raise WasiCompilationError(
+                    "configuration",
+                    "WASI SDK was not found. Install wasi-sdk 34 and set WASI_SDK_PATH to its directory.",
+                )
+            compiler = zig
+            sysroot = None
+            mode = "zig"
+            used_sdk = zig.parent
+            inspect_cmd = [str(zig), "version"]
+            version_prefix = "zig "
         try:
-            result = subprocess.run([str(compiler), "--version"], capture_output=True,
+            result = subprocess.run(inspect_cmd, capture_output=True,
                                     text=True, timeout=15)
         except (OSError, subprocess.TimeoutExpired) as error:
             raise WasiCompilationError("configuration", f"cannot inspect WASI compiler: {error}") from error
         if result.returncode != 0:
             raise WasiCompilationError("configuration", result.stderr or "cannot inspect WASI compiler",
                                        result.returncode)
-        version = (result.stdout or result.stderr).splitlines()[0].strip()
-        return compiler, sysroot, version
+        version = version_prefix + (result.stdout or result.stderr).splitlines()[0].strip()
+        return compiler, sysroot, version, mode, used_sdk
 
     def build(self, c_source, output):
-        compiler, sysroot, compiler_version = self._compiler()
+        compiler, sysroot, compiler_version, mode, used_sdk = self._compiler()
         output_path = Path(output).expanduser()
         if output_path.suffix.lower() != ".wasm":
             output_path = output_path.with_suffix(".wasm")
@@ -70,10 +94,16 @@ class WasiToolchain:
             source_path = Path(temporary) / "program.c"
             candidate = Path(temporary) / "program.wasm"
             source_path.write_text(c_source, encoding="utf-8")
-            command = [str(compiler), "--target=wasm32-wasip1",
-                       f"--sysroot={sysroot}", "-std=c99", "-O2",
-                       f"-Wl,-z,stack-size={WASI_STACK_SIZE_BYTES}", "-Wl,--stack-first",
-                       f"-I{self.repo_root}", str(source_path), "-o", str(candidate)]
+            if mode == "wasi-sdk":
+                command = [str(compiler), "--target=wasm32-wasip1",
+                           f"--sysroot={sysroot}", "-std=c99", "-O2",
+                           f"-Wl,-z,stack-size={WASI_STACK_SIZE_BYTES}", "-Wl,--stack-first",
+                           f"-I{self.repo_root}", str(source_path), "-o", str(candidate)]
+            else:
+                command = [str(compiler), "cc", "-target", "wasm32-wasip1",
+                           "-std=c99", "-O2",
+                           f"-Wl,-z,stack-size={WASI_STACK_SIZE_BYTES}", "-Wl,--stack-first",
+                           f"-I{self.repo_root}", str(source_path), "-o", str(candidate)]
             started = time.perf_counter()
             try:
                 result = subprocess.run(command, capture_output=True, text=True, timeout=120)
@@ -89,6 +119,6 @@ class WasiToolchain:
             except ValueError as error:
                 raise WasiCompilationError("target-validation", str(error)) from error
             os.replace(candidate, output_path)
-        return WasiBuildResult(str(output_path), compile_ms, str(self.sdk_path),
+        return WasiBuildResult(str(output_path), compile_ms, str(used_sdk),
                                str(compiler), compiler_version,
                                info.imports, info.exports)

@@ -126,7 +126,7 @@ class ManagedEmission:
             value = gen.boxed(args[0]) if args else 'null'
             output = self.output(result)
             gen.emit('call void @wysna_llvm_mutate(ptr ' + output + ', ptr ' + pointer + ', ptr ' + value + ', i32 ' +
-                     str(('append', 'pop', 'clear').index(data['method'])) + ', ' + self.location(operation.source) + ')')
+                     str(('append', 'pop', 'clear', 'remove').index(data['method'])) + ', ' + self.location(operation.source) + ')')
             if args:
                 gen.release_boxed(args[0])
             self.complete(result, output)

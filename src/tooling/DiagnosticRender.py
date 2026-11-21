@@ -38,6 +38,17 @@ def _sanitize(text):
     return _display(stripped)[0]
 
 
+def _with_call_stack(text, error):
+    frames = getattr(error, "call_stack", None)
+    if not frames:
+        return text
+    lines = [
+        f"  at {_sanitize(fn_name)} ({_sanitize(fpath)}:{int(line_no)})"
+        for fn_name, fpath, line_no in frames
+    ]
+    return text + "\n" + "\n".join(lines)
+
+
 def render_diagnostic(error, source_by_file, *, span_cache=None):
     """Render a diagnostic without inventing locations or rereading files."""
     if getattr(error, "has_location", True):
@@ -50,21 +61,22 @@ def render_diagnostic(error, source_by_file, *, span_cache=None):
         help_text = _sanitize(help_text)
     span = record["primary_span"]
     if span is None:
-        return f"{header}\n  = help: {help_text}" if help_text else header
+        base = f"{header}\n  = help: {help_text}" if help_text else header
+        return _with_call_stack(base, error)
     source = source_for_file(source_by_file, span["source_id"])
     if source is None:
-        return header
+        return _with_call_stack(header, error)
     encoded = source.encode("utf-8")
     try:
         prefix = encoded[:span["start_byte"]].decode("utf-8")
         marked = encoded[span["start_byte"]:span["end_byte"]].decode("utf-8")
     except UnicodeError:
-        return header
+        return _with_call_stack(header, error)
     before = re.split(r"\r\n|\r|\n", prefix)
     line_number = len(before)
     lines = re.split(r"\r\n|\r|\n", source)
     if line_number > len(lines):
-        return header
+        return _with_call_stack(header, error)
     line = lines[line_number - 1]
     column = len(before[-1])
     # Bound excerpts and never emit source control sequences into the terminal.
@@ -85,4 +97,4 @@ def render_diagnostic(error, source_by_file, *, span_cache=None):
                 f" {' ' * len(gutter)} | {' ' * (len(left) + indent)}{'^' * mark_width}")
     if help_text:
         rendered += f"\n {' ' * len(gutter)} = help: {help_text}"
-    return rendered
+    return _with_call_stack(rendered, error)

@@ -160,6 +160,57 @@ static inline WVal wysna_make_object(const char* name, int32_t count, const char
     return wysna_make_hi_ptr(WVAL_HI_OBJECT, st);
 }
 
+static inline size_t wysna_struct_vals_offset(void) {
+    return ((sizeof(WStructBuf) + sizeof(WVal) - 1) / sizeof(WVal)) * sizeof(WVal);
+}
+
+static inline WVal wysna_make_struct_static(const char* name, int32_t count, const char* const* keys, const WVal* vals) {
+    int32_t cap = count > 0 ? count : 1;
+    size_t vals_offset = wysna_struct_vals_offset();
+    size_t vals_size = sizeof(WVal) * (size_t)cap;
+    size_t total = vals_offset + vals_size;
+    WStructBuf* st = (WStructBuf*)wysna_alloc_safe(total);
+    st->refcount = 1;
+    st->control = NULL;
+    st->vtable = NULL;
+    st->name = name;
+    st->len = count;
+    st->keys = (const char**)keys;
+    st->vals = (WVal*)((char*)st + vals_offset);
+    wysna_mem_on_alloc();
+    for (int32_t i = 0; i < count; i++) {
+        st->vals[i] = wysna_clone(vals[i]);
+    }
+    return wysna_make_hi_ptr(WVAL_HI_STRUCT, st);
+}
+
+static inline WVal wysna_make_object_static(const char* name, int32_t count, const char* const* keys, const WVal* vals) {
+    int32_t cap = count > 0 ? count : 1;
+    size_t vals_offset = wysna_struct_vals_offset();
+    size_t vals_size = sizeof(WVal) * (size_t)cap;
+    size_t total = vals_offset + vals_size;
+    WStructBuf* st = (WStructBuf*)wysna_alloc_safe(total);
+    st->refcount = 1;
+    st->control = (WWeakControl*)wysna_alloc_safe(sizeof(WWeakControl));
+    memset(st->control, 0, sizeof(WWeakControl));
+    st->control->kind = W_WEAK;
+    st->control->strong = 1;
+    st->control->weak = 1;
+    st->control->color = W_COLOR_BLACK;
+    st->control->object = st;
+    wysna_mem_on_alloc();
+    st->vtable = NULL;
+    st->name = name;
+    st->len = count;
+    st->keys = (const char**)keys;
+    st->vals = (WVal*)((char*)st + vals_offset);
+    wysna_mem_on_alloc();
+    for (int32_t i = 0; i < count; i++) {
+        st->vals[i] = wysna_clone(vals[i]);
+    }
+    return wysna_make_hi_ptr(WVAL_HI_OBJECT, st);
+}
+
 /* Default non-optional weak fields are independent expired handles. */
 static inline WVal wysna_empty_weak(void) {
     WWeakControl* control = (WWeakControl*)wysna_alloc_safe(sizeof(WWeakControl));

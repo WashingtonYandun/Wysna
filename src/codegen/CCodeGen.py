@@ -358,12 +358,12 @@ class CCodeGen:
             if all_fields:
                 f_names = ", ".join([f'"{f.name}"' for f in all_fields])
                 f_defaults = ", ".join([self._default_c_expr_for_type(f.type_ann) for f in all_fields])
-                new_lines.append(f"    const char* _k[{len(all_fields)}] = {{ {f_names} }};")
+                new_lines.append(f"    static const char* const _k[{len(all_fields)}] = {{ {f_names} }};")
                 new_lines.append(f"    WVal _v[{len(all_fields)}] = {{ {f_defaults} }};")
-                new_lines.append(f'    WVal v_self = wysna_make_object("{stmt.name}", {len(all_fields)}, _k, _v);')
+                new_lines.append(f'    WVal v_self = wysna_make_object_static("{stmt.name}", {len(all_fields)}, _k, _v);')
                 new_lines.append(f"    wysna_release_array({len(all_fields)}, _v);")
             else:
-                new_lines.append(f'    WVal v_self = wysna_make_object("{stmt.name}", 0, NULL, NULL);')
+                new_lines.append(f'    WVal v_self = wysna_make_object_static("{stmt.name}", 0, NULL, NULL);')
             new_lines.append(f"    wysna_set_vtable(v_self, &wysna_vtable_{stmt.name});")
             if init_m is not None:
                 new_lines.append(f"    wysna_release(wysna_method_{init_cls}__init({', '.join(init_args)}));")

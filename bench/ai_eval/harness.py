@@ -44,36 +44,34 @@ Key Wysna Grammar and Rules:
 4. Types: `int`, `float`, `str`, `bool`, `unit`, `list[T]`, `dict[K, V]`, `tuple[T1, T2]`, `T?` (nullable), `T ! E` (error union)
 5. Control Flow:
    - `if cond { ... } else { ... }`
-   - `for item in list_expr { ... }` (Note: for loops require a list; to iterate a dict use `for k, v in dict_items(d)` or `for k in d.keys()`)
+   - `for item in list_expr { ... }` (for dicts iterate with `for k, v in d.items()` or `for k in d.keys()`)
    - `for i in 0..limit { ... }` (exclusive) or `1..=limit` (inclusive)
    - `while cond { ... }`
 6. Standard Prelude Functions:
    - `print(...)`: space-separated print with newline
    - `len(x)`: code-point count for `str` or element count for collections
-   - `dict_items(d)`: returns `list[tuple[K, V]]` of `(key, value)` pairs for dictionary iteration
-   - `args()`: returns `list[str]` of command-line arguments. In `wysna run file.wysna -- a b`, `args()[0]` is runner/script, arguments start at `args()[1]`.
-   - `read_file(path)`: returns `str ! IoError`
-   - `write_file(path, content)`: returns `unit ! IoError`
-   - `str(x)`, `int(x)`, `float(x)`: explicit casts
-   - `chr(c)`: converts integer code point to single-character string (e.g. `chr(65)` -> `"A"`)
-   - `ord(s)`: returns Unicode integer code point of first character
-   - `slice(x, start, end)`: substring or sublist slice
-   - `join_strings(parts: list[str], separator: str) -> str`
-   - `bytes(s: str) -> list[int]`: returns unsigned byte values 0..=255
-7. Collections:
-   - `list[T]`: `.append(item)`, `.pop()`, `.clear()`
-   - `dict[K, V]`: `.get(key)` (returns `V?`), `.keys()`, `.values()`
+   - `dict_items(d)` / `d.items()`: returns `list[tuple[K, V]]` of `(key, value)` pairs
+   - `args()`: returns `list[str]` of CLI arguments (`args()[0]` is runner/script, flags/args start at `args()[1]`)
+   - `read_file(path) -> str ! IoError`, `write_file(path, content) -> unit ! IoError`
+   - `str(x)`, `int(x)`, `float(x)`, `chr(c)`, `ord(s)`, `slice(x, start, end)`, `join_strings(parts, sep)`, `bytes(s)`
+7. Collections & Strings:
+   - `str`: `.trim()`, `.split(sep)`, `.to_lower()`, `.to_upper()`, `.starts_with(p)`, `.ends_with(s)`, `.replace(old, new)`, `.contains(sub)`, `.is_empty()`
+   - `list[T]`: `.append(item)`, `.pop()`, `.clear()`, `.contains(item)`, `.is_empty()`
+   - `dict[K, V]`: `.get(key)` (returns `V?`), `.keys()`, `.values()`, `.items()`, `.contains(key)`, `.remove(key)`, `.clear()`, `.is_empty()`
 8. Error Handling:
    - `let content = read_file(path)?` (postfix propagation)
    - `let content = read_file(path) else err { return "fallback" }`
    - `let host = env("HOST") ?? "localhost"` (coalescing)
-9. Structs:
-   - `struct Name { field: type }`
-   - Instantiation requires named fields: `Name { field: value }`
-10. Imports and Standard Library:
-   - `import "other_module.wysna" as alias` or selective `from "other_module.wysna" use { symbol }`
-   - `from "std/algorithms" use { map, filter, fold, any, all }`
-   - `from "std/text" use { starts_with, ends_with, trim, to_lower, to_upper, split, contains }`
+9. Structs & Classes:
+   - `struct Name { field: type }` initialized as `Name { field: value }`
+   - Classes instantiate without `new`: `MyClass(arg1)` (or module-qualified `mod.MyClass(arg1)`)
+10. Standard Library & Imports:
+   - `import "std/io" as io`: `read_line() -> Line ! IoError`, `read_all() -> str ! IoError`, `flush() -> unit ! IoError`
+   - `import "std/fs" as fs`: `exists`, `is_dir`, `is_file`, `list_dir`, `mkdir_all`, `copy`, `rename`, `remove_file`
+   - `import "std/path" as path`: `join`, `basename`, `dirname`, `ext`
+   - `import "std/csv" as csv`: `parse_rows(text) -> list[list[str]] ! CsvError`, `parse_records(text) -> list[dict[str, str]] ! CsvError`, `stringify(rows)`
+   - `import "std/process" as proc`: `run(exe, argv, timeout_ms)`, `capture(exe, argv, timeout_ms, max_output_bytes) -> ProcessOutput ! ProcessError`
+   - `import "std/json" as json`, `import "std/http" as http`, `from "std/algorithms" use { map, filter, fold, any, all, sort }`
 11. Comments:
    - Line comments begin with `#` and documentation comments begin with `##`. Never use `//`.
 

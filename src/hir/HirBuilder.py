@@ -946,7 +946,9 @@ class HirBuilder:
                         target_cls = rec_entry.data
                 if rec_entry.tag in ("list", "dict"):
                     target = CollectionCallTarget(rec_entry.tag, expr.callee.property)
-                elif rec_hir.type_id == TYPE_STR and expr.callee.property in ("contains", "is_empty"):
+                elif rec_hir.type_id == TYPE_STR and expr.callee.property in (
+                    "contains", "is_empty", "trim", "split", "to_lower", "to_upper", "starts_with", "ends_with", "replace"
+                ):
                     target = CollectionCallTarget("str", expr.callee.property)
                 else:
                     target = VirtualCallTarget(expr.callee.property, slot=slot, target_class=target_cls)

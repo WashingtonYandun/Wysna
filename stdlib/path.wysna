@@ -28,3 +28,12 @@ pub fn dirname(path: str) -> str {
     if boundary == 2 and path[1] == ":" { return slice(path, 0, 3) }
     return slice(path, 0, boundary)
 }
+pub fn ext(path: str) -> str {
+    let name = basename(path)
+    let mut dot = -1
+    for index in 0..len(name) {
+        if name[index] == "." { dot = index }
+    }
+    if dot <= 0 { return "" }
+    return slice(name, dot, len(name))
+}
