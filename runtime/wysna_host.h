@@ -292,10 +292,10 @@ static int64_t wysna_host_file_write(void* file_handle, void* buffer_handle) {
     return 0;
 }
 static int64_t wysna_host_is_open(void* handle) { return wysna_host_find(handle, 2) != NULL; }
-/* Operations: exists, size, mkdir, remove, rename. Failures return -1. */
+/* Operations: exists, size, mkdir, remove, rename, is_dir, is_file. Failures return -1. */
 static int64_t wysna_host_fs(void* first, void* second, int64_t operation) {
 #ifdef WYSNA_DENY_CAP_FILESYSTEM_READ
-    if (operation == 0 || operation == 1) {
+    if (operation == 0 || operation == 1 || operation == 5 || operation == 6) {
         (void)first; (void)second;
         wysna_sandbox_deny("filesystem.read");
         return -1;
@@ -324,6 +324,16 @@ static int64_t wysna_host_fs(void* first, void* second, int64_t operation) {
                 result = code == ERROR_FILE_NOT_FOUND || code == ERROR_PATH_NOT_FOUND ? 0 : -1;
                 if (result < 0) { wysna_host_error_code = code; wysna_host_error_domain = 2; }
             }
+        } else if (operation == 5 || operation == 6) {
+            DWORD attr = GetFileAttributesW(wide);
+            if (attr != INVALID_FILE_ATTRIBUTES) {
+                result = operation == 5 ? ((attr & FILE_ATTRIBUTE_DIRECTORY) ? 1 : 0)
+                                        : ((attr & FILE_ATTRIBUTE_DIRECTORY) ? 0 : 1);
+            } else {
+                DWORD code = GetLastError();
+                result = code == ERROR_FILE_NOT_FOUND || code == ERROR_PATH_NOT_FOUND ? 0 : -1;
+                if (result < 0) { wysna_host_error_code = code; wysna_host_error_domain = 2; }
+            }
         } else if (operation == 1) {
             WIN32_FILE_ATTRIBUTE_DATA data;
             if (GetFileAttributesExW(wide, GetFileExInfoStandard, &data)) {
@@ -339,11 +349,24 @@ static int64_t wysna_host_fs(void* first, void* second, int64_t operation) {
             result = MoveFileExW(wide, wide_other, MOVEFILE_REPLACE_EXISTING) ? 0 : -1;
         }
     }
-    if (result < 0 && operation != 0) { wysna_host_error_code = GetLastError(); wysna_host_error_domain = 2; }
+    if (result < 0 && operation != 0 && operation != 5 && operation != 6) {
+        wysna_host_error_code = GetLastError(); wysna_host_error_domain = 2;
+    }
     free(wide); free(wide_other);
 #else
     struct stat status;
-    if (operation <= 1) result = stat(path, &status) == 0 ? (operation == 0 ? 1 : status.st_size) : (operation == 0 && errno == ENOENT ? 0 : -1);
+    if (operation <= 1 || operation == 5 || operation == 6) {
+        if (stat(path, &status) == 0) {
+            if (operation == 0) result = 1;
+            else if (operation == 1) result = status.st_size;
+            else if (operation == 5) result = S_ISDIR(status.st_mode) ? 1 : 0;
+            else result = S_ISREG(status.st_mode) ? 1 : 0;
+        } else if ((operation == 0 || operation == 5 || operation == 6) && (errno == ENOENT || errno == ENOTDIR)) {
+            result = 0;
+        } else {
+            result = -1;
+        }
+    }
     else if (operation == 2) result = mkdir(path, 0777) == 0 ? 0 : -1;
     else if (operation == 3) result = remove(path) == 0 ? 0 : -1;
     else if (operation == 4) result = rename(path, other) == 0 ? 0 : -1;

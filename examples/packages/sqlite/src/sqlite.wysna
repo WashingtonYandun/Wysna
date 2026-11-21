@@ -1,0 +1,209 @@
+import "std/bytes" as utf8
+import "std/resources"
+
+extern "C" fn ws_buf_new() -> opaque
+extern "C" fn ws_buf_clear(buf: opaque) -> unit
+extern "C" fn ws_buf_push(buf: opaque, byte: int32) -> int32
+extern "C" fn ws_buf_len(buf: opaque) -> int64
+extern "C" fn ws_buf_get(buf: opaque, index: int64) -> int32
+extern "C" fn ws_buf_free(buf: opaque) -> unit
+
+extern "C" fn ws_sqlite_open(path_buf: opaque) -> opaque
+extern "C" fn ws_sqlite_close(db_handle: opaque) -> int32
+extern "C" fn ws_sqlite_exec(db_handle: opaque, sql_buf: opaque) -> int32
+extern "C" fn ws_sqlite_prepare(db_handle: opaque, sql_buf: opaque) -> opaque
+extern "C" fn ws_sqlite_bind_int(stmt_handle: opaque, index: int32, value: int64) -> int32
+extern "C" fn ws_sqlite_bind_text(stmt_handle: opaque, index: int32, text_buf: opaque) -> int32
+extern "C" fn ws_sqlite_step(stmt_handle: opaque) -> int32
+extern "C" fn ws_sqlite_reset(stmt_handle: opaque) -> int32
+extern "C" fn ws_sqlite_column_int(stmt_handle: opaque, col: int32) -> int64
+extern "C" fn ws_sqlite_column_text(stmt_handle: opaque, col: int32, out_buf: opaque) -> int32
+extern "C" fn ws_sqlite_finalize(stmt_handle: opaque) -> int32
+extern "C" fn ws_sqlite_last_code(db_handle: opaque) -> int32
+extern "C" fn ws_sqlite_last_error(db_handle: opaque, out_buf: opaque) -> unit
+
+pub struct SqliteError { code: int, message: str }
+
+fn push_text(buf: opaque, text: str) -> unit {
+    ws_buf_clear(buf)
+    for b in bytes(text) {
+        let _ignored = ws_buf_push(buf, b)
+    }
+}
+
+fn read_buf_text(buf: opaque) -> str {
+    let n = ws_buf_len(buf)
+    let mut octets: list[int] = []
+    for i in 0..n {
+        let v = ws_buf_get(buf, i)
+        if v >= 0 {
+            octets.append(v)
+        }
+    }
+    return utf8.decode(octets) else error { "" }
+}
+
+fn read_db_error(db_raw: opaque) -> SqliteError {
+    let out = ws_buf_new()
+    ws_sqlite_last_error(db_raw, out)
+    let code = ws_sqlite_last_code(db_raw)
+    let msg = read_buf_text(out)
+    ws_buf_free(out)
+    return SqliteError { code: code, message: msg }
+}
+
+pub class Statement {
+    private handle: resources.Resource
+    private owner: opaque
+
+    public fn init(stmt_raw: opaque, owner_raw: opaque) {
+        this.owner = owner_raw
+        this.handle = resources.acquire(stmt_raw, |ptr: opaque| -> int {
+            ws_sqlite_finalize(ptr)
+        }) else error {
+            resources.Resource(stmt_raw, |ptr: opaque| -> int { ws_sqlite_finalize(ptr) })
+        }
+    }
+
+    public fn bind_int(index: int, value: int) -> unit ! SqliteError {
+        let raw = this.handle.borrow() else error {
+            return Err(SqliteError { code: 21, message: error.message })
+        }
+        let rc = ws_sqlite_bind_int(raw, index, value)
+        if rc != 0 {
+            return Err(read_db_error(this.owner))
+        }
+    }
+
+    public fn bind_text(index: int, value: str) -> unit ! SqliteError {
+        let raw = this.handle.borrow() else error {
+            return Err(SqliteError { code: 21, message: error.message })
+        }
+        let buf = ws_buf_new()
+        push_text(buf, value)
+        let rc = ws_sqlite_bind_text(raw, index, buf)
+        ws_buf_free(buf)
+        if rc != 0 {
+            return Err(read_db_error(this.owner))
+        }
+    }
+
+    public fn step() -> bool ! SqliteError {
+        let raw = this.handle.borrow() else error {
+            return Err(SqliteError { code: 21, message: error.message })
+        }
+        let rc = ws_sqlite_step(raw)
+        if rc < 0 {
+            return Err(read_db_error(this.owner))
+        }
+        return rc == 1
+    }
+
+    public fn reset() -> unit ! SqliteError {
+        let raw = this.handle.borrow() else error {
+            return Err(SqliteError { code: 21, message: error.message })
+        }
+        let rc = ws_sqlite_reset(raw)
+        if rc != 0 {
+            return Err(read_db_error(this.owner))
+        }
+    }
+
+    public fn column_int(col: int) -> int ! SqliteError {
+        let raw = this.handle.borrow() else error {
+            return Err(SqliteError { code: 21, message: error.message })
+        }
+        return ws_sqlite_column_int(raw, col)
+    }
+
+    public fn column_text(col: int) -> str ! SqliteError {
+        let raw = this.handle.borrow() else error {
+            return Err(SqliteError { code: 21, message: error.message })
+        }
+        let buf = ws_buf_new()
+        let n = ws_sqlite_column_text(raw, col, buf)
+        if n < 0 {
+            ws_buf_free(buf)
+            return Err(SqliteError { code: 1, message: "failed to read column text" })
+        }
+        let text = read_buf_text(buf)
+        ws_buf_free(buf)
+        return text
+    }
+
+    public fn close() -> int {
+        return this.handle.close()
+    }
+}
+
+pub class Database {
+    private handle: resources.Resource
+
+    public fn init(raw: opaque) {
+        this.handle = resources.acquire(raw, |ptr: opaque| -> int {
+            ws_sqlite_close(ptr)
+        }) else error {
+            resources.Resource(raw, |ptr: opaque| -> int { ws_sqlite_close(ptr) })
+        }
+    }
+
+    public fn exec(sql: str) -> unit ! SqliteError {
+        let raw = this.handle.borrow() else error {
+            return Err(SqliteError { code: 21, message: error.message })
+        }
+        let buf = ws_buf_new()
+        push_text(buf, sql)
+        let rc = ws_sqlite_exec(raw, buf)
+        ws_buf_free(buf)
+        if rc != 0 {
+            return Err(read_db_error(raw))
+        }
+    }
+
+    public fn begin() -> unit ! SqliteError {
+        return this.exec("BEGIN")
+    }
+
+    public fn commit() -> unit ! SqliteError {
+        return this.exec("COMMIT")
+    }
+
+    public fn rollback() -> unit ! SqliteError {
+        return this.exec("ROLLBACK")
+    }
+
+    public fn prepare(sql: str) -> Statement ! SqliteError {
+        let raw = this.handle.borrow() else error {
+            return Err(SqliteError { code: 21, message: error.message })
+        }
+        let buf = ws_buf_new()
+        push_text(buf, sql)
+        let stmt_raw = ws_sqlite_prepare(raw, buf)
+        ws_buf_free(buf)
+        let code = ws_sqlite_last_code(raw)
+        if code != 0 {
+            let err = read_db_error(raw)
+            let _unused = ws_sqlite_finalize(stmt_raw)
+            return Err(err)
+        }
+        return Statement(stmt_raw, raw)
+    }
+
+    public fn close() -> int {
+        return this.handle.close()
+    }
+}
+
+pub fn open(path: str) -> Database ! SqliteError {
+    let buf = ws_buf_new()
+    push_text(buf, path)
+    let raw = ws_sqlite_open(buf)
+    ws_buf_free(buf)
+    let code = ws_sqlite_last_code(raw)
+    if code != 0 {
+        let err = read_db_error(raw)
+        let _ignored = ws_sqlite_close(raw)
+        return Err(err)
+    }
+    return Database(raw)
+}

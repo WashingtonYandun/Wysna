@@ -1,0 +1,67 @@
+import "sqlite.wysna" as sqlite
+
+fn main() -> unit {
+    let db = sqlite.open(":memory:") else error {
+        eprint("sqlite open error:", error.message)
+        exit(1)
+        return
+    }
+    db.exec("CREATE TABLE users (id INTEGER PRIMARY KEY, name TEXT NOT NULL UNIQUE)") else error {
+        let _c = db.close()
+        eprint("ddl error:", error.message)
+        exit(1)
+        return
+    }
+    db.begin() else error {
+        let _c = db.close()
+        exit(1)
+        return
+    }
+    let ins = db.prepare("INSERT INTO users (id, name) VALUES (?1, ?2)") else error {
+        let _c = db.close()
+        eprint("prepare error:", error.message)
+        exit(1)
+        return
+    }
+    ins.bind_int(1, 1) else error { exit(1) return }
+    ins.bind_text(2, "Ada") else error { exit(1) return }
+    let _done1 = ins.step() else error { exit(1) return }
+    ins.reset() else error { exit(1) return }
+    ins.bind_int(1, 2) else error { exit(1) return }
+    ins.bind_text(2, "Washo") else error { exit(1) return }
+    let _done2 = ins.step() else error { exit(1) return }
+    let _f1 = ins.close()
+    db.commit() else error {
+        let _c = db.close()
+        exit(1)
+        return
+    }
+
+    # Verify rollback on duplicate UNIQUE constraint
+    db.begin() else error { exit(1) return }
+    let ins_dup = db.prepare("INSERT INTO users (id, name) VALUES (?1, ?2)") else error { exit(1) return }
+    ins_dup.bind_int(1, 3) else error { exit(1) return }
+    ins_dup.bind_text(2, "Ada") else error { exit(1) return }
+    match ins_dup.step() {
+        Ok(_) => print("UNEXPECTED-DUP"),
+        Err(_) => {
+            let _rb = db.rollback()
+            print("rollback-ok")
+        },
+    }
+    let _f2 = ins_dup.close()
+
+    let sel = db.prepare("SELECT id, name FROM users ORDER BY id") else error { exit(1) return }
+    while true {
+        let has_row = sel.step() else error {
+            eprint("select step error:", error.message)
+            false
+        }
+        if not has_row { break }
+        let id = sel.column_int(0) else error { 0 }
+        let name = sel.column_text(1) else error { "" }
+        print(id, name)
+    }
+    let _f3 = sel.close()
+    let _c = db.close()
+}

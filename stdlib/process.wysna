@@ -1,10 +1,12 @@
 import "std/buffer"
 
 extern "C" fn wysna_host_process_run(executable: opaque, arguments: opaque, timeout_ms: int) -> int
+extern "C" fn wysna_host_process_capture(executable: opaque, arguments: opaque, timeout_ms: int, max_output_bytes: int, stdout_output: opaque, stderr_output: opaque) -> int
 extern "C" fn wysna_host_last_error() -> int
 extern "C" fn wysna_host_last_error_domain() -> int
 
 pub struct ProcessError { operation: str, code: int, domain: int }
+pub struct ProcessOutput { status: int, stdout: str, stderr: str }
 
 fn encode_failure(operation: str) -> ProcessError {
     return ProcessError { operation: operation, code: 22, domain: 1 }
@@ -58,4 +60,48 @@ pub fn run(executable: str, arguments: list[str], timeout_ms: int) -> int ! Proc
         return Err(ProcessError { operation: "run", code: code, domain: domain })
     }
     return result
+}
+
+# Executes `executable` directly without a shell and captures UTF-8 stdout/stderr up to `max_output_bytes` each.
+pub fn capture(executable: str, arguments: list[str], timeout_ms: int, max_output_bytes: int) -> ProcessOutput ! ProcessError {
+    if len(executable) == 0 or timeout_ms < 1 or timeout_ms > 600000 or max_output_bytes < 1 or max_output_bytes > 16777216 {
+        return Err(encode_failure("invalid command, timeout, or output bound"))
+    }
+    let command = buffer.from_text(executable)
+    let encoded_arguments = encode_arguments(arguments) else error {
+        command.close()
+        return Err(error)
+    }
+    let stdout_buf = new buffer.Bytes()
+    let stderr_buf = new buffer.Bytes()
+    let status = wysna_host_process_capture(
+        command.borrow(),
+        encoded_arguments.borrow(),
+        timeout_ms,
+        max_output_bytes,
+        stdout_buf.borrow(),
+        stderr_buf.borrow(),
+    )
+    let code = wysna_host_last_error()
+    let domain = wysna_host_last_error_domain()
+    command.close()
+    encoded_arguments.close()
+    if status < 0 {
+        stdout_buf.close()
+        stderr_buf.close()
+        return Err(ProcessError { operation: "capture", code: code, domain: domain })
+    }
+    let out_text = buffer.decode_utf8(stdout_buf) else error {
+        stdout_buf.close()
+        stderr_buf.close()
+        return Err(ProcessError { operation: "capture", code: 22, domain: 1 })
+    }
+    let err_text = buffer.decode_utf8(stderr_buf) else error {
+        stdout_buf.close()
+        stderr_buf.close()
+        return Err(ProcessError { operation: "capture", code: 22, domain: 1 })
+    }
+    stdout_buf.close()
+    stderr_buf.close()
+    return ProcessOutput { status: status, stdout: out_text, stderr: err_text }
 }
