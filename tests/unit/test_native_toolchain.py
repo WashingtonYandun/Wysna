@@ -231,6 +231,37 @@ def test_selfhost_emission_preserves_input_cwd_and_cleans_output():
         _check_selfhost_emission(outcome)
 
 
+def test_size_profile_omits_debug_info_and_strips_dead_sections():
+    import sys
+    commands = []
+
+    def run(command, **options):
+        commands.append(command)
+        if '-MF' in command:
+            dep_path = Path(command[command.index('-MF') + 1])
+            dep_path.write_text(f'{dep_path}: \n', encoding='utf-8')
+        if '-c' in command and '-o' in command:
+            Path(command[command.index('-o') + 1]).write_bytes(b'object')
+        return subprocess.CompletedProcess(command, 0, stdout='', stderr='')
+
+    with tempfile.TemporaryDirectory(prefix='wysna-size-profile-') as temporary:
+        with patch.dict(os.environ, {'WYSNA_COMPILER_CACHE': 'off'}), \
+                patch('compiler.NativeToolchain.compiler_command', return_value=['fake-cc']), \
+                patch('compiler.CObjectCache.compiler_identity',
+                      return_value={'command': ['fake-cc'], 'version': 'fake 1.0', 'executable_sha256': '0' * 64}), \
+                patch('compiler.NativeToolchain.subprocess.run', side_effect=run):
+            NativeToolchain(ROOT).build('int main(void) { return 0; }', Path(temporary) / 'app', profile='size')
+
+    compile_cmd = next(cmd for cmd in commands if '-c' in cmd)
+    link_cmd = commands[-1]
+    assert '-Os' in compile_cmd and '-g' not in compile_cmd
+    assert '-ffunction-sections' in compile_cmd and '-fdata-sections' in compile_cmd
+    if os.name != 'nt':
+        expected_strip = ['-Wl,-dead_strip', '-Wl,-S'] if sys.platform == 'darwin' else ['-Wl,--gc-sections', '-Wl,-s']
+        for flag in expected_strip:
+            assert flag in link_cmd
+
+
 def run_native_toolchain_tests():
     test_native_build_runs_explicit_c_adapter()
     test_http_native_build_resolves_and_links_libcurl_only_on_demand()

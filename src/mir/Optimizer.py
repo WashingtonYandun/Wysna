@@ -522,9 +522,9 @@ def optimize_cfg(module, interner=None):
 
 def optimize(module, interner):
     """Run full verified MIR optimization pipeline."""
-    optimize_parameter_reads(module, interner)
-    optimize_local_cow_uniqueness(module, interner)
-    optimize_interprocedural_cow(module, interner)
+    optimize_parameter_reads(module, interner, verify_input=True, verify_output=False)
+    optimize_local_cow_uniqueness(module, interner, verify_input=False, verify_output=False)
+    optimize_interprocedural_cow(module, interner, verify_input=False, verify_output=False)
     for function in module.functions:
         for _ in range(24):
             c1 = fold_scalar_constants(function)

@@ -4,10 +4,11 @@ from checker.TypeInterner import TYPE_STR
 from mir.Verifier import Verifier
 
 
-def optimize_parameter_reads(module, interner):
+def optimize_parameter_reads(module, interner, *, verify_input=True, verify_output=True):
     """Substitute stable borrowed parameters only when no use consumes the copy."""
-    verifier = Verifier(interner)
-    verifier.verify(module)
+    verifier = Verifier(interner) if (verify_input or verify_output) else None
+    if verify_input:
+        verifier.verify(module)
     for function in module.functions:
         operations = [operation for block in function.blocks for operation in block.operations]
         definitions = Counter(operation.result for operation in operations if operation.result is not None)
@@ -40,14 +41,16 @@ def optimize_parameter_reads(module, interner):
                 operation.args = tuple(replacements.get(argument, argument) for argument in operation.args)
                 remaining.append(operation)
             block.operations = remaining
-    verifier.verify(module)
+    if verify_output:
+        verifier.verify(module)
     return module
 
 
-def optimize_local_cow_uniqueness(module, interner):
+def optimize_local_cow_uniqueness(module, interner, *, verify_input=True, verify_output=True):
     """Release single-block temporary clones immediately after their last read before CoW mutation."""
-    verifier = Verifier(interner)
-    verifier.verify(module)
+    verifier = Verifier(interner) if (verify_input or verify_output) else None
+    if verify_input:
+        verifier.verify(module)
     hoisted_count = 0
     for function in module.functions:
         all_ops = [op for block in function.blocks for op in block.operations]
@@ -135,7 +138,8 @@ def optimize_local_cow_uniqueness(module, interner):
                         hoisted_count += 1
             block.operations = new_ops
 
-    verifier.verify(module)
+    if verify_output:
+        verifier.verify(module)
     return hoisted_count
 
 
@@ -150,6 +154,13 @@ _READONLY_RUNTIME_ARGS = {
     'wysna_builtin_enumerate': (0,),
     'wysna_builtin_slice': (0,),
     'wysna_builtin_str': (0,),
+    'wysna_str_trim': (0,),
+    'wysna_str_to_lower': (0,),
+    'wysna_str_to_upper': (0,),
+    'wysna_str_split': (0, 1),
+    'wysna_str_starts_with': (0, 1),
+    'wysna_str_ends_with': (0, 1),
+    'wysna_str_replace': (0, 1, 2),
     'wysna_builtin_ord': (0,),
     'wysna_builtin_bytes': (0,),
     'wysna_equal': (0, 1),
@@ -335,10 +346,11 @@ def _source_unmodified_until_uses(function, def_pos, use_positions, kills_by_blo
     return True
 
 
-def optimize_interprocedural_cow(module, interner):
+def optimize_interprocedural_cow(module, interner, *, verify_input=True, verify_output=True):
     """Eliminate read-only/non-escaping clones across callees and interprocedural call sites."""
-    verifier = Verifier(interner)
-    verifier.verify(module)
+    verifier = Verifier(interner) if (verify_input or verify_output) else None
+    if verify_input:
+        verifier.verify(module)
     readonly_params = _compute_readonly_params(module, interner)
     eliminated = 0
 
@@ -427,5 +439,6 @@ def optimize_interprocedural_cow(module, interner):
                     new_ops.append(op)
                 block.operations = new_ops
 
-    verifier.verify(module)
+    if verify_output:
+        verifier.verify(module)
     return eliminated

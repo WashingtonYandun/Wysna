@@ -188,12 +188,16 @@ class CompilerService:
     def explain_with_foreign_bindings(self, checked):
         """Analyze effects and classify declarations the interpreter binds eagerly."""
         self._validate(checked)
+        if getattr(checked, '_cached_explain', None) is not None:
+            return checked._cached_explain
         from compiler.EffectAnalysis import analyze_effects
         from mir.Lowering import Lowering
         hir = self.lower_hir(checked)
         module = Lowering(checked._interner, checked.source.file).lower(hir)
         trusted, untrusted = self._foreign_contracts(hir)
-        return analyze_effects(module, checked._interner, self.source_texts(), trusted), untrusted
+        result = (analyze_effects(module, checked._interner, self.source_texts(), trusted), untrusted)
+        checked._cached_explain = result
+        return result
 
     def explain(self, checked):
         """Analyze verified resolved MIR without interpreting, linking or loading FFI."""
@@ -212,12 +216,41 @@ class CompilerService:
         self._validate(checked)
         from checker.LayoutGraph import build_layout_graph_from_declarations
         from node.NodeType import StructDecl, EnumDecl, ClassDecl
+        body = checked._unit.program.body
         graph = build_layout_graph_from_declarations(
-            struct_decls=[s for s in checked.ast.body if isinstance(s, StructDecl)],
-            enum_decls=[s for s in checked.ast.body if isinstance(s, EnumDecl)],
-            class_decls=[s for s in checked.ast.body if isinstance(s, ClassDecl)],
+            struct_decls=[s for s in body if isinstance(s, StructDecl)],
+            enum_decls=[s for s in body if isinstance(s, EnumDecl)],
+            class_decls=[s for s in body if isinstance(s, ClassDecl)],
         )
         return graph.explain_strong_reference_cycles()
+
+    def lint_discarded_expressions(self, checked, file_name=None):
+        """Run read-only discarded-expression lints without cloning the checked AST."""
+        self._validate(checked)
+        from checker.Lints import lint_discarded_expressions
+        return lint_discarded_expressions(checked._unit.program, file_name or checked.source.file)
+
+    def lint_warnings(self, checked, file_name=None):
+        """Return all non-blocking W6001/W6002 WysnaError warnings without redundant AST clones."""
+        self._validate(checked)
+        from node.NodeType import ClassDecl
+        path = file_name or checked.source.file
+        warnings = list(self.lint_discarded_expressions(checked, path))
+        class_pos = {
+            c.name: (getattr(c, 'line', 1), getattr(c, 'col', 1))
+            for c in checked._unit.program.body
+            if isinstance(c, ClassDecl)
+        }
+        for adv in self.analyze_reference_cycles(checked):
+            classes = adv.get("classes", [])
+            chain = " -> ".join(classes) + f" -> {classes[0]}" if classes else adv.get("chain", "")
+            line, col = class_pos.get(classes[0], (1, 1)) if classes else (1, 1)
+            warnings.append(WysnaError(
+                f"strong reference cycle detected in nominal classes: {chain}",
+                line=line, col=col, file=path, code="W6002",
+                severity="warning", stage="lint", help=adv.get("advisory", ""),
+            ).with_data(kind="reference_cycle", classes=classes))
+        return warnings
 
     def emit_c(self, checked, *, target_profile=None):
         self._validate(checked)

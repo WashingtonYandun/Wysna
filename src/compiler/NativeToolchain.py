@@ -74,11 +74,20 @@ class NativeToolchain:
         if profile not in (None, 'dev', 'release', 'size'):
             raise ValueError('Unknown C99 optimization profile: ' + str(profile))
         optimization = {'dev': '-O0', 'release': '-O2', 'size': '-Os'}.get(profile, '-O2')
-        profile_flags = ['-g', '-ffunction-sections', '-fdata-sections'] if profile else []
+        profile_flags = (
+            ['-g', '-ffunction-sections', '-fdata-sections']
+            if profile in ('dev', 'release')
+            else ['-ffunction-sections', '-fdata-sections']
+        )
         base = (command + ['-std=c99', optimization, f'-I{self.repo_root}'] + profile_flags
                 + curl_cflags + sanitizer_flags)
         output_path = executable_name(os.fspath(output))
         libraries = tuple(os.fspath(library) for library in link_libraries)
+        clock_adapter = os.path.join(self.repo_root, 'bench', 'clock_adapter.c')
+        if ('wysna_benchmark_nanoseconds' in c_source
+                and not any(lib.replace('\\', '/').endswith('clock_adapter.c') for lib in libraries)
+                and os.path.isfile(clock_adapter)):
+            libraries = libraries + (clock_adapter,)
         object_suffix = '.obj' if os.name == 'nt' else '.o'
         with tempfile.TemporaryDirectory(prefix='wysna-native-') as temporary:
             source_path = Path(temporary) / 'program.c'
@@ -117,7 +126,9 @@ class NativeToolchain:
             ] + curl_libs
             started = time.perf_counter()
             section_flags = []
-            if profile and os.name != 'nt':
+            if profile == 'size' and os.name != 'nt':
+                section_flags = ['-Wl,-dead_strip', '-Wl,-S'] if sys.platform == 'darwin' else ['-Wl,--gc-sections', '-Wl,-s']
+            elif profile in ('dev', 'release') and os.name != 'nt':
                 section_flags = ['-Wl,-dead_strip'] if sys.platform == 'darwin' else ['-Wl,--gc-sections']
             link_command = base + [object_path, '-o', output_path] + linker_inputs + native_stack_link_args(command) + section_flags
             result = subprocess.run(link_command, capture_output=True, text=True, timeout=300)

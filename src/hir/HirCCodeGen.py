@@ -1,4 +1,4 @@
-"""Public typed-HIR backend: verify/lower to MIR, then emit C99 from MIR only."""
+"""Compatibility wrapper for typed-HIR callers: lowers HIR to verified MIR and delegates to mir.CCodeGen (matching CompilerService.emit_c)."""
 from common.Telemetry import CodegenTelemetry
 from error.Error import WysnaError
 

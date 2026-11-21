@@ -78,7 +78,67 @@ def sha256_file(path: str) -> str:
     return h.hexdigest()
 
 
-def run_suite() -> None:
+SUITE_DOMAINS = {
+    "checker": [
+        "tests/unit/test_types_conformance.py",
+        "tests/unit/test_c03_generic_specialization.py",
+        "tests/unit/test_c04_adt_layout.py",
+        "tests/unit/test_c05_types_inference.py",
+        "tests/unit/test_f03_error_unions.py",
+        "tests/unit/test_generic_hardening.py",
+        "tests/unit/test_strong_reference_cycles.py",
+        "tests/unit/test_use_syntax.py",
+    ],
+    "mir": [
+        "tests/unit/test_mir.py",
+        "tests/unit/test_mir_ownership.py",
+        "tests/unit/test_mir_optimizer.py",
+        "tests/unit/test_mir_scalar_unboxing.py",
+        "tests/unit/test_mir_call_unboxing.py",
+        "tests/unit/test_mir_exchange.py",
+        "tests/unit/test_resolved_hir.py",
+        "tests/unit/test_hir_return_paths.py",
+    ],
+    "selfhost": [
+        "tests/unit/test_selfhost_mir.py",
+        "tests/unit/test_selfhost_split_conformance.py",
+        "tests/unit/test_selfhost_compilation_context.py",
+        "tests/unit/test_selfhost_diagnostics.py",
+        "tests/unit/test_selfhost_source_provenance.py",
+        "tests/unit/test_selfhost_generic_functions.py",
+    ],
+    "tooling": [
+        "tests/unit/test_agent_diagnostics.py",
+        "tests/unit/test_language_server.py",
+        "tests/unit/test_tool_result.py",
+        "tests/unit/test_compiler_service.py",
+        "tests/unit/test_compilation_session.py",
+        "tests/unit/test_effect_analysis.py",
+        "tests/unit/test_capability_policy.py",
+        "tests/unit/test_formatter_conformance.py",
+        "tests/unit/test_project_scaffold.py",
+        "tests/unit/test_semantic_graph_and_zerolang_gap.py",
+    ],
+    "stdlib": [
+        "tests/unit/test_standard_toolkit.py",
+        "tests/unit/test_foundations.py",
+        "tests/unit/test_crypto.py",
+        "tests/unit/test_http_client.py",
+        "tests/unit/test_unicode_normalization.py",
+    ],
+    "contract": [
+        "tests/unit/test_architecture_contract.py",
+        "tests/unit/test_ci_harness.py",
+        "tests/unit/test_audit_findings.py",
+        "tests/unit/test_audit_remediation.py",
+        "tests/unit/test_native_toolchain.py",
+        "tests/unit/test_distribution_contract.py",
+        "tests/unit/test_expansion_contracts.py",
+    ],
+}
+
+
+def run_suite(*, fast: bool = False, suite: str | None = None) -> None:
     file_path = Path(__file__).resolve()
     if file_path.parent.name == "src":
         repo_root = str(file_path.parent.parent)
@@ -95,12 +155,48 @@ def run_suite() -> None:
     prev_cwd = os.getcwd()
     os.chdir(repo_root)
     try:
-        _run_suite_in_repo(repo_root)
+        if suite is not None:
+            _run_domain_suite(repo_root, suite)
+        elif fast:
+            _run_fast_suite(repo_root)
+        else:
+            _run_suite_in_repo(repo_root)
     finally:
         os.chdir(prev_cwd)
 
 
-def _run_suite_in_repo(repo_root: str) -> None:
+def _run_domain_suite(repo_root: str, suite: str) -> None:
+    if suite not in SUITE_DOMAINS:
+        print(f"Unknown test suite '{suite}'. Valid suites: {', '.join(sorted(SUITE_DOMAINS))}", file=sys.stderr)
+        sys.exit(2)
+    targets = [p for p in SUITE_DOMAINS[suite] if os.path.exists(os.path.join(repo_root, p))]
+    print(f"Running Wysna domain suite '{suite}' ({len(targets)} modules)...")
+    res = subprocess.run([sys.executable, "-m", "pytest", "-q", *targets], cwd=repo_root)
+    sys.exit(res.returncode)
+
+
+def _run_fast_suite(repo_root: str) -> None:
+    import time
+    t0 = time.perf_counter()
+    print("==================================================")
+    print("Wysna Fast Local Suite (--fast: in-process core & contracts)")
+    print("==================================================")
+    _run_inprocess_core_steps(repo_root)
+    fast_modules = [
+        "tests/unit/test_architecture_contract.py",
+        "tests/unit/test_ci_harness.py",
+        "tests/unit/test_effect_analysis.py",
+        "tests/unit/test_agent_diagnostics.py",
+        "tests/unit/test_compiler_service.py",
+        "tests/unit/test_selfhost_split_conformance.py",
+    ]
+    res = subprocess.run([sys.executable, "-m", "pytest", "-q", *fast_modules], cwd=repo_root)
+    elapsed = time.perf_counter() - t0
+    print(f"Fast suite finished in {elapsed:.2f}s")
+    sys.exit(res.returncode)
+
+
+def _run_inprocess_core_steps(repo_root: str) -> tuple:
     print("==================================================")
     print("Wysna Conformance Runner (SPEC v0.1)")
     print("==================================================")
@@ -384,6 +480,36 @@ def _run_suite_in_repo(repo_root: str) -> None:
             print(f"  [RUNTIME FAIL] {f}: {e}")
 
     print(f"Runtime execution:   {runtime_passed}/{len(runtime_files)}")
+    if not (
+        v_lex_passed == len(v_lex_files)
+        and i_lex_passed == len(i_lex_files)
+        and v_parse_passed == len(v_parse_files)
+        and i_parse_passed == len(i_parse_files)
+        and v_type_passed == len(v_type_files)
+        and i_type_passed == len(i_type_files)
+        and err_passed == len(err_files)
+        and fmt_passed == len(fmt_files)
+        and hir_passed == len(hir_files)
+        and runtime_passed == len(runtime_files)
+    ):
+        raise AssertionError("In-process core conformance failure")
+    return (
+        v_lex_files, v_lex_passed, i_lex_files, i_lex_passed,
+        v_parse_files, v_parse_passed, i_parse_files, i_parse_passed,
+        v_type_files, v_type_passed, i_type_files, i_type_passed,
+        err_files, err_passed, fmt_files, fmt_passed,
+        hir_files, hir_passed, runtime_dir, runtime_files, runtime_passed,
+    )
+
+
+def _run_suite_in_repo(repo_root: str) -> None:
+    (
+        v_lex_files, v_lex_passed, i_lex_files, i_lex_passed,
+        v_parse_files, v_parse_passed, i_parse_files, i_parse_passed,
+        v_type_files, v_type_passed, i_type_files, i_type_passed,
+        err_files, err_passed, fmt_files, fmt_passed,
+        hir_files, hir_passed, runtime_dir, runtime_files, runtime_passed,
+    ) = _run_inprocess_core_steps(repo_root)
 
     # 7. Native C99 Backend Tests (Wysna Seed) & 8. Self-Hosting Wysna Compiler Stage-2 Suite
     c99_targets = [f for f in runtime_files if os.path.exists(os.path.join(runtime_dir, f[:-6] + ".expected"))]
@@ -525,9 +651,11 @@ def _run_suite_in_repo(repo_root: str) -> None:
         except Exception as e:
             print(f"  [BOOTSTRAP/SELFHOST FAIL] {e}")
 
-    # 11. Typed HIR -> C99 Native Backend (HirCCodeGen)
+    # 11. Typed HIR -> C99 Native Backend (Seed MIR/C99)
     hir_c99_passed = 0
     with tempfile.TemporaryDirectory() as tmpdir:
+        hir_jobs = []
+        hir_failures = {}
         for f in c99_targets:
             path = os.path.join(runtime_dir, f)
             expected_path = os.path.join(runtime_dir, f[:-6] + ".expected")
@@ -535,7 +663,6 @@ def _run_suite_in_repo(repo_root: str) -> None:
                 code = stream.read()
             with open(expected_path, "r", encoding="utf-8") as exp_stream:
                 expected = exp_stream.read()
-
             try:
                 ast = Parser(file=path).parse(code)
                 checker = TypeChecker(file=path)
@@ -544,13 +671,39 @@ def _run_suite_in_repo(repo_root: str) -> None:
                 hir_mod = builder.lower(ast)
                 gen = HirCCodeGen(checker.interner, file_path=path)
                 c_code = gen.generate(hir_mod)
-
                 c_path = os.path.join(tmpdir, "hir_" + f[:-6] + ".c")
                 bin_path = os.path.join(tmpdir, "hir_" + f[:-6])
                 with open(c_path, "w", encoding="utf-8") as cf:
                     cf.write(c_code)
-                comp = subprocess.run([os.environ.get("CC", "cc"), "-std=c99", f"-I{repo_root}"] + extra_cc_flags + [c_path, "-o", bin_path], timeout=120, capture_output=True, text=True)
+                hir_jobs.append((f, c_path, bin_path, expected))
+            except Exception as e:
+                hir_failures[f] = e
+
+        def _build_hir_binary(job):
+            f, c_path, bin_path, expected = job
+            try:
+                comp = subprocess.run([cc_cmd, "-std=c99", f"-I{repo_root}"] + extra_cc_flags + [c_path, "-o", bin_path], timeout=120, capture_output=True, text=True)
                 assert comp.returncode == 0, comp.stderr
+                return f, (bin_path, expected), None
+            except Exception as exc:
+                return f, None, exc
+
+        if compile_workers > 1 and len(hir_jobs) > 1:
+            with concurrent.futures.ThreadPoolExecutor(max_workers=compile_workers) as pool:
+                hir_built = {f: (res, err) for f, res, err in pool.map(_build_hir_binary, hir_jobs)}
+        else:
+            hir_built = {f: (res, err) for f, res, err in (_build_hir_binary(job) for job in hir_jobs)}
+
+        for f in c99_targets:
+            if f in hir_failures:
+                print(f"  [HIR C99 FAIL] {f}: {hir_failures[f]}")
+                continue
+            compiled, compile_err = hir_built[f]
+            if compile_err is not None:
+                print(f"  [HIR C99 FAIL] {f}: {compile_err}")
+                continue
+            bin_path, expected = compiled
+            try:
                 run_res = subprocess.run([bin_path], timeout=30, capture_output=True, text=True, cwd=repo_root)
                 _assert_native_outcome(f, run_res, expected, panic_expectation(expected))
                 hir_c99_passed += 1
@@ -605,7 +758,7 @@ def _run_suite_in_repo(repo_root: str) -> None:
             pass
 
     print(f"Seed C99 Native:     {c99_passed}/{len(c99_targets)}")
-    print(f"Seed HIR C99:        {hir_c99_passed}/{len(c99_targets)}")
+    print(f"Seed MIR C99:        {hir_c99_passed}/{len(c99_targets)}")
     print(f"Compiler Stage-2:    {selfhost_runtime_passed}/{len(selfhost_targets)}")
     print(f"Compiler Modular:    {'1/1 (Loss-less verified)' if split_ok else '0/1'}")
     print(f"Generic Hardening:   {'1/1 (Canonical cache verified)' if hardening_ok else '0/1'}")

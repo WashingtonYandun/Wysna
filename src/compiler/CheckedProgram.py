@@ -155,7 +155,8 @@ class CheckedProgram:
     """
     __slots__ = ('_session', '_unit', '_interner', '_generation', '_options_key',
                  '_source', '_sources', '_modules', '_declarations', '_telemetry',
-                 '_symbols', '_scope_symbols', '_root_symbols', '_program', '_unit_programs')
+                 '_symbols', '_scope_symbols', '_root_symbols', '_program', '_unit_programs',
+                 '_cached_explain')
 
     def __init__(self, session, unit, *, revision=None):
         self._session = session
@@ -163,6 +164,7 @@ class CheckedProgram:
         self._interner = session.interner
         self._generation = session.generation
         self._options_key = session.options_key()
+        self._cached_explain = None
         units, visited = [], set()
 
         def collect(current):
