@@ -46,7 +46,11 @@ Generics include functions, structs, recursive ADTs, concrete parameterized clas
 with methods, and rejected invalid layouts. `generic_class_methods` is a separately
 measured category so its support cannot be inferred from generic functions or structs.
 Checked modules cover imported specialization. Error unions cover subset propagation,
-nominal error identity, exhaustive handlers and managed payload cleanup.
+nominal error identity, exhaustive handlers and managed payload cleanup. Concrete generic
+struct/enum/class alternatives, specialization identity, and generic union rejection
+have an additional targeted gate in `tests/unit/test_native_generic_error_unions.py`,
+using `tests/fixtures/generic_error_union_members.wysna`. These targeted cases do not
+change the measured 209-fixture historical table above.
 
 ## Expansion boundaries
 

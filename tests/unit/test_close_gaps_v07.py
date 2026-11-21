@@ -297,7 +297,7 @@ main()
 '''
         with tempfile.TemporaryDirectory(prefix="wysna-f3-gen-err-") as tmpdir:
             tmp = Path(tmpdir)
-            for engine in ("interpreter", "ast", "hir"):
+            for engine in ENGINES:
                 res = run_engine(engine, source, "gen_err", selfhost_bin=self.selfhost_bin,
                                  directory=tmp / engine)
                 self.assertEqual(res.exit_code, 0, f"{engine}: {res.stderr}")

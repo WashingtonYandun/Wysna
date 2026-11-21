@@ -1,5 +1,7 @@
 # 03 · Lenguaje: Sintaxis, Semántica y Sistema de Tipos
 
+La evaluación original y sus repros conservan el estado de la auditoría. `LANG-01` a `LANG-06` ya figuran como implementados; no se deben interpretar todos los diagnósticos en presente de la tabla histórica como bugs abiertos actuales. El siguiente ciclo contrastado con main está en [12-SIGUIENTE-CICLO-LENGUAJE.md](12-SIGUIENTE-CICLO-LENGUAJE.md).
+
 ## 1. Evaluación Integral de los 9 Ejes del Lenguaje
 
 Antes de proponer cambios, se evalúan los nueve ejes solicitados desde la perspectiva de un desarrollador (humano o agente) que construye aplicaciones reales, distinguiendo aciertos (`KEEP`) de defectos reproducibles:
@@ -237,6 +239,19 @@ Antes de proponer cambios, se evalúan los nueve ejes solicitados desde la persp
 - **Criterio de aceptación:** Todos los operadores léxicos de `WYSNA_SINTAXIS.md:124-137` aparecen en la tabla de precedencia de `SPEC.md` §5 y coinciden con un test en `tests/parser/valid/` que verifica `await f()?`, `await f() else err { ... }`, `a ?? b else { c }` y `x += y * z`.
 - **Requiere aprobación:** no.
 - **Estado:** implementado.
+
+---
+
+## Siguiente ciclo · LANG-07 · Errores genéricos concretos en el compilador nativo
+
+- **Prioridad:** P1, paridad del sistema de tipos.
+- **Problema reproducido en main:** Seed acepta `BoxErr[int] | GenErr[str]`; el SDK nativo lo rechaza con `W2001: generic nominal types cannot be error union alternatives`.
+- **Cambio implementado en candidato:** permitir alternativas nominales genéricas concretas; analizar patrones `Failure[T](error)` mediante el parser de tipos existente; mantener una identidad por especialización al comprobar exhaustividad; canonicalizar de nuevo una unión al sustituir parámetros genéricos.
+- **Caso de seguridad:** `Failure[T] | Failure[int]` con `T=int` se rechaza con `W2001`, igual que Seed. Antes de la canonicalización ese borde producía `W9999` al bajar a MIR.
+- **Prueba de aceptación:** mismo resultado en intérprete, AST C99, Seed MIR C99 y Selfhost; regresión previa también verificada con LLVM. Rechazar handlers no exhaustivos (`W2003`), alternativas ajenas (`W2001`) y propagación incompatible (`W2006`). Comprobar payloads gestionados con ASan/UBSan en POSIX y memoria balanceada en los motores nativos.
+- **Fuentes:** `selfhost/src/08_semantics.wysna`, bundle regenerado y `tests/unit/test_native_generic_error_unions.py`.
+- **Compatibilidad:** no añade sintaxis ni cambia la ABI; amplía el perfil nativo para una construcción ya soportada en Seed.
+- **Estado:** implementado en rama candidata; sujeto a revisión e integración.
 
 ---
 
