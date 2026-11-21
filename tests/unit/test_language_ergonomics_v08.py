@@ -184,8 +184,13 @@ fn tail(flag: bool) -> unit ! str {
     match flag { true => fail(), false => Ok(print()) }
 }
 tail(true) else error { print(error) }
+fn recover() -> int {
+    let failed: int ! str = Err("recover")
+    failed else error { (match (if true { 0 } else { 3 }) { 0 => 6, _ => 7 }) }
+}
+print(recover())
 '''
-        self._assert_all_engines(source, "matched\n7 0 8\ntail error\n", "discard-match")
+        self._assert_all_engines(source, "matched\n7 0 8\ntail error\n6\n", "discard-match")
         invalid = "let n = match true { true => 1, false => \"no\" }\n"
         with self.assertRaises(WysnaError):
             self.service.check(invalid, "<discard-match>")

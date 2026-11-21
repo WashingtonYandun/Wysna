@@ -5532,9 +5532,9 @@ fn sem_tail_expression(context: SemanticContext) -> bool {
     let mut depth = 0
     while position < len(context.tokens) {
         let kind = context.tokens[position].kind
-        if kind == "LBRACE" { depth = depth + 1 }
-        elif kind == "RBRACE" {
-            if depth == 0 { return true }
+        if kind == "LBRACE" or kind == "LPAREN" or kind == "LBRACKET" { depth = depth + 1 }
+        elif kind == "RBRACE" or kind == "RPAREN" or kind == "RBRACKET" {
+            if depth == 0 { return kind == "RBRACE" }
             depth = depth - 1
             if depth == 0 {
                 let mut next_pos = position + 1
