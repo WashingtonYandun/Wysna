@@ -8,8 +8,9 @@ from mir.Verifier import Verifier
 
 
 class CCodeGen:
-    def __init__(self, interner):
+    def __init__(self, interner, *, emit_line_directives=False):
         self.interner = interner
+        self.emit_line_directives = bool(emit_line_directives)
         self.abi_exports = []
 
     def generate(self, module):
@@ -383,11 +384,21 @@ class CCodeGen:
             for target in b.terminator.targets
             if target <= b.id
         }
+        last_source = None
         for block in function.blocks:
             lines.append(f'bb{block.id}:;')
             if block.id == 0 or block.id in back_edge_targets:
                 lines.append('    wysna_step_tick();')
             for operation in block.operations:
+                if self.emit_line_directives:
+                    src = getattr(operation, 'source', None)
+                    src_file = getattr(src, 'file', '') if src is not None else ''
+                    src_line = int(getattr(src, 'line', 0) or 0) if src is not None else 0
+                    if src_line > 0 and src_file and src_file != '<unknown>':
+                        key = (src_file, src_line)
+                        if key != last_source:
+                            lines.append(f'#line {src_line} {quote(src_file)}')
+                            last_source = key
                 lines.extend('    ' + line for line in self.operation(operation))
             term = block.terminator
             if term.kind == 'goto':

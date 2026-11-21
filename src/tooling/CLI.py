@@ -231,6 +231,7 @@ def main(argv=None) -> None:
     file_to_run: Optional[str] = None
     eval_code: Optional[str] = None
     sanitize = False
+    line_directives = False
     link_libraries = []
 
     if args and args[0] in ("run", "check", "fmt", "ast", "mir", "tokens", "emit-c", "emit-llvm", "build", "test", "bench", "version", "repl"):
@@ -588,6 +589,8 @@ def main(argv=None) -> None:
             link_libraries.append(args[i])
         elif arg in ("--sanitize", "-s"):
             sanitize = True
+        elif arg == "--line-directives":
+            line_directives = True
         elif arg in ("--help", "-h"):
             if json_v1:
                 usage_error("--help cannot be combined with --output-format=json-v1")
@@ -656,6 +659,8 @@ def main(argv=None) -> None:
                 or emit_c_path is not None or json_diagnostics):
             usage_error("llvm-experimental does not support these diagnostic, C generation, or build options")
 
+    if line_directives and (subcmd not in ("emit-c", "build") or backend != "c99" or engine != "seed"):
+        usage_error("--line-directives is supported only by Seed emit-c and build")
     if requested_invocation_id is not None and report_json_path is None:
         usage_error("--invocation-id requires --report-json")
 
@@ -854,6 +859,7 @@ def main(argv=None) -> None:
             ),
             json_v1=json_v1,
             warn_cycles=warn_cycles,
+            line_directives=line_directives,
             tool_command=command_for_output,
             report_state=report_state,
         )

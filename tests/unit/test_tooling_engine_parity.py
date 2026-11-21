@@ -155,3 +155,34 @@ def test_selfhost_formatter_matches_seed_on_inline_spacing_new_and_multiline_str
     assert "    let x = 1 + 2\n" in ml_comp.stdout
     assert '    let msg = """\n  a+b = untouched\n    keep indent\n"""\n' in ml_comp.stdout
 
+
+def test_emit_c_line_directives_compiles_under_clang_g(tmp_path):
+    src_path = tmp_path / "dbg_sample.wysna"
+    c_path = tmp_path / "dbg_sample.c"
+    bin_path = tmp_path / "dbg_sample_bin"
+    src_path.write_text(
+        "fn compute(n: int) -> int {\n"
+        "    let mut acc = 0\n"
+        "    for i in 1..=n {\n"
+        "        acc = acc + i\n"
+        "    }\n"
+        "    return acc\n"
+        "}\n"
+        "print(compute(5))\n",
+        encoding="utf-8",
+    )
+    res = subprocess.run(
+        [sys.executable, str(ROOT / "main.py"), "emit-c", "--line-directives", str(src_path), "-o", str(c_path)],
+        capture_output=True, text=True, check=True, cwd=str(ROOT),
+    )
+    assert res.returncode == 0
+    c_text = c_path.read_text(encoding="utf-8")
+    assert f'#line 2 "{src_path}"' in c_text or f'#line 4 "{src_path}"' in c_text
+    subprocess.run(
+        ["clang", "-g", "-std=c99", "-I" + str(ROOT), str(c_path), "-o", str(bin_path)],
+        check=True, capture_output=True, text=True,
+    )
+    run_res = subprocess.run([str(bin_path)], capture_output=True, text=True, check=True)
+    assert run_res.stdout.strip() == "15"
+
+

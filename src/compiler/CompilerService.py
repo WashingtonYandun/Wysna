@@ -252,7 +252,7 @@ class CompilerService:
             ).with_data(kind="reference_cycle", classes=classes))
         return warnings
 
-    def emit_c(self, checked, *, target_profile=None):
+    def emit_c(self, checked, *, target_profile=None, line_directives=False):
         self._validate(checked)
         browser_library = target_profile == 'browser-library'
         from mir.Lowering import Lowering
@@ -265,7 +265,7 @@ class CompilerService:
         )
         mir_module.library_mode = bool(browser_library)
         lowered_mir = time.perf_counter()
-        generator = CCodeGen(checked._interner)
+        generator = CCodeGen(checked._interner, emit_line_directives=line_directives)
         source = generator.generate(mir_module)
         source = self._enable_http_runtime(source)
         emitted = time.perf_counter()
