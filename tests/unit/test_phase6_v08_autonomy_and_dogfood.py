@@ -347,6 +347,7 @@ fn main() { print(apply(rules.rule)) }
             identities = {m["identity"] for m in all_env["result"]["modules"]}
             self.assertGreaterEqual(len(identities), 18)
             self.assertIn("std/json", identities)
+            self.assertIn("std/result", identities)
 
             json_res = self._run_sdk(["api", "std/json", "--output-format=json-v1"], ROOT, scratch)
             self.assertEqual(json_res.returncode, 0, json_res.stderr)

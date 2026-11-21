@@ -323,7 +323,7 @@ def test_project_impact_reports_cli_browser_service_and_test_paths():
     entries = {entry["name"]: entry for entry in impact["entries"]}
     assert set(entries) == {"app", "service", "web", "shared-pricing-contract"}
     assert all(entry["affected"] for entry in entries.values())
-    assert entries["service"]["unanalyzed_boundaries"] == ["c-ffi"]
+    assert entries["service"]["unanalyzed_boundaries"] == ["c-ffi", "indirect-call"]
     assert entries["web"]["unanalyzed_boundaries"] == ["javascript"]
     assert entries["app"]["paths"][0]["chain"][-1]["to"].endswith("::" + symbol)
     assert any(path["chain"] == [] for path in entries["web"]["paths"])
