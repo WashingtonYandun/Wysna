@@ -238,6 +238,7 @@ class EvaluationSummary:
             "post_autofix_first_check_pass_rate": round(self.post_autofix_first_check_pass_rate, 4),
             "raw_pass_at_1_count": self.raw_pass_at_1_count,
             "raw_pass_at_1_rate": round(self.raw_pass_at_1_rate, 4),
+            "post_autofix_pass_at_1_rate": round(self.pass_at_1_rate, 4),
             "autofix_pass_at_1_count": self.autofix_pass_at_1_count,
             "autofix_pass_at_1_rate": round(self.autofix_pass_at_1_rate, 4),
             "pass_at_1_count": self.pass_at_1_count,

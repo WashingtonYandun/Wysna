@@ -374,8 +374,7 @@ def run_pipeline(
                 print(f"warning[W-ARC]: {msg}", file=sys.stderr)
                 print(f"  advisory: {adv['advisory']}", file=sys.stderr)
         if check_only:
-            from checker.Lints import lint_discarded_expressions
-            lint_warnings = lint_discarded_expressions(checked.ast, file_name)
+            lint_warnings = service.lint_discarded_expressions(checked, file_name)
             lint_sources = _sources_for_diagnostics(file_name, source_code, service)
             for warning in lint_warnings:
                 print("warning" + render_diagnostic(warning, lint_sources, span_cache={}),

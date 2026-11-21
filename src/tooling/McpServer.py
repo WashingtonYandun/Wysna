@@ -167,12 +167,11 @@ class McpServer:
                 checked = self.service.check_parsed(parsed)
             except WysnaError as error:
                 return self._diagnostics_envelope("check", error, path, source)
-            warnings = list(lint_discarded_expressions(checked.ast, path))
-            warnings.extend(self.service.analyze_reference_cycles(checked))
+            warnings = self.service.lint_warnings(checked, path)
             sources = {path: source, **self.service.source_texts()}
             cache = {}
             records = [
-                diagnostic_from_error(w, sources, severity="warning", span_cache=cache)
+                diagnostic_from_error(w, sources, span_cache=cache)
                 for w in warnings
             ]
             return tool_result("check", "ok", 0, diagnostics=records)

@@ -838,4 +838,27 @@ def test_patch_and_fix_preserve_crlf_utf8_spans_permissions_and_mcp_errors(tmp_p
     assert not list(tmp_path.glob("*.tmp"))
 
 
+def test_mcp_check_handles_w6001_and_w6002_warnings(tmp_path):
+    source = (
+        "class Node {\n"
+        "    next: Node?\n"
+        "    fn init(next: Node?) { this.next = next }\n"
+        "}\n"
+        "fn main() -> int {\n"
+        "    let x = 1\n"
+        "    x + 2\n"
+        "    return 0\n"
+        "}\n"
+    )
+    target = tmp_path / "warnings.wysna"
+    target.write_text(source, encoding="utf-8")
+    server = McpServer(tmp_path)
+    failed, payload = call(server, "wysna_check", {"path": "warnings.wysna"})
+    assert not failed
+    assert payload["status"] == "ok"
+    assert {diag["code"] for diag in payload["diagnostics"]} == {"W6001", "W6002"}
+    assert all(diag["severity"] == "warning" for diag in payload["diagnostics"])
+
+
+
 

@@ -24,6 +24,6 @@ uninstall:
 	@echo "[OK] Removed $(BINDIR)/wysna"
 
 clean:
-	rm -rf .wysna_cache build dist *.egg-info
+	rm -rf .wysna_cache build dist *.egg-info src/*.egg-info
 	find . -name "__pycache__" -type d -prune -exec rm -rf {} +
 	@echo "[OK] Cleaned build caches"

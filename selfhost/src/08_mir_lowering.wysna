@@ -340,6 +340,104 @@ fn mir_lower_function(context: MirBuilder, function: CheckedFunction) {
     mir_finish(context, if function.closure { "wysna_" + function.name } else { mir_abi_name(function.name) }, function.source)
 }
 
+fn mir_optimize_function_param_reads(fn_: MirFunction) -> MirFunction {
+    if fn_.is_async { return fn_ }
+    let slot_count = len(fn_.slots)
+    let mut definitions: list[int] = []
+    let mut replacement: list[int] = []
+    let mut protected: list[bool] = []
+    let mut is_str_param: list[bool] = []
+    for _i in 0..slot_count {
+        definitions.append(0)
+        replacement.append(-1)
+        protected.append(false)
+        is_str_param.append(false)
+    }
+    for p in fn_.params {
+        if p >= 0 and p < slot_count and fn_.slots[p].type_id == 5 {
+            is_str_param[p] = true
+        }
+    }
+    for block in fn_.blocks {
+        if block.terminator.value >= 0 and block.terminator.value < slot_count {
+            protected[block.terminator.value] = true
+        }
+        for op in block.operations {
+            if op.result >= 0 and op.result < slot_count {
+                definitions[op.result] = definitions[op.result] + 1
+            }
+            if mir_consumes(op) or op.opcode == "mutate" {
+                for a in op.args {
+                    if a >= 0 and a < slot_count { protected[a] = true }
+                }
+            }
+            if op.place.root >= 0 and op.place.root < slot_count {
+                protected[op.place.root] = true
+            }
+            for proj in op.place.projections {
+                if proj.kind == "index" and proj.index >= 0 and proj.index < slot_count {
+                    protected[proj.index] = true
+                }
+            }
+        }
+    }
+    let mut changed = false
+    for block in fn_.blocks {
+        for op in block.operations {
+            if op.opcode == "clone" and len(op.args) == 1 and op.result >= 0 {
+                let src_slot = op.args[0]
+                let dst_slot = op.result
+                if is_str_param[src_slot] and definitions[dst_slot] == 1 and not protected[dst_slot] {
+                    replacement[dst_slot] = src_slot
+                    changed = true
+                }
+            }
+        }
+    }
+    if not changed { return fn_ }
+    let mut new_blocks: list[MirBlock] = []
+    for block in fn_.blocks {
+        let mut new_ops: list[MirOperation] = []
+        for op in block.operations {
+            if op.opcode == "clone" and op.result >= 0 and replacement[op.result] >= 0 {
+                continue
+            }
+            if op.opcode == "release" and len(op.args) == 1 and replacement[op.args[0]] >= 0 {
+                continue
+            }
+            let mut new_args: list[int] = []
+            for a in op.args {
+                if a >= 0 and a < slot_count and replacement[a] >= 0 {
+                    new_args.append(replacement[a])
+                } else {
+                    new_args.append(a)
+                }
+            }
+            new_ops.append(MirOperation {
+                owner_type: op.owner_type,
+                labels: op.labels,
+                place: op.place,
+                opcode: op.opcode,
+                result: op.result,
+                args: new_args,
+                name: op.name,
+                value: op.value,
+                source: op.source
+            })
+        }
+        new_blocks.append(MirBlock { operations: new_ops, terminator: block.terminator })
+    }
+    return MirFunction { name: fn_.name, return_type: fn_.return_type, slots: fn_.slots, blocks: new_blocks, params: fn_.params, source: fn_.source, is_async: fn_.is_async, async_return_type: fn_.async_return_type }
+}
+
+fn mir_optimize_parameter_reads(module: MirModule) -> MirModule {
+    let mut optimized: list[MirFunction] = []
+    for fn_ in module.functions {
+        optimized.append(mir_optimize_function_param_reads(fn_))
+    }
+    return MirModule { file: module.file, functions: optimized, globals: module.globals, records: module.records, virtual_slots: module.virtual_slots, externs: module.externs, types: module.types, source: module.source }
+}
+
 fn mir_build(program: CheckedProgram) -> MirModule {
     checked_verify(program)
     let context = new MirBuilder(program)
@@ -377,7 +475,8 @@ fn mir_build(program: CheckedProgram) -> MirModule {
         mir_return(context, value, source)
     }
     mir_finish(context, "wysna_program", source)
-    return MirModule { file: program.file, functions: context.functions, globals: context.globals, records: context.records, virtual_slots: context.virtual_slots, externs: context.externs, types: context.types, source: source }
+    let raw_module = MirModule { file: program.file, functions: context.functions, globals: context.globals, records: context.records, virtual_slots: context.virtual_slots, externs: context.externs, types: context.types, source: source }
+    return mir_optimize_parameter_reads(raw_module)
 }
 
 fn mir_module_json(module: MirModule) -> str {

@@ -155,8 +155,7 @@ class LanguageServer:
             parsed = self.compiler.parse(source, path, recover=True)
             checked = self.compiler.check_parsed(parsed)
             self.checked[uri] = checked
-            warnings = list(lint_discarded_expressions(checked.ast, path))
-            warnings.extend(self.compiler.analyze_reference_cycles(checked))
+            warnings = self.compiler.lint_warnings(checked, path)
             for warning in warnings:
                 entry, actions = self._diagnostic_entry(warning, path, source, severity=2)
                 diagnostics.append(entry)

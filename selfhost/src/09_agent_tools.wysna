@@ -694,6 +694,7 @@ fn tool_build_graph_with_overlays(src: str, file: str, ov_paths: list[str], ov_t
 fn tool_build_checked_graph(src: str, canonical: str, expanded: list[Token], program: CheckedProgram, ov_paths: list[str], ov_texts: list[str], include_entry: bool) -> ToolGraph {
     let graph = new ToolGraph(canonical, src)
     graph.mod_names.append(canonical)
+    let mut mod_hashes: list[str] = [canonical + "=" + diag_sha256_hex(src)]
     tool_scan_decl_nodes(graph, program, src, canonical)
     for etok in expanded {
         if etok.file != "" and etok.file != "<unknown>" and not tool_str_contains(graph.mod_names, etok.file) {
@@ -701,6 +702,7 @@ fn tool_build_checked_graph(src: str, canonical: str, expanded: list[Token], pro
             let ext_res = module_read_with_overlays(etok.file, ov_paths, ov_texts)
             let ext_src = if ext_res[0] == "1" { ext_res[1] } else { "" }
             if ext_src != "" {
+                mod_hashes.append(etok.file + "=" + diag_sha256_hex(ext_src))
                 tool_scan_decl_nodes(graph, program, ext_src, etok.file)
             }
         }
@@ -800,20 +802,8 @@ fn tool_build_checked_graph(src: str, canonical: str, expanded: list[Token], pro
         }
     }
 
-    # Compute deterministic canonical graph_hash
-    let mut payload_parts: list[str] = ["src:", diag_sha256_hex(src), "|nodes:"]
-    let mut node_sigs: list[str] = []
-    for n in graph.nodes {
-        node_sigs.append(n.id + "@" + str(n.start_byte) + ":" + str(n.end_byte) + ":" + n.signature + ":" + tool_str_list_json(n.implements_list) + ":" + n.super_class + (if n.indirect_call { ":indirect" } else { "" }))
-    }
-    payload_parts.append(join_strings(tool_sort_strings(node_sigs), ";"))
-    payload_parts.append("|edges:")
-    let mut edge_sigs: list[str] = []
-    for e in graph.edges {
-        edge_sigs.append(e.from_id + "->" + e.to_id + ":" + e.kind + "@" + str(e.line))
-    }
-    payload_parts.append(join_strings(tool_sort_strings(edge_sigs), ";"))
-    graph.graph_hash = "graph:" + slice(diag_sha256_hex(join_strings(payload_parts, "")), 0, 16)
+    # Compute deterministic canonical graph_hash shared across engines
+    graph.graph_hash = "graph:" + slice(diag_sha256_hex(join_strings(tool_sort_strings(mod_hashes), "\n")), 0, 16)
     return graph
 }
 
@@ -1361,8 +1351,7 @@ fn tool_handle_check_v1(file: str, legacy_json: bool, json_v1: bool) -> unit {
     mir_verify(module)
     let fn_count = str(len(module.functions))
     if json_v1 {
-        let artifacts_json = "[{\"kind\":\"checked_program\",\"media_type\":\"application/json\",\"file\":" + diag_json_quote(file) + ",\"functions\":" + fn_count + "}]"
-        diag_write_output(diag_tool_envelope_json("check", "ok", 0, "[]", "", "", artifacts_json))
+        diag_write_output(diag_tool_envelope_json("check", "ok", 0, "[]", "", "", "[]"))
     } elif legacy_json {
         diag_write_output("{\"schema_version\":\"wysna.cli.result/1\",\"compiler_version\":\"0.8.0\",\"command\":\"check\",\"ok\":true,\"exit_code\":0,\"diagnostics\":[],\"data\":{\"file\":" + diag_json_quote(file) + ",\"functions\":" + fn_count + "}}")
     } else {
@@ -1423,8 +1412,77 @@ fn selfhost_format_body(source: str, in_path: str) -> str {
     let mut out_lines: list[str] = []
     let mut depth = 0
     let mut block_depth = 0
+    let mut in_ml_str = false
     let mut prev_blank = true
     for raw in raw_lines {
+        if in_ml_str {
+            out_lines.append(raw)
+            prev_blank = false
+            let rlen = len(raw)
+            let mut idx = 0
+            let mut escaped = false
+            let mut in_str = false
+            while idx < rlen {
+                let c = ord(raw[idx])
+                if in_ml_str {
+                    if escaped {
+                        escaped = false
+                        idx = idx + 1
+                    } elif c == 92 {
+                        escaped = true
+                        idx = idx + 1
+                    } elif idx + 2 < rlen and c == 34 and ord(raw[idx + 1]) == 34 and ord(raw[idx + 2]) == 34 {
+                        in_ml_str = false
+                        idx = idx + 3
+                    } else {
+                        idx = idx + 1
+                    }
+                } elif block_depth > 0 {
+                    if c == 47 and idx + 1 < rlen and ord(raw[idx + 1]) == 42 {
+                        block_depth = block_depth + 1
+                        idx = idx + 2
+                    } elif c == 42 and idx + 1 < rlen and ord(raw[idx + 1]) == 47 {
+                        block_depth = block_depth - 1
+                        idx = idx + 2
+                    } else {
+                        idx = idx + 1
+                    }
+                } elif in_str {
+                    if escaped {
+                        escaped = false
+                    } elif c == 92 {
+                        escaped = true
+                    } elif c == 34 {
+                        in_str = false
+                    }
+                    idx = idx + 1
+                } else {
+                    if c == 35 {
+                        break
+                    } elif c == 47 and idx + 1 < rlen and ord(raw[idx + 1]) == 42 {
+                        block_depth = block_depth + 1
+                        idx = idx + 2
+                    } elif idx + 2 < rlen and c == 34 and ord(raw[idx + 1]) == 34 and ord(raw[idx + 2]) == 34 {
+                        in_ml_str = true
+                        escaped = false
+                        idx = idx + 3
+                    } elif c == 34 {
+                        in_str = true
+                        escaped = false
+                        idx = idx + 1
+                    } elif c == 123 {
+                        depth = depth + 1
+                        idx = idx + 1
+                    } elif c == 125 {
+                        if depth > 0 { depth = depth - 1 }
+                        idx = idx + 1
+                    } else {
+                        idx = idx + 1
+                    }
+                }
+            }
+            continue
+        }
         if block_depth > 0 {
             out_lines.append(raw)
             let rlen = len(raw)
@@ -1476,7 +1534,20 @@ fn selfhost_format_body(source: str, in_path: str) -> str {
             let mut idx = 0
             while idx < tlen {
                 let c = ord(trimmed[idx])
-                if block_depth > 0 {
+                if in_ml_str {
+                    if escaped {
+                        escaped = false
+                        idx = idx + 1
+                    } elif c == 92 {
+                        escaped = true
+                        idx = idx + 1
+                    } elif idx + 2 < tlen and c == 34 and ord(trimmed[idx + 1]) == 34 and ord(trimmed[idx + 2]) == 34 {
+                        in_ml_str = false
+                        idx = idx + 3
+                    } else {
+                        idx = idx + 1
+                    }
+                } elif block_depth > 0 {
                     if c == 47 and idx + 1 < tlen and ord(trimmed[idx + 1]) == 42 {
                         block_depth = block_depth + 1
                         idx = idx + 2
@@ -1501,8 +1572,13 @@ fn selfhost_format_body(source: str, in_path: str) -> str {
                     } elif c == 47 and idx + 1 < tlen and ord(trimmed[idx + 1]) == 42 {
                         block_depth = block_depth + 1
                         idx = idx + 2
+                    } elif idx + 2 < tlen and c == 34 and ord(trimmed[idx + 1]) == 34 and ord(trimmed[idx + 2]) == 34 {
+                        in_ml_str = true
+                        escaped = false
+                        idx = idx + 3
                     } elif c == 34 {
                         in_str = true
+                        escaped = false
                         idx = idx + 1
                     } elif c == 123 {
                         opens = opens + 1

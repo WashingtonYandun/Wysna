@@ -91,8 +91,10 @@ fn mir_c_operation(module: MirModule, function: MirFunction, operation: MirOpera
     }
     if kind == "mutate" {
         let reference = mir_c_place(module, function, operation.place)
-        let mut call = "wysna_list_" + operation.name + "(" + reference
-        if operation.name == "pop" { call = "wysna_list_pop_at(" + reference + ", " + escape_c_str(operation.source.file) + ", " + str(operation.source.line) + ", " + str(operation.source.col) }
+        let target_tid = mir_place_type(module, function, operation.place, operation.source)
+        let prefix = if module.types[target_tid].kind == "dict" { "wysna_dict_" } else { "wysna_list_" }
+        let mut call = prefix + operation.name + "(" + reference
+        if prefix == "wysna_list_" and operation.name == "pop" { call = "wysna_list_pop_at(" + reference + ", " + escape_c_str(operation.source.file) + ", " + str(operation.source.line) + ", " + str(operation.source.col) }
         for argument in arguments { call = call + ", " + argument }
         return mir_c_write_consume(function, result, call + ")", true)
     }
@@ -489,6 +491,19 @@ fn mir_c_async_function(module: MirModule, function: MirFunction) -> str {
     return join_strings(parts, "")
 }
 
+fn mir_c_display_fn_name(name: str) -> str {
+    let mut raw = if len(name) > 9 and slice(name, 0, 9) == "wysna_fn_" { slice(name, 9, len(name)) } else { name }
+    let prefix = "__wysna_module_"
+    if len(raw) > len(prefix) and slice(raw, 0, len(prefix)) == prefix {
+        for i in len(prefix)..len(raw) - 1 {
+            if slice(raw, i, i + 2) == "__" {
+                return slice(raw, i + 2, len(raw))
+            }
+        }
+    }
+    return raw
+}
+
 fn mir_c_function(module: MirModule, function: MirFunction) -> str {
     if function.is_async { return mir_c_async_function(module, function) }
     let mut parts: list[str] = [mir_c_signature(function) + " {\n"]
@@ -515,9 +530,14 @@ fn mir_c_function(module: MirModule, function: MirFunction) -> str {
         }
         return join_strings(parts, "") + "    return " + parallel_helper + "(" + p0 + ", " + p1 + ");\n}\n"
     }
+    let track_frame = len(function.name) > 9 and slice(function.name, 0, 9) == "wysna_fn_"
     for i in 0..len(function.slots) {
         let slot = function.slots[i]
         if not slot.parameter { parts.append("    " + mir_c_type(slot.type_id) + " " + mir_c_name(i) + " = " + (if mir_value_storage(slot.type_id) { "wysna_unit()" } else { "0" }) + ";\n") }
+    }
+    if track_frame {
+        let ffile = if function.source.file != "" { function.source.file } else { "<unknown>" }
+        parts.append("    wysna_runtime_push_frame(" + escape_c_str(mir_c_display_fn_name(function.name)) + ", " + escape_c_str(ffile) + ", " + str(function.source.line) + ");\n")
     }
     parts.append("    goto bb0;\n")
     for i in 0..len(function.blocks) {
@@ -530,6 +550,7 @@ fn mir_c_function(module: MirModule, function: MirFunction) -> str {
         elif term.kind == "return" {
             let name = mir_c_name(term.value)
             let expression = if mir_value_storage(function.return_type) { "wysna_move(&" + name + ")" } else { name }
+            if track_frame { parts.append("    wysna_runtime_pop_frame();\n") }
             parts.append("    return " + expression + ";\n")
         }
         else { parts.append("    wysna_runtime_fail(\"W9999\", \"Unreachable MIR block executed\");\n") }

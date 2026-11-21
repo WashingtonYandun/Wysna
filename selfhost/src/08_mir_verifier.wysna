@@ -86,12 +86,22 @@ fn mir_verify_runtime(module: MirModule, operation: MirOperation, slots: list[Mi
         if name == "wysna_not" { return type_ == 2 and returned == 2 }
         if name == "wysna_builtin_int" { return type_ >= 2 and type_ <= 6 and returned == 3 }
         if name == "wysna_builtin_float" { return type_ >= 2 and type_ <= 6 and returned == 4 }
+        if name == "wysna_str_trim" or name == "wysna_str_to_lower" or name == "wysna_str_to_upper" { return type_ == 5 and returned == 5 }
         if name == "wysna_await" { return true }
+        return false
+    }
+    if len(operation.args) == 3 {
+        let a0 = slots[operation.args[0]].type_id
+        let a1 = slots[operation.args[1]].type_id
+        let a2 = slots[operation.args[2]].type_id
+        if name == "wysna_str_replace" { return a0 == 5 and a1 == 5 and a2 == 5 and returned == 5 }
         return false
     }
     if len(operation.args) != 2 { return false }
     let first = slots[operation.args[0]].type_id
     let second = slots[operation.args[1]].type_id
+    if name == "wysna_str_split" { return first == 5 and second == 5 and module.types[returned].kind == "list" and module.types[returned].args[0] == 5 }
+    if name == "wysna_str_starts_with" or name == "wysna_str_ends_with" { return first == 5 and second == 5 and returned == 2 }
     if name == "wysna_index_get_owned_at" {
         if first == 5 { return second == 3 and returned == 5 }
         let input = module.types[first]
@@ -254,6 +264,12 @@ fn mir_verify_shape(module: MirModule, function: MirFunction) {
                         if operation.name == "pop" { valid = type_ == descriptor.args[0] and len(operation.args) == 0 }
                         elif operation.name == "clear" { valid = type_ == 1 and len(operation.args) == 0 }
                         elif operation.name == "append" { valid = type_ == 1 and len(operation.args) == 1 if valid { valid = function.slots[operation.args[0]].type_id == descriptor.args[0] } }
+                    } elif descriptor.kind == "dict" {
+                        if operation.name == "clear" { valid = type_ == 1 and len(operation.args) == 0 }
+                        elif operation.name == "remove" {
+                            valid = len(operation.args) == 1 and mir_is_optional(module.types, type_) and module.types[type_].args[0] == descriptor.args[1]
+                            if valid { valid = mir_compatible(module.types, module.records, function.slots[operation.args[0]].type_id, descriptor.args[0]) }
+                        }
                     }
                 } elif operation.opcode == "global_load" {
                     let global = operation.value.integer

@@ -153,7 +153,7 @@ fn api_resolve_stdlib_module(stdlib_root: str, relative_in: str) -> list[str] {
 fn api_availability_json(module_id: str) -> str {
     let mut interp = "supported"
     let mut nat = "supported"
-    let mut selfhost = "unknown"
+    let mut selfhost = "supported"
     let mut wasm = "supported"
     if module_id == "std/http" or (len(module_id) >= 9 and slice(module_id, 0, 9) == "std/http/") {
         interp = "requires-pycurl-extra"
@@ -621,20 +621,21 @@ fn api_module_json(rec: ApiModuleRecord) -> str {
     return join_strings(parts, "")
 }
 
-fn api_collect_stdlib_file(acc: ApiIndexCollector, resolved_path: str, module_id: str) -> unit {
+fn api_collect_stdlib_file(acc: ApiIndexCollector, resolved_path: str, module_id: str, recurse: bool) -> unit {
     let canon = module_canonical(resolved_path)
     if tool_str_contains(acc.visited, canon) { return }
     acc.visited.append(canon)
     let src = read_file(canon) else err { return }
     let rec = api_extract_module(src, canon, module_id, "wysna-stdlib@0.8.0")
     acc.modules.append(rec)
+    if not recurse { return }
     for imp in rec.imports {
         if len(imp) >= 4 and slice(imp, 0, 4) == "std/" {
             let sub = api_resolve_stdlib_module(acc.stdlib_root, imp)
             if sub[0] == "1" {
                 let rel = slice(imp, 4, len(imp))
                 let clean_rel = if proj_str_ends_with(rel, ".wysna") { slice(rel, 0, len(rel) - 6) } else { rel }
-                api_collect_stdlib_file(acc, sub[1], "std/" + clean_rel)
+                api_collect_stdlib_file(acc, sub[1], "std/" + clean_rel, true)
             }
         }
     }
@@ -662,6 +663,7 @@ fn api_emit_error_and_exit(code: str, msg: str) -> unit {
 fn tool_handle_api(args: list[str], _json_mode: bool) -> unit {
     let mut mod_arg = ""
     let mut has_mod = false
+    let mut include_deps = false
     let mut manifest_arg = ""
     let mut i = 1
     while i < len(args) {
@@ -671,6 +673,9 @@ fn tool_handle_api(args: list[str], _json_mode: bool) -> unit {
         } elif a == "--output-format" and i + 1 < len(args) {
             if args[i + 1] != "json-v1" { api_emit_error_and_exit("W5002", "unsupported output format: " + args[i + 1]) }
             i = i + 2
+        } elif a == "--with-deps" or a == "--include-deps" {
+            include_deps = true
+            i = i + 1
         } elif a == "--manifest" and i + 1 < len(args) {
             manifest_arg = args[i + 1]
             i = i + 2
@@ -693,7 +698,10 @@ fn tool_handle_api(args: list[str], _json_mode: bool) -> unit {
         if not m.ok {
             api_emit_error_and_exit(m.err_code, m.err_msg)
         }
-        let tidx = proj_find_target_idx(m, "app")
+        let mut tidx = proj_find_target_idx(m, "app")
+        if tidx < 0 and len(m.targets) == 1 {
+            tidx = 0
+        }
         if tidx < 0 {
             api_emit_error_and_exit("W5002", "project API index requires a target named 'app'")
         }
@@ -761,13 +769,13 @@ fn tool_handle_api(args: list[str], _json_mode: bool) -> unit {
         }
         let rel = if len(mod_arg) >= 4 and slice(mod_arg, 0, 4) == "std/" { slice(mod_arg, 4, len(mod_arg)) } else { mod_arg }
         let clean_rel = if proj_str_ends_with(rel, ".wysna") { slice(rel, 0, len(rel) - 6) } else { rel }
-        api_collect_stdlib_file(acc, resolved[1], "std/" + clean_rel)
+        api_collect_stdlib_file(acc, resolved[1], "std/" + clean_rel, include_deps)
     } else {
-        let known: list[str] = ["algorithms", "async", "buffer", "bytes", "crypto", "environment", "files", "fs", "http", "io", "json", "parse", "path", "process", "resources", "result", "test", "text", "time"]
+        let known: list[str] = ["algorithms", "async", "buffer", "bytes", "crypto", "csv", "environment", "files", "fs", "http", "io", "json", "parse", "path", "process", "resources", "result", "test", "text", "time"]
         for name in known {
             let resolved = api_resolve_stdlib_module(stdlib_root, name)
             if resolved[0] == "1" {
-                api_collect_stdlib_file(acc, resolved[1], "std/" + name)
+                api_collect_stdlib_file(acc, resolved[1], "std/" + name, true)
             }
         }
     }

@@ -488,6 +488,12 @@ fn proj_find_target_idx(m: ProjectManifest, name: str) -> int {
     return -1
 }
 
+fn proj_resolve_target_name(m: ProjectManifest, target_arg: str) -> str {
+    if target_arg != "" { return target_arg }
+    if proj_find_target_idx(m, "app") >= 0 or len(m.targets) != 1 { return "app" }
+    return m.targets[0].name
+}
+
 fn proj_fail(m: ProjectManifest, code: str, msg: str) -> ProjectManifest {
     m.ok = false
     m.err_code = code
@@ -1302,7 +1308,7 @@ fn tool_handle_project(args: list[str], json_mode_in: bool) -> unit {
     }
 
     if subcmd == "check" {
-        let tname = if target_arg != "" { target_arg } else { "app" }
+        let tname = proj_resolve_target_name(m, target_arg)
         let tidx = proj_find_target_idx(m, tname)
         if tidx < 0 {
             proj_emit_error_and_exit("check", json_mode, "W5002", "unknown target '" + tname + "'")
@@ -1348,7 +1354,7 @@ fn tool_handle_project(args: list[str], json_mode_in: bool) -> unit {
     }
 
     if subcmd == "build" or subcmd == "run" {
-        let tname = if target_arg != "" { target_arg } else { "app" }
+        let tname = proj_resolve_target_name(m, target_arg)
         let tidx = proj_find_target_idx(m, tname)
         if tidx < 0 {
             proj_emit_error_and_exit(subcmd, json_mode, "W5002", "unknown target '" + tname + "'")
