@@ -1,3 +1,5 @@
+> **Historical Snapshot Notice (`v0.7.0 Candidate`):** This document is an archived architectural audit from `2026-11-17`. For the canonical `v0.8.0` specification and current implementation status, consult [`SPEC.md`](../SPEC.md), [`docs/ENGINE_PARITY_MATRIX.md`](ENGINE_PARITY_MATRIX.md), [`docs/KNOWN_LIMITS.md`](KNOWN_LIMITS.md), and [`docs/evolution/02-ESTADO-REAL.md`](evolution/02-ESTADO-REAL.md).
+
 # Wysna: Comprehensive End-to-End Capabilities & Technical Debt Audit
 
 **Status:** Canonical End-to-End Architecture, Feature Inventory & Deficit Audit
