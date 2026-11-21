@@ -615,7 +615,8 @@ fn main() -> unit {
                     assert built.returncode == 0, built.stderr
                     if engine == 'selfhost' and extra_cc:
                         c_path = directory / 'selfhost.c'
-                        emit = subprocess.run([selfhost_bin, str(source_path), str(c_path)],
+                        emit = subprocess.run([selfhost_bin, '--stdlib-root', str(ROOT / 'stdlib'),
+                                               str(source_path), str(c_path)],
                                               capture_output=True, text=True, timeout=120)
                         assert emit.returncode == 0, emit.stderr
                         subprocess.run(compiler_command() + ['-std=c99', '-O2', '-I' + str(ROOT),

@@ -466,7 +466,7 @@ def _run_suite_in_repo(repo_root: str) -> None:
         try:
             from compiler.Bootstrap import bootstrap_compiler, publish_bootstrap_cache
             artifacts = bootstrap_compiler(repo_root, os.path.join(tmpdir, "bootstrap"))
-            s2_bin = str(artifacts.compiler)
+            stage2_command = [str(artifacts.compiler), "--stdlib-root", str(Path(repo_root) / "stdlib")]
             h0, h1, h2 = artifacts.hashes
             assert h0 == h1 == h2, f"Native MIR hash mismatch: {h0} vs {h1} vs {h2}"
             bootstrap_ok = True
@@ -482,7 +482,7 @@ def _run_suite_in_repo(repo_root: str) -> None:
                     expected = exp_stream.read()
                 selfhost_c_path = os.path.join(tmpdir, "selfhost_" + f[:-6] + ".c")
                 selfhost_bin_path = os.path.join(tmpdir, "selfhost_" + f[:-6])
-                subprocess.run([s2_bin, path, selfhost_c_path], check=True, timeout=120, capture_output=True, cwd=repo_root)
+                subprocess.run(stage2_command + [path, selfhost_c_path], check=True, timeout=120, capture_output=True, cwd=repo_root)
                 subprocess.run([cc_cmd, "-std=c99", f"-I{repo_root}"] + extra_cc_flags + [selfhost_c_path, "-o", selfhost_bin_path], check=True, timeout=120, capture_output=True)
                 return f, selfhost_bin_path, expected
 
@@ -515,7 +515,7 @@ def _run_suite_in_repo(repo_root: str) -> None:
 
                 ex_c_path = os.path.join(tmpdir, "ex_" + f[:-6] + ".c")
                 ex_bin_path = os.path.join(tmpdir, "ex_" + f[:-6])
-                subprocess.run([s2_bin, ex_path, ex_c_path], check=True, timeout=120, capture_output=True, cwd=repo_root)
+                subprocess.run(stage2_command + [ex_path, ex_c_path], check=True, timeout=120, capture_output=True, cwd=repo_root)
                 subprocess.run([os.environ.get("CC", "cc"), "-std=c99", f"-I{repo_root}", ex_c_path, "-o", ex_bin_path], check=True, timeout=120, capture_output=True)
                 ex_res = subprocess.run([ex_bin_path], timeout=30, capture_output=True, text=True, cwd=repo_root)
                 assert ex_res.returncode == 0, ex_res.stderr

@@ -302,7 +302,7 @@ def test_automation_fetch_publishes_atomically_and_preserves_prior_batch():
             selfhost_c = work / "fetch_selfhost.c"
             selfhost_bin = work / ("fetch-selfhost.exe" if os.name == "nt" else "fetch-selfhost")
             emit_selfhost = subprocess.run(
-                [str(selfhost), str(fetch_source), str(selfhost_c)],
+                [str(selfhost), "--stdlib-root", str(ROOT / "stdlib"), str(fetch_source), str(selfhost_c)],
                 cwd=ROOT, capture_output=True, text=True, timeout=120,
             )
             assert emit_selfhost.returncode == 0, emit_selfhost.stderr

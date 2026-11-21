@@ -137,7 +137,7 @@ def run_engine(engine, source, label, selfhost_bin, directory, sanitize=False, r
         command = driver + ['run', str(source_path)]
     elif engine == 'selfhost':
         # Direct invocation: no Seed parser/checker runs on the input first.
-        command = [str(selfhost_bin), str(source_path), str(c_path)]
+        command = [str(selfhost_bin), '--stdlib-root', str(ROOT / 'stdlib'), str(source_path), str(c_path)]
     elif engine == 'ast':
         command = [sys.executable, str(ROOT / 'tests/emit_ast_oracle.py'),
                    str(source_path), str(c_path)]
