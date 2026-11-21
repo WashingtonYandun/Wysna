@@ -2503,6 +2503,7 @@ fn sem_error_type_name(context: SemanticContext, type_id: int) -> str {
     if type_.kind == "float" { return "float" }
     if type_.kind == "bool" { return "bool" }
     if type_.kind == "str" { return "str" }
+    if len(type_.args) > 0 { return sem_nominal_specialization_name(type_.name, type_.args) }
     return type_.name
 }
 fn sem_error_union(context: SemanticContext, first: int) -> int {
@@ -2510,14 +2511,14 @@ fn sem_error_union(context: SemanticContext, first: int) -> int {
     let mut has_union = false
     while sem_match(context, "PIPE") { has_union = true alternatives.append(sem_type(context)) }
     if not has_union { return first }
+    return sem_intern_error_union(context, alternatives)
+}
+fn sem_intern_error_union(context: SemanticContext, alternatives: list[int]) -> int {
     let mut unique: list[int] = []
     for alternative in alternatives {
         let kind = sem_kind(context, alternative)
         if kind != "int" and kind != "float" and kind != "bool" and kind != "str" and kind != "struct" and kind != "enum" and kind != "class" {
             sem_error(context, "W2001", "error union alternatives must be scalar, struct, enum, or class types")
-        }
-        if len(context.types[alternative].args) > 0 and (kind == "struct" or kind == "enum") {
-            sem_error(context, "W2001", "generic nominal types cannot be error union alternatives")
         }
         let mut found = false
         for existing in unique { if existing == alternative { found = true } }
@@ -3449,6 +3450,7 @@ fn sem_substitute_type(context: SemanticContext, type_id: int, names: list[str],
         if next != arg { changed = true }
     }
     if not changed { return type_id }
+    if type_.kind == "error_union" { return sem_intern_error_union(context, replaced) }
     return sem_intern(context, type_.kind, type_.name, replaced)
 }
 fn sem_unify_type(context: SemanticContext, unification: SemUnification, pattern: int, actual: int) -> bool {
@@ -4695,31 +4697,29 @@ fn sem_pattern_syntax(context: SemanticContext, subject: int, source: Token) -> 
         return sem_record_pattern(context, "tuple", children)
     }
 
+    let pattern_start = context.pos
     let mut owner = ""
     let mut name = sem_expect(context, "IDENT").val
     if name == "_" { return sem_leaf_pattern(context, "*") }
     if sem_match(context, "DOT") { owner = name name = sem_expect(context, "IDENT").val }
     let kind = sem_kind(context, subject)
+    if kind == "error_union" and (sem_is(context, "LBRACKET") or sem_is(context, "LPAREN")) {
+        if owner != "" { report_error_at("W2001", source, "error type patterns must be unqualified") }
+        context.pos = pattern_start
+        let error_type = sem_type(context)
+        sem_expect(context, "LPAREN")
+        let mut is_alternative = false
+        for alternative in context.types[subject].args { if alternative == error_type { is_alternative = true } }
+        if not is_alternative { report_error_at("W2001", source, "error type pattern is not an alternative of this union") }
+        if sem_is(context, "RPAREN") { report_error_at("W2005", source, "error type pattern requires exactly one payload binding") }
+        if not sem_is(context, "IDENT") { report_error_at("W2005", source, "error type pattern payload must be a binding or wildcard") }
+        let child_pattern = sem_pattern(context, error_type)
+        if child_pattern != "*" { report_error_at("W2005", source, "error type pattern payload must be a binding or wildcard") }
+        if sem_match(context, "COMMA") { report_error_at("W2005", source, "error type pattern requires exactly one payload binding") }
+        sem_expect(context, "RPAREN")
+        return sem_record_pattern(context, sem_error_type_name(context, error_type), [context.last_pattern])
+    }
     if sem_match(context, "LPAREN") {
-        if kind == "error_union" {
-            if owner != "" { report_error_at("W2001", source, "error type patterns must be unqualified") }
-            let mut error_type = -1
-            if name == "int" { error_type = context.integer_type }
-            elif name == "float" { error_type = context.float_type }
-            elif name == "bool" { error_type = context.boolean_type }
-            elif name == "str" { error_type = context.string_type }
-            else { error_type = sem_named(context, name) }
-            let mut is_alternative = false
-            for alternative in context.types[subject].args { if alternative == error_type { is_alternative = true } }
-            if not is_alternative { report_error_at("W2001", source, "error type pattern is not an alternative of this union") }
-            if sem_is(context, "RPAREN") { report_error_at("W2005", source, "error type pattern requires exactly one payload binding") }
-            if not sem_is(context, "IDENT") { report_error_at("W2005", source, "error type pattern payload must be a binding or wildcard") }
-            let child_pattern = sem_pattern(context, error_type)
-            if child_pattern != "*" { report_error_at("W2005", source, "error type pattern payload must be a binding or wildcard") }
-            if sem_match(context, "COMMA") { report_error_at("W2005", source, "error type pattern requires exactly one payload binding") }
-            sem_expect(context, "RPAREN")
-            return sem_record_pattern(context, sem_error_type_name(context, error_type), [context.last_pattern])
-        }
         let mut payload_types: list[int] = []
         let mut valid = false
         if (owner == "" or owner == "Option") and name == "Some" and kind == "optional" {

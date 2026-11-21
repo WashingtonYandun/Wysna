@@ -1,0 +1,70 @@
+struct BoxErr[T] { detail: T }
+enum GenErr[T] { Coded(T), Empty }
+class RefErr[T] {
+    public detail: T
+    fn init(detail: T) { this.detail = detail }
+}
+
+fn fail(mode: int) -> int ! BoxErr[int] | BoxErr[str] | BoxErr[list[str]] | GenErr[int] | GenErr[str] | RefErr[str] {
+    if mode == 0 { return Ok(7) }
+    if mode == 1 { return Err(BoxErr[int] { detail: 404 }) }
+    if mode == 2 { return Err(BoxErr[str] { detail: "note" }) }
+    if mode == 3 { return Err(BoxErr[list[str]] { detail: ["a", "b"] }) }
+    if mode == 4 {
+        let issue: GenErr[int] = GenErr.Coded(12)
+        return Err(issue)
+    }
+    if mode == 5 {
+        let issue: GenErr[str] = GenErr.Coded("tag")
+        return Err(issue)
+    }
+    if mode == 7 {
+        let issue: GenErr[str] = GenErr.Empty
+        return Err(issue)
+    }
+    if mode == 8 {
+        let issue: GenErr[int] = GenErr.Empty
+        return Err(issue)
+    }
+    let issue: RefErr[str] = new RefErr[str]("ref")
+    return Err(issue)
+}
+
+fn outer(mode: int) -> int ! bool | BoxErr[int] | BoxErr[str] | BoxErr[list[str]] | GenErr[int] | GenErr[str] | RefErr[str] {
+    return fail(mode)?
+}
+
+fn wrapped[T](detail: T) -> int ! BoxErr[T] | str {
+    return Err(BoxErr[T] { detail: detail })
+}
+
+fn main() -> unit {
+    for mode in 0..9 {
+        let value = outer(mode) else issue {
+            match issue {
+                bool(flag) => print("FLAG", flag),
+                BoxErr[int](error) => print("BOX_INT", error.detail),
+                BoxErr[str](error) => print("BOX_STR", error.detail),
+                BoxErr[list[str]](error) => print("BOX_LIST", len(error.detail), error.detail[1]),
+                GenErr[int](error) => match error {
+                    GenErr.Coded(code) => print("ENUM_INT", code),
+                    GenErr.Empty => print("EMPTY_INT"),
+                },
+                GenErr[str](error) => match error {
+                    GenErr.Coded(label) => print("ENUM_STR", label),
+                    GenErr.Empty => print("EMPTY_STR"),
+                },
+                RefErr[str](error) => print("CLASS", error.detail),
+            }
+            continue
+        }
+        print("VALUE", value)
+    }
+    let recovered = wrapped(32) else issue {
+        match issue {
+            BoxErr[int](error) => error.detail,
+            str(_) => 0,
+        }
+    }
+    print("RECOVERED", recovered)
+}

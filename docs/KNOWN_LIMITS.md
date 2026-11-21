@@ -70,11 +70,13 @@ exhaustively inspect the value bound by `else err`. A source error set can propa
 it is a subset of the destination function's declared error set. Payloads are not
 converted.
 
-Supported alternatives across Seed and LLVM are `int`, `float`, `bool`, `str`, `struct`
+Supported alternatives across Seed, LLVM, and native Selfhost are `int`, `float`, `bool`, `str`, `struct`
 (including concrete generic `Struct[T]`), `enum` (including concrete generic `Enum[T]`),
-and `class` types (`Selfhost` supports scalars, non-generic `struct`/`enum`, and
-non-generic `class`). Patterns use `Type(error)` (including generic `Type[T]` payloads) and bind the
-full payload. Duplicate alternatives are canonicalized; a union must contain at least
+and `class` types, including concrete parameterized classes. Patterns use `Type(error)` (including generic `Type[T]` payloads) and bind the
+full payload. Distinct specializations such as `Failure[int]` and `Failure[str]` remain
+distinct alternatives for exhaustiveness, propagation, and runtime discrimination.
+A generic substitution that leaves fewer than two distinct alternatives is rejected
+with `W2001` before MIR lowering. Duplicate alternatives are canonicalized; a union must contain at least
 two distinct alternatives.
 
 **Limit.** Collections (`list`, `dict`), tuples, function values, built-in `Option`/`Result`
