@@ -350,7 +350,7 @@ class Formatter:
         if isinstance(expr, NewExpr):
             args_str = ", ".join([self.format_expr(a, level) for a in expr.args])
             tparams = "[" + ", ".join(self.format_type(t) for t in expr.type_args) + "]" if getattr(expr, "type_args", None) else ""
-            return f"new {expr.class_name}{tparams}({args_str})"
+            return f"{expr.class_name}{tparams}({args_str})"
 
         if isinstance(expr, UnaryExpr):
             inner = self.format_expr(expr.operand, level, parent_prec=10)

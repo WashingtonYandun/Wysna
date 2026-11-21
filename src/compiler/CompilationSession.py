@@ -481,9 +481,17 @@ class CompilationSession:
             for origin, exports_ in modules:
                 for local, emitted in exports_.items():
                     if local != emitted:
+                        readable = str(origin) + '::' + local
                         for item in getattr(error, 'diagnostics', (error,)):
-                            item.message = item.message.replace(emitted, str(origin) + '::' + local)
-                        error.message = error.message.replace(emitted, str(origin) + '::' + local)
+                            item.message = item.message.replace(emitted, readable)
+                            if getattr(item, 'help', None):
+                                item.help = item.help.replace(emitted, readable)
+                            data = getattr(item, 'data', None)
+                            if isinstance(data, dict):
+                                for key, value in list(data.items()):
+                                    if isinstance(value, str):
+                                        data[key] = value.replace(emitted, readable)
+                        error.message = error.message.replace(emitted, readable)
             raise
         finally:
             self.active.pop()

@@ -263,7 +263,11 @@ class HirBindings:
         if isinstance(node, H.HirMethodCall):
             entry = self.interner.get_entry(node.receiver.type_id)
             expected_collection_kind = 'str' if node.receiver.type_id == TYPE_STR else entry.tag
-            if entry.tag in ('list', 'dict') or (node.receiver.type_id == TYPE_STR and node.method_name in ('contains', 'is_empty')):
+            if entry.tag in ('list', 'dict') or (
+                node.receiver.type_id == TYPE_STR and node.method_name in (
+                    'contains', 'is_empty', 'trim', 'split', 'to_lower', 'to_upper', 'starts_with', 'ends_with', 'replace'
+                )
+            ):
                 if (not isinstance(node.target, H.CollectionCallTarget)
                         or node.target.receiver_kind != expected_collection_kind
                         or node.target.method_name != node.method_name):
@@ -304,12 +308,24 @@ class HirBindings:
                               'values': ([], self.interner.mk_list(value)),
                               'items': ([], self.interner.mk_list(self.interner.mk_tuple((key, value)))),
                               'contains': ([key], TYPE_BOOL),
-                              'is_empty': ([], TYPE_BOOL)}
+                              'is_empty': ([], TYPE_BOOL),
+                              'remove': ([key], self.interner.mk_optional(value)),
+                              'clear': ([], TYPE_UNIT)}
                 if node.method_name not in signatures:
                     self.verifier._fail(node, 'Unresolved HIR dictionary method')
                 self.signature(node, *signatures[node.method_name])
             elif node.receiver.type_id == TYPE_STR:
-                signatures = {'contains': ([TYPE_STR], TYPE_BOOL), 'is_empty': ([], TYPE_BOOL)}
+                signatures = {
+                    'contains': ([TYPE_STR], TYPE_BOOL),
+                    'is_empty': ([], TYPE_BOOL),
+                    'trim': ([], TYPE_STR),
+                    'split': ([TYPE_STR], self.interner.mk_list(TYPE_STR)),
+                    'to_lower': ([], TYPE_STR),
+                    'to_upper': ([], TYPE_STR),
+                    'starts_with': ([TYPE_STR], TYPE_BOOL),
+                    'ends_with': ([TYPE_STR], TYPE_BOOL),
+                    'replace': ([TYPE_STR, TYPE_STR], TYPE_STR),
+                }
                 if node.method_name not in signatures:
                     self.verifier._fail(node, 'Unresolved HIR string method')
                 self.signature(node, *signatures[node.method_name])

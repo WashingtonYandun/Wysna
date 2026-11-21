@@ -290,6 +290,11 @@ def resolve_module_call(checker: "TypeChecker", expr: CallExpr, callee_t: Option
             expr.callee = IdentExpr(specialized.name, expr.line, expr.col)
             expr.type_args = None
             return CheckedCall(checker._check_expr(expr))
+        if isinstance(type_template, ClassType):
+            if checker.global_scope.lookup_type(type_template.name) is None:
+                checker.global_scope.define_type(type_template.name, type_template, file=checker.file)
+            expr.callee = IdentExpr(type_template.name, expr.line, expr.col)
+            return CheckedCall(checker._check_class_instantiation(type_template, expr.args, expr.line, expr.col))
         symbol = module_type.scope.lookup_symbol(expr.callee.property)
         if symbol and isinstance(symbol.type, GenericFnTemplate):
             callee_t = specialize_imported_function(checker, expr, symbol.type, module_type.checked_module)

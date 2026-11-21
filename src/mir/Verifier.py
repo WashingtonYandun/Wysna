@@ -16,6 +16,8 @@ RUNTIME = {
     'wysna_builtin_args', 'wysna_builtin_env', 'wysna_builtin_unix_time', 'wysna_builtin_exit', 'wysna_builtin_enumerate', 'wysna_builtin_dict_items',
     'wysna_builtin_read_file', 'wysna_builtin_write_file', 'wysna_builtin_join_strings', 'wysna_builtin_weak_owned',
     'wysna_builtin_upgrade', 'wysna_builtin_contract_assert_at', 'wysna_await', 'wysna_contains',
+    'wysna_str_trim', 'wysna_str_split', 'wysna_str_to_lower', 'wysna_str_to_upper',
+    'wysna_str_starts_with', 'wysna_str_ends_with', 'wysna_str_replace',
 }
 RUNTIME_ARITIES = {
     **dict.fromkeys(('wysna_neg', 'wysna_not', 'wysna_ok', 'wysna_err', 'wysna_enum_payload', 'wysna_wrap_result',
@@ -24,12 +26,14 @@ RUNTIME_ARITIES = {
                      'wysna_builtin_str', 'wysna_builtin_int', 'wysna_builtin_float', 'wysna_builtin_ord',
                      'wysna_builtin_chr', 'wysna_builtin_bytes', 'wysna_builtin_exit', 'wysna_builtin_enumerate',
                      'wysna_builtin_dict_items', 'wysna_builtin_read_file', 'wysna_builtin_weak_owned',
-                     'wysna_builtin_upgrade', 'wysna_builtin_env', 'wysna_await'), 1),
+                     'wysna_builtin_upgrade', 'wysna_builtin_env', 'wysna_await',
+                     'wysna_str_trim', 'wysna_str_to_lower', 'wysna_str_to_upper'), 1),
     **dict.fromkeys(('wysna_add', 'wysna_sub', 'wysna_mul', 'wysna_div_at', 'wysna_mod_at', 'wysna_lt', 'wysna_le',
                      'wysna_gt', 'wysna_ge', 'wysna_equal', 'wysna_not_equal', 'wysna_make_range',
                      'wysna_index_get_owned_at', 'wysna_dict_get', 'wysna_builtin_write_file',
-                     'wysna_builtin_join_strings', 'wysna_builtin_contract_assert_at', 'wysna_contains'), 2),
-    'wysna_builtin_slice': 3, 'wysna_builtin_args': 0, 'wysna_builtin_unix_time': 0, 'wysna_enum': 0, 'wysna_empty_weak': 0,
+                     'wysna_builtin_join_strings', 'wysna_builtin_contract_assert_at', 'wysna_contains',
+                     'wysna_str_split', 'wysna_str_starts_with', 'wysna_str_ends_with'), 2),
+    'wysna_builtin_slice': 3, 'wysna_str_replace': 3, 'wysna_builtin_args': 0, 'wysna_builtin_unix_time': 0, 'wysna_enum': 0, 'wysna_empty_weak': 0,
     'wysna_builtin_print': None, 'wysna_builtin_eprint': None,
 }
 assert set(RUNTIME_ARITIES) == RUNTIME, 'Every MIR runtime helper requires a signature'
@@ -223,6 +227,14 @@ class Verifier:
                 self.compatible(types[0], result.type_id)
                 or entry(0).tag in ('struct', 'class', 'enum')
             ))
+        elif name in ('wysna_str_trim', 'wysna_str_to_lower', 'wysna_str_to_upper'):
+            require(types == [TYPE_STR] and result.type_id == TYPE_STR)
+        elif name == 'wysna_str_split':
+            require(types == [TYPE_STR, TYPE_STR] and list_of(TYPE_STR))
+        elif name in ('wysna_str_starts_with', 'wysna_str_ends_with'):
+            require(types == [TYPE_STR, TYPE_STR] and result.type_id == TYPE_BOOL)
+        elif name == 'wysna_str_replace':
+            require(types == [TYPE_STR, TYPE_STR, TYPE_STR] and result.type_id == TYPE_STR)
         elif name in ('wysna_ok', 'wysna_err'):
             require(returned.tag == 'result' and self.compatible(types[0], returned.data[0 if name == 'wysna_ok' else 1]))
         elif name == 'wysna_wrap_result':
@@ -409,12 +421,24 @@ class Verifier:
                 self.fail('MIR place store type mismatch', operation.source)
             if kind == 'mutate':
                 entry = self.interner.get_entry(target_type)
-                if entry.tag != 'list' or data.get('method') not in ('append', 'pop', 'clear'):
+                method = data.get('method')
+                if entry.tag == 'list':
+                    if method not in ('append', 'pop', 'clear'):
+                        self.fail('Invalid MIR mutating intrinsic', operation.source)
+                    expected = entry.data if method == 'pop' else TYPE_UNIT
+                    if len(args) != (1 if method == 'append' else 0) or result.type_id != expected or args and not self.compatible(args[0].type_id, entry.data):
+                        self.fail('MIR mutating intrinsic signature mismatch', operation.source)
+                elif entry.tag == 'dict':
+                    if method not in ('clear', 'remove'):
+                        self.fail('Invalid MIR mutating intrinsic', operation.source)
+                    if method == 'clear':
+                        if len(args) != 0 or result.type_id != TYPE_UNIT:
+                            self.fail('MIR mutating intrinsic signature mismatch', operation.source)
+                    else:
+                        if len(args) != 1 or result.type_id != self.interner.mk_optional(entry.data[1]) or not self.compatible(args[0].type_id, entry.data[0]):
+                            self.fail('MIR mutating intrinsic signature mismatch', operation.source)
+                else:
                     self.fail('Invalid MIR mutating intrinsic', operation.source)
-                method = data['method']
-                expected = entry.data if method == 'pop' else TYPE_UNIT
-                if len(args) != (1 if method == 'append' else 0) or result.type_id != expected or args and not self.compatible(args[0].type_id, entry.data):
-                    self.fail('MIR mutating intrinsic signature mismatch', operation.source)
         if kind == 'load_field':
             layout = self.module.layouts.get(args[0].type_id)
             index = data.get('index', -1)

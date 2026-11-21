@@ -464,12 +464,30 @@ def resolve_member_with_receiver_type(checker: "TypeChecker", expr: MemberExpr, 
             return FunctionType([obj_t.key], BoolType)
         if expr.property == "is_empty":
             return FunctionType([], BoolType)
+        if expr.property == "remove":
+            return FunctionType([obj_t.key], OptionalType(obj_t.value), is_mutating=True)
+        if expr.property == "clear":
+            return FunctionType([], UnitType, is_mutating=True)
 
     if obj_t == StrType:
         if expr.property == "contains":
             return FunctionType([StrType], BoolType)
         if expr.property == "is_empty":
             return FunctionType([], BoolType)
+        if expr.property == "trim":
+            return FunctionType([], StrType)
+        if expr.property == "split":
+            return FunctionType([StrType], ListType(StrType))
+        if expr.property == "to_lower":
+            return FunctionType([], StrType)
+        if expr.property == "to_upper":
+            return FunctionType([], StrType)
+        if expr.property == "starts_with":
+            return FunctionType([StrType], BoolType)
+        if expr.property == "ends_with":
+            return FunctionType([StrType], BoolType)
+        if expr.property == "replace":
+            return FunctionType([StrType, StrType], StrType)
 
     if isinstance(obj_t, TupleType) and expr.property.isdigit():
         idx = int(expr.property)

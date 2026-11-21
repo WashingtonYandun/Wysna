@@ -564,7 +564,7 @@ class Lowering:
         if isinstance(node, H.HirMethodCall):
             if isinstance(node.target, H.CollectionCallTarget):
                 method = node.target.method_name
-                if method in ('append', 'pop', 'clear'):
+                if method in ('append', 'pop', 'clear', 'remove'):
                     place = self.place(node.receiver)
                     values = [self.expr(arg) for arg in node.args]
                     return self.op('mutate', self.slot(type_id), values, {'place': place, 'method': method}, node=node)
@@ -575,6 +575,10 @@ class Lowering:
                     length = self.runtime('wysna_builtin_len', [values[0]], TYPE_INT, node)
                     zero = self.constant(0, TYPE_INT, node)
                     return self.runtime('wysna_equal', [length, zero], type_id, node)
+                if node.target.receiver_kind == 'str' and method in (
+                    'trim', 'split', 'to_lower', 'to_upper', 'starts_with', 'ends_with', 'replace'
+                ):
+                    return self.runtime('wysna_str_' + method, values, type_id, node)
                 runtime_fn = 'wysna_builtin_dict_items' if method == 'items' else 'wysna_dict_' + method
                 return self.runtime(runtime_fn, values, type_id, node)
             if isinstance(node.receiver, H.HirSuperRef):

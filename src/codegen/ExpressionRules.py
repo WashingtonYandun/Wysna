@@ -450,6 +450,18 @@ def emit_call_expr(emitter: "CCodeGen", expr: CallExpr, out: List[str]) -> str:
         if method == "items" and isinstance(receiver_type, DictType):
             obj_v = emitter.emit_value(obj_expr, out)
             return emitter._bind_call(f"wysna_builtin_dict_items({obj_v})", out)
+        if method == "remove" and isinstance(receiver_type, DictType):
+            lref = emitter.prepare_assignment_ref(obj_expr, out)
+            arg_v = emitter.emit_value(expr.args[0], out)
+            return emitter._bind_call(f"wysna_dict_remove({lref}, {arg_v})", out)
+        if method == "clear" and isinstance(receiver_type, DictType):
+            lref = emitter.prepare_assignment_ref(obj_expr, out)
+            return emitter._bind_call(f"wysna_dict_clear({lref})", out)
+        if receiver_type == StrType and method in ("trim", "split", "to_lower", "to_upper", "starts_with", "ends_with", "replace"):
+            obj_v = emitter.emit_value(obj_expr, out)
+            arg_vals = [emitter.emit_value(a, out) for a in expr.args]
+            all_args = ", ".join([obj_v] + arg_vals)
+            return emitter._bind_call(f"wysna_str_{method}({all_args})", out)
 
         # OOP dynamic method dispatch
         obj_v = emitter.emit_value(obj_expr, out)

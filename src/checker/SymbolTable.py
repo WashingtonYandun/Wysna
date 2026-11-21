@@ -27,9 +27,13 @@ class Scope:
         self.symbols: Dict[str, Symbol] = {}
         self.types: Dict[str, WysnaType] = {}
 
-    def define_symbol(self, symbol: Symbol, file: str = "<stdin>") -> None:
+    def define_symbol(self, symbol: Symbol, file: str = "<stdin>", *, allow_builtin_override: bool = False) -> None:
         if symbol.name in self.symbols:
             prev = self.symbols[symbol.name]
+            if allow_builtin_override and getattr(prev, "kind", None) == "builtin":
+                symbol.file = file
+                self.symbols[symbol.name] = symbol
+                return
             raise TypeError(
                 message=f"Duplicate declaration of symbol '{symbol.name}' (previously declared at line {prev.line}:{prev.col})",
                 line=symbol.line,

@@ -468,6 +468,14 @@ class WysnaDict(CowOwner):
     def values(self) -> List[WysnaValue]:
         return list(self.storage.data.values())
 
+    def remove(self, key: Any) -> Optional[WysnaValue]:
+        self.ensure_unique()
+        return self.storage.data.pop(dict_key(key), None)
+
+    def clear(self) -> None:
+        self.ensure_unique()
+        self.storage.data.clear()
+
     def __len__(self) -> int:
         return len(self.storage.data)
 

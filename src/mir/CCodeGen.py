@@ -309,6 +309,15 @@ class CCodeGen:
                 return 'wysna_spawn_take_option'
         return None
 
+    @staticmethod
+    def _display_fn_name(name):
+        raw = name[9:] if name.startswith('wysna_fn_') else name
+        if raw.startswith('__wysna_module_'):
+            end = raw.find('__', 15)
+            if end >= 0:
+                raw = raw[end + 2:]
+        return raw
+
     def function(self, function):
         if getattr(function, 'is_async', False):
             return self._async_function(function)
@@ -345,12 +354,21 @@ class CCodeGen:
                 lines.append(f'    return {parallel_helper}({p_names[0]}, {p_names[1]});')
             lines.extend(['}', ''])
             return lines
+        track_frame = function.name.startswith('wysna_fn_')
         for slot in function.slots:
             if slot.parameter:
                 continue
             type_ = {'value': 'WVal', 'predicate': 'bool', 'counter': 'int32_t', 'integer': 'int64_t', 'float': 'double', 'boolean': 'bool'}[slot.storage]
             initial = 'wysna_unit()' if slot.storage == 'value' else '0'
             lines.append(f'    {type_} {self.name(slot.id)} = {initial};')
+        if track_frame:
+            fn_src = getattr(function, 'source', None)
+            fn_file = getattr(fn_src, 'file', '') or '<unknown>'
+            fn_line = int(getattr(fn_src, 'line', 0) or 0)
+            lines.append(
+                f'    wysna_runtime_push_frame({quote(self._display_fn_name(function.name))}, '
+                f'{quote(fn_file)}, {fn_line});'
+            )
         lines.append('    goto bb0;')
         back_edge_targets = {
             target
@@ -377,6 +395,8 @@ class CCodeGen:
                     expression = f'wysna_move(&{self.name(term.value)})'
                 else:
                     expression = self.name(term.value)
+                if track_frame:
+                    lines.append('    wysna_runtime_pop_frame();')
                 lines.append(f'    return {expression};')
             else:
                 lines.append('    wysna_runtime_fail("W9999", "Unreachable MIR block executed");')
@@ -717,12 +737,15 @@ class CCodeGen:
                 return [self.write(place.root, args[0], consume=moved_box)]
             return [f'wysna_assign({self.place(place, source)}, {args[0]});']
         if kind == 'mutate':
-            reference = self.place(data['place'], source)
+            place = data['place']
+            reference = self.place(place, source)
             method = data['method']
-            if method == 'pop':
+            target_tid = place.projections[-1].type_id if place.projections else self.slots[place.root].type_id
+            prefix = 'wysna_dict' if self.interner.get_entry(target_tid).tag == 'dict' else 'wysna_list'
+            if prefix == 'wysna_list' and method == 'pop':
                 call = f'wysna_list_pop_at({reference}, {quote(source.file)}, {source.line}, {source.col})'
             else:
-                call = f'wysna_list_{method}(' + ', '.join([reference] + args) + ')'
+                call = f'{prefix}_{method}(' + ', '.join([reference] + args) + ')'
             return [self.write(result, call, consume=True)]
         if kind == 'function':
             environment = args[0] if args else 'wysna_unit()'

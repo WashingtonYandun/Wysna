@@ -191,8 +191,17 @@ def check_struct_init_expr(checker: "TypeChecker", expr: StructInitExpr, is_stat
     return struct_t
 
 
+def _unwrap_expected_payload(expected):
+    from checker.WysnaType import ResultType, OptionalType
+    curr = expected
+    while isinstance(curr, (ResultType, OptionalType)):
+        curr = curr.ok if isinstance(curr, ResultType) else curr.inner
+    return curr
+
+
 def check_list_expr(checker: "TypeChecker", expr: ListExpr, is_statement_context: bool = False) -> WysnaType:
-    context = checker.expected_type if isinstance(checker.expected_type, ListType) else None
+    unwrapped = _unwrap_expected_payload(checker.expected_type)
+    context = unwrapped if isinstance(unwrapped, ListType) else None
     if len(expr.elements) == 0:
         return context or ListType(AnyType())
     elem_types = [checker._check_payload(e, context.element if context else None) for e in expr.elements]
@@ -225,7 +234,8 @@ def check_list_expr(checker: "TypeChecker", expr: ListExpr, is_statement_context
 
 
 def check_tuple_expr(checker: "TypeChecker", expr: TupleExpr, is_statement_context: bool = False) -> WysnaType:
-    expected = checker.expected_type if isinstance(checker.expected_type, TupleType) else None
+    unwrapped = _unwrap_expected_payload(checker.expected_type)
+    expected = unwrapped if isinstance(unwrapped, TupleType) else None
     if expected is not None and len(expected.elements) == len(expr.elements):
         elem_types = [
             checker._check_payload(elem, exp_t)
@@ -237,7 +247,8 @@ def check_tuple_expr(checker: "TypeChecker", expr: TupleExpr, is_statement_conte
 
 
 def check_dict_expr(checker: "TypeChecker", expr: DictExpr, is_statement_context: bool = False) -> WysnaType:
-    context = checker.expected_type if isinstance(checker.expected_type, DictType) else None
+    unwrapped = _unwrap_expected_payload(checker.expected_type)
+    context = unwrapped if isinstance(unwrapped, DictType) else None
     if len(expr.entries) == 0:
         return context or DictType(AnyType(), AnyType())
     first_key_t = checker._check_payload(expr.entries[0].key, context.key if context else None)
