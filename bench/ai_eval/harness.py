@@ -258,6 +258,18 @@ class EvaluationHarness:
             if tc.args:
                 cmd += ["--"] + tc.args
 
+            # Each case and repair starts from the same declared persistence state.
+            try:
+                for name, content in tc.preserved_files.items():
+                    path = self._resolve_confined_path(workspace_dir, name)
+                    path.unlink(missing_ok=True)
+                    if content is not None:
+                        path.parent.mkdir(parents=True, exist_ok=True)
+                        with path.open("xb") as fixture:
+                            fixture.write(content.encode("utf-8"))
+            except (OSError, ValueError) as error:
+                return False, f"Test '{tc.name}' could not prepare its fixture: {error}"
+
             try:
                 proc = subprocess.run(
                     cmd,
@@ -272,6 +284,22 @@ class EvaluationHarness:
                 return False, f"Test '{tc.name}' timed out after {self.timeout_seconds}s"
             except Exception as e:
                 return False, f"Test '{tc.name}' execution failed: {e}"
+
+            for name, content in tc.preserved_files.items():
+                try:
+                    path = self._resolve_confined_path(workspace_dir, name)
+                    if content is None:
+                        unchanged = not os.path.lexists(Path(workspace_dir) / name.replace("\\", "/"))
+                    elif path.is_file():
+                        expected = content.encode("utf-8")
+                        with path.open("rb") as observed:
+                            unchanged = observed.read(len(expected) + 1) == expected
+                    else:
+                        unchanged = False
+                except (OSError, ValueError):
+                    unchanged = False
+                if not unchanged:
+                    return False, f"Persistence invariant violated: test '{tc.name}' changed '{name}'"
 
             # Check exit code
             if proc.returncode != tc.expected_exit:
@@ -288,6 +316,9 @@ class EvaluationHarness:
                     False,
                     f"Test '{tc.name}' stdout mismatch:\n--- Expected:\n{expected_stdout.strip()}\n--- Actual:\n{actual_stdout.strip()}",
                 )
+
+            if tc.expected_stderr is not None and proc.stderr != tc.expected_stderr:
+                return False, f"Test '{tc.name}' stderr mismatch: expected {tc.expected_stderr!r}, got {proc.stderr!r}"
 
             # Check file assertions if any
             for rel_path, expected_content in tc.file_assertions.items():

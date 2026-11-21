@@ -88,6 +88,11 @@ final. La medición suma los turnos y tokens de las consultas al total.
 python3 bench/ai_eval/ab_cohort.py --interactive-tools --provider openai --base-url http://localhost:1234/v1 --model MODEL_ID --output /tmp/wysna-ab.json
 ```
 
+Los informes con `oracle_revision: 2` verifican el diagnóstico de rechazo en stderr y
+el estado del archivo inmediatamente después de cada lote inválido. El oráculo
+prueba un destino ausente y otro que ya contiene datos. Para comparar tasas de
+éxito históricas, ejecuta ambas condiciones con la misma revisión del oráculo.
+
 Ejecuta la evaluación con código generado dentro de un entorno aislado.
 El proveedor simulado comprueba el protocolo de consultas. Para medir éxito,
 tiempo y tokens de un modelo, utiliza un proveedor real con uso reportado.
