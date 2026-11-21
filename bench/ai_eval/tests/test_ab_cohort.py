@@ -12,6 +12,7 @@ if REPO_ROOT not in sys.path:
 
 from bench.ai_eval.ab_cohort import (
     COHORT_SCHEMA_VERSION,
+    ConditionHarness,
     TASK_FAMILIES,
     _build_default_cohort_tasks,
     evaluate_expansion_gate,
@@ -66,7 +67,7 @@ def test_h2_persistence_oracle_rejects_compiler_valid_partial_write():
         '    let mut buf = ""\n'
         '    for item in lines {\n'
         '        let n = parse.parse_int(text.trim(item)) else err { exit(3) return }\n'
-        '        if n < 0 or n > 1000 { exit(3) return }\n'
+        '        if n < 0 or n > 1000 { eprint("value_limit_exceeded") exit(3) return }\n'
         r'        buf = buf + str(n) + "\n"' + '\n'
         '    }\n'
         '    io.write_text(out_path, text.trim(buf)) else err { exit(3) return }\n'
@@ -95,6 +96,30 @@ def test_h2_persistence_oracle_rejects_compiler_valid_partial_write():
     b_runs = [r for r in report["runs"] if r["condition"] == "B"]
     assert all(not r["passed"] and r["regression"] for r in a_runs), a_runs
     assert all(r["passed"] and not r["regression"] and r["semantic_queries_count"] >= 1 for r in b_runs), b_runs
+
+
+def test_negative_cases_require_diagnostic_and_preserve_ledger(tmp_path):
+    harness = ConditionHarness("A", repo_root=REPO_ROOT)
+    task = next(item.task for item in _build_default_cohort_tasks() if item.family == "add_capability")
+    cases = [case for case in task.test_cases if case.expected_exit == 3]
+    source = tmp_path / "main.wysna"
+
+    source.write_text("exit(3)\n", encoding="utf-8")
+    passed, error = harness.run_oracle_tests(str(tmp_path), source.name, cases)
+    assert not passed and "stderr" in error
+
+    source.write_text(
+        'let arguments = args()\n'
+        'write_file(arguments[2], "") else { exit(2) }\n'
+        'eprint("value_limit_exceeded")\nexit(3)\n', encoding="utf-8",
+    )
+    for case in cases:
+        passed, error = harness.run_oracle_tests(str(tmp_path), source.name, [case])
+        assert not passed and "Persistence invariant" in error, (case.name, error)
+    assert len(cases) == 2
+
+    source.write_text('eprint("value_limit_exceeded")\nexit(3)\n', encoding="utf-8")
+    assert harness.run_oracle_tests(str(tmp_path), source.name, cases) == (True, None)
 
 
 def test_collateral_line_tracking_and_decision_gate_thresholds():
@@ -152,6 +177,7 @@ def test_ab_cohort_cli_runs_isolated_mock_smoke(tmp_path):
     assert proc.returncode == 0, proc.stderr
     payload = json.loads(out.read_text(encoding="utf-8"))
     assert payload["schema_version"] == COHORT_SCHEMA_VERSION
+    assert payload["oracle_revision"] == 2
     assert payload["families_covered"] == sorted(TASK_FAMILIES)
     assert payload["decision"] == "inconclusive"
     assert len(payload["runs"]) == 10  # 5 families * 2 conditions

@@ -49,7 +49,7 @@ def _build_default_cohort_tasks() -> List[CohortTask]:
                 ),
                 test_cases=[
                     TaskTestCase(name="valid", args=["4", "5", "6"], expected_stdout="15\n", expected_exit=0),
-                    TaskTestCase(name="negative", args=["4", "-1"], expected_exit=2),
+                    TaskTestCase(name="negative", args=["4", "-1"], expected_exit=2, expected_stderr="invalid\n"),
                 ],
             ),
             family="authoring",
@@ -120,7 +120,7 @@ def _build_default_cohort_tasks() -> List[CohortTask]:
                 status="supported",
                 instruction=(
                     "Extend `main.wysna` so values > 1000 are rejected BEFORE writing `ledger.txt`, "
-                    "print diagnostic `value_limit_exceeded` and exit 3 while keeping `ledger.txt` "
+                    "print diagnostic `value_limit_exceeded` to stderr and exit 3 while keeping the output file "
                     "intact on partial invalid batches."
                 ),
                 fixtures={
@@ -150,8 +150,16 @@ def _build_default_cohort_tasks() -> List[CohortTask]:
                     TaskTestCase(
                         name="invalid_batch_must_not_persist_partial_rows",
                         args=["batch_invalid.txt", "ledger.txt"],
-                        expected_stdout="",
                         expected_exit=3,
+                        expected_stderr="value_limit_exceeded\n",
+                        preserved_files={"ledger.txt": None},
+                    ),
+                    TaskTestCase(
+                        name="invalid_batch_preserves_previous_ledger",
+                        args=["batch_invalid.txt", "ledger.txt"],
+                        expected_exit=3,
+                        expected_stderr="value_limit_exceeded\n",
+                        preserved_files={"ledger.txt": "7\r\n42\r\n"},
                     ),
                     TaskTestCase(
                         name="valid_batch_persists",
@@ -337,26 +345,6 @@ class ConditionHarness(EvaluationHarness):
         except (ValueError, OSError, subprocess.TimeoutExpired) as error:
             return f"Query failed: {error}"
 
-    def run_oracle_tests(
-        self,
-        workspace_dir: str,
-        entrypoint: str,
-        test_cases: List[TaskTestCase],
-    ) -> Tuple[bool, Optional[str]]:
-        passed, failure = super().run_oracle_tests(workspace_dir, entrypoint, test_cases)
-        if not passed:
-            return passed, failure
-        # Guard against Hito 2 persistence regression: invalid batch must never leave `ledger.txt` created/populated.
-        for tc in test_cases:
-            if tc.name == "invalid_batch_must_not_persist_partial_rows":
-                ledger = self._resolve_confined_path(workspace_dir, "ledger.txt")
-                if ledger.exists() and ledger.read_text(encoding="utf-8").strip():
-                    return (
-                        False,
-                        "Persistence invariant violated: invalid batch left partial rows in ledger.txt after compiler acceptance",
-                    )
-        return True, None
-
 
 def evaluate_expansion_gate(
     paired_runs: Sequence[Dict[str, Any]],
@@ -527,6 +515,7 @@ def run_ab_cohort(
                 })
 
     summary = evaluate_expansion_gate(runs)
+    summary["oracle_revision"] = 2
     summary["provider_name"] = provider_name
     summary["context_mode"] = "model-selected" if interactive else "prefetched"
     summary["model_name"] = model_name

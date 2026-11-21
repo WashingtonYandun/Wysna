@@ -18,6 +18,9 @@ class TaskTestCase:
     expected_stdout: str = ""
     expected_exit: int = 0
     file_assertions: Dict[str, str] = field(default_factory=dict)
+    expected_stderr: Optional[str] = None
+    # UTF-8 fixture contents to seed and preserve exactly, or None for a missing file.
+    preserved_files: Dict[str, Optional[str]] = field(default_factory=dict)
 
     def to_dict(self) -> Dict[str, Any]:
         return {
@@ -27,6 +30,8 @@ class TaskTestCase:
             "expected_stdout": self.expected_stdout,
             "expected_exit": self.expected_exit,
             "file_assertions": self.file_assertions,
+            "expected_stderr": self.expected_stderr,
+            "preserved_files": self.preserved_files,
         }
 
     @classmethod
@@ -38,6 +43,8 @@ class TaskTestCase:
             expected_stdout=data.get("expected_stdout", ""),
             expected_exit=data.get("expected_exit", 0),
             file_assertions=data.get("file_assertions", {}),
+            expected_stderr=data.get("expected_stderr"),
+            preserved_files=data.get("preserved_files", {}),
         )
 
 
