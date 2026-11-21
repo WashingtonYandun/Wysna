@@ -54,7 +54,7 @@ Function values, captures, FFI, the standard library and LSP have separate
 contracts in `tests/unit/test_expansion_contracts.py` (with Stage-3 native LSP covered in `tests/unit/test_phase4_native_lsp.py`). A green core corpus does not
 imply Wysna Compiler support for every expansion combination. Constrained parameterized classes and interfaces,
 independent generic class methods, parameterized inheritance, `from ... use` imports, and stackless CPS `async fn`
-coroutines are now implemented in both Seed and Selfhost (`native-core-v1`), alongside Python-free native `wysna api`, `wysna.toml` v1 `project check|build|run|test`, and 11/11 `wysna mcp` tools; unresolved generic nominal values, `wysna.lock` dependency locking, `project new`, library-mode exports, and WASM remain outside `native-core-v1`. Scoped
+coroutines are now implemented in both Seed and Selfhost (`native-core-v1`), alongside Python-free native `wysna api`, `wysna.toml` v1 `project new|lock|check|build|run|test`, and 11/11 `wysna mcp` tools; unresolved generic nominal values, library-mode exports, and WASM remain outside `native-core-v1`. Scoped
 resources have a separate
 four-engine gate in `tests/unit/test_audit_readiness.py`. The SQLite adapter/application
 also has dedicated checks; see [C interoperability](FFI_VALIDATION.md).
@@ -74,6 +74,6 @@ Seed HIR/MIR builds a separately recorded initial engine. Three successive nativ
 every engine to pass every fixture. `--sanitize` instruments native programs with
 ASan/UBSan; Linux additionally enables LSan.
 
-`wysna build --engine=compiler` invokes native Wysna Compiler directly, with no Wysna Seed semantic pre-check. This selects an engine; `--backend` selects only the emitted target.
+`wysna build --engine=compiler` invokes native Wysna Compiler directly, with no Wysna Seed semantic pre-check. This selects an engine; `--backend` selects only the emitted target (`c99` is the supported default; `--backend=llvm-experimental` and the local `wysna service serve` harness are **FROZEN (`FREEZE`, ADR-00)** and retained under existing smoke gates without new feature or target expansion).
 Unsupported syntax or semantics must be diagnosed by Wysna Compiler. See [known limits](KNOWN_LIMITS.md)
 for runtime and platform boundaries.

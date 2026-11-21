@@ -3,9 +3,8 @@
 Use the installed Seed CLI as the project workflow. It provides deterministic
 project checks, builds, tests, API discovery and versioned machine output. The standalone `native-core-v1` SDK provides `check`, `fmt`, `test`, `build`, `run`, `graph`,
 `inspect`, `patch`, `explain`, `fix`, `schema`, `mcp`, `api`, `capabilities`, `skills`,
-`project check|build|run|test`, and Stage-3 native `lsp` without Python, while Seed continues
-to own `wysna project new`, `wysna project lock` / `wysna.lock`, library-mode exports,
-and WebAssembly targets.
+`project new|lock|check|build|run|test`, and Stage-3 native `lsp` without Python, while Seed continues
+to own library-mode exports and WebAssembly targets (`wasi-command`, `browser-library`).
 
 ## Discover the installed toolchain
 
@@ -80,8 +79,9 @@ server over stdio to avoid Python startup and temporary-file overhead on every c
 wysna mcp --root .
 ```
 
-The MCP server exposes `wysna_check`, `wysna_fix`, `wysna_fmt`, `wysna_explain`,
-`wysna_schema`, `wysna_api`, and `wysna_capabilities` confined to `--root`.
+The MCP server exposes 11 tools confined to `--root`: `wysna_check`, `wysna_fix`,
+`wysna_fmt`, `wysna_explain`, `wysna_schema`, `wysna_api`, `wysna_capabilities`,
+`wysna_graph`, `wysna_inspect`, `wysna_patch`, and `wysna_skills`.
 
 For zero-Python native semantic inspection, checked edits, and editor integration in
 the standalone SDK / Selfhost Stage-2+ toolchain:
@@ -136,9 +136,9 @@ To safeguard agent loops against runaway execution and unrepeatable I/O side-eff
   response states the toolchain and runtime each one needs.
 - The native SDK currently implements `native-core-v1` source checking, MIR/C99
   emission, native build/run/test/fmt, Agent-First tools (`graph`, `inspect`, `patch`,
-  `explain`, `schema`, `fix`, `api`, `capabilities`, `skills`, `mcp`, `project check|build|run|test`),
-  and Stage-3 native `lsp` without Python. Do not assume Seed `project new`, `project lock` /
-  `wysna.lock`, library-mode exports, WASI, or browser targets are available through that SDK.
+  `explain`, `schema`, `fix`, `api`, `capabilities`, `skills`, `mcp`, `project new|lock|check|build|run|test`),
+  and Stage-3 native `lsp` without Python. Do not assume library-mode exports, WASI,
+  browser targets, or `--backend=llvm-experimental` are available through that SDK.
 - Effect reports and capability declarations help review programs; `wysna run --allow/--deny` enforces static pre-execution gates (`W5006`) and Seed `wysna build --sandbox` (with `--allow/--deny`) compiles `WYSNA_DENY_CAP_*` runtime checks (`W5006`), though neither replaces an OS kernel sandbox for arbitrary native C extensions.
 - AI authoring and self-healing repair benchmarks live in `bench/ai_eval/`
   (`harness.py` and `token_audit.py`); outside this evaluation suite, Wysna

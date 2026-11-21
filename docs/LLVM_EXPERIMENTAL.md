@@ -1,5 +1,7 @@
 # Native LLVM backend
 
+> **Status: `FREEZE` (Experimental / ADR-00).** `--backend=llvm-experimental` and `LLVM SDK` are frozen: existing `llvm-smoke` verification gates remain intact to protect MIR backend independence, while no new optimizations, Windows/Wasm targets, or feature parity expansion are planned. C99 (`--backend=c99`) is the supported production backend.
+
 Wysna Seed emits LLVM IR directly from verified MIR for `llvm-native-v1`.
 LLVM is an explicit option; C99 remains the default. Wysna Compiler and its
 Python-free native SDK continue to use C99. The separate [Seed LLVM SDK](LLVM_SDK.md)

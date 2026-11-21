@@ -117,8 +117,10 @@ propagate only if every member belongs to the destination set. Payloads are not
 converted.
 
 To keep runtime identity verifiable and avoid ambiguous sets, alternatives are limited
-to scalars (`int`, `float`, `bool`, `str`), non-generic `struct`, and non-generic `enum`.
-Classes, generic types, and composite types are outside this contract.
+to scalars (`int`, `float`, `bool`, `str`), concrete `struct` (including `Struct[T]`),
+concrete `enum` (including `Enum[T]`), and `class` types (`Selfhost` covers scalars,
+non-generic `struct`/`enum`, and non-generic `class`). Collection, tuple, and function
+types are outside this contract.
 
 ### 4.4 Nominal Class & Interface Subtyping
 1. **Single Inheritance (`extends`):** `NominalClass(sub_def, sub_args) <: NominalClass(sup_def, sup_args)` if and only if walking the `superclass` chain from `sub` (with generic argument substitution) reaches `NominalClass(sup_def, sup_args)`.
@@ -138,7 +140,7 @@ Concretely, even if `Dog <: Animal`:
 
 ### 4.6 Dictionary Key Validity (`is_valid_dict_key`)
 For `Dict(key: TypeId, val: TypeId)`:
-- `key` must be one of `int`, `str`, `bool`, or a `NominalEnum` whose payload types are recursively valid keys (or a `tuple` composed recursively of valid key types once tuple hashing is enabled).
+- `key` must be one of `int`, `str`, `bool`, a `NominalEnum` whose payload types are recursively valid keys, or a `tuple` composed recursively of valid key types.
 - Generic enum arguments are substituted before validation, and forward declarations are supported; cyclic key graphs are rejected because they cannot establish finite validity.
 - `float` (and any composite containing `float`), `list`, `dict`, `struct`, and `class` are statically rejected with **`W2010` (`INVALID_DICT_KEY_TYPE`)**. Excluding `float` is an explicit language predictability design choice to avoid IEEE-754 `NaN` key-lookup anomalies (`NaN != NaN`) and `-0.0` vs. `+0.0` hashing ambiguities.
 
@@ -170,7 +172,7 @@ Value semantics (`is_value`) and heap Reference Counting (`needs_retain` / `need
 | `float` | `true` | `false` | `false` | `false` | **`false` (`W2010`)** | Immediate unboxed `double` in `WVal` |
 | `str` | `true` | `false` | `false` | `true` | `true` | Immutable UTF-8 buffer |
 | `list[T]`, `dict[K, V]` | `true` | `false` | `false` | `true` | `false` (`W2010`) | Refcounted CoW buffer (`WListBuf*`, `WDictBuf*`) |
-| `tuple[T1, ...]` | `true` | `false` | `false` | `true` | `false` | Refcounted buffer (`WTupleBuf*`) |
+| `tuple[T1, ...]` | `true` | `false` | `false` | `true` | `true` (if elements are valid keys) | Refcounted buffer (`WTupleBuf*`) |
 | `Point` (`struct`) | `true` | `false` | `false` | `true` | `false` (`W2010`) | Refcounted CoW buffer (`WStructBuf*`) |
 | `User` (`class` / `interface`) | `false` | `true` | `true` | `true` | `false` (`W2010`) | Refcounted identity object (`WStructBuf*` with `W_OBJECT`) |
 | `T?` / `T ! E` | Inherits | Inherits | Inherits | `true` (`WBoxBuf*`) | `false` (`W2010`) | Tagged `WVal` or refcounted `WBoxBuf*` (`W_OK` / `W_ERR`) |

@@ -57,6 +57,8 @@ evidence of a production server, an SLO, or an enforced network capability.
 
 ## Local service pilot
 
+> **Status: `FREEZE` (Experimental / ADR-00).** `wysna service serve` is frozen as a bounded local subprocess harness; no custom HTTP routing, middleware, TLS, or persistent socket framework expansion is planned.
+
 `wysna service serve` uses the maintained `aiohttp` HTTP server adapter from the
 optional `wysna[service]` extra. It binds only to a literal loopback IP address.
 The adapter owns HTTP parsing; Wysna does not implement its own HTTP parser. Defaults
@@ -69,10 +71,11 @@ unbounded header totals before the host checks the aggregate limit. Worker and q
 counts can be lowered or raised only to fixed ceilings (8 workers and 32 queued
 requests). Saturation returns `503`.
 
-The host writes a bounded UTF-8 JSON envelope to a unique temporary directory,
-then starts a new native Wysna process for that one request. The worker reads the path
-from `args()[1]` and writes one JSON object to stdout with exactly `status` and `body`
-fields. The host caps stdout while it is being read, validates the response, and maps
+The host writes a bounded UTF-8 JSON envelope (`{"method": str, "path": str, "headers": dict[str, str], "body": str}`)
+to a unique temporary directory, then starts a new native Wysna process for that one request. The worker reads the path
+from `args()[1]` (with the request header keys forwarded in lowercase: `accept`, `content-type`, `x-request-id`)
+and writes one JSON object to stdout with `status` (`int`, 100–599) and `body` (`json.Value`, i.e., a parsed JSON
+object/array/scalar value rather than an already-escaped JSON string). The host caps stdout while it is being read, validates the response, and maps
 worker timeout, crash, malformed output, and output overflow to bounded HTTP errors.
 Each process receives only a small environment allowlist plus
 `WYSNA_SERVICE_DATABASE`; request headers forwarded to the worker are limited to

@@ -114,10 +114,7 @@ memory diagnostics; `WYSNA_MEM_CHECK` is not a substitute for those tools.
 
 ## 6. Ownership across HIR and MIR
 
-HirCCodeGen is the default native emitter; the AST emitter and Wysna Compiler are independent
-implementations. Each uses lexical cleanup scopes to release owned temporaries on normal
-exits. MIR makes retain, transfer, and release operations explicit, verifies them, and feeds
-the default C99 emitter.
+`CompilerService.emit_c` (via `mir/CCodeGen.py`, wrapped for legacy HIR callers by the `HirCCodeGen` compatibility facade) is the default native emitter; the AST emitter and Wysna Compiler are independent implementations. Each uses lexical cleanup scopes to release owned temporaries on normal exits. MIR makes retain, transfer, and release operations explicit, verifies them, and feeds the default C99 emitter.
 
 ## Managed strings and constructor contracts
 
