@@ -16,12 +16,14 @@ from node.NodeType import (
 from checker.WysnaType import (
     WysnaType,
     IntType,
+    BoolType,
     StrType,
     UnitType,
     NoneType,
     OptionalType,
     ListType,
     DictType,
+    TupleType,
     StructType,
     EnumType,
     InterfaceType,
@@ -91,19 +93,23 @@ def check_new_expr(checker: "TypeChecker", expr: NewExpr, is_statement_context: 
     return checker._check_class_instantiation(class_t, expr.args, expr.line, expr.col)
 
 
-def check_assignment_expr(checker: "TypeChecker", expr: AssignmentExpr, is_statement_context: bool = False) -> WysnaType:
-    # Constructors on the RHS need the binding's existing type context.
+def _check_rhs_with_expected(
+    checker: "TypeChecker", rhs: object, expected: Optional[WysnaType]
+) -> WysnaType:
+    """Check an assignment RHS under a temporarily scoped expected type."""
     old_expected = checker.expected_type
-    if isinstance(expr.target, IdentExpr):
-        destination = checker.current_scope.lookup_symbol(expr.target.name)
-        if destination is not None:
-            checker.expected_type = destination.type
+    checker.expected_type = expected
     try:
-        val_t = checker._check_expr(expr.value)
+        return checker._check_expr(rhs)
     finally:
         checker.expected_type = old_expected
 
+
+def check_assignment_expr(checker: "TypeChecker", expr: AssignmentExpr, is_statement_context: bool = False) -> WysnaType:
     if isinstance(expr.target, IdentExpr):
+        destination = checker.current_scope.lookup_symbol(expr.target.name)
+        expected = destination.type if destination is not None else None
+        val_t = _check_rhs_with_expected(checker, expr.value, expected)
         sym = checker.current_scope.lookup_symbol(expr.target.name)
         if sym is None:
             raise suggest(TypeError(
@@ -137,6 +143,16 @@ def check_assignment_expr(checker: "TypeChecker", expr: AssignmentExpr, is_state
         return sym.type
 
     if isinstance(expr.target, IndexExpr):
+        # Evaluate target receiver/index first so empty containers on RHS inherit element/value type.
+        obj_t = _check_rhs_with_expected(checker, expr.target.object, None)
+        idx_t = _check_rhs_with_expected(checker, expr.target.index, None)
+        expected = None
+        if isinstance(obj_t, ListType):
+            expected = obj_t.element
+        elif isinstance(obj_t, DictType):
+            expected = obj_t.value
+        val_t = _check_rhs_with_expected(checker, expr.value, expected)
+
         # Target value root must be a mutable binding (unless rooted in a reference-type class)
         sym = checker._find_value_root_symbol(expr.target.object)
         if sym and not sym.is_mut:
@@ -147,8 +163,6 @@ def check_assignment_expr(checker: "TypeChecker", expr: AssignmentExpr, is_state
                 file=checker.file,
                 code="W3001"
             ), sym, checker.file)
-        obj_t = checker._check_expr(expr.target.object)
-        idx_t = checker._check_expr(expr.target.index)
         if isinstance(obj_t, ListType):
             if idx_t != IntType:
                 raise TypeError(
@@ -203,9 +217,17 @@ def check_assignment_expr(checker: "TypeChecker", expr: AssignmentExpr, is_state
             code="W2001"
         )
 
-
     if isinstance(expr.target, MemberExpr):
-        obj_t = checker._check_expr(expr.target.object)
+        obj_t = _check_rhs_with_expected(checker, expr.target.object, None)
+        expected = None
+        if isinstance(obj_t, ClassType):
+            f_info = obj_t.fields.get(expr.target.property)
+            if f_info is not None:
+                expected = f_info.type
+        elif isinstance(obj_t, StructType):
+            expected = obj_t.fields.get(expr.target.property)
+        val_t = _check_rhs_with_expected(checker, expr.value, expected)
+
         if isinstance(obj_t, ClassType):
             f_info = obj_t.fields.get(expr.target.property)
             if f_info is None:
@@ -431,6 +453,10 @@ def resolve_member_with_receiver_type(checker: "TypeChecker", expr: MemberExpr, 
             return FunctionType([], obj_t.element, is_mutating=True)
         if expr.property == "clear":
             return FunctionType([], UnitType, is_mutating=True)
+        if expr.property == "contains":
+            return FunctionType([obj_t.element], BoolType)
+        if expr.property == "is_empty":
+            return FunctionType([], BoolType)
 
     if isinstance(obj_t, DictType):
         if expr.property == "get":
@@ -439,6 +465,30 @@ def resolve_member_with_receiver_type(checker: "TypeChecker", expr: MemberExpr, 
             return FunctionType([], ListType(obj_t.key))
         if expr.property == "values":
             return FunctionType([], ListType(obj_t.value))
+        if expr.property == "items":
+            return FunctionType([], ListType(TupleType([obj_t.key, obj_t.value])))
+        if expr.property == "contains":
+            return FunctionType([obj_t.key], BoolType)
+        if expr.property == "is_empty":
+            return FunctionType([], BoolType)
+
+    if obj_t == StrType:
+        if expr.property == "contains":
+            return FunctionType([StrType], BoolType)
+        if expr.property == "is_empty":
+            return FunctionType([], BoolType)
+
+    if isinstance(obj_t, TupleType) and expr.property.isdigit():
+        idx = int(expr.property)
+        if idx < 0 or idx >= len(obj_t.elements):
+            raise TypeError(
+                message=f"Tuple index {idx} out of range for '{obj_t}'",
+                line=expr.line,
+                col=expr.col,
+                file=checker.file,
+                code="W3002"
+            )
+        return obj_t.elements[idx]
 
     if isinstance(obj_t, ModuleType):
         sym = obj_t.scope.lookup_symbol(expr.property)

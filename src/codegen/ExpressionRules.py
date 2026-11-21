@@ -268,6 +268,9 @@ def emit_member_expr(emitter: "CCodeGen", expr: MemberExpr, out: List[str]) -> s
         if f"v_{expr.object.name}_{expr.property}" in emitter.global_vars:
             return f"v_{expr.object.name}_{expr.property}"
     obj_val = emitter.emit_expr(expr.object, out)
+    if expr.property.isdigit():
+        call = emitter._source_call("wysna_tuple_get_owned_at", f"{obj_val}, {int(expr.property)}", expr)
+        return emitter._bind_call(call, out)
     return emitter._bind_call(f'wysna_clone(wysna_member_get({obj_val}, "{expr.property}"))', out)
 
 
@@ -414,7 +417,7 @@ def emit_call_expr(emitter: "CCodeGen", expr: CallExpr, out: List[str]) -> str:
                 return emitter._bind_call(f"{mod_fn}({', '.join(arg_vals)})", out)
 
         # Collection methods
-        from checker.WysnaType import ListType, DictType
+        from checker.WysnaType import ListType, DictType, StrType
         receiver_type = getattr(obj_expr, "inferred_type", None)
         if method == "append" and isinstance(receiver_type, ListType):
             lref = emitter.prepare_assignment_ref(obj_expr, out)
@@ -427,6 +430,13 @@ def emit_call_expr(emitter: "CCodeGen", expr: CallExpr, out: List[str]) -> str:
         if method == "clear" and isinstance(receiver_type, ListType):
             lref = emitter.prepare_assignment_ref(obj_expr, out)
             return emitter._bind_call(f"wysna_list_clear({lref})", out)
+        if method == "contains" and (isinstance(receiver_type, (ListType, DictType)) or receiver_type == StrType):
+            obj_v = emitter.emit_value(obj_expr, out)
+            arg_v = emitter.emit_value(expr.args[0], out)
+            return emitter._bind_call(f"wysna_contains({obj_v}, {arg_v})", out)
+        if method == "is_empty" and (isinstance(receiver_type, (ListType, DictType)) or receiver_type == StrType):
+            obj_v = emitter.emit_value(obj_expr, out)
+            return emitter._bind_call(f"wysna_equal(wysna_builtin_len({obj_v}), wysna_int(0))", out)
         if method == "get" and isinstance(receiver_type, DictType):
             obj_v = emitter.emit_value(obj_expr, out)
             arg_v = emitter.emit_value(expr.args[0], out)
@@ -437,6 +447,9 @@ def emit_call_expr(emitter: "CCodeGen", expr: CallExpr, out: List[str]) -> str:
         if method == "values" and isinstance(receiver_type, DictType):
             obj_v = emitter.emit_value(obj_expr, out)
             return emitter._bind_call(f"wysna_dict_values({obj_v})", out)
+        if method == "items" and isinstance(receiver_type, DictType):
+            obj_v = emitter.emit_value(obj_expr, out)
+            return emitter._bind_call(f"wysna_builtin_dict_items({obj_v})", out)
 
         # OOP dynamic method dispatch
         obj_v = emitter.emit_value(obj_expr, out)
@@ -477,6 +490,34 @@ def emit_dict_expr(emitter: "CCodeGen", expr: DictExpr, out: List[str]) -> str:
 
 
 def emit_struct_init_expr(emitter: "CCodeGen", expr: StructInitExpr, out: List[str]) -> str:
+    spread_once = getattr(expr, "_spread_once_expr", None)
+    spread_name = getattr(expr, "_spread_once_name", None)
+    if spread_once is not None and spread_name:
+        sp_val = emitter.emit_expr(spread_once, out)
+        res = emitter.new_temp()
+        emitter._declare_owned_var(res, "wysna_unit()", out)
+        inner: List[str] = []
+        emitter._push_scope("block")
+        emitter._declare_owned_var(f"v_{spread_name}", emitter._own_expr(sp_val), inner)
+        if not expr.fields:
+            s_call = f'wysna_make_struct("{expr.struct_name}", 0, NULL, NULL)'
+        else:
+            evaluated = {field.name: emitter.emit_value(field.value, inner) for field in expr.fields}
+            field_order = list(expr.inferred_type.fields)
+            f_names = [f'"{name}"' for name in field_order]
+            f_vals = [evaluated[name] for name in field_order]
+            k_tmp = emitter.new_aux("_k")
+            v_tmp = emitter.new_aux("_v")
+            inner.append(f"const char* {k_tmp}[{len(f_names)}] = {{ {', '.join(f_names)} }};")
+            inner.append(f"WVal {v_tmp}[{len(f_vals)}] = {{ {', '.join(f_vals)} }};")
+            s_call = f'wysna_make_struct("{expr.struct_name}", {len(f_names)}, {k_tmp}, {v_tmp})'
+        inner.append(f"wysna_assign(&{res}, {s_call});")
+        emitter._pop_scope(inner)
+        out.append("{")
+        for s in inner:
+            out.append(f"    {s}")
+        out.append("}")
+        return res
     if not expr.fields:
         return emitter._bind_call(f'wysna_make_struct("{expr.struct_name}", 0, NULL, NULL)', out)
     evaluated = {field.name: emitter.emit_value(field.value, out) for field in expr.fields}

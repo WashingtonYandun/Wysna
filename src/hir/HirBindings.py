@@ -1,6 +1,6 @@
 """Verify lexical names and direct-call/return contracts in the current HIR."""
 from hir import HirNodes as H
-from checker.TypeInterner import TYPE_UNIT, TYPE_NONE
+from checker.TypeInterner import TYPE_UNIT, TYPE_NONE, TYPE_BOOL, TYPE_STR
 from checker.TypeRelations import TypeRelations
 
 
@@ -242,24 +242,30 @@ class HirBindings:
                     self.verifier._fail(node, 'Struct constructor field type mismatch')
         if isinstance(node, H.HirFieldRead):
             entry = self.interner.get_entry(node.object.type_id)
-            declaration = self.classes.get(entry.data) if entry.tag == 'class' else self.structs.get(entry.data)
-            fields = {}
-            visited = set()
-            while declaration is not None and declaration.name not in visited:
-                visited.add(declaration.name)
-                for field in declaration.fields:
-                    fields.setdefault(field.name, field.type_id)
-                declaration = self.classes.get(getattr(declaration, 'superclass', None))
-            if not fields and entry.tag == 'struct':
-                definition = self.interner.struct_defs.get(entry.data)
-                fields = definition.fields if definition else {}
-            if fields.get(node.field_name) != node.type_id:
-                self.verifier._fail(node, 'Unresolved or mistyped HIR field')
+            if entry.tag == 'tuple':
+                idx = int(node.field_name) if node.field_name.isdigit() else -1
+                if not 0 <= idx < len(entry.data) or entry.data[idx] != node.type_id:
+                    self.verifier._fail(node, 'Unresolved or mistyped HIR tuple element')
+            else:
+                declaration = self.classes.get(entry.data) if entry.tag == 'class' else self.structs.get(entry.data)
+                fields = {}
+                visited = set()
+                while declaration is not None and declaration.name not in visited:
+                    visited.add(declaration.name)
+                    for field in declaration.fields:
+                        fields.setdefault(field.name, field.type_id)
+                    declaration = self.classes.get(getattr(declaration, 'superclass', None))
+                if not fields and entry.tag == 'struct':
+                    definition = self.interner.struct_defs.get(entry.data)
+                    fields = definition.fields if definition else {}
+                if fields.get(node.field_name) != node.type_id:
+                    self.verifier._fail(node, 'Unresolved or mistyped HIR field')
         if isinstance(node, H.HirMethodCall):
             entry = self.interner.get_entry(node.receiver.type_id)
-            if entry.tag in ('list', 'dict'):
+            expected_collection_kind = 'str' if node.receiver.type_id == TYPE_STR else entry.tag
+            if entry.tag in ('list', 'dict') or (node.receiver.type_id == TYPE_STR and node.method_name in ('contains', 'is_empty')):
                 if (not isinstance(node.target, H.CollectionCallTarget)
-                        or node.target.receiver_kind != entry.tag
+                        or node.target.receiver_kind != expected_collection_kind
                         or node.target.method_name != node.method_name):
                     self.verifier._fail(node, 'Collection intrinsic target does not match receiver')
             elif (not isinstance(node.target, H.VirtualCallTarget)
@@ -286,16 +292,26 @@ class HirBindings:
                 signature = self.interner.get_entry(type_id)
                 self.signature(node, list(signature.data[0]), signature.data[1])
             elif entry.tag == 'list':
-                signatures = {'append': ([entry.data], TYPE_UNIT), 'pop': ([], entry.data), 'clear': ([], TYPE_UNIT)}
+                signatures = {'append': ([entry.data], TYPE_UNIT), 'pop': ([], entry.data), 'clear': ([], TYPE_UNIT),
+                              'contains': ([entry.data], TYPE_BOOL), 'is_empty': ([], TYPE_BOOL)}
                 if node.method_name not in signatures:
                     self.verifier._fail(node, 'Unresolved HIR list method')
                 self.signature(node, *signatures[node.method_name])
             elif entry.tag == 'dict':
                 key, value = entry.data
                 signatures = {'get': ([key], self.interner.mk_optional(value)),
-                              'keys': ([], self.interner.mk_list(key)), 'values': ([], self.interner.mk_list(value))}
+                              'keys': ([], self.interner.mk_list(key)),
+                              'values': ([], self.interner.mk_list(value)),
+                              'items': ([], self.interner.mk_list(self.interner.mk_tuple((key, value)))),
+                              'contains': ([key], TYPE_BOOL),
+                              'is_empty': ([], TYPE_BOOL)}
                 if node.method_name not in signatures:
                     self.verifier._fail(node, 'Unresolved HIR dictionary method')
+                self.signature(node, *signatures[node.method_name])
+            elif node.receiver.type_id == TYPE_STR:
+                signatures = {'contains': ([TYPE_STR], TYPE_BOOL), 'is_empty': ([], TYPE_BOOL)}
+                if node.method_name not in signatures:
+                    self.verifier._fail(node, 'Unresolved HIR string method')
                 self.signature(node, *signatures[node.method_name])
             else:
                 self.verifier._fail(node, 'HIR method receiver is not dispatchable')

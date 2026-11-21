@@ -15,7 +15,7 @@ RUNTIME = {
     'wysna_builtin_float', 'wysna_builtin_ord', 'wysna_builtin_chr', 'wysna_builtin_slice', 'wysna_builtin_bytes',
     'wysna_builtin_args', 'wysna_builtin_env', 'wysna_builtin_unix_time', 'wysna_builtin_exit', 'wysna_builtin_enumerate', 'wysna_builtin_dict_items',
     'wysna_builtin_read_file', 'wysna_builtin_write_file', 'wysna_builtin_join_strings', 'wysna_builtin_weak_owned',
-    'wysna_builtin_upgrade', 'wysna_builtin_contract_assert_at', 'wysna_await',
+    'wysna_builtin_upgrade', 'wysna_builtin_contract_assert_at', 'wysna_await', 'wysna_contains',
 }
 RUNTIME_ARITIES = {
     **dict.fromkeys(('wysna_neg', 'wysna_not', 'wysna_ok', 'wysna_err', 'wysna_enum_payload', 'wysna_wrap_result',
@@ -28,7 +28,7 @@ RUNTIME_ARITIES = {
     **dict.fromkeys(('wysna_add', 'wysna_sub', 'wysna_mul', 'wysna_div_at', 'wysna_mod_at', 'wysna_lt', 'wysna_le',
                      'wysna_gt', 'wysna_ge', 'wysna_equal', 'wysna_not_equal', 'wysna_make_range',
                      'wysna_index_get_owned_at', 'wysna_dict_get', 'wysna_builtin_write_file',
-                     'wysna_builtin_join_strings', 'wysna_builtin_contract_assert_at'), 2),
+                     'wysna_builtin_join_strings', 'wysna_builtin_contract_assert_at', 'wysna_contains'), 2),
     'wysna_builtin_slice': 3, 'wysna_builtin_args': 0, 'wysna_builtin_unix_time': 0, 'wysna_enum': 0, 'wysna_empty_weak': 0,
     'wysna_builtin_print': None, 'wysna_builtin_eprint': None,
 }
@@ -185,6 +185,17 @@ class Verifier:
                 require(pair.tag == 'tuple' and tuple(pair.data) == tuple(dictionary.data))
             else:
                 require(list_of(dictionary.data[0 if name == 'wysna_dict_keys' else 1]))
+        elif name == 'wysna_contains':
+            container = entry(0)
+            require(result.type_id == TYPE_BOOL)
+            if types[0] == TYPE_STR:
+                require(types[1] == TYPE_STR)
+            elif container.tag == 'list':
+                require(self.compatible(types[1], container.data))
+            elif container.tag == 'dict':
+                require(self.compatible(types[1], container.data[0]))
+            else:
+                require(False)
         elif name == 'wysna_builtin_enumerate':
             require(entry(0).tag == 'list' and returned.tag == 'list')
             pair = self.interner.get_entry(returned.data)

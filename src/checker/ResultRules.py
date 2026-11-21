@@ -126,13 +126,16 @@ def check_else_err_expr(checker: "TypeChecker", expr: ElseErrExpr, is_statement_
         )
 
     old_scope = checker.current_scope
+    old_expected = checker.expected_type
     checker.current_scope = handler_scope
     try:
-        for s in expr.handler.statements:
-            checker._check_stmt(s)
+        checker.expected_type = None
+        checker._check_statement_sequence(expr.handler.statements, recovering=False)
+        checker.expected_type = unwrapped_t
         tail_t = checker._check_expr(expr.handler.tail_expr) if expr.handler.tail_expr else None
     finally:
         checker.current_scope = old_scope
+        checker.expected_type = old_expected
 
     if not checker._block_diverges(expr.handler):
         actual_handler_t = tail_t if tail_t is not None else UnitType

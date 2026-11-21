@@ -282,6 +282,22 @@ def resolve_declaration_signatures(checker: "TypeChecker", program: Program) -> 
                 intf_type.methods[m.name] = FunctionType(params=p_types, ret=r_type)
 
         elif isinstance(stmt, ClassDecl):
+            for m in stmt.methods:
+                if m.name == stmt.name:
+                    raise TypeError(
+                        message=f"Constructor in class '{stmt.name}' must be named 'init', found 'fn {m.name}'",
+                        line=m.line,
+                        col=m.col,
+                        file=checker.file,
+                        code="W3004",
+                    ).with_fix(
+                        f"Rename constructor 'fn {m.name}' to 'fn init'",
+                        old=f"fn {m.name}",
+                        new="fn init",
+                        line=m.line,
+                        col=m.col,
+                        applicability="machine",
+                    )
             if stmt.type_params:
                 continue
             if isinstance(stmt.superclass, TypeNode):

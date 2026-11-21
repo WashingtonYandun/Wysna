@@ -59,6 +59,9 @@ class TokenType(Enum):
 
     # Relational & Equality Operators
     ASSIGN = auto()            # =
+    PLUS_ASSIGN = auto()       # +=
+    MINUS_ASSIGN = auto()      # -=
+    STAR_ASSIGN = auto()       # *=
     EQ = auto()                # ==
     NOT_EQ = auto()            # !=
     LT = auto()                # <

@@ -233,6 +233,140 @@ def _resolve_related(related, default_filename, source_by_file, span_cache):
     return records
 
 
+def _match_open_token(tokens, close_idx, open_name, close_name):
+    depth = 1
+    pos = close_idx - 1
+    while pos >= 0:
+        tname = tokens[pos].type.name
+        if tname == close_name:
+            depth += 1
+        elif tname == open_name:
+            depth -= 1
+            if depth == 0:
+                return pos
+        pos -= 1
+    return -1
+
+
+def _match_close_token(tokens, open_idx, open_name, close_name):
+    depth = 1
+    pos = open_idx + 1
+    while pos < len(tokens):
+        tname = tokens[pos].type.name
+        if tname == open_name:
+            depth += 1
+        elif tname == close_name:
+            depth -= 1
+            if depth == 0:
+                return pos
+        pos += 1
+    return -1
+
+
+def _synthesize_unwrap_fixes(error, filename, source):
+    """Synthesize a conservative 'maybe' '?' unwrap/propagation fix for W2001 hints."""
+    line = getattr(error, "line", None)
+    col = getattr(error, "col", None)
+    if not isinstance(line, int) or not isinstance(col, int):
+        return []
+    try:
+        from lexer.Lexer import Lexer
+
+        tokens = [
+            tok for tok in Lexer(source, file=filename).tokenize()
+            if tok.type.name not in ("NEWLINE", "EOF")
+        ]
+    except (WysnaError, UnicodeError, ValueError, RuntimeError):
+        return []
+
+    idx = next((i for i, tok in enumerate(tokens) if tok.line == line and tok.col == col), -1)
+    if idx < 0:
+        return []
+
+    tok_name = tokens[idx].type.name
+    if tok_name in ("IDENTIFIER", "THIS", "SUPER"):
+        start_idx = idx
+    elif tok_name in ("LPAREN", "LBRACKET", "DOT"):
+        cur = idx
+        while cur > 0:
+            if cur >= 2 and tokens[cur - 2].type.name == "DOT" and tokens[cur - 1].type.name in ("IDENTIFIER", "INT"):
+                cur -= 2
+            elif tokens[cur - 1].type.name in ("IDENTIFIER", "THIS", "SUPER"):
+                cur -= 1
+                break
+            elif tokens[cur - 1].type.name in ("RPAREN", "RBRACKET"):
+                open_idx = _match_open_token(
+                    tokens, cur - 1,
+                    "LPAREN" if tokens[cur - 1].type.name == "RPAREN" else "LBRACKET",
+                    tokens[cur - 1].type.name,
+                )
+                if open_idx < 0:
+                    return []
+                cur = open_idx
+            else:
+                break
+        if cur == idx and tok_name == "DOT":
+            return []
+        if tokens[cur].type.name not in ("IDENTIFIER", "THIS", "SUPER", "LPAREN"):
+            return []
+        start_idx = cur
+    else:
+        return []
+
+    end_idx = start_idx
+    if tokens[start_idx].type.name == "LPAREN":
+        close_idx = _match_close_token(tokens, start_idx, "LPAREN", "RPAREN")
+        if close_idx < 0:
+            return []
+        end_idx = close_idx
+        j = close_idx + 1
+    else:
+        j = start_idx + 1
+
+    while j < len(tokens):
+        jname = tokens[j].type.name
+        if jname == "DOT" and j + 1 < len(tokens) and tokens[j + 1].type.name in ("IDENTIFIER", "INT"):
+            end_idx = j + 1
+            j += 2
+        elif jname in ("LPAREN", "LBRACKET"):
+            close_name = "RPAREN" if jname == "LPAREN" else "RBRACKET"
+            close_idx = _match_close_token(tokens, j, jname, close_name)
+            if close_idx < 0:
+                return []
+            end_idx = close_idx
+            j = close_idx + 1
+        else:
+            break
+
+    if end_idx < idx or (j < len(tokens) and tokens[j].type.name == "QUESTION"):
+        return []
+
+    start_off = getattr(tokens[start_idx], "start_offset", None)
+    end_off = getattr(tokens[end_idx], "end_offset", None)
+    if not isinstance(start_off, int) or not isinstance(end_off, int) or not (0 <= start_off < end_off <= len(source)):
+        return []
+
+    orig = source[start_off:end_off]
+    try:
+        sha = hashlib.sha256(source.encode("utf-8")).hexdigest()
+        start_byte = len(source[:start_off].encode("utf-8"))
+        end_byte = len(source[:end_off].encode("utf-8"))
+    except UnicodeEncodeError:
+        return []
+
+    return [{
+        "description": f"append '?' to unwrap/propagate '{orig}'",
+        "applicability": "maybe",
+        "edits": [{
+            "source_id": filename,
+            "source_sha256": sha,
+            "start_byte": start_byte,
+            "end_byte": end_byte,
+            "replacement": orig + "?",
+        }],
+    }]
+
+
 def diagnostic_from_error(error, source_by_file=None, *, span_cache=None):
     """Adapt a legacy compiler diagnostic without inventing an unknown range."""
     source_by_file = source_by_file or {}
@@ -244,6 +378,10 @@ def diagnostic_from_error(error, source_by_file=None, *, span_cache=None):
     data = dict(getattr(error, "data", None) or {})
     if getattr(error, "help", None):
         data["help"] = error.help
+
+    fixes = _resolve_fixes(getattr(error, "fixes", None), filename, source)
+    if not fixes and data.get("unwrap_hint") == "?" and source is not None and filename:
+        fixes = _synthesize_unwrap_fixes(error, filename, source)
 
     return {
         "code": getattr(error, "code", "W9999"),
@@ -262,7 +400,7 @@ def diagnostic_from_error(error, source_by_file=None, *, span_cache=None):
         ),
         "related": _resolve_related(getattr(error, "related", None), filename, source_by_file, span_cache),
         "data": data,
-        "fixes": _resolve_fixes(getattr(error, "fixes", None), filename, source),
+        "fixes": fixes,
     }
 
 

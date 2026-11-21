@@ -618,15 +618,16 @@ class UseDecl(ImportDecl):
         }
 
 class LetDecl(Stmt):
-    def __init__(self, name: str, is_mut: bool, type_ann: Optional[TypeNode], initializer: 'Expr', line: int = 1, col: int = 1):
+    def __init__(self, name: str, is_mut: bool, type_ann: Optional[TypeNode], initializer: 'Expr', line: int = 1, col: int = 1, pattern: Optional[Pattern] = None):
         super().__init__(line, col)
         self.name = name
         self.is_mut = is_mut
         self.type_ann = type_ann
         self.initializer = initializer
+        self.pattern = pattern
 
     def to_dict(self) -> dict:
-        return {
+        d = {
             "kind": "LetDecl",
             "name": self.name,
             "is_mut": self.is_mut,
@@ -635,6 +636,9 @@ class LetDecl(Stmt):
             "line": self.line,
             "col": self.col
         }
+        if self.pattern is not None:
+            d["pattern"] = self.pattern.to_dict()
+        return d
 
 class WhileStmt(Stmt):
     def __init__(self, condition: 'Expr', body: Block, line: int = 1, col: int = 1):
@@ -945,11 +949,12 @@ class FieldInit(Node):
         return {"kind": "FieldInit", "name": self.name, "value": self.value.to_dict(), "line": self.line, "col": self.col}
 
 class StructInitExpr(Expr):
-    def __init__(self, struct_name: str, fields: List[FieldInit], type_args: Optional[List[TypeNode]] = None, line: int = 1, col: int = 1):
+    def __init__(self, struct_name: str, fields: List[FieldInit], type_args: Optional[List[TypeNode]] = None, line: int = 1, col: int = 1, spread: Optional[Expr] = None):
         super().__init__(line, col)
         self.struct_name = struct_name
         self.fields = fields
         self.type_args = type_args or []
+        self.spread = spread
 
     def to_dict(self) -> dict:
         d = {
@@ -961,6 +966,8 @@ class StructInitExpr(Expr):
         }
         if self.type_args:
             d["type_args"] = [t.to_dict() for t in self.type_args]
+        if self.spread is not None:
+            d["spread"] = self.spread.to_dict()
         return d
 
 class ListExpr(Expr):

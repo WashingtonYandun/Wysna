@@ -48,8 +48,7 @@ and       or        not
 Identifiers must start with an ASCII letter (`a-z`, `A-Z`) or underscore `_`, followed by letters, digits, or underscores. Identifiers cannot match any of the reserved keywords.
 
 ### 3.2 Literals, Integer Arithmetic & IEEE-754 Floating-Point Semantics
-* **Integers (`int`):** 64-bit signed two's complement integers (`-9_223_372_036_854_775_808` to `9_223_372_036_854_775_807`). Supports optional `_` digit separators:
-  `0`, `42`, `-10`, `1_000_000`.
+* **Integers (`int`):** 64-bit signed two's complement integers (`-9_223_372_036_854_775_808` to `9_223_372_036_854_775_807`). Supports decimal (`0`, `42`, `-10`, `1_000_000`), hexadecimal (`0xFF`, `0x10_2A`), and binary (`0b1010_0101`) integer literals with optional `_` digit separators. Scientific exponent notation (`1e5`) and octal prefixes are rejected with `W0002`.
 * **Integer Overflow & Division:** Integer addition (`+`), subtraction (`-`), multiplication (`*`), and unary negation (`-`) use **defined 64-bit two's complement wrapping semantics** (via unsigned cast arithmetic in C99, never undefined behavior). Integer division (`/`) truncates toward zero; division or modulo (`%`) by zero triggers a deterministic runtime panic.
 * **Floats (`float` — IEEE-754 `binary64`):** IEEE-754 64-bit double-precision floating-point numbers. Literals must include digits both before and after the decimal point (`3.14`, `-0.5`, `100.0`; forms such as `.5` or `1.` are invalid):
   - **Signed Zero:** `+0.0 == -0.0` evaluates to `true`, and `+0.0 != -0.0` evaluates to `false`.
@@ -61,6 +60,10 @@ Identifiers must start with an ASCII letter (`a-z`, `A-Z`) or underscore `_`, fo
 
 ### 3.3 Strings (`str`) & Unicode Scalar Semantics
 * **UTF-8 Storage:** Strings are immutable and stored as UTF-8 in memory.
+* **Single-Line, Multiline (`"""..."""`), and Formatted (`f"..."` / `f"""..."""`) Literals:**
+  - Single-line strings (`"..."`) disallow unescaped newlines.
+  - Multiline strings (`"""..."""`) preserve literal line breaks (normalizing CRLF/CR to `\n`) and accept escape sequences.
+  - Interpolated strings (`f"..."` and `f"""..."""`) splice arbitrary expressions inside `{expr}` by converting each expression via `str(...)` (`{{` and `}}` produce literal braces).
 * **Unicode Scalar Value Indexing:** `len(s)`, `s[i]`, `slice(s, start, end)`, `ord(s)`, and `chr(c)` operate strictly on **Unicode Scalar Values (Code Points)** (`U+0000..=U+D7FF` and `U+E000..=U+10FFFF`), returning a single code-point string (`str`) or code-point count:
   ```wysna
   let s = "Zoë"
@@ -72,7 +75,7 @@ Identifiers must start with an ASCII letter (`a-z`, `A-Z`) or underscore `_`, fo
 * **Escape Sequences:** `\n`, `\r`, `\t`, `\\`, `\"`, `\0`, `\u{HHHH}` (1 to 6 hex digits).
 
 ### 3.4 Comments and Delimiters
-* **Comments:** Only line comments beginning with `#` are supported. Documentation comments begin with `##`.
+* **Comments:** Line comments begin with `#` (documentation comments with `##`), and block comments use `/* ... */` with arbitrary nesting (`/* outer /* inner */ */`).
 * **Blocks:** Braces `{}` delimit blocks for `if`, `for`, `while`, `fn`, `match`, `struct`, `class`, and `interface`.
 * **Statement separators:** A physical newline (`LF`, `CRLF`, or `CR`) produces a `NEWLINE` separator after a token that can end an expression, provided it occurs outside parentheses and brackets. Literals, identifiers, `this`, `super`, closing delimiters, postfix `?`, `break`, and `continue` can end an expression. Blank lines and newlines after comments follow the same rule. A semicolon (`;`) is an explicit separator and may be used at the top level or inside a block.
 * **Continuation:** Newlines inside `(...)` and `[...]` are ignored. A newline after an operator does not end the expression; a binary operator that continues the expression must appear at the end of the preceding line. A newline after `return` also does not end the return: if an expression appears on the next line, it is part of the return.
@@ -140,6 +143,8 @@ line returns that expression, and the value may span lines.
     optional form is `d.get(k)`, which returns `V?` and never panics. Wysna has no
     auto-narrowing, so a single optional-deducing operator for the common case would
     force every dictionary read through unwrapping ceremony.
+* `tuple[T1, T2, ...]` / `(T1, T2, ...)`: Fixed-size heterogeneous immutable product type. Tuple type annotations accept both `tuple[int, str]` and shorthand `(int, str)` (and `()` / `tuple[]` for empty tuples). Elements are accessed positionally (`pair.0`, `nested.0.1`) or destructured irrefutably with `let (a, b) = pair`, `match`, or `for`.
+* **Membership (`in` / `.contains` / `.is_empty`):** `item in xs`, `key in d`, and `sub in s` evaluate to `bool` using `xs.contains(item)`, `d.contains(key)`, and `s.contains(sub)`. All three also provide `.is_empty() -> bool`.
   - **Key Domain & `float` Restriction (`W2010`):** Dictionary keys `K` must belong to Wysna's predictable key domain (`int`, `str`, `bool`, or `enum`). While some languages permit floating-point dictionary keys by defining custom canonicalization rules for `NaN` bit patterns and signed zeros (`+0.0` vs `-0.0`), Wysna deliberately restricts the dictionary key model for predictability and rejects `float` (and any composite type containing `float`) as a key type `K` at compile time with diagnostic `W2010` (`INVALID_DICT_KEY_TYPE`).
 * `tuple[T1, T2, ...]`: Fixed-size heterogeneous immutable product type (`(1, "ok", true)`).
 
@@ -166,13 +171,14 @@ struct Token {
     col: int
 }
 
-# Named initialization is strictly required:
+# Named initialization is strictly required (with optional `..base` spread for copying remaining fields):
 let tok = Token {
     kind: TokenKind.Ident,
     value: "foo",
     line: 1,
     col: 10,
 }
+let next_tok = Token { ..tok, col: 14 }
 ```
 
 ### 4.6 Object-Oriented Programming (`class` & `interface`)
@@ -239,7 +245,7 @@ Evaluation follows an explicit 12-level precedence hierarchy:
 | **4** | `*` `/` `%` | Multiplicative | Left |
 | **5** | `+` `-` | Additive, string concatenation | Left |
 | **6** | `..` `..=` | Exclusive range, inclusive range | Left (chained ranges are accepted; a range is a value, not a comparator) |
-| **7** | `<` `<=` `>` `>=` | Relational comparisons | Left |
+| **7** | `<` `<=` `>` `>=` `in` | Relational comparisons & membership (`x in container`) | Left |
 | **8** | `==` `!=` | Equality comparisons | Left |
 | **9** | `and` | Short-circuit logical AND | Left |
 | **10** | `or` | Short-circuit logical OR | Left |
@@ -291,9 +297,9 @@ Equality is partitioned cleanly along the value vs reference boundary:
 
 ## 6. Control Flow & Pattern Matching
 
-### 6.1 Variables: Immutability by Default
-* `let x = 42`: Immutable binding with local type inference.
-* `let mut count = 0`: Mutable binding.
+### 6.1 Variables: Immutability, Compound Assignment & Inference
+* `let x = 42`: Immutable binding with local bidirectional type inference (including empty `[]` / `{}` literals inferred from `let`/`return`/call/`this.field`/`xs[i]`/`struct` field/`tuple`/`if`/`match`/`else` target types).
+* `let mut count = 0`: Mutable binding. Supports compound assignment operators `+=`, `-=` (for `int` and `float`), and `+=` (for `str` concatenation as well as numbers) and `*=` (for `int` and `float`) on any valid mutable lvalue (`x += 1`, `this.balance += amount`, `counts[k] += 1`).
 * Function parameters are strictly typed and immutable within the body. There is no
   `mut` modifier on a parameter; copy into a `let mut` local to mutate one. Value
   semantics make that copy cheap (copy-on-write) and unambiguous.
@@ -303,6 +309,12 @@ Equality is partitioned cleanly along the value vs reference boundary:
   ```wysna
   for item in items {
       print(item)
+  }
+  ```
+* **Dictionary key-value iteration (`for k, v in dict`):**
+  ```wysna
+  for k, v in counts {
+      print(k, v)
   }
   ```
 * **Indexed iteration via tuple destructuring with `enumerate`:**
@@ -566,9 +578,9 @@ pub import "std/path"
 | `import "<path>"` (Default Namespace) | ✅ Soportado (C99 & LLVM) | ✅ Soportado (`native-core-v1`) |
 | `import "<path>" as <alias>` | ✅ Soportado (C99 & LLVM) | ✅ Soportado (`native-core-v1`) |
 | `pub import "<path>"` (Re-export) | ✅ Soportado | ✅ Soportado |
-| `from <path> use { sym1, sym2 }` | ✅ Soportado (C99 & LLVM) | ⏳ Límite de perfil (previsto v0.7.0) |
-| `from <path> use sym as alias` | ✅ Soportado (C99 & LLVM) | ⏳ Límite de perfil (previsto v0.7.0) |
-| `from <path> use sub.sym` | ✅ Soportado (C99 & LLVM) | ⏳ Límite de perfil (previsto v0.7.0) |
+| `from <path> use { sym1, sym2 }` | ✅ Soportado (C99 & LLVM) | ✅ Soportado (`native-core-v1`) |
+| `from <path> use sym as alias` | ✅ Soportado (C99 & LLVM) | ✅ Soportado (`native-core-v1`) |
+| `from <path> use sub.sym` | ✅ Soportado (C99 & LLVM) | ✅ Soportado (`native-core-v1`) |
 
 ---
 
@@ -731,15 +743,23 @@ and `write_file` are resolved from the process working directory that launched W
 Native binaries receive the operating system's argument vector, including its executable
 name in `args()[0]`.
 
-### 11.2 Built-in Collection Methods
+### 11.2 Built-in Collection & String Methods
 * **`list[T]`:**
   - `xs.append(item: T) -> unit` (mutating; triggers CoW detach if shared)
   - `xs.pop() -> T` (mutating; removes and returns last element)
   - `xs.clear() -> unit` (mutating; removes all elements)
+  - `xs.contains(item: T) -> bool` (alias: `item in xs`)
+  - `xs.is_empty() -> bool`
 * **`dict[K, V]`:**
   - `d.get(key: K) -> V?` (returns `Some(V)` if present, or `none`)
+  - `d.contains(key: K) -> bool` (alias: `key in d`)
+  - `d.is_empty() -> bool`
   - `d.keys() -> list[K]` (returns list of keys in insertion order)
   - `d.values() -> list[V]` (returns list of values in insertion order)
+  - `d.items() -> list[tuple[K, V]]` (returns list of `(key, value)` pairs in insertion order)
+* **`str`:**
+  - `s.contains(sub: str) -> bool` (alias: `sub in s`)
+  - `s.is_empty() -> bool`
 
 ---
 

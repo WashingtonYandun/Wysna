@@ -181,6 +181,15 @@ class TypeChecker:
 
     def _poison_binding(self, stmt: LetDecl) -> None:
         """Keep later uses of a failed ``let`` from producing misleading follow-up errors."""
+        if getattr(stmt, "pattern", None) is not None:
+            def collect_names(pat: Pattern) -> None:
+                if isinstance(pat, IdentifierPattern):
+                    self._poisoned_names.add(pat.name)
+                elif isinstance(pat, TuplePattern):
+                    for elem in pat.elements:
+                        collect_names(elem)
+            collect_names(stmt.pattern)
+            return
         scope = self.current_scope
         if stmt.name in scope.symbols:
             return
@@ -333,8 +342,7 @@ class TypeChecker:
     # ==========================================
 
     def _pass2_check_program(self, program: Program) -> None:
-        for stmt in program.body:
-            self._check_stmt_recovering(stmt)
+        self._check_statement_sequence(program.body, recovering=True)
 
     def _clone_generic_definition(self, template, substitutions):
         declaration = clone_ast(template.ast_decl)
@@ -832,21 +840,108 @@ class TypeChecker:
                     file=self.file
                 )
         old_scope = self.current_scope
+        old_expected = self.expected_type
         self.current_scope = block_scope
         self.scope_spans.append(((block.line, block.col),
                                  (getattr(block, 'end_line', block.line), getattr(block, 'end_col', block.col)), block_scope))
 
         try:
-            for s in block.statements:
-                self._check_stmt_recovering(s)
+            self.expected_type = None
+            self._check_statement_sequence(block.statements, recovering=True)
             if block.tail_expr:
+                self.expected_type = old_expected
                 return self._check_expr(block.tail_expr, is_statement_context=is_statement_context)
             return None
         finally:
             self.current_scope = old_scope
+            self.expected_type = old_expected
+
+    def _expand_pattern_let_stmt(self, stmt: LetDecl) -> List[LetDecl]:
+        tmp_name = f"__let_tuple_{stmt.line}_{stmt.col}_{id(stmt)}"
+        tmp_decl = LetDecl(
+            name=tmp_name,
+            is_mut=False,
+            type_ann=stmt.type_ann,
+            initializer=stmt.initializer,
+            line=stmt.line,
+            col=stmt.col,
+        )
+        tmp_decl._allow_internal = True
+        if hasattr(stmt, "source_file"):
+            tmp_decl.source_file = stmt.source_file
+        if hasattr(stmt, "module_id"):
+            tmp_decl.module_id = stmt.module_id
+        self._check_let_decl(tmp_decl)
+        tmp_sym = self.current_scope.lookup_symbol(tmp_name)
+        assert tmp_sym is not None
+        var_type = tmp_sym.type
+        self._bind_pattern_type(stmt.pattern, var_type, {}, stmt.line, stmt.col)
+        result: List[LetDecl] = [tmp_decl]
+
+        def emit_leaves(pat: Pattern, path: Tuple[int, ...]) -> None:
+            if isinstance(pat, WildcardPattern):
+                return
+            if isinstance(pat, IdentifierPattern):
+                proj_expr: Expr = IdentExpr(tmp_name, line=pat.line, col=pat.col)
+                for idx in path:
+                    proj_expr = MemberExpr(proj_expr, str(idx), line=pat.line, col=pat.col)
+                leaf = LetDecl(
+                    name=pat.name,
+                    is_mut=stmt.is_mut,
+                    type_ann=None,
+                    initializer=proj_expr,
+                    line=pat.line,
+                    col=pat.col,
+                )
+                if hasattr(pat, "source_name"):
+                    leaf.source_name = pat.source_name
+                if hasattr(stmt, "is_exported"):
+                    leaf.is_exported = stmt.is_exported
+                if hasattr(stmt, "source_file"):
+                    leaf.source_file = stmt.source_file
+                if hasattr(stmt, "module_id"):
+                    leaf.module_id = stmt.module_id
+                self._check_let_decl(leaf)
+                result.append(leaf)
+                return
+            if isinstance(pat, TuplePattern):
+                for idx, elem in enumerate(pat.elements):
+                    emit_leaves(elem, path + (idx,))
+
+        emit_leaves(stmt.pattern, ())
+        return result
+
+    def _check_statement_sequence(self, statements: List[Stmt], *, recovering: bool = True) -> None:
+        expanded: List[Stmt] = []
+        changed = False
+        for stmt in statements:
+            if isinstance(stmt, LetDecl) and getattr(stmt, "pattern", None) is not None:
+                changed = True
+                if recovering:
+                    known = len(self._collected_errors)
+                    snapshot = self._snapshot_state()
+                    try:
+                        expanded.extend(self._expand_pattern_let_stmt(stmt))
+                    except WysnaError as error:
+                        self._restore_state(snapshot)
+                        self._record_error(error, known)
+                        self._poison_binding(stmt)
+                        expanded.append(stmt)
+                else:
+                    expanded.extend(self._expand_pattern_let_stmt(stmt))
+            else:
+                if recovering:
+                    self._check_stmt_recovering(stmt)
+                else:
+                    self._check_stmt(stmt)
+                expanded.append(stmt)
+        if changed:
+            statements[:] = expanded
 
     def _check_let_decl(self, stmt: LetDecl) -> None:
-        if stmt.name.startswith("_WYSNA_") or stmt.name.startswith("__wysna_internal_"):
+        if not getattr(stmt, "_allow_internal", False) and (
+            stmt.name.startswith("_WYSNA_") or stmt.name.startswith("__wysna_internal_")
+        ):
             raise TypeError(
                 message=f"Identifier '{stmt.name}' is reserved for internal compiler use",
                 line=stmt.line,
@@ -918,13 +1013,15 @@ class TypeChecker:
     def _check_for_stmt(self, stmt: ForStmt) -> None:
         iter_t = self._check_expr(stmt.iterable)
 
-        # Iterable must be a list
+        # Iterable must be a list or dict
         elem_t: WysnaType
         if isinstance(iter_t, ListType):
             elem_t = iter_t.element
+        elif isinstance(iter_t, DictType):
+            elem_t = TupleType([iter_t.key, iter_t.value])
         else:
             raise TypeError(
-                message=f"Cannot iterate over non-list value of type '{iter_t}'",
+                message=f"Cannot iterate over non-iterable value of type '{iter_t}'",
                 line=stmt.iterable.line,
                 col=stmt.iterable.col,
                 file=self.file,
@@ -954,8 +1051,7 @@ class TypeChecker:
 
             bind(stmt.pattern, elem_t)
 
-            for s in stmt.body.statements:
-                self._check_stmt(s)
+            self._check_statement_sequence(stmt.body.statements, recovering=False)
             if stmt.body.tail_expr is not None:
                 self._check_expr(stmt.body.tail_expr, is_statement_context=True)
         finally:
@@ -1334,6 +1430,8 @@ class TypeChecker:
         elif isinstance(node, StructInitExpr):
             if node.type_args:
                 node.type_args = [self._substitute_type_node(a, subst) for a in node.type_args]
+            if getattr(node, "spread", None) is not None:
+                self._substitute_ast_types(node.spread, subst)
             for f in node.fields:
                 self._substitute_ast_types(f.value, subst)
         elif isinstance(node, CallExpr):

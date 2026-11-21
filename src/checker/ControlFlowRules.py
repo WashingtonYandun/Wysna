@@ -31,57 +31,78 @@ if TYPE_CHECKING:
 
 
 def check_if_expr(checker: "TypeChecker", expr: IfExpr, is_statement_context: bool = False) -> WysnaType:
-    cond_t = checker._check_expr(expr.condition)
-    if not checker._require_boolean(cond_t, expr.condition, "Condition of 'if'"):
-        raise TypeError(
-            message=f"Condition of 'if' must be bool, found '{cond_t}'",
-            line=expr.condition.line,
-            col=expr.condition.col,
-            file=checker.file,
-            code="W2001"
-        )
-    then_t = checker._check_block(expr.then_branch, is_statement_context=is_statement_context) or UnitType
+    outer_expected = checker.expected_type
+    try:
+        checker.expected_type = None
+        cond_t = checker._check_expr(expr.condition)
+        if not checker._require_boolean(cond_t, expr.condition, "Condition of 'if'"):
+            raise TypeError(
+                message=f"Condition of 'if' must be bool, found '{cond_t}'",
+                line=expr.condition.line,
+                col=expr.condition.col,
+                file=checker.file,
+                code="W2001"
+            )
+        checker.expected_type = None if is_statement_context else outer_expected
+        then_t = checker._check_block(expr.then_branch, is_statement_context=is_statement_context) or UnitType
+        branch_expected = None
+        if not is_statement_context:
+            if outer_expected is not None and outer_expected != UnitType:
+                branch_expected = outer_expected
+            elif then_t != UnitType:
+                branch_expected = then_t
 
-    for elif_b in expr.elif_branches:
-        e_cond_t = checker._check_expr(elif_b.condition)
-        if not checker._require_boolean(e_cond_t, elif_b.condition, "Condition of 'elif'"):
-            raise TypeError(message=f"Condition of 'elif' must be bool, found '{e_cond_t}'", line=elif_b.condition.line, col=elif_b.condition.col, file=checker.file, code="W2001")
-        e_then_t = checker._check_block(elif_b.body, is_statement_context=is_statement_context) or UnitType
-        if not is_statement_context and not checker.type_relations.is_assignable(e_then_t, then_t):
-            raise TypeError(
-                message=f"Incompatible types in 'elif' branch: '{e_then_t}' vs '{then_t}'",
-                line=elif_b.line,
-                col=elif_b.col,
-                file=checker.file,
-                code="W2001"
-            )
+        for elif_b in expr.elif_branches:
+            checker.expected_type = None
+            e_cond_t = checker._check_expr(elif_b.condition)
+            if not checker._require_boolean(e_cond_t, elif_b.condition, "Condition of 'elif'"):
+                raise TypeError(message=f"Condition of 'elif' must be bool, found '{e_cond_t}'", line=elif_b.condition.line, col=elif_b.condition.col, file=checker.file, code="W2001")
+            checker.expected_type = branch_expected
+            e_then_t = checker._check_block(elif_b.body, is_statement_context=is_statement_context) or UnitType
+            if not is_statement_context and not checker.type_relations.is_assignable(e_then_t, then_t):
+                raise TypeError(
+                    message=f"Incompatible types in 'elif' branch: '{e_then_t}' vs '{then_t}'",
+                    line=elif_b.line,
+                    col=elif_b.col,
+                    file=checker.file,
+                    code="W2001"
+                )
 
-    if expr.else_branch is not None:
-        else_t = checker._check_block(expr.else_branch, is_statement_context=is_statement_context) or UnitType
-        if not is_statement_context and not checker.type_relations.is_assignable(else_t, then_t):
-            raise TypeError(
-                message=f"Incompatible types in 'if' expression branches: '{else_t}' vs '{then_t}'",
-                line=expr.else_branch.line,
-                col=expr.else_branch.col,
-                file=checker.file,
-                code="W2001"
-            )
-        return UnitType if is_statement_context else then_t
-    else:
-        if not is_statement_context and then_t != UnitType:
-            raise TypeError(
-                message="If-expression returning a value requires an 'else' branch",
-                line=expr.line,
-                col=expr.col,
-                file=checker.file,
-                code="W2001"
-            )
-        return UnitType
+        if expr.else_branch is not None:
+            checker.expected_type = branch_expected
+            else_t = checker._check_block(expr.else_branch, is_statement_context=is_statement_context) or UnitType
+            if not is_statement_context and not checker.type_relations.is_assignable(else_t, then_t):
+                raise TypeError(
+                    message=f"Incompatible types in 'if' expression branches: '{else_t}' vs '{then_t}'",
+                    line=expr.else_branch.line,
+                    col=expr.else_branch.col,
+                    file=checker.file,
+                    code="W2001"
+                )
+            return UnitType if is_statement_context else then_t
+        else:
+            if not is_statement_context and then_t != UnitType:
+                raise TypeError(
+                    message="If-expression returning a value requires an 'else' branch",
+                    line=expr.line,
+                    col=expr.col,
+                    file=checker.file,
+                    code="W2001"
+                )
+            return UnitType
+    finally:
+        checker.expected_type = outer_expected
 
 
 def check_match_expr(checker: "TypeChecker", expr: MatchExpr, is_statement_context: bool = False) -> WysnaType:
     outer_expected = checker.expected_type
+    checker.expected_type = None
     subject_t = checker._check_expr(expr.subject)
+    arm_expected = (
+        outer_expected
+        if (not is_statement_context and outer_expected is not None and outer_expected != UnitType)
+        else None
+    )
     covered_variants: Set[str] = set()
     has_wildcard = False
     arm_types: List[WysnaType] = []
@@ -217,7 +238,13 @@ def check_match_expr(checker: "TypeChecker", expr: MatchExpr, is_statement_conte
         if arm.guard is not None:
             covered_variants = previous_coverage
             has_wildcard = previous_wildcard
-        arm_t = checker._check_block(arm.body, initial_bindings=arm_bindings) or UnitType
+        checker.expected_type = None if is_statement_context else arm_expected
+        try:
+            arm_t = checker._check_block(arm.body, initial_bindings=arm_bindings) or UnitType
+        finally:
+            checker.expected_type = outer_expected
+        if not is_statement_context and arm_expected is None and arm_t != UnitType:
+            arm_expected = arm_t
         arm_types.append(arm_t)
 
     # Guards do not contribute unconditional coverage. Specialize the

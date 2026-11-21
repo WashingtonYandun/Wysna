@@ -301,10 +301,21 @@ fn api_extract_module(src: str, file_path: str, module_id: str, package_id: str)
             is_extern = false
             continue
         }
-        if k == "IDENT" and v == "from" and c.pos + 3 < len(c.tokens) and c.tokens[c.pos + 1].kind == "STR" and c.tokens[c.pos + 2].kind == "IDENT" and c.tokens[c.pos + 2].val == "use" {
-            rec.imports.append(c.tokens[c.pos + 1].val)
-            c.pos = c.pos + 3
-            if schema_cur_kind(c) == "LBRACE" { schema_skip_brace_block(c) }
+        let api_from = module_parse_from_header(c.tokens, c.pos)
+        if api_from.found {
+            rec.imports.append(api_from.requested)
+            c.pos = api_from.use_pos + 1
+            if schema_cur_kind(c) == "LBRACE" {
+                schema_skip_brace_block(c)
+            } else {
+                if schema_cur_kind(c) == "IDENT" { c.pos = c.pos + 1 }
+                if schema_cur_kind(c) == "DOT" and c.pos + 1 < len(c.tokens) and c.tokens[c.pos + 1].kind == "IDENT" {
+                    c.pos = c.pos + 2
+                }
+                if schema_cur_kind(c) == "AS" and c.pos + 1 < len(c.tokens) {
+                    c.pos = c.pos + 2
+                }
+            }
             is_pub = false
             is_extern = false
             continue

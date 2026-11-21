@@ -232,9 +232,10 @@ class Formatter:
 
         if isinstance(stmt, LetDecl):
             mut_str = "mut " if stmt.is_mut else ""
+            target_str = self.format_pattern(stmt.pattern) if getattr(stmt, "pattern", None) is not None else stmt.name
             type_str = f": {self.format_type(stmt.type_ann)}" if stmt.type_ann is not None else ""
             val_str = self.format_expr(stmt.initializer, level)
-            return f"{ind}let {mut_str}{stmt.name}{type_str} = {val_str}"
+            return f"{ind}let {mut_str}{target_str}{type_str} = {val_str}"
 
         if isinstance(stmt, WhileStmt):
             cond_str = self.format_expr(stmt.condition, level)
@@ -307,6 +308,8 @@ class Formatter:
             return PRECEDENCE_MAP.get(expr.op, 10)
         if isinstance(expr, RangeExpr):
             return 7
+        if isinstance(expr, CallExpr) and getattr(expr, "is_in_operator", False):
+            return 6
         if isinstance(expr, UnaryExpr):
             return 10
         return 20
@@ -400,6 +403,12 @@ class Formatter:
             return f"{op_str} else{err_part} {blk_str}"
 
         if isinstance(expr, CallExpr):
+            if getattr(expr, "is_in_operator", False):
+                my_prec = 6
+                left_str = self.format_expr(expr.args[0], level, parent_prec=my_prec)
+                right_str = self.format_expr(expr.callee.object, level, parent_prec=my_prec + 1)
+                res = f"{left_str} in {right_str}"
+                return f"({res})" if my_prec < parent_prec else res
             callee_str = self.format_expr(expr.callee, level, parent_prec=15)
             targs = f"[{', '.join([self.format_type(a) for a in expr.type_args])}]" if getattr(expr, "type_args", None) else ""
             args_str = ", ".join([self.format_expr(a, level) for a in expr.args])
@@ -416,10 +425,13 @@ class Formatter:
 
         if isinstance(expr, StructInitExpr):
             targs = f"[{', '.join([self.format_type(a) for a in expr.type_args])}]" if getattr(expr, "type_args", None) else ""
-            if not expr.fields:
+            parts: List[str] = []
+            if getattr(expr, "spread", None) is not None:
+                parts.append(f"..{self.format_expr(expr.spread, level)}")
+            parts.extend(f"{f.name}: {self.format_expr(f.value, level)}" for f in expr.fields)
+            if not parts:
                 return f"{expr.struct_name}{targs} {{}}"
-            fields_str = ", ".join([f"{f.name}: {self.format_expr(f.value, level)}" for f in expr.fields])
-            return f"{expr.struct_name}{targs} {{ {fields_str} }}"
+            return f"{expr.struct_name}{targs} {{ {', '.join(parts)} }}"
 
         if isinstance(expr, ListExpr):
             elems_str = ", ".join([self.format_expr(e, level) for e in expr.elements])
@@ -452,7 +464,7 @@ class Formatter:
             subj_str = self.format_expr(expr.subject, level)
             lines: List[str] = [f"match {subj_str} {{"]
             for arm in expr.arms:
-                pat_str = "else" if isinstance(arm.pattern, WildcardPattern) else self.format_pattern(arm.pattern)
+                pat_str = self.format_pattern(arm.pattern)
                 if arm.guard is not None:
                     pat_str += ' if ' + self.format_expr(arm.guard, level + 1)
                 # If single tail_expr with no statements, can format inline or block

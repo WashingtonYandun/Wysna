@@ -43,6 +43,9 @@ fn mir_field_index(record: MirRecord, name: str, source: Token) -> int {
 fn mir_member(context: MirBuilder, node: CheckedNode) -> int {
     let value = mir_expression(context, node.children[0])
     if context.current < 0 { return -1 }
+    if context.types[context.slots[value].type_id].kind == "tuple" {
+        return mir_op(context, "tuple_get", mir_type(context, node.type_id, node.source), [value], "", mir_literal_int(int(node.text)), node.source)
+    }
     let record = mir_find_record(context.records, context.slots[value].type_id, node.source)
     let index = mir_field_index(record, node.text, node.source)
     return mir_load_field(context, value, index, record.fields[index].type_id, node.source)

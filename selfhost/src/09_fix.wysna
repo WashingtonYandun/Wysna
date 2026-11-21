@@ -185,7 +185,7 @@ fn fix_resolve_mut_root_name(tokens: list[Token], tok_idx: int) -> str {
         }
         return t.val
     }
-    if t.kind == "ASSIGN" and tok_idx > 0 {
+    if (t.kind == "ASSIGN" or t.kind == "PLUS_ASSIGN" or t.kind == "MINUS_ASSIGN" or t.kind == "STAR_ASSIGN") and tok_idx > 0 {
         let mut p = tok_idx - 1
         while p >= 0 {
             if tokens[p].kind == "RBRACKET" {
@@ -205,6 +205,156 @@ fn fix_resolve_mut_root_name(tokens: list[Token], tok_idx: int) -> str {
         if p >= 0 and tokens[p].kind == "IDENT" { return tokens[p].val }
     }
     return ""
+}
+
+fn fix_is_scalar_wrap_tok(t: Token) -> bool {
+    return t.kind == "IDENT" or t.kind == "INT" or t.kind == "FLOAT" or t.kind == "TRUE" or t.kind == "FALSE"
+}
+
+fn fix_raw_token_span(src: str, tok: Token) -> list[int] {
+    let off0 = diag_char_offset_at(src, tok.line, tok.col)
+    if off0 < 0 or off0 >= len(src) { return [-1, -1] }
+    let mut off1 = off0
+    let mut saw_dot = false
+    while off1 < len(src) {
+        let ch = src[off1]
+        let c = ord(ch)
+        if is_alnum(c) {
+            off1 = off1 + 1
+        } elif tok.kind == "FLOAT" and ch == "." and not saw_dot and off1 + 1 < len(src) and is_digit(ord(src[off1 + 1])) {
+            saw_dot = true
+            off1 = off1 + 1
+        } else {
+            break
+        }
+    }
+    if off1 <= off0 { return [-1, -1] }
+    return [off0, off1]
+}
+
+fn fix_extract_expected_found(msg: str) -> list[str] {
+    let empty: list[str] = []
+    let p1 = "expected '"
+    let p2 = "', found '"
+    let n = len(msg)
+    let l1 = len(p1)
+    let l2 = len(p2)
+    let mut i = 0
+    while i + l1 <= n {
+        if slice(msg, i, i + l1) == p1 {
+            let e0 = i + l1
+            let mut e1 = e0
+            while e1 < n and msg[e1] != "'" { e1 = e1 + 1 }
+            if e1 + l2 <= n and slice(msg, e1, e1 + l2) == p2 {
+                let f0 = e1 + l2
+                let mut f1 = f0
+                while f1 < n and msg[f1] != "'" { f1 = f1 + 1 }
+                if f1 < n and e1 > e0 and f1 > f0 {
+                    return [slice(msg, e0, e1), slice(msg, f0, f1)]
+                }
+            }
+        }
+        i = i + 1
+    }
+    return empty
+}
+
+fn fix_postfix_end_token(tokens: list[Token], start_idx: int) -> int {
+    if start_idx < 0 or start_idx >= len(tokens) { return -1 }
+    let first_kind = tokens[start_idx].kind
+    if first_kind != "IDENT" and first_kind != "THIS" and first_kind != "SUPER" { return -1 }
+    let mut end_idx = start_idx
+    let mut j = start_idx + 1
+    let n = len(tokens)
+    while j < n {
+        let tk = tokens[j].kind
+        if tk == "DOT" and j + 1 < n and (tokens[j + 1].kind == "IDENT" or tokens[j + 1].kind == "INT") {
+            end_idx = j + 1
+            j = j + 2
+        } elif tk == "LPAREN" or tk == "LBRACKET" {
+            let open_k = tk
+            let close_k = if tk == "LPAREN" { "RPAREN" } else { "RBRACKET" }
+            let mut depth = 1
+            let mut p = j + 1
+            while p < n and depth > 0 {
+                if tokens[p].kind == open_k { depth = depth + 1 }
+                elif tokens[p].kind == close_k { depth = depth - 1 }
+                p = p + 1
+            }
+            if depth != 0 { return -1 }
+            end_idx = p - 1
+            j = p
+        } else {
+            break
+        }
+    }
+    if j < n and tokens[j].kind == "QUESTION" { return -1 }
+    return end_idx
+}
+
+fn fix_token_end_char(src: str, tok: Token) -> int {
+    if tok.kind == "RPAREN" or tok.kind == "RBRACKET" {
+        let off = diag_char_offset_at(src, tok.line, tok.col)
+        if off < 0 or off >= len(src) { return -1 }
+        return off + 1
+    }
+    let span = fix_raw_token_span(src, tok)
+    return span[1]
+}
+
+fn fix_plan_w2001(src: str, tokens: list[Token], start_byte: int, msg: str) -> list[FixEdit] {
+    let mut out: list[FixEdit] = []
+    if proj_str_contains_substr(msg, "binary operand types:") {
+        let is_str_scalar = proj_str_contains_substr(msg, "expected 'str', found 'int'") or proj_str_contains_substr(msg, "expected 'str', found 'float'") or proj_str_contains_substr(msg, "expected 'str', found 'bool'")
+        let is_scalar_str = proj_str_contains_substr(msg, "expected 'int', found 'str'") or proj_str_contains_substr(msg, "expected 'float', found 'str'") or proj_str_contains_substr(msg, "expected 'bool', found 'str'")
+        if not is_str_scalar and not is_scalar_str { return out }
+        let start_char = lsp_char_offset_from_utf8_byte(src, start_byte)
+        let lc = fix_line_col_from_char(src, start_char)
+        let tok_idx = fix_tok_index_at(tokens, lc[0], lc[1])
+        if tok_idx < 0 or tok_idx >= len(tokens) { return out }
+        let mut wrap_idx = -1
+        if is_str_scalar and tok_idx >= 1 and tokens[tok_idx - 1].kind == "PLUS" and fix_is_scalar_wrap_tok(tokens[tok_idx]) {
+            let nxt_kind = if tok_idx + 1 < len(tokens) { tokens[tok_idx + 1].kind } else { "EOF" }
+            if nxt_kind != "LPAREN" and nxt_kind != "DOT" and nxt_kind != "LBRACKET" {
+                wrap_idx = tok_idx
+            }
+        } elif is_scalar_str and tok_idx >= 2 and tokens[tok_idx - 1].kind == "PLUS" and fix_is_scalar_wrap_tok(tokens[tok_idx - 2]) {
+            let prev_kind = if tok_idx >= 3 { tokens[tok_idx - 3].kind } else { "EOF" }
+            if prev_kind != "DOT" and prev_kind != "RBRACKET" and prev_kind != "RPAREN" {
+                wrap_idx = tok_idx - 2
+            }
+        }
+        if wrap_idx < 0 { return out }
+        let wtok = tokens[wrap_idx]
+        let span = fix_raw_token_span(src, wtok)
+        if span[0] < 0 { return out }
+        let orig = slice(src, span[0], span[1])
+        let b0 = diag_utf8_byte_at(src, span[0])
+        let b1 = diag_utf8_byte_at(src, span[1])
+        out.append(new FixEdit("W2001", "wrap '" + orig + "' in str(...)", "machine", b0, b1, "str(" + orig + ")"))
+        return out
+    }
+    let ef = fix_extract_expected_found(msg)
+    if len(ef) != 2 { return out }
+    let exp = ef[0]
+    let fnd = ef[1]
+    let is_opt = fnd == exp + "?"
+    let res_prefix = exp + " ! "
+    let is_res = len(fnd) > len(res_prefix) and slice(fnd, 0, len(res_prefix)) == res_prefix
+    if not is_opt and not is_res { return out }
+    let start_char = lsp_char_offset_from_utf8_byte(src, start_byte)
+    let lc = fix_line_col_from_char(src, start_char)
+    let tok_idx = fix_tok_index_at(tokens, lc[0], lc[1])
+    let end_idx = fix_postfix_end_token(tokens, tok_idx)
+    if end_idx < 0 { return out }
+    let c0 = diag_char_offset_at(src, tokens[tok_idx].line, tokens[tok_idx].col)
+    let c1 = fix_token_end_char(src, tokens[end_idx])
+    if c0 < 0 or c1 <= c0 or c1 > len(src) { return out }
+    let orig = slice(src, c0, c1)
+    let b0 = diag_utf8_byte_at(src, c0)
+    let b1 = diag_utf8_byte_at(src, c1)
+    out.append(new FixEdit("W2001", "append '?' to unwrap/propagate '" + orig + "'", "maybe", b0, b1, orig + "?"))
+    return out
 }
 
 fn fix_plan_w3001(src: str, tokens: list[Token], start_byte: int, msg: str) -> list[FixEdit] {
@@ -397,6 +547,20 @@ fn fix_plan_w1001(src: str, tokens: list[Token], start_byte: int, end_byte: int,
     return out
 }
 
+fn fix_plan_w3004(src: str, tokens: list[Token], start_byte: int, end_byte: int, msg: str) -> list[FixEdit] {
+    let mut out: list[FixEdit] = []
+    if not proj_str_contains_substr(msg, "must be named 'init', found 'fn ") { return out }
+    let start_char = lsp_char_offset_from_utf8_byte(src, start_byte)
+    let end_char = lsp_char_offset_from_utf8_byte(src, end_byte)
+    if start_char < 0 or end_char <= start_char or end_char > len(src) { return out }
+    let lc = fix_line_col_from_char(src, start_char)
+    let tok_idx = fix_tok_index_at(tokens, lc[0], lc[1])
+    if tok_idx < 0 or tok_idx >= len(tokens) or tokens[tok_idx].kind != "IDENT" { return out }
+    let orig = slice(src, start_char, end_char)
+    out.append(new FixEdit("W3004", "rename constructor 'fn " + orig + "' to 'fn init'", "machine", start_byte, end_byte, "init"))
+    return out
+}
+
 fn fix_apply_non_overlapping(src: str, edits: list[FixEdit]) -> str {
     # Sort descending by start_byte
     let mut sorted: list[FixEdit] = []
@@ -502,8 +666,12 @@ fn tool_handle_fix(args: list[str], json_mode_in: bool) -> unit {
             let mut gen: list[FixEdit] = []
             if code == "W3001" {
                 gen = fix_plan_w3001(current_src, tokens, sb, msg)
+            } elif code == "W2001" {
+                gen = fix_plan_w2001(current_src, tokens, sb, msg)
             } elif code == "W1001" {
                 gen = fix_plan_w1001(current_src, tokens, sb, eb, msg)
+            } elif code == "W3004" {
+                gen = fix_plan_w3004(current_src, tokens, sb, eb, msg)
             }
             for g in gen {
                 if g.applicability == "machine" or (include_maybe and g.applicability == "maybe") {

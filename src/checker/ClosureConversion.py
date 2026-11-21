@@ -103,7 +103,10 @@ def convert_lambda(checker, expression):
             for index, statement in enumerate(node.statements):
                 node.statements[index] = rewrite(statement, local)
                 if isinstance(statement, A.LetDecl):
-                    local.add(statement.name)
+                    if getattr(statement, 'pattern', None) is not None:
+                        local.update(pattern_names(statement.pattern))
+                    else:
+                        local.add(statement.name)
             node.tail_expr = rewrite(node.tail_expr, local)
             return node
         if isinstance(node, A.ForStmt):

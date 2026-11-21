@@ -141,6 +141,7 @@ def optimize_local_cow_uniqueness(module, interner):
 
 _READONLY_RUNTIME_ARGS = {
     'wysna_builtin_len': (0,),
+    'wysna_contains': (0, 1),
     'wysna_index_get_owned_at': (0,),
     'wysna_dict_get': (0,),
     'wysna_dict_keys': (0,),

@@ -1,4 +1,4 @@
-# Manual de Sintaxis y Referencia del Lenguaje Wysna (v0.7.0)
+# Manual de Sintaxis y Referencia del Lenguaje Wysna (v0.8.0)
 
 Este documento constituye la referencia técnica canónica, completa y exhaustiva de la sintaxis, el modelo semántico, el sistema de tipos y las primitivas de tiempo de ejecución del lenguaje **Wysna**, derivada directamente de la implementación de referencia del compilador (**Wysna Seed**), el compilador auto-hospedado (**Wysna Compiler**) y la especificación formal normativa.
 
@@ -38,7 +38,7 @@ flowchart LR
     D --> F["Backend Nativo C99 / LLVM<br/>Binarios autocontenidos sin GC"]
 ```
 
-* **Semántica de Valores Pura:** Por defecto, las colecciones (`list`, `dict`, `set`, `struct`) se comportan como valores inmutables compartidos mediante **Copy-on-Write (CoW)** con conteo de referencias automático (**ARC**).
+* **Semántica de Valores Pura:** Por defecto, las colecciones (`list`, `dict`, `tuple`, `struct`, `enum`) se comportan como valores inmutables compartidos mediante **Copy-on-Write (CoW)** con conteo de referencias automático (**ARC**).
 * **Ausencia de Garbage Collector (GC):** La liberación de memoria es determinista e inmediata en el momento en que el contador de referencias llega a 0, con rutas de liberación $O(1)$ para búferes escalares planos.
 * **Canales de Error en la Firma de Tipos:** No existen excepciones ocultas ni desenrollado de pila opaco (`panic`/`throw`). Toda función que puede fallar declara formalmente su conjunto de errores en la firma: `T ! E`.
 * **Contratos Estáticos y Dinámicos:** Soporte nativo para precondiciones (`requires`) y postcondiciones (`ensures`), exportables automáticamente a **JSON Schema (Draft 2020-12)**.
@@ -48,11 +48,14 @@ flowchart LR
 ## 2. Estructura Léxica y Gramática Base
 
 ### 2.1 Comentarios
-Los comentarios inician con el carácter `#` y se extienden hasta el final de la línea física:
+Wysna admite comentarios de línea con `#` (y comentarios de documentación con `##`), además de comentarios de bloque anidables `/* ... */`:
 
 ```wysna
-# Esto es un comentario de una sola línea en Wysna
+# Comentario de una sola línea en Wysna
+## Comentario de documentación
 let x = 42  # Comentario en línea
+
+/* Comentario de bloque /* con anidamiento arbitrario */ permitido */
 ```
 
 ### 2.2 Delimitación de Sentencias y Terminador Lógico
@@ -66,13 +69,15 @@ let c = a +
 ```
 
 ### 2.3 Literales Numéricos
-Los números en Wysna son decimales en base 10. No se admiten notaciones hexadecimales (`0x`), binarias (`0b`) ni exponentes científicos (`1e5`). Se permite el uso de guion bajo (`_`) como separador de legibilidad:
+Wysna admite enteros decimales, hexadecimales (`0x` / `0X`) y binarios (`0b` / `0B`) con separadores de legibilidad `_`. Los exponentes científicos (`1e5`) y prefijos octales siguen rechazándose con `W0002`:
 
 * **Enteros (`int`):** Enteros con signo de 64 bits (`-9223372036854775808` a `9223372036854775807`).
   ```wysna
   let count = 42
   let million = 1_000_000
   let negative = -15
+  let flags = 0xFF00_00A5
+  let mask = 0b1010_0101
   ```
 * **Flotantes (`float`):** IEEE-754 de doble precisión (64 bits). **Exigen obligatoriamente dígitos tanto antes como después del punto decimal**:
   ```wysna
@@ -83,14 +88,23 @@ Los números en Wysna son decimales en base 10. No se admiten notaciones hexadec
   # 5.  -> Error sintáctico W0002 (requiere dígito posterior: 5.0)
   ```
 
-### 2.4 Literales de Texto (`str`)
-Cadenas de caracteres codificadas estrictamente en UTF-8 delimitadas por comillas dobles (`"`). Soportan secuencias de escape estándar y escalares Unicode:
+### 2.4 Literales de Texto (`str`), Multilínea (`"""..."""`) e Interpolación (`f"..."`)
+Cadenas de caracteres codificadas estrictamente en UTF-8 delimitadas por `"` (una línea) o `"""` (multilínea con preservación de saltos de línea). Además, las cadenas formateadas `f"..."` y `f"""..."""` interpolan expresiones arbitrarias `{expr}` convirtiéndolas mediante `str(...)` (`{{` y `}}` escapan llaves literales):
 
 ```wysna
 let greeting = "Hola, mundo!\n"
 let tabbed = "Columna 1\tColumna 2"
 let unicode_char = "\u{1F980}"  # Cangrejo emoji vía escape Unicode
 let escaped_quote = "Dijo: \"Wysna es rápido\""
+
+let name = "Washo"
+let port = 8080
+let summary = f"Servicio activo para {name} en puerto {port}"
+let template = f"""
+host: {name}
+port: {port}
+literal: {{ok}}
+"""
 ```
 
 ### 2.5 Palabras Reservadas y Operadores
@@ -100,13 +114,14 @@ let escaped_quote = "Dijo: \"Wysna es rápido\""
 | **Declaraciones** | `fn`, `let`, `mut`, `struct`, `enum`, `import`, `from`, `use`, `pub`, `extern` |
 | **POO** | `class`, `interface`, `extends`, `implements`, `new`, `this`, `super`, `public`, `private` |
 | **Control de Flujo** | `if`, `elif`, `else`, `for`, `while`, `in`, `match`, `return`, `break`, `continue` |
+| **Asincronía (contextual)** | `async`, `await` |
 | **Literales Booleanos** | `true`, `false`, `none` |
 | **Operadores Lógicos** | `and`, `or`, `not` |
 | **Aritmética** | `+`, `-`, `*`, `/`, `%` |
 | **Comparación** | `==`, `!=`, `<`, `<=`, `>`, `>=` |
-| **Asignación / Flechas** | `=`, `->`, `=>` |
+| **Asignación / Flechas / Spread** | `=`, `+=`, `-=`, `*=`, `->`, `=>`, `..` |
 | **Rangos** | `..` (exclusivo), `..=` (inclusivo) |
-| **Errores / Opcionales** | `?` (propagación), `??` (coalescencia nula), `!` (canal de error), `else error` |
+| **Errores / Opcionales** | `?` (propagación), `??` (coalescencia nula), `!` (`T ! E` y uniones `E1 \| E2`), `else` / `else error` |
 
 ---
 
@@ -130,7 +145,7 @@ graph TD
 
     Composites --> C1["list[T]"]
     Composites --> C2["dict[K, V]"]
-    Composites --> C3["set[T]"]
+    Composites --> C3["tuple[T1, T2, ...]"]
     Composites --> C4["struct Name { ... }"]
     Composites --> C5["enum Name { ... }"]
     Composites --> C6["class Name { ... }"]
@@ -148,11 +163,11 @@ graph TD
 * **`unit`:** Tipo unitario vacío (equivalente a `void` funcional). Toda función sin tipo de retorno explícito retorna `unit`.
 * **`none`:** Representa la ausencia de valor (utilizado con tipos opcionales `T?`).
 
-### 3.2 Colecciones Copy-on-Write
+### 3.2 Colecciones Copy-on-Write y Tuplas
 * **`list[T]`:** Lista dinámica redimensionable.
   * **Optimización Escalar:** `list[int]`, `list[bool]` y `list[float]` son automáticamente asignadas como búferes contiguos C sin encajonar (`unboxed scalar buffers`), con desprendimiento $O(1)$ vía `memcpy`.
-* **`dict[K, V]`:** Tabla hash asociativa. Las claves (`K`) deben ser tipos comparables (`int`, `str`, `bool`, o `enum`).
-* **`set[T]`:** Conjunto de elementos únicos no duplicados.
+* **`dict[K, V]`:** Tabla hash asociativa. Las claves (`K`) deben ser tipos comparables (`int`, `str`, `bool`, `enum` o tuplas hashables).
+* **`tuple[T1, T2, ...]` (atajo `(T1, T2, ...)`):** Producto heterogéneo inmutable de tamaño fijo (su tipo se anota como `tuple[int, str]` o `(int, str)`, sus elementos se leen posicionalmente con `pair.0`, `nested.0.1`, y se desestructura directamente en `let (a, b) = pair`, `match` o `for a, b in ...`).
 
 ### 3.3 Tipos Opcionales (`T?`)
 Cualquier tipo puede marcarse como opcional agregando el sufijo `?`. Su valor puede ser una instancia de `T` o `none`:
@@ -165,8 +180,8 @@ let missing_name: str? = none
 let display_name: str = possible_name ?? "Anónimo"
 ```
 
-### 3.4 Canales de Error (`T ! E`)
-Las funciones no arrojan excepciones no tipadas. Cuando una función puede fallar, declara el tipo exitoso (`T`) y el conjunto de errores (`E`) separados por el operador de exclamación `!`:
+### 3.4 Canales de Error y Uniones (`T ! E` / `T ! E1 | E2`)
+Las funciones no arrojan excepciones no tipadas. Cuando una función puede fallar, declara el tipo exitoso (`T`) y el tipo o unión de tipos de error (`E1 | E2`) separados por el operador de exclamación `!`:
 
 ```wysna
 fn divide(a: int, b: int) -> int ! str {
@@ -174,6 +189,13 @@ fn divide(a: int, b: int) -> int ! str {
         return Err("División por cero")
     }
     return a / b
+}
+
+struct ParseErr { msg: str }
+struct IoErr { path: str }
+
+fn load_config(path: str) -> int ! ParseErr | IoErr {
+    return Err(IoErr { path: path })
 }
 ```
 
@@ -189,24 +211,28 @@ let port = 8080
 # port = 8081  -> Error de compilación W3001: Cannot reassign immutable variable
 ```
 
-### 4.2 Mutabilidad Explícita (`let mut`)
-Para permitir la reasignación de una variable o la modificación de sus campos internos, debe declararse explícitamente con `mut`:
+### 4.2 Mutabilidad Explícita (`let mut`) y Asignación Compuesta
+Para permitir la reasignación de una variable o la modificación de sus campos o índices internos, debe declararse explícitamente con `mut`. Están disponibles `=`, `+=`, `-=` y `*=`:
 
 ```wysna
 let mut counter = 0
-counter = counter + 1
+counter += 1
+
+let mut log = "start"
+log += ":ok"
 
 let mut numbers = [1, 2, 3]
 numbers.append(4)
 ```
 
-### 4.3 Inferencia de Tipos
-El compilador infiere automáticamente el tipo a partir de la expresión inicializadora. La anotación de tipo es opcional a menos que exista ambigüedad:
+### 4.3 Inferencia Bidireccional de Tipos
+El compilador infiere tipos locales de forma bidireccional, incluyendo colecciones vacías (`[]`, `{}`) y lambdas cuando el contexto (`let`, `return`, llamada, rama `if`/`match`/`else`, campo `struct`, tupla o asignación `this.campo = {}` / `xs[0] = []`) fija el tipo esperado:
 
 ```wysna
-let name = "Sofia"        # Inferido como str
-let score: int = 100       # Explícito
-let ratio: float = 0.75    # Explícito
+let name = "Sofia"           # Inferido como str
+let score: int = 100          # Explícito
+let ratio: float = 0.75       # Explícito
+let ids: list[int] = []       # Inferido desde anotación
 ```
 
 ---
@@ -254,16 +280,25 @@ let int_val = identity[int](42)
 let str_val = identity[str]("WySofia")
 ```
 
-### 5.4 Funciones Lambda y Closures
-Las funciones anónimas se declaran mediante la sintaxis de tubería `|params| => expr`:
+### 5.4 Funciones Lambda, Closures y Funciones Asíncronas (`async` / `await`)
+Las funciones anónimas se declaran mediante `|params| => expr`, y las corrutinas cooperativas sin pila usan los modificadores contextuales `async fn` y `await`:
 
 ```wysna
 let square = |n: int| => n * n
 let sum = |a: int, b: int| => a + b
 
+import "std/algorithms" as alg
 let numbers = [1, 2, 3, 4]
-# Usando closures con funciones de orden superior
-let doubled = numbers.map(|n: int| => n * 2)
+let doubled = alg.parallel_map[int, int](numbers, |n: int| => n * 2)
+
+async fn fetch_step(x: int) -> int {
+    return x * 2
+}
+
+async fn run_flow() -> int {
+    let v = await fetch_step(21)
+    return v
+}
 ```
 
 ### 5.5 Enlaces Externos C (`extern "C" fn`)
@@ -292,16 +327,20 @@ fn parse_port(text: str) -> int ! str {
 }
 ```
 
-### 6.2 Cláusula de Manejo Local (`else error`)
-Permite capturar el error en el sitio de la llamada y proporcionar un valor por defecto o ejecutar un bloque de salida:
+### 6.2 Cláusula de Manejo Local (`else error` y `else` para opcionales)
+Permite capturar el error en el sitio de la llamada (`else err { ... }`) o recuperar el valor por defecto de un opcional (`else { ... }`):
 
 ```wysna
-# Desempaquetado con valor por defecto
-let port = parse_port("") else error { 3000 }
+# Desempaquetado de Result con acceso al error
+let port = parse_port("") else err { 3000 }
+
+# Recuperación de opcional sin binding de error
+fn find_user(id: int) -> str? { return none }
+let user = find_user(1) else { "invitado" }
 
 # Desempaquetado con retorno temprano
-let safe_port = parse_port(input) else error {
-    print("Error en puerto, abortando")
+let safe_port = parse_port(input) else err {
+    print(f"Error en puerto ({err}), abortando")
     return Err("Fallo de configuración")
 }
 ```
@@ -338,14 +377,22 @@ enum ConnectionState[T] {
 ```
 
 ### 7.2 Coincidencia de Patrones (`match`)
-La sentencia `match` evalúa exhaustivamente todas las variantes de un enum o valores primitivos. Si una variante no está contemplada y no se define un comodín `_`, el compilador genera un error estático `W2001`:
+La sentencia `match` evalúa exhaustivamente todas las variantes de un enum, uniones de errores (`ParseErr(e) => ...`), tuplas o valores primitivos. Si una variante no está contemplada y no se define el comodín canónico `_ =>`, el compilador genera un error estático `W2003` (el formateador normaliza `else =>` a `_ =>`):
 
 ```wysna
 fn execute(cmd: Command) -> str {
     return match cmd {
         Command.Quit => "Cerrando aplicación",
-        Command.Echo(msg) => "Eco: " + msg,
-        Command.Move(x, y) => "Moviendo a (" + str(x) + ", " + str(y) + ")",
+        Command.Echo(msg) => f"Eco: {msg}",
+        Command.Move(x, y) => f"Moviendo a ({x}, {y})",
+    }
+}
+
+fn describe_code(code: int) -> str {
+    return match code {
+        200 => "OK",
+        404 => "No encontrado",
+        _ => "Otro",
     }
 }
 ```
@@ -354,12 +401,12 @@ fn execute(cmd: Command) -> str {
 
 ## 8. Estructuras de Datos y Programación Orientada a Objetos
 
-### 8.1 Structs (Semántica de Valor Pura)
-Los structs representan agrupaciones de datos con semántica de valor Copy-on-Write:
+### 8.1 Structs (Semántica de Valor Pura, Invariantes y Actualización Funcional `..`)
+Los structs representan agrupaciones de datos con semántica de valor Copy-on-Write, permiten contratos de campo (`requires`) y admiten actualización funcional mediante `..base`:
 
 ```wysna
 pub struct User {
-    id: int,
+    id: int requires id > 0,
     username: str,
     active: bool,
 }
@@ -371,26 +418,29 @@ let user1 = User {
     active: true,
 }
 
+# Actualización funcional preservando el resto de campos
+let user2 = User { ..user1, active: false }
+
 # Acceso a campos
-print(user1.username)
+print(user2.username)
 ```
 
 ### 8.2 Clases (Semántica de Referencia con ARC)
-Las clases se utilizan para modelar entidades con identidad compartida, estado mutable y métodos de instancia:
+Las clases se utilizan para modelar entidades con identidad compartida, estado mutable y métodos de instancia. El constructor de una clase se declara siempre como `fn init(...)` (si se escribe `fn NombreClase(...)`, el compilador emite `W3004` y `wysna fix --apply` lo renombra automáticamente a `fn init`):
 
 ```wysna
 class BankAccount {
     private balance: int
     public owner: str
 
-    fn BankAccount(owner: str, initial_deposit: int) {
+    fn init(owner: str, initial_deposit: int) {
         this.owner = owner
         this.balance = initial_deposit
     }
 
     public fn deposit(amount: int) -> unit {
         if amount > 0 {
-            this.balance = this.balance + amount
+            this.balance += amount
         }
     }
 
@@ -416,7 +466,7 @@ interface Serializable {
 class Config implements Serializable {
     public path: str
 
-    fn Config(path: str) {
+    fn init(path: str) {
         this.path = path
     }
 
@@ -462,13 +512,19 @@ while i < 5 {
 ```
 
 ### 9.3 Bucle Iterativo (`for ... in ...`)
-Itera sobre colecciones (`list`, `set`) o sobre rangos numéricos:
+Itera sobre listas (`list`), diccionarios (`dict[K, V]` como pares `(k, v)`) o sobre rangos numéricos:
 
 ```wysna
 # Iteración sobre listas
 let fruits = ["manzana", "plátano", "naranja"]
 for fruit in fruits {
     print(fruit)
+}
+
+# Iteración directa sobre diccionarios
+let scores = {"ana": 10, "luis": 20}
+for k, v in scores {
+    print(f"{k}: {v}")
 }
 
 # Iteración sobre rangos numéricos (exclusivo e inclusivo)
@@ -537,7 +593,9 @@ let rev = alg.reverse([1, 2, 3])
 | `import "<path>"` | ✅ Soportado al 100% | ✅ Soportado al 100% |
 | `import "<path>" as <alias>` | ✅ Soportado al 100% | ✅ Soportado al 100% |
 | `pub import "<path>"` | ✅ Soportado al 100% | ✅ Soportado al 100% |
-| `from <path> use { sym1, sym2 }` | ✅ Soportado al 100% | ⏳ Previsto v0.7.0 (Límite de perfil actual) |
+| `from <path> use { sym1, sym2 }` | ✅ Soportado al 100% | ✅ Soportado (`native-core-v1`) |
+| `from <path> use sym as alias` | ✅ Soportado al 100% | ✅ Soportado (`native-core-v1`) |
+| `from <path> use sub.sym` | ✅ Soportado al 100% | ✅ Soportado (`native-core-v1`) |
 
 ---
 
@@ -550,7 +608,7 @@ let rev = alg.reverse([1, 2, 3])
 | `print(value)` | `(any) -> unit` | Imprime el valor a la salida estándar (`stdout`) seguido de salto de línea. |
 | `eprint(value)` | `(any) -> unit` | Imprime el valor a la salida de errores (`stderr`) seguido de salto de línea. |
 | `exit(code)` | `(int) -> unit` | Termina el proceso inmediatamente con el código de salida especificado. |
-| `len(collection)` | `(list / dict / str / set) -> int` | Retorna la cantidad de elementos o bytes de la colección o texto. |
+| `len(collection)` | `(str \| list[T] \| dict[K, V] \| tuple[...]) -> int` | Retorna la cantidad de escalares Unicode o elementos de la colección. |
 | `int(value)` | `(any) -> int` | Convierte strings o flotantes a entero de 64 bits. |
 | `float(value)` | `(any) -> float` | Convierte enteros o strings a número de coma flotante IEEE-754. |
 | `str(value)` | `(any) -> str` | Convierte cualquier valor a su representación textual canónica UTF-8. |
@@ -564,14 +622,18 @@ let rev = alg.reverse([1, 2, 3])
 | `weak(object)` | `(class) -> Weak[T]` | Crea una referencia débil que no incrementa el contador fuerte de ARC. |
 | `upgrade(weak_ref)` | `(Weak[T]) -> T?` | Intenta resolver la referencia débil (`none` si el objeto ya fue destruido). |
 
-### 11.2 Métodos de Colecciones y Cadenas
+### 11.2 Métodos de Colecciones y Cadenas (y operador `in`)
+
+Tanto `list[T]`, `dict[K, V]` como `str` implementan `.contains(...) -> bool`, `.is_empty() -> bool` y el operador booleano `x in contenedor`:
 
 ```wysna
 # Listas
 let mut lst = [1, 2]
-lst.append(3)           # [1, 2, 3]
-let last = lst.pop()     # Retorna 3, lista queda [1, 2]
-lst.clear()             # []
+lst.append(3)               # [1, 2, 3]
+let has_two = 2 in lst      # true (equivalente a lst.contains(2))
+let empty_l = lst.is_empty() # false
+let last = lst.pop()        # Retorna 3, lista queda [1, 2]
+lst.clear()                 # []
 
 # Cadenas
 let text = "  Wysna Lang  "
@@ -579,12 +641,15 @@ let clean = text.trim()             # "Wysna Lang"
 let parts = clean.split(" ")        # ["Wysna", "Lang"]
 let upper = clean.to_upper()        # "WYSNA LANG"
 let has = clean.starts_with("Wys")  # true
+let sub = "Lang" in clean           # true (clean.contains("Lang"))
 
 # Diccionarios
 let mut dict_val = {"a": 1, "b": 2}
-let has_key = dict_val.contains("a")  # true
+let has_key = "a" in dict_val         # true (dict_val.contains("a"))
+let empty_d = dict_val.is_empty()     # false
 let keys = dict_val.keys()            # ["a", "b"]
 let values = dict_val.values()        # [1, 2]
+let pairs = dict_val.items()          # [("a", 1), ("b", 2)]
 dict_val.remove("a")
 ```
 
@@ -665,7 +730,7 @@ Wysna provee una suite completa de herramientas para desarrolladores y agentes:
 | Comando | Sintaxis Canónica | Propósito |
 | :--- | :--- | :--- |
 | `check` | `wysna check src/main.wysna [--output-format=json-v1]` | Verificación estática de tipos sin emitir código. |
-| `fix` | `wysna fix --apply src/main.wysna` | Auto-reparación determinista de errores con SHA-256 verificado. |
+| `fix` | `wysna fix --apply src/main.wysna [--include-maybe]` | Auto-reparación determinista de errores con SHA-256 verificado (`--include-maybe` habilita fixes tentativos como `?` en `W2001`). |
 | `run` | `wysna run src/main.wysna [--max-steps=N]` | Ejecución directa mediante el intérprete de referencia. |
 | `build` | `wysna build src/main.wysna -o bin/app` | Compilación nativa a código máquina vía MIR y C99/LLVM. |
 | `fmt` | `wysna fmt src/main.wysna` | Formateo canónico e idempotente del código fuente. |
@@ -687,8 +752,8 @@ Todos los diagnósticos emitidos por el compilador siguen una numeración formal
 | :--- | :--- | :--- |
 | **`W0xxx`** | **Léxico y Sintaxis** | • `W0001`: Token inesperado o carácter no válido.<br>• `W0002`: Literal numérico malformado.<br>• `W0003`: String no terminado.<br>• `W0004`: Secuencia de escape inválida.<br>• `W0005`: Secuencia de escape Unicode inválida.<br>• `W0006`: Sintaxis inválida o delimitador faltante (`}`, `)`). |
 | **`W1xxx`** | **Ámbito y Módulos** | • `W1001`: Identificador, símbolo o tipo desconocido.<br>• `W1002`: Declaración duplicada.<br>• `W1003`: Módulo no encontrado o dependencia circular.<br>• `W1004`: Uso inválido de control de flujo (`break`/`continue`/`return` fuera de contexto). |
-| **`W2xxx`** | **Sistema de Tipos** | • `W2001`: Discrepancia de tipos (*Type mismatch*).<br>• `W2002`: Destino de asignación no válido.<br>• `W2003`: Cantidad de argumentos inválida.<br>• `W2004`: Estructura o enum no exhaustivo.<br>• `W2005`: Restricción genérica violada. |
-| **`W3xxx`** | **Mutabilidad y Acceso** | • `W3001`: Intento de reasignación a variable inmutable (requiere `let mut`).<br>• `W3002`: Miembro privado inaccesible desde el ámbito exterior. |
-| **`W4xxx`** | **Gobernanza y Runtime** | • `W4001`: Excepción de valor no capturada en tiempo de ejecución.<br>• `W4002`: Error de I/O en sistema de archivos.<br>• `W4003`: División por cero.<br>• `W4004`: Presupuesto de cuotas excedido (`--max-steps` o `--max-heap-mb`).<br>• `W4005`: Violación de contrato estático o dinámico (`requires`/`ensures`). |
-| **`W5xxx`** | **Toolchain y C99** | • `W5001`: Compilador C del host no encontrado o comando inválido.<br>• `W5002`: Falla de enlace o compilación C99 nativa. |
+| **`W2xxx`** | **Sistema de Tipos** | • `W2001`: Discrepancia de tipos (*Type mismatch*).<br>• `W2002`: Destino de asignación no válido.<br>• `W2003`: Coincidencia de patrones (`match`) no exhaustiva.<br>• `W2004`: Tipo de retorno inválido o `return` faltante.<br>• `W2005`: Aridad inválida o destino no invocable (`requires` / genéricos).<br>• `W2006`: Propagación o cláusula `else` inválida (`T?` / `T ! E`).<br>• `W2007`: Campo faltante o duplicado al inicializar un `struct`.<br>• `W2010`: Tipo de clave inválido en `dict`. |
+| **`W3xxx`** | **Mutabilidad y Acceso** | • `W3001`: Intento de reasignación a variable inmutable (requiere `let mut`).<br>• `W3002`: Miembro privado inaccesible desde el ámbito exterior.<br>• `W3003`: Herencia o contrato `interface` incumplido.<br>• `W3004`: Lectura/campo sin inicializar en constructor `fn init`. |
+| **`W4xxx`** | **Gobernanza y Runtime** | • `W4001`: División o módulo por cero.<br>• `W4002`: Índice o clave fuera de rango.<br>• `W4003`: Error de ejecución o invariante en runtime.<br>• `W4004`: Presupuesto de cuotas excedido (`--max-steps` o `--max-heap-mb`).<br>• `W4005`: Violación de contrato estático o dinámico (`requires`/`ensures`). |
+| **`W5xxx`** | **Toolchain y Host** | • `W5001`: Compilador C del host no encontrado o comando inválido.<br>• `W5002`: Uso inválido de comando u opciones.<br>• `W5003`: Archivo fuente ilegible.<br>• `W5004`: Error de escritura de artefacto.<br>• `W5005`: Falla de compilador/enlazador nativo o `graph:...` obsoleto.<br>• `W5006`: Violación de política de capacidades. |
 | **`W6xxx`** | **Linter y Advertencias** | • `W6001`: Salto de línea ambiguo con operador unario menos (`let x = a\n -b`).<br>• `W6002`: Detección estática de ciclo de retención ARC en clases. |

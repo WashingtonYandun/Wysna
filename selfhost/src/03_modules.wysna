@@ -248,14 +248,65 @@ fn module_is_confined_under(candidate: str, root: str) -> bool {
     return len(can_file) > len(prefix) and slice(can_file, 0, len(prefix)) == prefix
 }
 
-fn module_load_source(context: ModuleLoader, canonical: str, requested: str, token: Token) -> int {
+struct UseHeader {
+    found: bool,
+    use_pos: int,
+    requested: str,
+}
+
+fn module_strip_wysna_ext(path: str) -> str {
+    let n = len(path)
+    if n >= 6 and slice(path, n - 6, n) == ".wysna" {
+        return slice(path, 0, n - 6)
+    }
+    return path
+}
+
+fn module_parse_from_header(tokens: list[Token], pos_in: int) -> UseHeader {
+    let n = len(tokens)
+    if pos_in >= n or tokens[pos_in].kind != "IDENT" or tokens[pos_in].val != "from" {
+        return UseHeader { found: false, use_pos: pos_in, requested: "" }
+    }
+    let mut cur = pos_in + 1
+    let mut requested = ""
+    if cur < n and tokens[cur].kind == "STR" {
+        requested = tokens[cur].val
+        cur = cur + 1
+    } else {
+        let mut prefix = ""
+        if cur < n and tokens[cur].kind == "DOT" {
+            prefix = "./"
+            cur = cur + 1
+        } elif cur < n and tokens[cur].kind == "DOT_DOT" {
+            prefix = "../"
+            cur = cur + 1
+        }
+        if cur >= n or tokens[cur].kind != "IDENT" {
+            return UseHeader { found: false, use_pos: pos_in, requested: "" }
+        }
+        let mut segs: list[str] = [tokens[cur].val]
+        cur = cur + 1
+        while cur + 1 < n and tokens[cur].kind == "DOT" and tokens[cur + 1].kind == "IDENT" {
+            segs.append(tokens[cur + 1].val)
+            cur = cur + 2
+        }
+        requested = prefix + join_strings(segs, "/")
+    }
+    if cur < n and tokens[cur].kind == "IDENT" and tokens[cur].val == "use" {
+        return UseHeader { found: true, use_pos: cur, requested: requested }
+    }
+    return UseHeader { found: false, use_pos: pos_in, requested: "" }
+}
+
+fn module_try_resolve_source(context: ModuleLoader, canonical: str, requested: str, token: Token) -> str {
     let mut resolved = module_normalize(module_directory(canonical) + requested)
     let standard = len(requested) >= 4 and slice(requested, 0, 4) == "std/"
     if standard {
         if not module_stdlib_name_safe(requested) { report_error_at("W1003", token, "invalid standard module: " + requested) }
         resolved = module_stdlib_path(requested)
-        if not module_file_readable(resolved) { report_error_at("W1003", token, "module not found: " + requested) }
+        if not module_loader_file_readable(context, resolved) { return "" }
         if not module_stdlib_confined(requested, resolved) { report_error_at("W1003", token, "cannot resolve standard module within its root: " + requested) }
+        return resolved
     } elif len(requested) >= 4 and slice(requested, 0, 4) == "pkg/" {
         let rest = slice(requested, 4, len(requested))
         let mut slash = -1
@@ -270,15 +321,17 @@ fn module_load_source(context: ModuleLoader, canonical: str, requested: str, tok
         if dep_root == "" { report_error_at("W1003", token, "unknown project dependency: " + dep_alias) }
         let need_ext = len(dep_mod) < 6 or slice(dep_mod, len(dep_mod) - 6, len(dep_mod)) != ".wysna"
         let cand = module_normalize(dep_root + "/" + (if need_ext { dep_mod + ".wysna" } else { dep_mod }))
-        if not module_loader_file_readable(context, cand) or not module_is_confined_under(cand, dep_root) {
+        if not module_loader_file_readable(context, cand) { return "" }
+        if not module_is_confined_under(cand, dep_root) {
             report_error_at("W1003", token, "module not found: " + requested)
         }
-        resolved = cand
+        return cand
     } else {
         let need_ext = len(requested) < 6 or slice(requested, len(requested) - 6, len(requested)) != ".wysna"
         let proj_src = module_resolve_proj_src_root(context)
         if proj_src != "" {
-            if not module_safe_pkg_rel(requested) {
+            let is_rel_dot = (len(requested) >= 2 and slice(requested, 0, 2) == "./") or (len(requested) >= 3 and slice(requested, 0, 3) == "../")
+            if not is_rel_dot and not module_safe_pkg_rel(requested) {
                 report_error_at("W1003", token, "invalid project import path: " + requested)
             }
             let mut owner = proj_src
@@ -288,31 +341,50 @@ fn module_load_source(context: ModuleLoader, canonical: str, requested: str, tok
                     break
                 }
             }
-            let base = if module_is_confined_under(canonical, owner) { module_directory(canonical) } else { owner + "/" }
+            let base = if is_rel_dot or module_is_confined_under(canonical, owner) { module_directory(canonical) } else { owner + "/" }
             let relative = if need_ext { requested + ".wysna" } else { requested }
             resolved = module_normalize(base + relative)
             if not module_is_confined_under(resolved, owner) {
                 report_error_at("W1003", token, "module not found inside project source root: " + requested)
             }
+            return if module_loader_file_readable(context, resolved) { resolved } else { "" }
         } else {
             let rel_ext = if need_ext { module_normalize(module_directory(canonical) + requested + ".wysna") } else { "" }
             let cwd_ext = if need_ext { module_normalize(requested + ".wysna") } else { "" }
             if module_loader_file_readable(context, resolved) {
-                resolved = resolved
+                return resolved
             } elif rel_ext != "" and module_loader_file_readable(context, rel_ext) {
-                resolved = rel_ext
+                return rel_ext
             } elif module_loader_file_readable(context, module_normalize(requested)) {
-                resolved = module_normalize(requested)
+                return module_normalize(requested)
             } elif cwd_ext != "" and module_loader_file_readable(context, cwd_ext) {
-                resolved = cwd_ext
+                return cwd_ext
             }
         }
     }
+    return ""
+}
+
+fn module_load_from_resolved(context: ModuleLoader, resolved: str, requested: str, token: Token) -> int {
     let loaded = module_read_with_overlays(resolved, context.ov_paths, context.ov_texts)
     if loaded[0] != "1" {
         report_error_at("W1003", token, "module not found: " + requested)
     }
     return module_expand(context, loaded[1], resolved, false)
+}
+
+fn module_load_source(context: ModuleLoader, canonical: str, requested: str, token: Token) -> int {
+    let resolved = module_try_resolve_source(context, canonical, requested, token)
+    if resolved == "" {
+        report_error_at("W1003", token, "module not found: " + requested)
+    }
+    return module_load_from_resolved(context, resolved, requested, token)
+}
+
+fn module_format_exports_hint(context: ModuleLoader, dep: int) -> str {
+    let exps = context.public_names[dep]
+    if len(exps) == 0 { return "" }
+    return " (Available exports: " + join_strings(exps, ", ") + ")"
 }
 
 fn module_expand(context: ModuleLoader, src: str, path: str, entry: bool) -> int {
@@ -344,10 +416,27 @@ fn module_expand(context: ModuleLoader, src: str, path: str, entry: bool) -> int
             elif kind == "FN" or kind == "STRUCT" or kind == "ENUM" or kind == "CLASS" or kind == "INTERFACE" or kind == "LET" {
                 let mut offset = 1
                 if kind == "LET" and tokens[i + 1].kind == "MUT" { offset = 2 }
-                let name = tokens[i + offset].val
-                names.append(name)
-                if exported { exports.append(name) }
-                exported = false
+                if kind == "LET" and tokens[i + offset].kind == "LPAREN" {
+                    let mut pd = 0
+                    let mut p = i + offset
+                    while p < len(tokens) - 1 {
+                        if tokens[p].kind == "LPAREN" { pd = pd + 1 }
+                        elif tokens[p].kind == "RPAREN" {
+                            pd = pd - 1
+                            if pd <= 0 { break }
+                        } elif tokens[p].kind == "IDENT" and tokens[p].val != "_" {
+                            names.append(tokens[p].val)
+                            if exported { exports.append(tokens[p].val) }
+                        }
+                        p = p + 1
+                    }
+                    exported = false
+                } else {
+                    let name = tokens[i + offset].val
+                    names.append(name)
+                    if exported { exports.append(name) }
+                    exported = false
+                }
             }
         }
         if kind == "LBRACE" { depth = depth + 1 }
@@ -361,10 +450,12 @@ fn module_expand(context: ModuleLoader, src: str, path: str, entry: bool) -> int
     let mut use_targets: list[str] = []
     let mut body: list[Token] = []
     let mut position = 0
+    let mut top_depth = 0
     while position < len(tokens) - 1 {
         let token = tokens[position]
+        let from_hdr = if top_depth == 0 { module_parse_from_header(tokens, position) } else { UseHeader { found: false, use_pos: position, requested: "" } }
 
-        if token.kind == "IMPORT" {
+        if top_depth == 0 and token.kind == "IMPORT" {
             let public_import = position > 0 and tokens[position - 1].kind == "PUB"
             if public_import and len(body) > 0 and body[len(body) - 1].kind == "PUB" { body.pop() }
             let requested = tokens[position + 1].val
@@ -380,32 +471,100 @@ fn module_expand(context: ModuleLoader, src: str, path: str, entry: bool) -> int
             context.import_targets.append(dependency)
             context.import_public.append(public_import)
             if public_import { context.public_names[index].append(alias) }
-        } elif token.kind == "IDENT" and token.val == "from" and position + 4 < len(tokens) and tokens[position + 1].kind == "STR" and tokens[position + 2].kind == "IDENT" and tokens[position + 2].val == "use" and tokens[position + 3].kind == "LBRACE" {
+        } elif from_hdr.found {
             let public_use = position > 0 and tokens[position - 1].kind == "PUB"
             if public_use and len(body) > 0 and body[len(body) - 1].kind == "PUB" { body.pop() }
-            let requested = tokens[position + 1].val
-            let dependency = module_load_source(context, canonical, requested, token)
-            position = position + 4
-            while position < len(tokens) - 1 and tokens[position].kind != "RBRACE" {
-                while position < len(tokens) - 1 and (tokens[position].kind == "NEWLINE" or tokens[position].kind == "COMMA") { position = position + 1 }
-                if position >= len(tokens) - 1 or tokens[position].kind == "RBRACE" { break }
-                if tokens[position].kind != "IDENT" { report_error_at("W0006", tokens[position], "expected imported symbol identifier") }
-                let sym_tok = tokens[position]
-                position = position + 1
-                let mut bound = sym_tok.val
-                if position + 1 < len(tokens) and tokens[position].kind == "AS" {
-                    bound = tokens[position + 1].val
-                    position = position + 2
+            let requested = from_hdr.requested
+            let base_req = module_strip_wysna_ext(requested)
+            let mut base_resolved = false
+            let mut base_dep = -1
+            position = from_hdr.use_pos + 1
+            let braced = position < len(tokens) - 1 and tokens[position].kind == "LBRACE"
+            if braced { position = position + 1 }
+            let mut parsed_any = false
+            while position < len(tokens) - 1 {
+                if braced {
+                    while position < len(tokens) - 1 and (tokens[position].kind == "NEWLINE" or tokens[position].kind == "COMMA") { position = position + 1 }
+                    if position >= len(tokens) - 1 or tokens[position].kind == "RBRACE" { break }
+                } elif parsed_any {
+                    break
                 }
-                if not module_contains(context.public_names[dependency], sym_tok.val) { report_error_at("W1001", sym_tok, "member is not exported: " + sym_tok.val) }
-                if module_contains(names, bound) or module_contains(aliases, bound) or module_contains(use_locals, bound) { report_error_at("W1002", sym_tok, "imported symbol conflicts with declaration: " + bound) }
-                use_locals.append(bound)
-                use_targets.append(module_name(dependency, sym_tok.val))
-                if public_use { context.public_names[index].append(bound) }
+                if tokens[position].kind != "IDENT" { report_error_at("W0006", tokens[position], "expected imported symbol identifier") }
+                let first_tok = tokens[position]
+                position = position + 1
+                parsed_any = true
+                if position + 1 < len(tokens) and tokens[position].kind == "DOT" and tokens[position + 1].kind == "IDENT" {
+                    let sym_tok = tokens[position + 1]
+                    position = position + 2
+                    let mut bound = sym_tok.val
+                    if position + 1 < len(tokens) and tokens[position].kind == "AS" {
+                        if tokens[position + 1].kind != "IDENT" { report_error_at("W0006", tokens[position + 1], "expected alias identifier") }
+                        bound = tokens[position + 1].val
+                        position = position + 2
+                    }
+                    let sub_req = base_req + "/" + first_tok.val
+                    let sub_dep = module_load_source(context, canonical, sub_req, first_tok)
+                    if not module_contains(context.public_names[sub_dep], sym_tok.val) {
+                        report_error_at("W1003", sym_tok, "member is not exported: " + sym_tok.val + module_format_exports_hint(context, sub_dep))
+                    }
+                    if module_contains(names, bound) or module_contains(aliases, bound) or module_contains(use_locals, bound) {
+                        report_error_at("W1002", sym_tok, "imported symbol conflicts with declaration: " + bound)
+                    }
+                    use_locals.append(bound)
+                    use_targets.append(module_name(sub_dep, sym_tok.val))
+                    if public_use { context.public_names[index].append(bound) }
+                } else {
+                    let sym_tok = first_tok
+                    let mut bound = sym_tok.val
+                    if position + 1 < len(tokens) and tokens[position].kind == "AS" {
+                        if tokens[position + 1].kind != "IDENT" { report_error_at("W0006", tokens[position + 1], "expected alias identifier") }
+                        bound = tokens[position + 1].val
+                        position = position + 2
+                    }
+                    if not base_resolved {
+                        base_resolved = true
+                        let base_path = module_try_resolve_source(context, canonical, requested, token)
+                        if base_path != "" {
+                            base_dep = module_load_from_resolved(context, base_path, requested, token)
+                        }
+                    }
+                    if base_dep >= 0 and module_contains(context.public_names[base_dep], sym_tok.val) {
+                        if module_contains(names, bound) or module_contains(aliases, bound) or module_contains(use_locals, bound) {
+                            report_error_at("W1002", sym_tok, "imported symbol conflicts with declaration: " + bound)
+                        }
+                        use_locals.append(bound)
+                        use_targets.append(module_name(base_dep, sym_tok.val))
+                        if public_use { context.public_names[index].append(bound) }
+                    } else {
+                        let sub_req = base_req + "/" + sym_tok.val
+                        let sub_path = module_try_resolve_source(context, canonical, sub_req, sym_tok)
+                        if sub_path != "" {
+                            let sub_dep = module_load_from_resolved(context, sub_path, sub_req, sym_tok)
+                            if module_contains(aliases, bound) or module_contains(names, bound) or module_contains(use_locals, bound) {
+                                report_error_at("W1002", sym_tok, "duplicate module alias: " + bound)
+                            }
+                            aliases.append(bound)
+                            dependencies.append(sub_dep)
+                            context.import_owners.append(index)
+                            context.import_aliases.append(bound)
+                            context.import_targets.append(sub_dep)
+                            context.import_public.append(public_use)
+                            if public_use { context.public_names[index].append(bound) }
+                        } elif base_dep >= 0 {
+                            report_error_at("W1003", sym_tok, "member is not exported: " + sym_tok.val + module_format_exports_hint(context, base_dep))
+                        } else {
+                            report_error_at("W1003", token, "module not found: " + requested)
+                        }
+                    }
+                }
             }
-            if position >= len(tokens) - 1 or tokens[position].kind != "RBRACE" { report_error_at("W0006", token, "expected '}' in from-use declaration") }
-            position = position + 1
+            if braced {
+                if position >= len(tokens) - 1 or tokens[position].kind != "RBRACE" { report_error_at("W0006", token, "expected '}' in from-use declaration") }
+                position = position + 1
+            }
         } else {
+            if token.kind == "LBRACE" { top_depth = top_depth + 1 }
+            elif token.kind == "RBRACE" and top_depth > 0 { top_depth = top_depth - 1 }
             body.append(token)
             position = position + 1
         }
