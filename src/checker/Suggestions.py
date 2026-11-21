@@ -102,7 +102,14 @@ def _annotate_mismatch(error, expected: str, found: str):
     elif found == f"{expected}?" or found.startswith(f"{expected} ! "):
         error.with_data(unwrap_hint="?")
         if not error.help:
-            error.help = "Use '?' to propagate or 'else' to handle the optional/error value."
+            if found == f"{expected}?":
+                requirement = "an optional return type"
+            else:
+                requirement = f"a result return type that accepts {found[len(expected) + 3:]}"
+            error.help = (
+                f"'?' can return early and requires {requirement} on the enclosing function. "
+                "Use 'else' for a local fallback."
+            )
     return error
 
 

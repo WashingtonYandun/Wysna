@@ -143,7 +143,9 @@ fn diag_primary_span_json(file: str, line: int, col: int, src: str) -> str {
 
 fn diag_record_json(code: str, stage: str, severity: str, msg: str, file: str, line: int, col: int, src: str) -> str {
     let span_json = diag_primary_span_json(file, line, col, src)
-    return "{\"code\":" + diag_json_quote(code) + ",\"severity\":" + diag_json_quote(severity) + ",\"stage\":" + diag_json_quote(stage) + ",\"message\":" + diag_json_quote(msg) + ",\"primary_span\":" + span_json + ",\"related\":[],\"data\":{},\"fixes\":[]}"
+    let data_json = if code == "W2001" { fix_mismatch_data_json(msg) } else { "{}" }
+    let fixes_json = if span_json != "null" { fix_diagnostic_edits_json(code, msg, file, src, line, col) } else { "[]" }
+    return "{\"code\":" + diag_json_quote(code) + ",\"severity\":" + diag_json_quote(severity) + ",\"stage\":" + diag_json_quote(stage) + ",\"message\":" + diag_json_quote(msg) + ",\"primary_span\":" + span_json + ",\"related\":[],\"data\":" + data_json + ",\"fixes\":" + fixes_json + "}"
 }
 
 fn diag_tool_envelope_json(command: str, status: str, exit_code: int, diagnostics_json: str, result_key: str, result_json: str, artifacts_json: str) -> str {

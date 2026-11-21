@@ -171,7 +171,9 @@ fn diag_primary_span_json(file: str, line: int, col: int, src: str) -> str {
 
 fn diag_record_json(code: str, stage: str, severity: str, msg: str, file: str, line: int, col: int, src: str) -> str {
     let span_json = diag_primary_span_json(file, line, col, src)
-    return "{\"code\":" + diag_json_quote(code) + ",\"severity\":" + diag_json_quote(severity) + ",\"stage\":" + diag_json_quote(stage) + ",\"message\":" + diag_json_quote(msg) + ",\"primary_span\":" + span_json + ",\"related\":[],\"data\":{},\"fixes\":[]}"
+    let data_json = if code == "W2001" { fix_mismatch_data_json(msg) } else { "{}" }
+    let fixes_json = if span_json != "null" { fix_diagnostic_edits_json(code, msg, file, src, line, col) } else { "[]" }
+    return "{\"code\":" + diag_json_quote(code) + ",\"severity\":" + diag_json_quote(severity) + ",\"stage\":" + diag_json_quote(stage) + ",\"message\":" + diag_json_quote(msg) + ",\"primary_span\":" + span_json + ",\"related\":[],\"data\":" + data_json + ",\"fixes\":" + fixes_json + "}"
 }
 
 fn diag_tool_envelope_json(command: str, status: str, exit_code: int, diagnostics_json: str, result_key: str, result_json: str, artifacts_json: str) -> str {
@@ -1208,7 +1210,11 @@ fn module_read_text_or_overlay(path: str) -> list[str] {
 }
 
 # An import graph belongs to one source expansion.
+struct ModuleNameSite { source: Token, expanded: Token, import_site: bool, rewrite: bool }
+
 class ModuleLoader {
+    trace_names: bool
+    name_sites: list[ModuleNameSite]
     paths: list[str]
     states: list[int]
     public_names: list[list[str]]
@@ -1224,6 +1230,9 @@ class ModuleLoader {
     dep_aliases: list[str]
     dep_roots: list[str]
     fn init() {
+        this.trace_names = false
+        let initial_sites: list[ModuleNameSite] = []
+        this.name_sites = initial_sites
         let initial_paths: list[str] = []
         this.paths = initial_paths
         let initial_states: list[int] = []
@@ -1596,6 +1605,7 @@ fn module_expand(context: ModuleLoader, src: str, path: str, entry: bool) -> int
     let mut dependencies: list[int] = []
     let mut use_locals: list[str] = []
     let mut use_targets: list[str] = []
+    let mut use_aliased: list[bool] = []
     let mut body: list[Token] = []
     let mut position = 0
     let mut top_depth = 0
@@ -1645,6 +1655,7 @@ fn module_expand(context: ModuleLoader, src: str, path: str, entry: bool) -> int
                     let sym_tok = tokens[position + 1]
                     position = position + 2
                     let mut bound = sym_tok.val
+                    let aliased = position + 1 < len(tokens) and tokens[position].kind == "AS"
                     if position + 1 < len(tokens) and tokens[position].kind == "AS" {
                         if tokens[position + 1].kind != "IDENT" { report_error_at("W0006", tokens[position + 1], "expected alias identifier") }
                         bound = tokens[position + 1].val
@@ -1659,11 +1670,15 @@ fn module_expand(context: ModuleLoader, src: str, path: str, entry: bool) -> int
                         report_error_at("W1002", sym_tok, "imported symbol conflicts with declaration: " + bound)
                     }
                     use_locals.append(bound)
-                    use_targets.append(module_name(sub_dep, sym_tok.val))
+                    let target = module_name(sub_dep, sym_tok.val)
+                    use_targets.append(target)
+                    use_aliased.append(aliased)
+                    module_trace_name(context, sym_tok, sym_tok, target, true, true)
                     if public_use { context.public_names[index].append(bound) }
                 } else {
                     let sym_tok = first_tok
                     let mut bound = sym_tok.val
+                    let aliased = position + 1 < len(tokens) and tokens[position].kind == "AS"
                     if position + 1 < len(tokens) and tokens[position].kind == "AS" {
                         if tokens[position + 1].kind != "IDENT" { report_error_at("W0006", tokens[position + 1], "expected alias identifier") }
                         bound = tokens[position + 1].val
@@ -1681,7 +1696,10 @@ fn module_expand(context: ModuleLoader, src: str, path: str, entry: bool) -> int
                             report_error_at("W1002", sym_tok, "imported symbol conflicts with declaration: " + bound)
                         }
                         use_locals.append(bound)
-                        use_targets.append(module_name(base_dep, sym_tok.val))
+                        let target = module_name(base_dep, sym_tok.val)
+                        use_targets.append(target)
+                        use_aliased.append(aliased)
+                        module_trace_name(context, sym_tok, sym_tok, target, true, true)
                         if public_use { context.public_names[index].append(bound) }
                     } else {
                         let sub_req = base_req + "/" + sym_tok.val
@@ -1736,11 +1754,15 @@ fn module_expand(context: ModuleLoader, src: str, path: str, entry: bool) -> int
                     if nested_target >= 0 and position + 4 < len(body) and body[position + 3].kind == "DOT" {
                         let nested_member = body[position + 4]
                         if not module_contains(context.public_names[nested_target], nested_member.val) { report_error_at("W1001", nested_member, "member is not exported: " + nested_member.val) }
-                        context.output.append(Token { kind: "IDENT", val: module_name(nested_target, nested_member.val), line: token.line, col: token.col, file: token.file })
+                        let target = module_name(nested_target, nested_member.val)
+                        module_trace_name(context, nested_member, token, target, false, true)
+                        context.output.append(Token { kind: "IDENT", val: target, line: token.line, col: token.col, file: token.file })
                         position = position + 5
                     } else {
                         if not module_contains(context.public_names[dependency], member.val) { report_error_at("W1001", member, "member is not exported: " + member.val) }
-                        context.output.append(Token { kind: "IDENT", val: module_name(dependency, member.val), line: token.line, col: token.col, file: token.file })
+                        let target = module_name(dependency, member.val)
+                        module_trace_name(context, member, token, target, false, true)
+                        context.output.append(Token { kind: "IDENT", val: target, line: token.line, col: token.col, file: token.file })
                         position = position + 3
                     }
                     consumed = true
@@ -1757,6 +1779,7 @@ fn module_expand(context: ModuleLoader, src: str, path: str, entry: bool) -> int
                 if not field {
                     for u in 0..len(use_locals) {
                         if token.val == use_locals[u] {
+                            module_trace_name(context, token, token, use_targets[u], false, not use_aliased[u])
                             context.output.append(Token { kind: token.kind, val: use_targets[u], line: token.line, col: token.col, file: token.file })
                             consumed = true
                             position = position + 1
@@ -1779,6 +1802,12 @@ fn module_expand(context: ModuleLoader, src: str, path: str, entry: bool) -> int
     }
     context.states[index] = 2
     return index
+}
+
+fn module_trace_name(context: ModuleLoader, source: Token, anchor: Token, target: str, import_site: bool, rewrite: bool) -> unit {
+    if not context.trace_names { return }
+    let expanded = Token { kind: "IDENT", val: target, line: anchor.line, col: anchor.col, file: anchor.file }
+    context.name_sites.append(ModuleNameSite { source: source, expanded: expanded, import_site: import_site, rewrite: rewrite })
 }
 fn module_tokens_with_overlays(src: str, path: str, ov_paths: list[str], ov_texts: list[str]) -> list[Token] {
     let context = new ModuleLoader()
@@ -3616,7 +3645,8 @@ fn sem_prefix(context: SemanticContext, allow_struct: bool, statement: bool) -> 
         }
         let expected_tuple = context.expected_type
         let is_tuple_ctx = expected_tuple >= 0 and sem_kind(context, expected_tuple) == "tuple" and sem_group_is_tuple(context)
-        context.statement_context = statement and not sem_group_is_tuple(context)
+        context.statement_context = statement and not sem_group_is_tuple(context) and
+            not sem_delimited_expression_suffix(context.tokens, context.pos - 1, "LPAREN", "RPAREN")
         if is_tuple_ctx and len(context.types[expected_tuple].args) > 0 {
             context.expected_type = context.types[expected_tuple].args[0]
         }
@@ -4120,6 +4150,9 @@ fn sem_expression(context: SemanticContext, minimum: int, allow_struct: bool) ->
             if context.expected_type >= 0 and sem_kind(context, context.expected_type) == "result" and (result_kind == "ok" or result_kind == "err") and sem_assignable(context, actual, context.expected_type) {
                 left = sem_value(context.expected_type)
             } else { left = sem_value(actual) }
+            if sem_kind(context, callee.type_id) == "builtin" and context.types[callee.type_id].name == "exit" {
+                left.terminates = true
+            }
             if context.capture_nodes {
                 let target = context.nodes[callee.node]
                 let mut nodes = argument_nodes
@@ -4689,7 +4722,7 @@ fn sem_pattern_syntax(context: SemanticContext, subject: int, source: Token) -> 
     if owner != "" { report_error_at("W2001", source, "qualified enum pattern required") }
     return sem_binding_pattern(context, name, subject)
 }
-fn sem_match_expression(context: SemanticContext, statement: bool) -> SemValue {
+fn sem_match_expression(context: SemanticContext, statement_context: bool) -> SemValue {
     let source = sem_expect(context, "MATCH")
     # Preserve syntax-error priority before resolving an atomic subject's name.
     # A bare pattern followed by a block always lacks its required arrow.
@@ -4704,10 +4737,11 @@ fn sem_match_expression(context: SemanticContext, statement: bool) -> SemValue {
         }
     }
     let outer_expected = context.expected_type
-    let stmt_result_ctx = if statement and outer_expected >= 0 and sem_kind(context, outer_expected) == "result" and sem_unit_return(context, outer_expected) { outer_expected } else { -1 }
     context.expected_type = -1
     let subject_value = sem_expression(context, 0, false)
     let subject = subject_value.type_id
+    let statement = statement_context and not sem_delimited_expression_suffix(context.tokens, context.pos, "LBRACE", "RBRACE")
+    let stmt_result_ctx = if statement and outer_expected >= 0 and sem_kind(context, outer_expected) == "result" and sem_unit_return(context, outer_expected) { outer_expected } else { -1 }
     let mut arms: list[int] = []
     sem_expect(context, "LBRACE")
     let mut covered: list[list[int]] = []
@@ -4747,10 +4781,12 @@ fn sem_match_expression(context: SemanticContext, statement: bool) -> SemValue {
         if not branch.terminates {
             if live_branches == 0 { initialized = context.initialized } else { initialized = sem_intersect(initialized, context.initialized) }
             live_branches = live_branches + 1
-            if common >= 0 { sem_require_at(context, branch.type_id, common, "W2001", branch_source) }
-            else {
-                common = branch.type_id
-                if not statement and arm_expected < 0 and common != context.unit_type { arm_expected = common }
+            if not statement {
+                if common >= 0 { sem_require_at(context, branch.type_id, common, "W2001", branch_source) }
+                else {
+                    common = branch.type_id
+                    if arm_expected < 0 and common != context.unit_type { arm_expected = common }
+                }
             }
         }
         all_return = all_return and branch.terminates
@@ -4988,7 +5024,8 @@ fn sem_block(context: SemanticContext, statement: bool) -> SemFlow {
             terminates = true
             tail = context.unit_type
         } else {
-            context.statement_context = statement or not sem_tail_expression(context)
+            let result_match = statement_source.kind == "MATCH" and stmt_keep_expected >= 0
+            context.statement_context = (statement and not result_match) or not sem_tail_expression(context)
             context.expected_type = if context.statement_context { stmt_keep_expected } else { outer_expected }
             let expression = sem_expression(context, 0, true)
             tail = expression.type_id
@@ -5462,14 +5499,42 @@ fn sem_lambda(context: SemanticContext) -> SemValue {
     return sem_value(signature)
 }
 
+fn sem_expression_suffix(tokens: list[Token], start: int) -> bool {
+    if start >= len(tokens) { return false }
+    let mut cursor = start
+    while cursor < len(tokens) and tokens[cursor].kind == "NEWLINE" { cursor += 1 }
+    if cursor >= len(tokens) { return false }
+    let kind = tokens[cursor].kind
+    if kind == "DOT" { return true }
+    if kind == "ELSE" and cursor + 1 < len(tokens) {
+        return tokens[cursor + 1].kind == "LBRACE" or
+            (tokens[cursor + 1].kind == "IDENT" and cursor + 2 < len(tokens) and tokens[cursor + 2].kind == "LBRACE")
+    }
+    return cursor == start and
+        (op_precedence(kind) > 0 or kind == "LPAREN" or kind == "LBRACKET" or kind == "QUESTION")
+}
+
+fn sem_delimited_expression_suffix(tokens: list[Token], start: int, open_kind: str, close_kind: str) -> bool {
+    if start < 0 or start >= len(tokens) or tokens[start].kind != open_kind { return false }
+    let mut depth = 0
+    for i in start..len(tokens) {
+        if tokens[i].kind == open_kind { depth += 1 }
+        elif tokens[i].kind == close_kind {
+            depth -= 1
+            if depth == 0 { return sem_expression_suffix(tokens, i + 1) }
+        }
+    }
+    return false
+}
+
 fn sem_tail_expression(context: SemanticContext) -> bool {
     let mut position = context.pos
     let mut depth = 0
     while position < len(context.tokens) {
         let kind = context.tokens[position].kind
-        if kind == "LBRACE" { depth = depth + 1 }
-        elif kind == "RBRACE" {
-            if depth == 0 { return true }
+        if kind == "LBRACE" or kind == "LPAREN" or kind == "LBRACKET" { depth = depth + 1 }
+        elif kind == "RBRACE" or kind == "RPAREN" or kind == "RBRACKET" {
+            if depth == 0 { return kind == "RBRACE" }
             depth = depth - 1
             if depth == 0 {
                 let mut next_pos = position + 1
@@ -5477,7 +5542,8 @@ fn sem_tail_expression(context: SemanticContext) -> bool {
                     next_pos = next_pos + 1
                 }
                 let next = if next_pos < len(context.tokens) { context.tokens[next_pos].kind } else { "EOF" }
-                if next != "ELSE" and next != "ELIF" { return next == "RBRACE" }
+                if next != "ELSE" and next != "ELIF" and next != "LBRACE" and
+                   not sem_expression_suffix(context.tokens, position + 1) { return next == "RBRACE" }
             }
         }
         if depth == 0 and (kind == "LET" or kind == "RETURN") and position > context.pos { return false }
@@ -7314,7 +7380,12 @@ fn mir_match(context: MirBuilder, node: CheckedNode) -> int {
         }
         let value = mir_expression(context, arm.body)
         if context.current >= 0 {
-            mir_store(context, result, mir_coerce(context, value, returned, false, arm.source), arm.source)
+            let outgoing = if returned == 1 {
+                mir_constant(context, mir_literal_unit(), returned, arm.source)
+            } else {
+                mir_coerce(context, value, returned, false, arm.source)
+            }
+            mir_store(context, result, outgoing, arm.source)
             mir_cleanup(context, len(context.scopes) - 1, arm.source)
             mir_jump(context, join, arm.source)
             live = true
@@ -7503,9 +7574,15 @@ fn mir_call(context: MirBuilder, node: CheckedNode) -> int {
         if len(function.type_params) > 0 { mir_unsupported(node.source, "generic calls") }
         return mir_op(context, "call", returned, arguments, mir_abi_name(function.name), mir_literal_unit(), node.source)
     }
+    if node.text == "exit" {
+        let result = mir_op(context, "runtime", returned, arguments, "wysna_builtin_exit", mir_literal_unit(), node.source)
+        let targets: list[int] = []
+        mir_terminate(context, "unreachable", targets, -1, node.source)
+        return result
+    }
     if node.text == "weak" { return mir_op(context, "runtime", returned, arguments, "wysna_builtin_weak_owned", mir_literal_unit(), node.source) }
     if node.text == "contract_assert" or node.text == "__wysna_contract_assert" { return mir_op(context, "runtime", returned, arguments, "wysna_builtin_contract_assert_at", mir_literal_unit(), node.source) }
-    let builtins: list[str] = ["upgrade", "print", "eprint", "int", "float", "str", "len", "ord", "chr", "slice", "bytes", "args", "env", "unix_time", "exit", "join_strings", "enumerate", "dict_items", "read_file", "write_file"]
+    let builtins: list[str] = ["upgrade", "print", "eprint", "int", "float", "str", "len", "ord", "chr", "slice", "bytes", "args", "env", "unix_time", "join_strings", "enumerate", "dict_items", "read_file", "write_file"]
     for name in builtins { if node.text == name { return mir_op(context, "runtime", returned, arguments, "wysna_builtin_" + name, mir_literal_unit(), node.source) } }
     mir_unsupported(node.source, "builtin call " + node.text)
     return -1
@@ -8886,7 +8963,7 @@ fn mir_emit_c(module: MirModule) -> str {
     let mut returned = 1
     for function in module.functions { if function.name == "wysna_program" { returned = function.return_type } }
     parts.append("int main(int argc, char** argv) {\n    wysna_init_args(argc, argv);\n    WVal result = " + mir_c_box("wysna_program()", returned) + ";\n")
-    parts.append("    int status = 0;\n    if (wysna_is_err(result)) { wysna_report_entrypoint_error(wysna_as_box(result)->val); status = 1; }\n    wysna_release(result);\n")
+    parts.append("    int status = wysna_entry_status(result);\n    wysna_release(result);\n")
     for global in module.globals { parts.append("    wysna_release(" + global.name + ");\n") }
     parts.append("    wysna_runtime_cleanup();\n    return status;\n}\n")
     return join_strings(parts, "")
@@ -8917,6 +8994,7 @@ class ToolGraphNode {
     end_char: int
     visibility: str
     is_async: bool
+    indirect_call: bool
     signature: str
     owner: str
     super_class: str
@@ -8949,6 +9027,7 @@ class ToolGraphNode {
         this.end_char = end_char
         this.visibility = visibility
         this.is_async = is_async
+        this.indirect_call = false
         this.signature = signature
         this.owner = owner
         this.super_class = ""
@@ -9517,6 +9596,28 @@ fn tool_walk_subtree(program: CheckedProgram, graph: ToolGraph, caller_idx: int,
     let caller_id = graph.nodes[caller_idx].id
     let line = node.source.line
     let file = node.source.file
+    if node.kind == "indirect_call" or node.kind == "virtual_call" {
+        graph.nodes[caller_idx].indirect_call = true
+    }
+    if node.kind == "callee" and node.target >= 0 {
+        let name = program.signatures[node.target].name
+        let short_name = tool_short_name(name)
+        let mut target_idx = -1
+        for function in program.functions {
+            if function.name != name { continue }
+            for i in 0..len(graph.nodes) {
+                if graph.nodes[i].kind == "fn" and graph.nodes[i].name == short_name and
+                     graph.nodes[i].file == function.source.file {
+                    target_idx = i
+                    break
+                }
+            }
+            break
+        }
+        if target_idx >= 0 {
+            tool_add_edge(graph, caller_id, graph.nodes[target_idx].id, "references_function", name, file, line)
+        }
+    }
     if node.kind == "new" or node.kind == "struct" or node.kind == "struct_call" {
         let t = program.types[node.type_id]
         let target_id = tool_resolve_nominal_id(graph, t.name)
@@ -9675,7 +9776,7 @@ fn tool_build_checked_graph(src: str, canonical: str, expanded: list[Token], pro
     let mut payload_parts: list[str] = ["src:", diag_sha256_hex(src), "|nodes:"]
     let mut node_sigs: list[str] = []
     for n in graph.nodes {
-        node_sigs.append(n.id + "@" + str(n.start_byte) + ":" + str(n.end_byte) + ":" + n.signature + ":" + tool_str_list_json(n.implements_list) + ":" + n.super_class)
+        node_sigs.append(n.id + "@" + str(n.start_byte) + ":" + str(n.end_byte) + ":" + n.signature + ":" + tool_str_list_json(n.implements_list) + ":" + n.super_class + (if n.indirect_call { ":indirect" } else { "" }))
     }
     payload_parts.append(join_strings(tool_sort_strings(node_sigs), ";"))
     payload_parts.append("|edges:")
@@ -9698,6 +9799,7 @@ fn tool_edge_json(e: ToolGraphEdge) -> str {
 
 fn tool_node_json(n: ToolGraphNode) -> str {
     let mut p: list[str] = ["{\"id\":" + diag_json_quote(n.id)]
+    if n.indirect_call { p.append(",\"indirect_call\":true") }
     p.append(",\"name\":" + diag_json_quote(n.name))
     p.append(",\"qualified_name\":" + diag_json_quote(n.qualified_name))
     p.append(",\"kind\":" + diag_json_quote(n.kind))
@@ -11141,6 +11243,8 @@ class LspDocument {
     has_graph: bool
     clean_ok: bool
     graph: ToolGraph
+    diagnostics: list[LspJson]
+    function_sites: list[LspRenameSite]
 
     fn init(uri: str, path: str, version: int, text: str, tmp_path: str) {
         this.uri = uri
@@ -11151,6 +11255,10 @@ class LspDocument {
         this.has_graph = false
         this.clean_ok = false
         this.graph = new ToolGraph(path, text)
+        let diagnostics: list[LspJson] = []
+        this.diagnostics = diagnostics
+        let sites: list[LspRenameSite] = []
+        this.function_sites = sites
     }
 }
 
@@ -11162,6 +11270,7 @@ class LspServerState {
     diag_tmp_path: str
     self_exe: str
     stdlib_root: str
+    workspace_roots: list[str]
 
     fn init() {
         let d0: list[LspDocument] = []
@@ -11172,6 +11281,8 @@ class LspServerState {
         this.diag_tmp_path = lsp_tmp_dir() + "/wysna_lsp_diag_" + str(unix_time()) + "_1.json"
         this.self_exe = lsp_self_exe_path()
         this.stdlib_root = lsp_stdlib_root_arg()
+        let roots: list[str] = []
+        this.workspace_roots = roots
     }
 }
 
@@ -11217,26 +11328,21 @@ fn lsp_publish_empty_diags(uri: str) -> unit {
     lsp_send_message("{\"jsonrpc\":\"2.0\",\"method\":\"textDocument/publishDiagnostics\",\"params\":{\"uri\":" + diag_json_quote(uri) + ",\"diagnostics\":[]}}")
 }
 
-fn lsp_check_and_publish(state: LspServerState, doc_idx: int) -> unit {
-    if doc_idx < 0 or doc_idx >= len(state.docs) { return }
-    let doc = state.docs[doc_idx]
-    for d in state.docs {
-        write_file(d.tmp_path, d.text) else _err { }
-    }
+fn lsp_check_snapshot(state: LspServerState, path: str, paths: list[str], snapshots: list[str]) -> str {
     let mut argv: list[str] = []
     if state.stdlib_root != "" {
         argv.append("--stdlib-root")
         argv.append(state.stdlib_root)
     }
     argv.append("check")
-    argv.append(doc.path)
+    argv.append(path)
     argv.append("--output-format=json-v1")
     argv.append("--diag-out")
     argv.append(state.diag_tmp_path)
-    for d in state.docs {
+    for index in 0..len(paths) {
         argv.append("--overlay")
-        argv.append(d.path)
-        argv.append(d.tmp_path)
+        argv.append(paths[index])
+        argv.append(snapshots[index])
     }
     let exe_buf = lsp_buf_from_str(state.self_exe)
     let args_buf = lsp_pack_argv_buf(argv)
@@ -11246,16 +11352,31 @@ fn lsp_check_and_publish(state: LspServerState, doc_idx: int) -> unit {
 
     let diag_raw = read_file(state.diag_tmp_path) else err { "" }
     lsp_remove_file(state.diag_tmp_path)
+    if rc != 0 and lsp_json_str(lsp_parse_json(diag_raw), "status", "") == "ok" { return "" }
+    return diag_raw
+}
+
+fn lsp_check_and_publish(state: LspServerState, doc_idx: int) -> unit {
+    if doc_idx < 0 or doc_idx >= len(state.docs) { return }
+    let doc = state.docs[doc_idx]
+    let mut snapshots: list[str] = []
+    for d in state.docs {
+        write_file(d.tmp_path, d.text) else _err { return }
+        snapshots.append(d.tmp_path)
+    }
+    let diag_raw = lsp_check_snapshot(state, doc.path, lsp_overlay_paths(state), snapshots)
     let mut diag_items: list[str] = []
+    let mut diagnostics: list[LspJson] = []
     let mut parsed_ok = false
     if diag_raw != "" {
         let parsed = lsp_parse_json(diag_raw)
-        if lsp_json_str(parsed, "status", "") == "ok" and rc == 0 {
+        if lsp_json_str(parsed, "status", "") == "ok" {
             parsed_ok = true
         }
         let d_arr = lsp_json_get(parsed, "diagnostics")
         if d_arr.kind == "array" {
             for item in d_arr.items {
+                diagnostics.append(item)
                 let code = lsp_json_str(item, "code", "W0001")
                 let sev_str = lsp_json_str(item, "severity", "error")
                 let sev = if sev_str == "warning" { 2 } elif sev_str == "info" { 3 } else { 1 }
@@ -11277,10 +11398,16 @@ fn lsp_check_and_publish(state: LspServerState, doc_idx: int) -> unit {
             }
         }
     }
+    doc.diagnostics = diagnostics
     lsp_send_message("{\"jsonrpc\":\"2.0\",\"method\":\"textDocument/publishDiagnostics\",\"params\":{\"uri\":" + diag_json_quote(doc.uri) + ",\"diagnostics\":[" + join_strings(diag_items, ",") + "]}}")
 
     if parsed_ok {
-        doc.graph = tool_build_graph_with_overlays(doc.text, doc.path, lsp_overlay_paths(state), lsp_overlay_texts(state))
+        let paths = lsp_overlay_paths(state)
+        let texts = lsp_overlay_texts(state)
+        let loader = lsp_load_source(doc.text, doc.path, paths, texts)
+        let program = check_program(loader.output, doc.path, true)
+        doc.graph = tool_build_checked_graph(doc.text, doc.path, loader.output, program, paths, texts, false)
+        doc.function_sites = lsp_collect_function_sites(loader, program)
         doc.has_graph = true
         doc.clean_ok = true
     } else {
@@ -11603,6 +11730,382 @@ fn lsp_cleanup(state: LspServerState) -> unit {
     for d in state.docs { lsp_remove_file(d.tmp_path) }
 }
 
+fn lsp_range_offset(src: str, range_: LspJson, endpoint: str) -> int {
+    let pos = lsp_json_get(range_, endpoint)
+    return lsp_utf16_offset(src, lsp_json_int(pos, "line", 0), lsp_json_int(pos, "character", 0))
+}
+
+fn lsp_text_document_edit(uri: str, version: str, edits: list[str]) -> str {
+    return "{\"textDocument\":{\"uri\":" + diag_json_quote(uri) + ",\"version\":" + version +
+        "},\"edits\":[" + join_strings(edits, ",") + "]}"
+}
+
+fn lsp_edit_json(src: str, start: int, end: int, replacement: str) -> str {
+    return "{\"range\":" + lsp_range_json_offsets(src, start, end) + ",\"newText\":" + diag_json_quote(replacement) + "}"
+}
+
+fn lsp_handle_code_actions(doc: LspDocument, params: LspJson) -> str {
+    let only = lsp_json_get(lsp_json_get(params, "context"), "only")
+    if only.kind == "array" and len(only.items) > 0 {
+        let mut allowed = false
+        for item in only.items { if item.str_val == "quickfix" or item.str_val == "" { allowed = true } }
+        if not allowed { return "[]" }
+    }
+    if len(doc.diagnostics) == 0 { return "[]" }
+    let range_ = lsp_json_get(params, "range")
+    let requested_start = lsp_range_offset(doc.text, range_, "start")
+    let requested_end = lsp_range_offset(doc.text, range_, "end")
+    let sha = diag_sha256_hex(doc.text)
+    let length = diag_utf8_byte_at(doc.text, len(doc.text))
+    let mut actions: list[str] = []
+    for diagnostic in doc.diagnostics {
+        let span = lsp_json_get(diagnostic, "primary_span")
+        if lsp_json_str(span, "source_id", "") != doc.path or lsp_json_str(span, "source_sha256", "") != sha { continue }
+        let start = lsp_char_offset_from_utf8_byte(doc.text, lsp_json_int(span, "start_byte", 0))
+        let end = lsp_char_offset_from_utf8_byte(doc.text, lsp_json_int(span, "end_byte", 0))
+        if range_.kind == "object" and (end < requested_start or start > requested_end) { continue }
+        let code = lsp_json_str(diagnostic, "code", "")
+        for fix in lsp_json_get(diagnostic, "fixes").items {
+            let proposed = lsp_json_get(fix, "edits").items
+            let mut edits: list[str] = []
+            for edit in proposed {
+                let start_byte = lsp_json_int(edit, "start_byte", -1)
+                let end_byte = lsp_json_int(edit, "end_byte", -1)
+                if start_byte < 0 or end_byte < start_byte or end_byte > length or
+                   lsp_json_str(edit, "source_id", "") != doc.path or lsp_json_str(edit, "source_sha256", "") != sha { break }
+                let start_char = lsp_char_offset_from_utf8_byte(doc.text, start_byte)
+                let end_char = lsp_char_offset_from_utf8_byte(doc.text, end_byte)
+                if diag_utf8_byte_at(doc.text, start_char) != start_byte or diag_utf8_byte_at(doc.text, end_char) != end_byte { break }
+                edits.append(lsp_edit_json(doc.text, start_char, end_char, lsp_json_str(edit, "replacement", "")))
+            }
+            if len(edits) == 0 or len(edits) != len(proposed) { continue }
+            let title = "[" + code + "] " + lsp_json_str(fix, "description", "Repair diagnostic")
+            let preferred = if lsp_json_str(fix, "applicability", "") == "machine" { "true" } else { "false" }
+            actions.append("{\"title\":" + diag_json_quote(title) + ",\"kind\":\"quickfix\",\"isPreferred\":" + preferred +
+                ",\"edit\":{\"documentChanges\":[" + lsp_text_document_edit(doc.uri, str(doc.version), edits) + "]}}")
+        }
+    }
+    return "[" + join_strings(actions, ",") + "]"
+}
+
+# Inspect incomplete calls without asking the reporting lexer to accept invalid editor text.
+fn lsp_call_prefix(src: str, limit: int) -> list[int] {
+    let mut delimiters: list[str] = []
+    let mut opens: list[int] = []
+    let mut commas: list[int] = []
+    let mut i = 0
+    while i < limit {
+        let ch = src[i]
+        if ch == "#" {
+            while i < limit and src[i] != "\n" { i += 1 }
+        } elif ch == "\"" {
+            let quote_width = if i + 2 < limit and src[i + 1] == "\"" and src[i + 2] == "\"" { 3 } else { 1 }
+            i += quote_width
+            while i < limit {
+                if src[i] == "\\" { i += 2 }
+                elif src[i] == "\"" and (quote_width == 1 or
+                     (i + 2 < limit and src[i + 1] == "\"" and src[i + 2] == "\"")) {
+                    i += quote_width
+                    break
+                } else { i += 1 }
+            }
+        } else {
+            if ch == "(" or ch == "[" or ch == "{" {
+                opens.append(i)
+                delimiters.append(ch)
+                commas.append(0)
+            } elif (ch == ")" or ch == "]" or ch == "}") and len(opens) > 0 {
+                delimiters.pop()
+                opens.pop()
+                commas.pop()
+            } elif ch == "," and len(opens) > 0 {
+                commas[len(commas) - 1] += 1
+            }
+            i += 1
+        }
+    }
+    for index in 0..len(opens) {
+        let last = len(opens) - 1 - index
+        if delimiters[last] == "(" { return [opens[last], commas[last]] }
+    }
+    return [-1, 0]
+}
+
+fn lsp_signature_parameters(label: str) -> list[str] {
+    let mut params: list[str] = []
+    let mut depth = 0
+    let mut start = -1
+    for i in 0..len(label) {
+        let ch = label[i]
+        if start < 0 {
+            if ch == "(" { start = i + 1 }
+        } elif depth == 0 and (ch == "," or ch == ")") {
+            let param = lsp_trim(slice(label, start, i))
+            if param != "" { params.append("{\"label\":" + diag_json_quote(param) + "}") }
+            if ch == ")" { break }
+            start = i + 1
+        } elif ch == "(" or ch == "[" { depth += 1 }
+        elif ch == ")" or ch == "]" { depth -= 1 }
+    }
+    return params
+}
+
+fn lsp_handle_signature_help(doc: LspDocument, pos: LspJson) -> str {
+    let offset = lsp_utf16_offset(doc.text, lsp_json_int(pos, "line", 0), lsp_json_int(pos, "character", 0))
+    let call = lsp_call_prefix(doc.text, offset)
+    if call[0] <= 0 { return "null" }
+    let mut callee_end = call[0]
+    while callee_end > 0 and (doc.text[callee_end - 1] == " " or doc.text[callee_end - 1] == "\t") { callee_end -= 1 }
+    if callee_end > 0 and doc.text[callee_end - 1] == "]" {
+        let mut depth = 1
+        callee_end -= 1
+        while callee_end > 0 and depth > 0 {
+            callee_end -= 1
+            if doc.text[callee_end] == "]" { depth += 1 }
+            elif doc.text[callee_end] == "[" { depth -= 1 }
+        }
+    }
+    let callee = lsp_ident_bounds_at(doc.text, callee_end)
+    if callee[0] < 0 or callee[1] != callee_end { return "null" }
+    let callee_pos = lsp_utf16_pos(doc.text, callee[0])
+    let mut candidates: list[int] = []
+    let spelling = slice(doc.text, callee[0], callee[1])
+    for site in doc.function_sites {
+        if site.source.val != spelling or not lsp_rename_token_at(doc, site.source, callee[0]) { continue }
+        for index in 0..len(doc.graph.nodes) {
+            let node = doc.graph.nodes[index]
+            if node.name == site.declaration.val and node.file == site.declaration.file and node.line == site.declaration.line and not (index in candidates) {
+                candidates.append(index)
+            }
+        }
+    }
+    if len(candidates) == 0 { candidates = lsp_resolve_nodes_at(doc, callee_pos[0], callee_pos[1]) }
+    let mut signatures: list[str] = []
+    let mut active = 0
+    for candidate in candidates {
+        let node = doc.graph.nodes[candidate]
+        if node.kind != "fn" and node.kind != "method" and node.kind != "extern" { continue }
+        let params = lsp_signature_parameters(node.signature)
+        if len(signatures) == 0 and len(params) > 0 {
+            active = if call[1] < len(params) { call[1] } else { len(params) - 1 }
+        }
+        signatures.append("{\"label\":" + diag_json_quote(node.signature) + ",\"parameters\":[" + join_strings(params, ",") + "]}")
+    }
+    if len(signatures) == 0 { return "null" }
+    return "{\"signatures\":[" + join_strings(signatures, ",") + "],\"activeSignature\":0,\"activeParameter\":" + str(active) + "}"
+}
+
+struct LspRenameSite { source: Token, declaration: Token, rewrite: bool }
+
+fn lsp_same_token(left: Token, right: Token) -> bool {
+    return left.file == right.file and left.line == right.line and left.col == right.col
+}
+
+fn lsp_token_key(token: Token) -> str {
+    return token.file + ":" + str(token.line) + ":" + str(token.col) + ":" + token.val
+}
+
+fn lsp_load_source(src: str, file: str, paths: list[str], texts: list[str]) -> ModuleLoader {
+    let loader = new ModuleLoader()
+    loader.ov_paths = paths
+    loader.ov_texts = texts
+    loader.trace_names = true
+    module_expand(loader, src, file, true)
+    loader.output.append(Token { kind: "EOF", val: "", line: 1, col: 1, file: file })
+    return loader
+}
+
+fn lsp_collect_function_sites(loader: ModuleLoader, program: CheckedProgram) -> list[LspRenameSite] {
+    let mut declarations: dict[str, Token] = {}
+    let mut sites: list[LspRenameSite] = []
+    let mut depth = 0
+    for i in 0..len(loader.output) - 1 {
+        let token = loader.output[i]
+        if depth == 0 and token.kind == "FN" and loader.output[i + 1].kind == "IDENT" {
+            let name = loader.output[i + 1]
+            let where_ = Token { kind: "IDENT", val: tool_short_name(name.val), file: name.file, line: name.line, col: name.col }
+            declarations[name.val] = where_
+            sites.append(LspRenameSite { source: where_, declaration: where_, rewrite: true })
+        }
+        if token.kind == "LBRACE" { depth += 1 }
+        elif token.kind == "RBRACE" { depth -= 1 }
+    }
+    let mut translations: dict[str, ModuleNameSite] = {}
+    for site in loader.name_sites {
+        if site.import_site {
+            let target = declarations.get(site.expanded.val) else { continue }
+            sites.append(LspRenameSite { source: site.source, declaration: target, rewrite: true })
+        } else {
+            translations[lsp_token_key(site.expanded)] = site
+        }
+    }
+    for node in program.nodes {
+        if node.kind != "callee" or node.target < 0 { continue }
+        let name = program.signatures[node.target].name
+        let target = declarations.get(name) else { continue }
+        let original = node.source
+        let fallback = Token { kind: "IDENT", val: target.val, file: original.file, line: original.line, col: original.col }
+        let translated = translations.get(lsp_token_key(original)) else {
+            ModuleNameSite { source: fallback, expanded: original, import_site: false, rewrite: true }
+        }
+        sites.append(LspRenameSite { source: translated.source, declaration: target, rewrite: translated.rewrite })
+    }
+    return sites
+}
+
+fn lsp_workspace_files(directory: str) -> list[str] ! str {
+    let input = lsp_buf_from_str(directory)
+    let output = wysna_host_buffer_new()
+    let count = wysna_host_project_entries(input, output)
+    wysna_host_close(input)
+    let raw = if count >= 0 { lsp_buf_to_str(output, count) } else { "" }
+    wysna_host_close(output)
+    if count < 0 { return Err("cannot read workspace directory") }
+    let mut files: list[str] = []
+    let mut i = 0
+    while i < len(raw) {
+        let kind = raw[i]
+        i += 1
+        let start = i
+        while i < len(raw) and ord(raw[i]) != 0 { i += 1 }
+        let name = slice(raw, start, i)
+        i += 1
+        if name == "" or name[0] == "." or name == "node_modules" or name == "dist" { continue }
+        let path = directory + "/" + name
+        if kind == "d" {
+            for nested in lsp_workspace_files(path)? { files.append(nested) }
+        } elif kind == "f" and proj_str_ends_with(name, ".wysna") {
+            files.append(path)
+        }
+    }
+    return Ok(files)
+}
+
+class LspRenameWorkspace {
+    paths: list[str]
+    texts: list[str]
+    snapshots: list[str]
+    versions: list[str]
+    candidates: list[int]
+
+    fn init() {
+        let strings: list[str] = []
+        let integers: list[int] = []
+        this.paths = strings
+        this.texts = strings
+        this.snapshots = strings
+        this.versions = strings
+        this.candidates = integers
+    }
+}
+
+fn lsp_stage_rename_workspace(state: LspServerState, workspace: LspRenameWorkspace, files: list[str], root: str, spelling: str) -> bool {
+    for doc in state.docs {
+        workspace.paths.append(doc.path)
+        workspace.texts.append(doc.text)
+        workspace.versions.append(str(doc.version))
+    }
+    for file in files {
+        if tool_str_contains(workspace.paths, file) { continue }
+        let source = read_file(file) else error { return false }
+        if proj_str_contains_substr(source, spelling) {
+            workspace.paths.append(file)
+            workspace.texts.append(source)
+            workspace.versions.append("null")
+        }
+    }
+    for i in 0..len(workspace.paths) {
+        let snapshot = lsp_next_tmp_path(state, "wysna_lsp_rename", ".wysna")
+        workspace.snapshots.append(snapshot)
+        write_file(snapshot, workspace.texts[i]) else error { return false }
+        if module_is_confined_under(workspace.paths[i], root) and proj_str_contains_substr(workspace.texts[i], spelling) {
+            workspace.candidates.append(i)
+        }
+    }
+    return true
+}
+
+fn lsp_rename_token_at(doc: LspDocument, site: Token, offset: int) -> bool {
+    if site.file != doc.path { return false }
+    let start = diag_char_offset_at(doc.text, site.line, site.col)
+    return start >= 0 and start <= offset and offset <= start + len(site.val)
+}
+
+fn lsp_snapshot_is_valid(state: LspServerState, workspace: LspRenameWorkspace, index: int) -> bool {
+    let raw = lsp_check_snapshot(state, workspace.paths[index], workspace.paths, workspace.snapshots)
+    return lsp_json_str(lsp_parse_json(raw), "status", "") == "ok"
+}
+
+fn lsp_workspace_rename_edits(state: LspServerState, workspace: LspRenameWorkspace, declaration: Token, new_name: str) -> str {
+    let mut changes: list[str] = []
+    let mut updated = workspace.texts
+    for index in workspace.candidates {
+        if not lsp_snapshot_is_valid(state, workspace, index) { return "null" }
+        let file = workspace.paths[index]
+        let text = workspace.texts[index]
+        let loader = lsp_load_source(text, file, workspace.paths, workspace.texts)
+        let sites = lsp_collect_function_sites(loader, check_program(loader.output, file, true))
+        let mut edits: list[str] = []
+        let mut patches: list[FixEdit] = []
+        let mut seen: list[int] = []
+        for site in sites {
+            if not site.rewrite or site.source.file != file or not lsp_same_token(site.declaration, declaration) { continue }
+            let start = diag_char_offset_at(text, site.source.line, site.source.col)
+            let end = start + len(site.source.val)
+            if start < 0 or end > len(text) or slice(text, start, end) != site.source.val { return "null" }
+            if start in seen { continue }
+            seen.append(start)
+            edits.append(lsp_edit_json(text, start, end, new_name))
+            patches.append(new FixEdit("", "", "", diag_utf8_byte_at(text, start), diag_utf8_byte_at(text, end), new_name))
+        }
+        if len(edits) == 0 { continue }
+        for token in tokenize(text, file) {
+            if token.kind == "IDENT" and token.val == new_name { return "null" }
+        }
+        changes.append(lsp_text_document_edit(lsp_path_to_uri(file), workspace.versions[index], edits))
+        updated[index] = fix_apply_non_overlapping(text, patches)
+    }
+    if len(changes) == 0 { return "null" }
+    for index in workspace.candidates {
+        if updated[index] != workspace.texts[index] {
+            write_file(workspace.snapshots[index], updated[index]) else error { return "null" }
+        }
+    }
+    for index in workspace.candidates {
+        if not lsp_snapshot_is_valid(state, workspace, index) { return "null" }
+    }
+    return "{\"documentChanges\":[" + join_strings(changes, ",") + "]}"
+}
+
+fn lsp_handle_rename(state: LspServerState, doc: LspDocument, pos: LspJson, new_name: str) -> str {
+    if not doc.clean_ok or new_name == "" or not (is_alpha(ord(new_name[0])) or new_name[0] == "_") or
+       new_name == "main" or new_name == "_" or sem_builtin(new_name) { return "null" }
+    if (len(new_name) >= 8 and slice(new_name, 0, 8) == "__wysna_") or
+       (len(new_name) >= 7 and slice(new_name, 0, 7) == "_WYSNA_") { return "null" }
+    for i in 0..len(new_name) { if not is_alnum(ord(new_name[i])) { return "null" } }
+    if tokenize(new_name, doc.path)[0].kind != "IDENT" { return "null" }
+    let offset = lsp_utf16_offset(doc.text, lsp_json_int(pos, "line", 0), lsp_json_int(pos, "character", 0))
+    for site in doc.function_sites {
+        if not lsp_rename_token_at(doc, site.source, offset) { continue }
+        let declaration = site.declaration
+        if declaration.val == "main" or declaration.val == new_name { return "null" }
+        let mut root = ""
+        for candidate in state.workspace_roots {
+            if len(candidate) > len(root) and module_is_confined_under(doc.path, candidate) and
+               module_is_confined_under(declaration.file, candidate) { root = candidate }
+        }
+        if root == "" { return "null" }
+        let files = lsp_workspace_files(root) else error { return "null" }
+        if not tool_str_contains(files, declaration.file) { return "null" }
+        let workspace = new LspRenameWorkspace()
+        let staged = lsp_stage_rename_workspace(state, workspace, files, root, declaration.val)
+        let result = if staged { lsp_workspace_rename_edits(state, workspace, declaration, new_name) } else { "null" }
+        for snapshot in workspace.snapshots { lsp_remove_file(snapshot) }
+        return result
+    }
+    return "null"
+}
+
 fn lsp_dispatch_message(state: LspServerState, msg: LspJson) -> bool {
     let method = lsp_json_str(msg, "method", "")
     let params = lsp_json_get(msg, "params")
@@ -11610,8 +12113,18 @@ fn lsp_dispatch_message(state: LspServerState, msg: LspJson) -> bool {
     let req_id_raw = if has_id { lsp_json_raw_literal(lsp_json_get(msg, "id")) } else { "null" }
 
     if method == "initialize" {
+        let mut roots: list[str] = []
+        for folder in lsp_json_get(params, "workspaceFolders").items {
+            let path = lsp_uri_to_path(lsp_json_str(folder, "uri", ""))
+            if path != "" { roots.append(module_canonical(path)) }
+        }
+        if len(roots) == 0 {
+            let path = lsp_uri_to_path(lsp_json_str(params, "rootUri", ""))
+            if path != "" { roots.append(module_canonical(path)) }
+        }
+        state.workspace_roots = roots
         let legend = "\"tokenTypes\":[\"keyword\",\"type\",\"class\",\"interface\",\"enum\",\"struct\",\"function\",\"method\",\"property\",\"variable\",\"parameter\",\"string\",\"number\",\"operator\",\"comment\"],\"tokenModifiers\":[]"
-        let caps = "\"positionEncoding\":\"utf-16\",\"textDocumentSync\":{\"openClose\":true,\"change\":2},\"definitionProvider\":true,\"implementationProvider\":true,\"hoverProvider\":true,\"referencesProvider\":true,\"documentFormattingProvider\":true,\"completionProvider\":{\"triggerCharacters\":[\".\"]},\"semanticTokensProvider\":{\"legend\":{" + legend + "},\"full\":true,\"range\":false}"
+        let caps = "\"positionEncoding\":\"utf-16\",\"textDocumentSync\":{\"openClose\":true,\"change\":2},\"definitionProvider\":true,\"implementationProvider\":true,\"hoverProvider\":true,\"referencesProvider\":true,\"documentFormattingProvider\":true,\"completionProvider\":{\"triggerCharacters\":[\".\"]},\"codeActionProvider\":{\"codeActionKinds\":[\"quickfix\"]},\"renameProvider\":true,\"signatureHelpProvider\":{\"triggerCharacters\":[\"(\",\",\"]},\"semanticTokensProvider\":{\"legend\":{" + legend + "},\"full\":true,\"range\":false}"
         let res = "{\"capabilities\":{" + caps + "},\"serverInfo\":{\"name\":\"wysna-native\",\"version\":\"0.8.0\"}}"
         if has_id { lsp_send_message("{\"jsonrpc\":\"2.0\",\"id\":" + req_id_raw + ",\"result\":" + res + "}") }
         return true
@@ -11697,6 +12210,12 @@ fn lsp_dispatch_message(state: LspServerState, msg: LspJson) -> bool {
         result_json = if idx >= 0 { lsp_handle_references(state, state.docs[idx], req_pos, inc_decl) } else { "[]" }
     } elif method == "textDocument/completion" {
         result_json = if idx >= 0 { lsp_handle_completion(state.docs[idx], req_pos) } else { "[]" }
+    } elif method == "textDocument/codeAction" {
+        result_json = if idx >= 0 { lsp_handle_code_actions(state.docs[idx], params) } else { "[]" }
+    } elif method == "textDocument/signatureHelp" {
+        result_json = if idx >= 0 { lsp_handle_signature_help(state.docs[idx], req_pos) } else { "null" }
+    } elif method == "textDocument/rename" {
+        result_json = if idx >= 0 { lsp_handle_rename(state, state.docs[idx], req_pos, lsp_json_str(params, "newName", "")) } else { "null" }
     } elif method == "textDocument/formatting" {
         result_json = if idx >= 0 { lsp_handle_formatting(state.docs[idx]) } else { "[]" }
     } elif method == "textDocument/semanticTokens/full" {
@@ -13389,6 +13908,25 @@ fn fix_extract_expected_found(msg: str) -> list[str] {
     return empty
 }
 
+fn fix_propagation_requirement(expected: str, found: str) -> str {
+    if found == expected + "?" { return "an optional return type" }
+    let prefix = expected + " ! "
+    if len(found) > len(prefix) and slice(found, 0, len(prefix)) == prefix {
+        return "a result return type that accepts " + slice(found, len(prefix), len(found))
+    }
+    return ""
+}
+
+fn fix_mismatch_data_json(msg: str) -> str {
+    let types = fix_extract_expected_found(msg)
+    if len(types) != 2 { return "{}" }
+    let base = "{\"kind\":\"type_mismatch\",\"expected\":" + diag_json_quote(types[0]) + ",\"found\":" + diag_json_quote(types[1])
+    let requirement = fix_propagation_requirement(types[0], types[1])
+    if requirement == "" { return base + "}" }
+    let help = "'?' can return early and requires " + requirement + " on the enclosing function. Use 'else' for a local fallback."
+    return base + ",\"unwrap_hint\":\"?\",\"help\":" + diag_json_quote(help) + "}"
+}
+
 fn fix_postfix_end_token(tokens: list[Token], start_idx: int) -> int {
     if start_idx < 0 or start_idx >= len(tokens) { return -1 }
     let first_kind = tokens[start_idx].kind
@@ -13468,10 +14006,7 @@ fn fix_plan_w2001(src: str, tokens: list[Token], start_byte: int, msg: str) -> l
     if len(ef) != 2 { return out }
     let exp = ef[0]
     let fnd = ef[1]
-    let is_opt = fnd == exp + "?"
-    let res_prefix = exp + " ! "
-    let is_res = len(fnd) > len(res_prefix) and slice(fnd, 0, len(res_prefix)) == res_prefix
-    if not is_opt and not is_res { return out }
+    if fix_propagation_requirement(exp, fnd) == "" { return out }
     let start_char = lsp_char_offset_from_utf8_byte(src, start_byte)
     let lc = fix_line_col_from_char(src, start_char)
     let tok_idx = fix_tok_index_at(tokens, lc[0], lc[1])
@@ -13483,7 +14018,7 @@ fn fix_plan_w2001(src: str, tokens: list[Token], start_byte: int, msg: str) -> l
     let orig = slice(src, c0, c1)
     let b0 = diag_utf8_byte_at(src, c0)
     let b1 = diag_utf8_byte_at(src, c1)
-    out.append(new FixEdit("W2001", "append '?' to unwrap/propagate '" + orig + "'", "maybe", b0, b1, orig + "?"))
+    out.append(new FixEdit("W2001", "append '?' to '" + orig + "' to propagate failure by returning early", "maybe", b0, b1, orig + "?"))
     return out
 }
 
@@ -13691,6 +14226,30 @@ fn fix_plan_w3004(src: str, tokens: list[Token], start_byte: int, end_byte: int,
     return out
 }
 
+fn fix_plan_diagnostic(code: str, src: str, tokens: list[Token], start_byte: int, end_byte: int, msg: str) -> list[FixEdit] {
+    if code == "W2001" { return fix_plan_w2001(src, tokens, start_byte, msg) }
+    if code == "W1001" { return fix_plan_w1001(src, tokens, start_byte, end_byte, msg) }
+    if code == "W3001" { return fix_plan_w3001(src, tokens, start_byte, msg) }
+    if code == "W3004" { return fix_plan_w3004(src, tokens, start_byte, end_byte, msg) }
+    return []
+}
+
+fn fix_diagnostic_edits_json(code: str, msg: str, file: str, src: str, line: int, col: int) -> str {
+    if code != "W2001" and code != "W1001" and code != "W3001" and code != "W3004" { return "[]" }
+    let start_char = diag_char_offset_at(src, line, col)
+    let end_char = diag_char_span_width(src, start_char)
+    if start_char < 0 or end_char <= start_char { return "[]" }
+    let fixes = fix_plan_diagnostic(code, src, tokenize(src, file), diag_utf8_byte_at(src, start_char), diag_utf8_byte_at(src, end_char), msg)
+    if len(fixes) == 0 { return "[]" }
+    let source = "{\"source_id\":" + diag_json_quote(file) + ",\"source_sha256\":" + diag_json_quote(diag_sha256_hex(src))
+    let mut parts: list[str] = []
+    for fix in fixes {
+        let edit = source + ",\"start_byte\":" + str(fix.start_byte) + ",\"end_byte\":" + str(fix.end_byte) + ",\"replacement\":" + diag_json_quote(fix.replacement) + "}"
+        parts.append("{\"description\":" + diag_json_quote(fix.description) + ",\"applicability\":" + diag_json_quote(fix.applicability) + ",\"edits\":[" + edit + "]}")
+    }
+    return "[" + join_strings(parts, ",") + "]"
+}
+
 fn fix_apply_non_overlapping(src: str, edits: list[FixEdit]) -> str {
     # Sort descending by start_byte
     let mut sorted: list[FixEdit] = []
@@ -13793,16 +14352,7 @@ fn tool_handle_fix(args: list[str], json_mode_in: bool) -> unit {
             let sb = lsp_json_int(sp, "start_byte", -1)
             let eb = lsp_json_int(sp, "end_byte", -1)
             if sb < 0 or eb <= sb { continue }
-            let mut gen: list[FixEdit] = []
-            if code == "W3001" {
-                gen = fix_plan_w3001(current_src, tokens, sb, msg)
-            } elif code == "W2001" {
-                gen = fix_plan_w2001(current_src, tokens, sb, msg)
-            } elif code == "W1001" {
-                gen = fix_plan_w1001(current_src, tokens, sb, eb, msg)
-            } elif code == "W3004" {
-                gen = fix_plan_w3004(current_src, tokens, sb, eb, msg)
-            }
+            let gen = fix_plan_diagnostic(code, current_src, tokens, sb, eb, msg)
             for g in gen {
                 if g.applicability == "machine" or (include_maybe and g.applicability == "maybe") {
                     cands.append(g)
@@ -15355,6 +15905,7 @@ fn proj_impact_entry_json(item: ProjectImpactEntry, target: ToolGraphNode, root:
 
     let mut paths: list[str] = []
     let mut labels: list[str] = []
+    let mut entry_ids: list[str] = []
     let mut boundaries: list[str] = []
     if item.profile == "browser-library" { boundaries.append("javascript") }
     for n in graph.nodes {
@@ -15365,6 +15916,7 @@ fn proj_impact_entry_json(item: ProjectImpactEntry, target: ToolGraphNode, root:
         let is_root = if item.profile == "browser-library" { n.kind == "fn" and n.visibility == "public" }
             else { n.kind == "entrypoint" or (n.kind == "fn" and n.name == "main") }
         if not is_root { continue }
+        entry_ids.append(n.id)
         let mut route: list[str] = []
         let mut description = n.id
         let mut cursor = -1
@@ -15383,15 +15935,33 @@ fn proj_impact_entry_json(item: ProjectImpactEntry, target: ToolGraphNode, root:
         paths.append("{\"entry_symbol\":" + diag_json_quote(n.id) + ",\"chain\":[" + join_strings(route, ",") + "]}")
         labels.append(description)
     }
+    let mut visited = entry_ids
+    let mut head = 0
+    while head < len(visited) {
+        let id = visited[head]
+        head = head + 1
+        let idx = tool_find_node_idx(graph, id)
+        if idx >= 0 and graph.nodes[idx].indirect_call {
+            boundaries.append("indirect-call")
+            break
+        }
+        for edge in graph.edges {
+            if edge.from_id == id and not tool_str_contains(visited, edge.to_id) {
+                visited.append(edge.to_id)
+            }
+        }
+    }
     let affected = len(paths) > 0
+    let impact_status = if affected { "affected" } elif len(boundaries) > 0 { "uncertain" } else { "no-static-path" }
     if not output_json {
-        print(item.kind + " " + item.name + " (" + item.entry + "): " + (if affected { "affected" } else { "no static path" }))
+        print(item.kind + " " + item.name + " (" + item.entry + "): " + (if impact_status == "no-static-path" { "no static path" } else { impact_status }))
         for label in labels { print("  " + label) }
         if len(boundaries) > 0 { print("  External boundaries: " + join_strings(boundaries, ", ")) }
     }
     return "{\"kind\":" + diag_json_quote(item.kind) + ",\"name\":" + diag_json_quote(item.name) +
         ",\"entry\":" + diag_json_quote(item.entry) + ",\"profile\":" + diag_json_quote(item.profile) +
         ",\"affected\":" + (if affected { "true" } else { "false" }) +
+        ",\"impact_status\":" + diag_json_quote(impact_status) +
         ",\"paths\":[" + join_strings(paths, ",") + "],\"unanalyzed_boundaries\":" + tool_str_list_json(boundaries) + "}"
 }
 
@@ -16402,7 +16972,7 @@ fn tool_handle_api(args: list[str], _json_mode: bool) -> unit {
         let clean_rel = if proj_str_ends_with(rel, ".wysna") { slice(rel, 0, len(rel) - 6) } else { rel }
         api_collect_stdlib_file(acc, resolved[1], "std/" + clean_rel)
     } else {
-        let known: list[str] = ["algorithms", "async", "buffer", "bytes", "crypto", "environment", "files", "fs", "http", "io", "json", "parse", "path", "process", "resources", "test", "text", "time"]
+        let known: list[str] = ["algorithms", "async", "buffer", "bytes", "crypto", "environment", "files", "fs", "http", "io", "json", "parse", "path", "process", "resources", "result", "test", "text", "time"]
         for name in known {
             let resolved = api_resolve_stdlib_module(stdlib_root, name)
             if resolved[0] == "1" {

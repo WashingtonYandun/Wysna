@@ -552,7 +552,7 @@ fn mir_emit_c(module: MirModule) -> str {
     let mut returned = 1
     for function in module.functions { if function.name == "wysna_program" { returned = function.return_type } }
     parts.append("int main(int argc, char** argv) {\n    wysna_init_args(argc, argv);\n    WVal result = " + mir_c_box("wysna_program()", returned) + ";\n")
-    parts.append("    int status = 0;\n    if (wysna_is_err(result)) { wysna_report_entrypoint_error(wysna_as_box(result)->val); status = 1; }\n    wysna_release(result);\n")
+    parts.append("    int status = wysna_entry_status(result);\n    wysna_release(result);\n")
     for global in module.globals { parts.append("    wysna_release(" + global.name + ");\n") }
     parts.append("    wysna_runtime_cleanup();\n    return status;\n}\n")
     return join_strings(parts, "")

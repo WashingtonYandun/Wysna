@@ -23,6 +23,7 @@ from checker.WysnaType import (
     FunctionType,
     ModuleType,
     AnyType,
+    GenericEnumTemplate,
     GenericStructTemplate,
     GenericFnTemplate,
 )
@@ -141,17 +142,12 @@ def check_call_expr(checker: "TypeChecker", expr: CallExpr, is_statement_context
             return resolution.type
         callee_t = resolution.type
 
-    if isinstance(expr.callee, MemberExpr) and isinstance(expr.callee.object, IdentExpr) and expr.callee.object.name in checker.generic_enum_templates and not (
-            (receiver_symbol := checker.current_scope.lookup_symbol(expr.callee.object.name))
-            and receiver_symbol.kind in ("var", "param")):
-        return check_generic_variant(checker, expr)
-
-    if (isinstance(expr.callee, MemberExpr) and isinstance(expr.callee.object, IdentExpr)
-            and not ((receiver_symbol := checker.current_scope.lookup_symbol(expr.callee.object.name))
-                     and receiver_symbol.kind in ("var", "param"))):
-        variant_type = check_enum_variant(checker, expr)
-        if variant_type is not None:
-            return variant_type
+    if isinstance(expr.callee, MemberExpr):
+        owner = checker._enum_owner(expr.callee.object)
+        if isinstance(owner, GenericEnumTemplate):
+            return check_generic_variant(checker, expr, owner)
+        if isinstance(owner, EnumType):
+            return check_enum_variant(checker, expr, owner)
 
     # Mutating method check on receiver (transitive across value-type paths)
     if callee_t is None:
@@ -296,29 +292,25 @@ def resolve_module_call(checker: "TypeChecker", expr: CallExpr, callee_t: Option
             return CheckedCall(checker._check_expr(expr))
         symbol = module_type.scope.lookup_symbol(expr.callee.property)
         if symbol and isinstance(symbol.type, GenericFnTemplate):
-            template = symbol.type
-            if expr.type_args:
-                concrete_args = [checker._resolve_type_node(argument) for argument in expr.type_args]
-            else:
-                if len(expr.args) != len(template.ast_decl.params):
-                    raise TypeError("Generic module function argument count mismatch", file=checker.file,
-                                    line=expr.line, col=expr.col, code="W2005")
-                bindings = {}
-                parameters = {parameter.name for parameter in template.type_params}
-                for parameter, argument in zip(template.ast_decl.params, expr.args):
-                    arg_t = _normalize_task_arg_for_inference(checker, checker._check_expr(argument), argument.line, argument.col)
-                    checker._unify_type(parameter.type_ann, arg_t, parameters, bindings)
-                if any(parameter.name not in bindings for parameter in template.type_params):
-                    raise TypeError("Cannot infer imported generic function arguments", file=checker.file,
-                                    line=expr.line, col=expr.col, code="W2003")
-                concrete_args = checker._concrete_type_args(template, bindings)
-            unit = module_type.checked_module
-            specialized = unit.checker._monomorphize_fn(template, concrete_args, expr.line, expr.col)
-            checker.session.refresh_specializations(unit)
-            expr.callee = IdentExpr(specialized.name, line=expr.callee.line, col=expr.callee.col)
-            expr.type_args = []
-            callee_t = specialized.type
+            callee_t = specialize_imported_function(checker, expr, symbol.type, module_type.checked_module)
     return CallTarget(callee_t)
+
+
+def specialize_imported_function(checker: "TypeChecker", expr: CallExpr, template: GenericFnTemplate,
+                                 imported_from) -> FunctionType:
+    source = getattr(template.ast_decl, "source_file", None)
+    unit = checker.session.modules.get(source, imported_from)
+    if expr.type_args:
+        concrete_args = [checker._resolve_type_node(arg) for arg in expr.type_args]
+    else:
+        concrete_args = infer_type_arguments(checker, template, template.ast_decl.params, expr,
+                                             "generic function", unify_checker=unit.checker)
+    specialized = unit.checker._monomorphize_fn(template, concrete_args, expr.line, expr.col)
+    checker.session.refresh_specializations(unit)
+    expr.callee = IdentExpr(specialized.name, line=expr.callee.line, col=expr.callee.col)
+    expr.callee.resolved_symbol = specialized
+    expr.type_args = []
+    return specialized.type
 
 
 def resolve_named_call(checker: "TypeChecker", expr: CallExpr, callee_t: Optional[WysnaType]) -> CallResolution:
@@ -347,6 +339,10 @@ def resolve_named_call(checker: "TypeChecker", expr: CallExpr, callee_t: Optiona
             raise TypeError(f"Symbol '{callee_name}' is not a generic function or struct",
                             file=checker.file, line=expr.line, col=expr.col, code="W2001")
         callee_t = checker._check_expr(expr.callee)
+    elif (symbol and isinstance(symbol.type, GenericFnTemplate)
+          and (owner_unit := checker.session.modules.get(getattr(symbol.type.ast_decl, "source_file", None))) is not None
+          and owner_unit.checker is not checker):
+        callee_t = specialize_imported_function(checker, expr, symbol.type, owner_unit)
     elif callee_name in checker.generic_fn_templates:
         template = checker.generic_fn_templates[callee_name]
         if expr.type_args:
@@ -496,8 +492,7 @@ def resolve_named_call(checker: "TypeChecker", expr: CallExpr, callee_t: Optiona
     return CallTarget(callee_t)
 
 
-def check_generic_variant(checker: "TypeChecker", expr: CallExpr) -> WysnaType:
-    template = checker.generic_enum_templates[expr.callee.object.name]
+def check_generic_variant(checker: "TypeChecker", expr: CallExpr, template: GenericEnumTemplate) -> WysnaType:
     variant_name = expr.callee.property
     var_decl = next((v for v in template.ast_decl.variants if (v.name if hasattr(v, "name") else str(v)) == variant_name), None)
     if var_decl is None:
@@ -524,6 +519,10 @@ def check_generic_variant(checker: "TypeChecker", expr: CallExpr) -> WysnaType:
         bindings = {}
         ctx_t = checker.expected_type or checker.current_fn_ret_type
         context_args = checker._builtin_arguments(ctx_t, template.name)
+        if isinstance(ctx_t, EnumType) and ctx_t.template_name == template.name:
+            context_args = ctx_t.type_args or []
+            if not payload_types:
+                bindings.update(zip([p.name for p in template.type_params], context_args))
         context_types = dict(zip([p.name for p in template.type_params], context_args))
         for pt, a_expr in zip(payload_types, expr.args):
             expected = None
@@ -574,44 +573,30 @@ def check_generic_variant(checker: "TypeChecker", expr: CallExpr) -> WysnaType:
         concrete_args = checker._concrete_type_args(template, bindings)
 
     enum_t = checker._monomorphize_enum(template, concrete_args, expr.line, expr.col)
-    expr.callee.object.name = enum_t.name
+    receiver = expr.callee.object
+    expr.callee.object = IdentExpr(enum_t.name, receiver.line, receiver.col)
     expr.type_args = []
     return enum_t
 
 
-def check_enum_variant(checker: "TypeChecker", expr: CallExpr) -> Optional[WysnaType]:
-    enum_t = checker.current_scope.lookup_type(expr.callee.object.name)
-    if isinstance(enum_t, EnumType):
-        variant_name = expr.callee.property
-        if variant_name not in enum_t.variants:
-            raise TypeError(
-                message=f"Enum '{enum_t.name}' has no variant '{variant_name}'",
-                line=expr.line,
-                col=expr.col,
-                file=checker.file,
-                code="W1001"
-            )
-        expected_payloads = enum_t.variant_payloads.get(variant_name, [])
-        if len(expr.args) != len(expected_payloads):
-            raise TypeError(
-                message=f"Variant '{variant_name}' expects {len(expected_payloads)} arguments, found {len(expr.args)}",
-                line=expr.line,
-                col=expr.col,
-                file=checker.file,
-                code="W2005"
-            )
-        for i, (a_expr, p_type) in enumerate(zip(expr.args, expected_payloads)):
-            a_type = checker._check_expr(a_expr)
-            if not checker.type_relations.is_assignable(a_type, p_type):
-                raise TypeError(
-                    message=f"Argument {i + 1} type mismatch: expected '{p_type}', found '{a_type}'",
-                    line=a_expr.line,
-                    col=a_expr.col,
-                    file=checker.file,
-                    code="W2001"
-                )
-        return enum_t
-    return None
+def check_enum_variant(checker: "TypeChecker", expr: CallExpr, enum_t: EnumType) -> WysnaType:
+    variant_name = expr.callee.property
+    if variant_name not in enum_t.variants:
+        raise TypeError(f"Enum '{enum_t.name}' has no variant '{variant_name}'",
+                        line=expr.line, col=expr.col, file=checker.file, code="W1001")
+    expected_payloads = enum_t.variant_payloads.get(variant_name, [])
+    if len(expr.args) != len(expected_payloads):
+        raise TypeError(f"Variant '{variant_name}' expects {len(expected_payloads)} arguments, found {len(expr.args)}",
+                        line=expr.line, col=expr.col, file=checker.file, code="W2005")
+    for i, (argument, expected) in enumerate(zip(expr.args, expected_payloads)):
+        actual = checker._check_payload(argument, expected)
+        if not checker.type_relations.is_assignable(actual, expected):
+            raise TypeError(f"Argument {i + 1} type mismatch: expected '{expected}', found '{actual}'",
+                            line=argument.line, col=argument.col, file=checker.file, code="W2001")
+    receiver = expr.callee.object
+    if isinstance(receiver, MemberExpr):
+        expr.callee.object = IdentExpr(enum_t.name, receiver.line, receiver.col)
+    return enum_t
 
 
 def check_builtin_call(checker: "TypeChecker", expr: CallExpr) -> Optional[WysnaType]:

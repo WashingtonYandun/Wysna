@@ -141,7 +141,7 @@ def check_else_err_expr(checker: "TypeChecker", expr: ElseErrExpr, is_statement_
         actual_handler_t = tail_t if tail_t is not None else UnitType
         if not checker.type_relations.is_assignable(actual_handler_t, unwrapped_t):
             raise TypeError(
-                message=f"'else' handler must diverge (return/break/continue) or evaluate to '{unwrapped_t}', found '{actual_handler_t}'",
+                message=f"'else' handler must diverge (return/break/continue/exit) or evaluate to '{unwrapped_t}', found '{actual_handler_t}'",
                 line=expr.line,
                 col=expr.col,
                 file=checker.file,

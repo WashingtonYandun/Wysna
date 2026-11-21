@@ -73,9 +73,12 @@ class LlvmCodeGen:
         else:
             bodies.append('  ' + ('' if returned == 'void' else '%result = ') +
                           'call ' + returned + ' @wysna_program()')
+        if entry.return_type == TYPE_INT:
+            bodies.append('  %status = call i32 @wysna_llvm_integer_entry_status(i64 %result)')
         for slot in reversed(module.globals):
             bodies.append('  call void @wysna_llvm_release(ptr ' + self.pointer(slot.id) + ')')
-        bodies.extend(['  call void @wysna_llvm_cleanup()', '  ret i32 ' + ('%status' if is_managed(entry.return_type) else '0'), '}', ''])
+        status = '%status' if is_managed(entry.return_type) or entry.return_type == TYPE_INT else '0'
+        bodies.extend(['  call void @wysna_llvm_cleanup()', '  ret i32 ' + status, '}', ''])
         global_debug = {binding.slot: binding for binding in debug_info.globals} if debug_info is not None else {}
         globals_ = []
         for slot in module.globals:

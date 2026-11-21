@@ -1,4 +1,4 @@
-# ERROR: W2003
+# ERROR: W3004
 class C {
     public x: int
     fn init(v: int) {

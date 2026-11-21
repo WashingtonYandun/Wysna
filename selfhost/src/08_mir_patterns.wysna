@@ -114,7 +114,12 @@ fn mir_match(context: MirBuilder, node: CheckedNode) -> int {
         }
         let value = mir_expression(context, arm.body)
         if context.current >= 0 {
-            mir_store(context, result, mir_coerce(context, value, returned, false, arm.source), arm.source)
+            let outgoing = if returned == 1 {
+                mir_constant(context, mir_literal_unit(), returned, arm.source)
+            } else {
+                mir_coerce(context, value, returned, false, arm.source)
+            }
+            mir_store(context, result, outgoing, arm.source)
             mir_cleanup(context, len(context.scopes) - 1, arm.source)
             mir_jump(context, join, arm.source)
             live = true

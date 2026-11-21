@@ -105,8 +105,8 @@ class CCodeGen:
                           '}'])
         else:
             lines.extend(['int main(int argc, char** argv) {', '    wysna_init_args(argc, argv);',
-                          '    WVal _t_main = ' + entry_call + ';', '    int status = 0;',
-                          '    if (wysna_is_err(_t_main)) { wysna_report_entrypoint_error(wysna_as_box(_t_main)->val); status = 1; }',
+                          '    WVal _t_main = ' + entry_call + ';',
+                          '    int status = wysna_entry_status(_t_main);',
                           '    wysna_release(_t_main);'])
             lines.extend(f'    wysna_release({slot.name});' for slot in reversed(module.globals))
             lines.extend(['    wysna_runtime_cleanup();', '    return status;', '}'])

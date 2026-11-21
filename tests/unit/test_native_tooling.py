@@ -40,6 +40,55 @@ class NativeToolingTests(unittest.TestCase):
         self.assertEqual(res.returncode, 0, res.stderr)
         self.assertIn("fn main()", res.stdout)
 
+    def test_native_check_and_fmt_preserve_diagnostic_and_fix(self):
+        source = "let priority = 10\nprint(priorit)\n"
+        with tempfile.TemporaryDirectory() as temporary:
+            path = Path(temporary) / "invalid.wysna"
+            path.write_text(source, encoding="utf-8")
+            for command in ("check", "fmt"):
+                with self.subTest(command=command):
+                    completed = subprocess.run(
+                        [sys.executable, str(self.wysna_cli), command, "--engine=compiler",
+                         "--output-format=json-v1", str(path)],
+                        cwd=self.repo_root, capture_output=True, text=True, timeout=120,
+                    )
+                    self.assertEqual(completed.returncode, 1, completed.stderr)
+                    envelope = json.loads(completed.stdout)
+                    self.assertEqual(envelope["command"], command)
+                    self.assertEqual(envelope["status"], "diagnostic_error")
+                    diagnostic, = envelope["diagnostics"]
+                    self.assertEqual(diagnostic["code"], "W1001")
+                    span = diagnostic["primary_span"]
+                    self.assertEqual(source[span["start_byte"]:span["end_byte"]], "priorit")
+                    fix, = diagnostic["fixes"]
+                    edit, = fix["edits"]
+                    self.assertEqual(edit["replacement"], "priority")
+                    self.assertEqual(edit["source_sha256"], span["source_sha256"])
+
+    def test_w2001_propagation_fix_explains_early_return(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            path = Path(temporary) / "invalid.wysna"
+            path.write_text("fn read() -> int ! str { Err(\"bad\") }\n"
+                            "fn main() -> int ! str {\n  let value: int = read()\n  return Ok(value)\n}\n",
+                            encoding="utf-8")
+            for engine in ("seed", "compiler"):
+                with self.subTest(engine=engine):
+                    completed = subprocess.run(
+                        [sys.executable, str(self.wysna_cli), "check", f"--engine={engine}",
+                         "--output-format=json-v1", str(path)],
+                        cwd=self.repo_root, capture_output=True, text=True, timeout=120,
+                    )
+                    self.assertEqual(completed.returncode, 1, completed.stderr)
+                    diagnostic, = json.loads(completed.stdout)["diagnostics"]
+                    self.assertEqual(diagnostic["code"], "W2001")
+                    self.assertEqual(diagnostic["data"]["expected"], "int")
+                    self.assertEqual(diagnostic["data"]["found"], "int ! str")
+                    self.assertIn("enclosing function", diagnostic["data"]["help"])
+                    self.assertIn("return early", diagnostic["data"]["help"])
+                    fix, = diagnostic["fixes"]
+                    self.assertEqual(fix["applicability"], "maybe")
+                    self.assertEqual(fix["edits"][0]["replacement"], "read()?")
+
     def test_run_with_compiler_engine(self):
         cmd = [sys.executable, str(self.wysna_cli), "run", "--engine=compiler", str(self.sample_valid)]
         res = subprocess.run(cmd, cwd=self.repo_root, capture_output=True, text=True, timeout=120)

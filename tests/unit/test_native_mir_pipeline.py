@@ -262,6 +262,8 @@ class NativeMirPipelineTests(unittest.TestCase):
         c_path.write_text(source, encoding="utf-8")
         command = compiler_command()
         flags = ["-fsanitize=address,undefined", "-fno-omit-frame-pointer"] if os.name != "nt" else []
+        if immediate_exit:
+            flags.append("-Werror=return-type")
         built = subprocess.run(command + ["-std=c99", "-O1"] + flags +
                                ["-I" + str(ROOT), str(c_path), "-lm", "-o", str(executable)],
                                capture_output=True, text=True, timeout=120)

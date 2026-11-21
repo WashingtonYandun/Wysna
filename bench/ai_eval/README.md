@@ -91,3 +91,28 @@ python3 bench/ai_eval/ab_cohort.py --interactive-tools --provider openai --base-
 Ejecuta la evaluación con código generado dentro de un entorno aislado.
 El proveedor simulado comprueba el protocolo de consultas. Para medir éxito,
 tiempo y tokens de un modelo, utiliza un proveedor real con uso reportado.
+
+## Impacto observado en proyectos
+
+`impact_benchmark.py` contrasta el grafo con cambios de comportamiento en las
+pruebas declaradas de `shared-browser-app` y `wysofia-ops`. Por defecto aplica
+cinco mutaciones en copias temporales y ejecuta las pruebas antes y después.
+También admite comparar una revisión de Git con otra revisión o con el árbol
+de trabajo. Los cambios de código de salida y stdout sirven como oráculo
+para pruebas que pasan en la base y mantienen la misma fuente.
+Ambas revisiones se evalúan con el mismo compilador y biblioteca estándar
+del checkout que ejecuta el ensayo.
+
+```sh
+python3 bench/ai_eval/impact_benchmark.py --output /tmp/wysna-impact.json
+python3 bench/ai_eval/impact_benchmark.py \
+  --project examples/wysofia-ops --base 2c77631 --entry src/main.wysna \
+  --symbol parse_events_json --symbol decode_event --output /tmp/wysna-impact-revisions.json
+```
+
+Pasa `--native-compiler` con la ruta al compilador Selfhost para medir también
+su grafo. El informe incluye pruebas observadas que el grafo encontró,
+pruebas inciertas, omisiones, tiempo del grafo y tiempo de las pruebas
+seleccionadas. La selección incluye las entradas inciertas. La comparación del
+contexto usa tokens léxicos como aproximación. Los tokens facturados y el
+tiempo del modelo se miden con el proveedor real en el ensayo A/B.

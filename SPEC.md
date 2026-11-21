@@ -370,6 +370,10 @@ match tok.kind {
 }
 ```
 * If an `enum` case is missing and no `else =>` fallback is provided, compilation fails with an exhaustiveness error.
+* A statement-position `match` evaluates the chosen arm for its effects and discards its value. Its arms may have different result types. A match used as a value still requires compatible types across the arms that produce that value.
+* Imported enum patterns may use the module-qualified owner (`status.State.Ready(value)`)
+  or an owner bound with a selective import (`State.Ready(value)`). The owner must resolve
+  to the enum of the subject.
 
 ---
 
@@ -383,11 +387,14 @@ fn read_file(path: str) -> str ! IoError {
 }
 ```
 
-If `main` returns a `Result` and that result is an `Err`, the runtime reports it on
-`stderr` as `W4003` and terminates with a non-zero status. Wysna has no stack unwinding, so
-this is the only point where an error becomes visible to the process that started the
-program; discarding it would make a failing program indistinguishable from a success
-for `make`, CI or a shell script.
+An implicitly invoked `main()` or a bare `main()` at the end of the entry module
+can return a process status. An `int` or `Ok(int)` in the range `0..=255` becomes the
+exit status. An integer outside that range produces `W4003` and status 1. An `Err`
+also produces `W4003` on stderr and status 1. Other successful values yield status 0.
+
+The builtin `exit(code)` terminates the process immediately. The compiler treats
+a direct call to it as a terminating path, including inside an `else` handler.
+That path does not have to produce a value for the enclosing expression.
 
 Handling strategies:
 1. **Propagation via `?`:**

@@ -61,17 +61,162 @@ class LanguageErgonomicsV08Tests(unittest.TestCase):
         cls.selfhost_bin = ensure_selfhost_compiler_binary(str(ROOT))
         cls.service = CompilerService(project_root=ROOT)
 
-    def _assert_all_engines(self, source: str, expected_stdout: str, stem: str) -> None:
+    def _assert_all_engines(self, source: str, expected_stdout: str, stem: str,
+                            *, status: int = 0, diagnostic: str = "") -> None:
         with tempfile.TemporaryDirectory(prefix=f"wysna-{stem}-") as tmpdir:
             root_tmp = Path(tmpdir)
             for engine in ENGINES:
                 res = run_engine(engine, source, stem, selfhost_bin=self.selfhost_bin, directory=root_tmp / engine)
-                self.assertEqual(res.exit_code, 0, f"{engine} failed: {res.stderr}")
+                self.assertEqual(res.exit_code, status, f"{engine} failed: {res.stderr}")
                 self.assertEqual(res.stdout, expected_stdout, f"{engine} stdout mismatch")
+                if diagnostic:
+                    self.assertIn(diagnostic, res.stderr)
             if HAS_LLVM:
                 llvm_res = _run_llvm(source, root_tmp / "llvm", name=f"{stem}.wysna")
-                self.assertEqual(llvm_res.returncode, 0, f"llvm failed: {llvm_res.stderr}")
+                self.assertEqual(llvm_res.returncode, status, f"llvm failed: {llvm_res.stderr}")
                 self.assertEqual(llvm_res.stdout, expected_stdout, "llvm stdout mismatch")
+                if diagnostic:
+                    self.assertIn(diagnostic, llvm_res.stderr)
+
+    def test_process_entrypoint_status_and_diverging_handler(self):
+        cases = [
+            ("implicit", "fn main() -> int { 255 }", 255, "", ""),
+            ("explicit", "fn main() -> int { 7 }\nmain()", 7, "", ""),
+            ("ordinary-call", "fn main() -> int { 7 }\nprint(main())", 0, "7\n", ""),
+            ("result", "fn main() -> int ! str { Ok(9) }", 9, "", ""),
+            ("invalid", "fn main() -> int { 256 }", 1, "", "W4003"),
+            ("negative", "fn main() -> int { -1 }", 1, "", "W4003"),
+            ("exiting", """
+fn main() -> int {
+    let absent: int? = none
+    let value = absent else { exit(42) }
+    return value
+}
+""", 42, "", ""),
+        ]
+        for name, source, status, stdout, diagnostic in cases:
+            with self.subTest(name=name):
+                self._assert_all_engines(source + "\n", stdout, name, status=status, diagnostic=diagnostic)
+
+    def test_qualified_and_selectively_aliased_enum_patterns(self):
+        with tempfile.TemporaryDirectory(prefix="wysna-pattern-owners-") as temporary:
+            root = Path(temporary).resolve()
+            entry = root / "main.wysna"
+            module = '''pub enum State { Ready(int), Idle }
+pub enum Choice[T] { Chosen(T), Absent }
+fn helper(value: int) -> int { value + 1 }
+pub fn apply[T](value: T, transform: fn(T) -> int) -> int {
+    return helper(transform(value))
+}
+'''
+            (root / "status.wysna").write_text(module, encoding="utf-8")
+            source = '''
+import "status.wysna" as status
+from "status.wysna" use State as Other
+from "status.wysna" use apply as transform
+fn classify(state: status.State) -> int {
+    return match state {
+        status.State.Ready(number) => number,
+        Other.Idle => 0,
+    }
+}
+fn double(value: int) -> int { value * 2 }
+print(classify(status.State.Ready(12)), classify(status.State.Idle))
+print(transform(5, double), status.apply[int](6, double))
+let chosen = status.Choice.Chosen(6)
+let absent: status.Choice[int] = status.Choice.Absent
+let absent_again: status.Choice[int] = status.Choice.Absent
+print(chosen == status.Choice.Chosen(6), absent == absent_again)
+'''
+            entry.write_text(source, encoding="utf-8")
+            for engine in ENGINES:
+                target = root / engine
+                target.mkdir()
+                (target / "status.wysna").write_text(module, encoding="utf-8")
+                result = run_engine(engine, source, "qualified", self.selfhost_bin, root)
+                self.assertEqual(result.exit_code, 0, result.stderr)
+                self.assertEqual(result.stdout, "12 0\n11 13\ntrue true\n")
+            invalid = source.replace("Other.Idle =>", "status.Unknown.Idle =>")
+            entry.write_text(invalid, encoding="utf-8")
+            with self.assertRaises(WysnaError):
+                self.service.check_file(entry)
+            rejected = _run_selfhost_cli(self.selfhost_bin, entry, root)
+            self.assertNotEqual(rejected.returncode, 0)
+
+    def test_map_error_preserves_success_and_calls_converter_for_failure(self):
+        source = '''
+import "std/result" as result_ops
+from "std/result" use map_error
+fn input(valid: bool) -> int ! str {
+    if valid { return Ok(7) }
+    return Err("bad")
+}
+fn convert(error: str) -> int {
+    print("converting")
+    return len(error)
+}
+let success = map_error(input(true), convert) else error { error }
+let failure = result_ops.map_error(input(false), convert) else error { error }
+print(success, failure)
+'''
+        self._assert_all_engines(source, "converting\n7 3\n", "map-error")
+
+    def test_statement_match_discards_values_but_executes_effects(self):
+        source = '''
+enum State { Idle, Ready(int) }
+fn process(state: State) -> int {
+    let mut count = 0
+    match state {
+        State.Ready(value) => { count += value },
+        State.Idle => {},
+    }
+    match count {
+        7 => print("matched"),
+        8 => count + 99,
+    }
+    (match count { _ => count }) + 1
+    match count { _ => count } + 1
+    return count
+}
+print(process(State.Ready(7)), process(State.Idle), process(State.Ready(8)))
+fn fail() -> unit ! str { Err("tail error") }
+fn tail(flag: bool) -> unit ! str {
+    match flag { true => fail(), false => Ok(print()) }
+}
+tail(true) else error { print(error) }
+fn recover() -> int {
+    let failed: int ! str = Err("recover")
+    failed else error { (match (if true { 0 } else { 3 }) { 0 => 6, _ => 7 }) }
+}
+print(recover())
+'''
+        self._assert_all_engines(source, "matched\n7 0 8\ntail error\n6\n", "discard-match")
+        invalid = "let n = match true { true => 1, false => \"no\" }\n"
+        with self.assertRaises(WysnaError):
+            self.service.check(invalid, "<discard-match>")
+        with tempfile.TemporaryDirectory() as temporary:
+            path = Path(temporary) / "invalid.wysna"
+            path.write_text(invalid, encoding="utf-8")
+            rejected = subprocess.run([self.selfhost_bin, "--check", str(path)],
+                                      capture_output=True, text=True, timeout=60)
+            self.assertIn("W2001", rejected.stderr)
+
+    def test_json_access_errors_include_field_and_actual_type(self):
+        source = '''
+import "std/json"
+let value = json.object({"status_code": json.from_str("201"), "dot.key": json.from_int(7)})
+match json.get_int(value, "status_code") { Err(issue) => print(issue.message), _ => {} }
+match json.get_optional_bool(value, "dot.key") { Err(issue) => print(issue.message), _ => {} }
+match json.get_str(value, "missing") { Err(issue) => print(issue.message), _ => {} }
+match json.to_int(json.Value.Number("9223372036854775808")) { Err(issue) => print(issue.message), _ => {} }
+'''
+        expected = (
+            'status_code: expected JSON integer, found JSON string\n'
+            '["dot.key"]: expected JSON boolean, found JSON number\n'
+            'missing: missing required JSON field\n'
+            'integer overflow\n'
+        )
+        self._assert_all_engines(source, expected, "json-field-errors")
 
     def test_b1_bidirectional_empty_collection_inference(self):
         source = '''

@@ -74,7 +74,7 @@ function activate(context) {
             output.clear();
             output.appendLine(envelope.result.symbol.name);
             for (const entry of envelope.result.entries) {
-                const status = entry.affected ? "affected" : "no static path";
+                const status = entry.impact_status?.replaceAll("-", " ") ?? (entry.affected ? "affected" : "no static path");
                 output.appendLine(`${entry.kind} ${entry.name} (${entry.entry}) — ${status}`);
                 for (const evidence of entry.paths) {
                     const chain = evidence.chain.map(edge => ` --${edge.kind}--> ${edge.to}`).join("");
