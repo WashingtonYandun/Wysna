@@ -9,11 +9,27 @@ from __future__ import annotations
 
 import json
 import os
+import ssl
 import time
 import urllib.request
 import urllib.error
+import threading
 from abc import ABC, abstractmethod
 from typing import Any, Dict, List, Optional, Tuple
+
+
+_openrouter_rate_lock = threading.Lock()
+_openrouter_next_request_at = 0.0
+
+
+def _build_ssl_context():
+    if os.path.exists("/etc/ssl/cert.pem"):
+        return ssl.create_default_context(cafile="/etc/ssl/cert.pem")
+    try:
+        import certifi
+        return ssl.create_default_context(cafile=certifi.where())
+    except ImportError:
+        return ssl.create_default_context()
 
 
 class LlmProvider(ABC):
@@ -109,17 +125,10 @@ class GeminiProvider(LlmProvider):
         self.endpoint = (
             f"https://generativelanguage.googleapis.com/v1beta/models/{self.model}:generateContent?key={self.api_key}"
         )
-        self.ssl_context = self._build_ssl_context()
+        self.ssl_context = _build_ssl_context()
 
     def _build_ssl_context(self):
-        import ssl
-        if os.path.exists("/etc/ssl/cert.pem"):
-            return ssl.create_default_context(cafile="/etc/ssl/cert.pem")
-        try:
-            import certifi
-            return ssl.create_default_context(cafile=certifi.where())
-        except ImportError:
-            return ssl.create_default_context()
+        return _build_ssl_context()
 
     def generate(
         self,
@@ -220,7 +229,7 @@ class GeminiProvider(LlmProvider):
 
 
 class OpenAICompatibleProvider(LlmProvider):
-    """Generic OpenAI-compatible provider (Ollama, LM Studio, vLLM, OpenAI)."""
+    """Generic OpenAI-compatible provider (OpenRouter, Ollama, LM Studio, vLLM, OpenAI)."""
 
     token_counting_method: str = "provider_usage"
 
@@ -230,12 +239,21 @@ class OpenAICompatibleProvider(LlmProvider):
         api_key: Optional[str] = None,
         model: str = "local-model",
         temperature: float = 0.2,
+        max_tokens: int = 8192,
+        min_interval_sec: Optional[float] = None,
     ):
         self.base_url = base_url.rstrip("/")
-        self.api_key = api_key or os.getenv("OPENAI_API_KEY", "not-needed")
+        self.is_openrouter = "openrouter.ai" in self.base_url.lower()
+        environment_key = os.getenv("OPENROUTER_API_KEY") if self.is_openrouter else os.getenv("OPENAI_API_KEY")
+        self.api_key = api_key or environment_key or ("" if self.is_openrouter else "not-needed")
+        if self.is_openrouter and not self.api_key:
+            raise ValueError("OpenRouter requires OPENROUTER_API_KEY or --api-key.")
         self.model = model
         self.temperature = temperature
+        self.max_tokens = max_tokens
+        self.min_interval_sec = (3.5 if self.is_openrouter else 0.0) if min_interval_sec is None else min_interval_sec
         self.endpoint = f"{self.base_url}/chat/completions"
+        self.ssl_context = _build_ssl_context()
 
     def generate(
         self,
@@ -254,7 +272,7 @@ class OpenAICompatibleProvider(LlmProvider):
             "model": self.model,
             "messages": messages,
             "temperature": self.temperature,
-            "max_tokens": 4096,
+            "max_tokens": self.max_tokens,
         }
 
         req_data = json.dumps(payload).encode("utf-8")
@@ -262,17 +280,47 @@ class OpenAICompatibleProvider(LlmProvider):
             "Content-Type": "application/json",
             "Authorization": f"Bearer {self.api_key}",
         }
-        req = urllib.request.Request(self.endpoint, data=req_data, headers=headers, method="POST")
+        if self.is_openrouter:
+            headers["HTTP-Referer"] = "https://github.com/WashingtonYandun/Wysna"
+            headers["X-Title"] = "Wysna AI Eval"
 
-        try:
-            with urllib.request.urlopen(req, timeout=120) as response:
-                res_body = response.read().decode("utf-8")
-                data = json.loads(res_body)
-        except urllib.error.HTTPError as e:
-            err_msg = e.read().decode("utf-8")
-            raise RuntimeError(f"OpenAI API HTTP {e.code}: {err_msg}") from e
-        except Exception as e:
-            raise RuntimeError(f"OpenAI API connection error: {e}") from e
+        backoff_schedule = (10.0, 20.0, 35.0, 45.0)
+        max_retries = 5
+        data = None
+        for attempt in range(max_retries):
+            if self.is_openrouter and self.min_interval_sec > 0.0:
+                global _openrouter_next_request_at
+                with _openrouter_rate_lock:
+                    now = time.monotonic()
+                    scheduled_at = max(now, _openrouter_next_request_at)
+                    _openrouter_next_request_at = scheduled_at + self.min_interval_sec
+                if scheduled_at > now:
+                    time.sleep(scheduled_at - now)
+
+            req = urllib.request.Request(self.endpoint, data=req_data, headers=headers, method="POST")
+            try:
+                with urllib.request.urlopen(req, context=self.ssl_context, timeout=120) as response:
+                    res_body = response.read().decode("utf-8")
+                    data = json.loads(res_body)
+                    break
+            except urllib.error.HTTPError as e:
+                err_msg = e.read().decode("utf-8", errors="replace")
+                if e.code in (429, 502, 503, 504) and attempt < max_retries - 1:
+                    delay = backoff_schedule[min(attempt, len(backoff_schedule) - 1)]
+                    retry_after = e.headers.get("Retry-After") if e.headers else None
+                    if retry_after:
+                        try:
+                            delay = max(float(retry_after) + 1.0, 1.0)
+                        except ValueError:
+                            pass
+                    time.sleep(delay)
+                    continue
+                raise RuntimeError(f"OpenAI API HTTP {e.code}: {err_msg}") from e
+            except (urllib.error.URLError, TimeoutError, ConnectionError) as e:
+                if attempt < max_retries - 1:
+                    time.sleep(2.0)
+                    continue
+                raise RuntimeError(f"OpenAI API connection error: {e}") from e
 
         latency_ms = (time.perf_counter() - start) * 1000.0
 
@@ -280,7 +328,8 @@ class OpenAICompatibleProvider(LlmProvider):
         if not choices:
             raise RuntimeError("OpenAI API returned no choices.")
 
-        completion = choices[0].get("message", {}).get("content", "")
+        message = choices[0].get("message", {}) or {}
+        completion = message.get("content") or ""
         usage = data.get("usage", {})
         tokens = {
             "prompt_tokens": usage.get("prompt_tokens", 0),
