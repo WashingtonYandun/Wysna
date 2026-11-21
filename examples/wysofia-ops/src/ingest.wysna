@@ -1,0 +1,25 @@
+import "audit.wysna" as audit
+
+fn main() -> int {
+    let arguments = args()
+    if len(arguments) != 3 {
+        eprint("usage: ingest <input.json> <report.json>")
+        return 2
+    }
+    let raw = read_file(arguments[1]) else err {
+        eprint("ingest: cannot read input: " + err.message)
+        return 2
+    }
+    let events = audit.parse_events_json(raw) else err {
+        eprint("ingest: invalid batch: " + err.reason)
+        return 1
+    }
+    let summary = audit.evaluate_batch(events)
+    let report = audit.render_summary_json(summary)
+    write_file(arguments[2], report + "\n") else err {
+        eprint("ingest: cannot write report: " + err.message)
+        return 3
+    }
+    print(report)
+    return 0
+}

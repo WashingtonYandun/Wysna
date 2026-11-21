@@ -11,6 +11,8 @@ from statistics import median
 import subprocess
 import sys
 import tempfile
+import time
+from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional, Sequence, Tuple
 
 if __name__ == "__main__" and (__package__ is None or __package__ == ""):
@@ -20,6 +22,7 @@ if __name__ == "__main__" and (__package__ is None or __package__ == ""):
 from bench.ai_eval.harness import EvaluationHarness, SYSTEM_PROMPT
 from bench.ai_eval.models import SCHEMA_VERSION, Task, TaskEvaluationResult, TaskTestCase
 from bench.ai_eval.providers import GeminiProvider, LlmProvider, MockProvider, OpenAICompatibleProvider
+from bench.ai_eval.checkpoint import COHORT_CHECKPOINT_SCHEMA, load_rows, save_rows, run_config
 
 TASK_FAMILIES = ("authoring", "syntax_type_repair", "refactor", "add_capability", "diagnosis")
 COHORT_SCHEMA_VERSION = "wysna.ai-eval-ab/1"
@@ -32,6 +35,7 @@ class CohortTask:
     allowed_edit_files: Tuple[str, ...]
     invariant_checker: Optional[Callable[[str, TaskEvaluationResult], Optional[str]]] = None
     condition_instructions: Tuple[Tuple[str, str], ...] = ()
+    condition_import_styles: Tuple[Tuple[str, str], ...] = ()
 
 
 def _build_default_cohort_tasks() -> List[CohortTask]:
@@ -508,35 +512,32 @@ def _build_default_cohort_tasks() -> List[CohortTask]:
 
 
 def build_import_style_ab_tasks() -> List[CohortTask]:
-    """Return one task whose A/B conditions differ only by import syntax."""
-    common_cases = [
-        TaskTestCase(
-            name="summary",
-            expected_stdout="sum=9\n",
-            expected_exit=0,
-        ),
+    """Use three identical A/B problems with import syntax as the only variable."""
+    scenarios = [
+        ("LANG-R01-IMPORT-STYLE", "sum", "sum", [("4,5", "sum=9\n"), ("8,-3", "sum=5\n")]),
+        ("LANG-R01-IMPORT-PRODUCT", "multiply", "product", [("3,7", "product=21\n"), ("-2,4", "product=-8\n")]),
+        ("LANG-R01-IMPORT-MAX", "take the maximum of", "max", [("5,9", "max=9\n"), ("-5,-1", "max=-1\n")]),
     ]
-    return [
-        CohortTask(
+    tasks = []
+    for task_id, operation, label, cases in scenarios:
+        tasks.append(CohortTask(
             task=Task(
-                id="LANG-R01-IMPORT-STYLE",
-                domain="cli_scripting",
-                title="Parse and sum two comma-separated integers",
+                id=task_id, domain="cli_scripting", title=f"Parse two CLI integers and compute {label}",
                 status="supported",
-                instruction=(
-                    "Write `main.wysna` to split the string `\"4,5\"`, parse both values as integers, "
-                    "sum them, and print exactly `sum=9`. Use the import form specified for this run."
-                ),
-                test_cases=common_cases,
+                instruction=(f"Write `main.wysna` to read a comma-separated pair from args()[1], "
+                             f"parse both integers, {operation} them, and print `{label}=<result>`. "
+                             "Use the import form specified for this run."),
+                test_cases=[TaskTestCase(name=f"case-{index}", args=[raw], expected_stdout=expected,
+                                        expected_exit=0) for index, (raw, expected) in enumerate(cases)],
             ),
-            family="authoring",
-            allowed_edit_files=("main.wysna",),
+            family="authoring", allowed_edit_files=("main.wysna",),
             condition_instructions=(
                 ("A", 'Use `import "std/parse" as parse` and call `parse.parse_int(...)`.'),
                 ("B", 'Use `from "std/parse" use { parse_int }` and call `parse_int(...)`.'),
             ),
-        ),
-    ]
+            condition_import_styles=(("A", "namespace"), ("B", "selective")),
+        ))
+    return tasks
 
 
 def _collect_semantic_context(harness: EvaluationHarness, task: Task) -> Tuple[str, int]:
@@ -607,13 +608,32 @@ def _count_collateral_lines(
 class ConditionHarness(EvaluationHarness):
     """Variant of EvaluationHarness supporting persistence-safe state assertions and Condition A/B context."""
 
-    def __init__(self, condition: str, *args: Any, interactive: bool = False, **kwargs: Any) -> None:
+    def __init__(self, condition: str, *args: Any, interactive: bool = False,
+                 required_import_style: Optional[str] = None, **kwargs: Any) -> None:
         super().__init__(*args, **kwargs)
         self.condition = condition
         self.interactive = interactive
         self.tool_turns = 0
         self.read_count = 0
         self.semantic_count = 0
+        self.required_import_style = required_import_style
+
+    def run_oracle_tests(self, workspace_dir, entrypoint, test_cases):
+        if self.required_import_style:
+            from parser.Parser import Parser
+            from node.NodeType import ImportDecl, UseDecl
+            source = self._resolve_confined_path(workspace_dir, entrypoint).read_text(encoding="utf-8")
+            program = Parser().parse(source)
+            imports = [node for node in program.body if isinstance(node, ImportDecl) and node.path == "std/parse"]
+            if self.required_import_style == "namespace":
+                valid = bool(imports) and all(type(node) is ImportDecl and node.namespace == "parse" for node in imports)
+            else:
+                valid = bool(imports) and all(isinstance(node, UseDecl) and not node.is_namespace
+                                             and any(symbol.name == "parse_int" for symbol in node.symbols)
+                                             for node in imports)
+            if not valid:
+                return False, f"Import style invariant: use the assigned {self.required_import_style} import from std/parse."
+        return super().run_oracle_tests(workspace_dir, entrypoint, test_cases)
 
     def workspace_context(self, fixtures):
         if self.interactive:
@@ -794,16 +814,46 @@ def run_ab_cohort(
     provider_name: str = "mock",
     interactive: bool = False,
     comparison_axis: str = "semantic-prefetch",
+    checkpoint_path: Optional[Path] = None,
+    checkpoint_config: Optional[Dict[str, Any]] = None,
 ) -> Dict[str, Any]:
     """Execute alternating blinded A/B repetitions with fresh isolated workspaces per run."""
-    runs: List[Dict[str, Any]] = []
+    if repetitions < 1 or max_repair_cycles < 0:
+        raise ValueError("Repetitions must be positive and repair cycles must be non-negative.")
+    task_ids = [item.task.id for item in cohort_tasks]
+    if len(task_ids) != len(set(task_ids)):
+        raise ValueError("Cohort task IDs must be unique.")
+    config = checkpoint_config or run_config(
+        Path(repo_root), provider=provider_name, model=model_name, base_url="",
+        corpus=[{"task": item.task.to_dict(), "allowed_edit_files": item.allowed_edit_files,
+                 "condition_instructions": item.condition_instructions,
+                 "condition_import_styles": item.condition_import_styles} for item in cohort_tasks],
+        parameters={"repetitions": repetitions, "max_repair_cycles": max_repair_cycles,
+                    "interactive": interactive, "comparison_axis": comparison_axis, "oracle_revision": 3},
+        output_paths=(checkpoint_path,),
+    )
+    runs = load_rows(checkpoint_path, config, COHORT_CHECKPOINT_SCHEMA) if checkpoint_path else []
+    expected_keys = [(rep, item.task.id, condition)
+                     for rep in range(repetitions) for item in cohort_tasks
+                     for condition in (("A", "B") if rep % 2 == 0 else ("B", "A"))]
+    actual_keys = [(row.get("repetition"), row.get("task_id"), row.get("condition")) for row in runs]
+    if actual_keys != expected_keys[:len(runs)]:
+        raise ValueError("Checkpoint contains duplicate, reordered or unexpected cohort runs.")
+    if checkpoint_path:
+        save_rows(checkpoint_path, config, runs, COHORT_CHECKPOINT_SCHEMA)
+    completed_count = len(runs)
+    run_index = 0
 
     for rep in range(repetitions):
         order = ("A", "B") if rep % 2 == 0 else ("B", "A")
         for cohort_item in cohort_tasks:
             for condition in order:
+                run_index += 1
+                if run_index <= completed_count:
+                    continue
                 harness = ConditionHarness(
                     condition, repo_root=repo_root, max_repair_cycles=max_repair_cycles, interactive=interactive,
+                    required_import_style=dict(cohort_item.condition_import_styles).get(condition),
                 )
                 provider = provider_factory(condition)
                 task_copy = Task.from_dict(cohort_item.task.to_dict())
@@ -812,13 +862,18 @@ def run_ab_cohort(
                     task_copy.instruction = f"{task_copy.instruction}\n\n[CONDITION]\n{condition_instruction}"
                 semantic_queries = 0
                 files_read = len(task_copy.fixtures)
+                context_started = time.perf_counter()
                 if condition == "B" and not interactive:
                     sem_note, semantic_queries = _collect_semantic_context(harness, task_copy)
                     if sem_note:
                         task_copy.instruction = f"{task_copy.instruction}\n\n[SEMANTIC_CONTEXT]\n{sem_note}"
+                context_preparation_ms = (time.perf_counter() - context_started) * 1000.0
 
                 result = harness.evaluate_task(task_copy, provider)
                 final_code = result.attempts[-1].code if result.attempts else ""
+                if result.attempts and result.attempts[-1].files:
+                    final_code = "\n".join(f"### {name}\n```wysna\n{content}\n```"
+                                           for name, content in result.attempts[-1].files.items())
                 files_touched, collateral_lines = _count_collateral_lines(
                     harness,
                     cohort_item.task.fixtures,
@@ -846,7 +901,8 @@ def run_ab_cohort(
                     "regression": regression,
                     "pass_at_attempt": result.pass_at_attempt,
                     "model_turns": result.model_turns + harness.tool_turns,
-                    "wall_time_ms": round(result.wall_time_ms, 2),
+                    "wall_time_ms": round(result.wall_time_ms + context_preparation_ms, 2),
+                    "context_preparation_ms": round(context_preparation_ms, 2),
                     "provider_latency_ms": round(result.provider_latency_ms, 2),
                     "total_tokens": result.total_tokens,
                     "token_counting_method": getattr(provider, "token_counting_method", "unknown"),
@@ -855,10 +911,23 @@ def run_ab_cohort(
                     "files_touched_count": files_touched,
                     "collateral_lines_changed": collateral_lines,
                     "final_error_category": result.final_error_category or invariant_err,
+                    "task_result": result.to_dict(),
                 })
+                if checkpoint_path:
+                    save_rows(checkpoint_path, config, runs, COHORT_CHECKPOINT_SCHEMA)
 
     summary = evaluate_expansion_gate(runs)
-    summary["oracle_revision"] = 2
+    import_ids = {item.task.id for item in cohort_tasks if item.condition_import_styles}
+    context_runs = [row for row in runs if row["task_id"] not in import_ids]
+    import_runs = [row for row in runs if row["task_id"] in import_ids]
+    if context_runs and import_runs:
+        summary["decision"] = "separate_comparisons_required"
+        summary["comparisons"] = {
+            "semantic_context": evaluate_expansion_gate(context_runs),
+            "import_style": evaluate_expansion_gate(import_runs),
+        }
+    summary["oracle_revision"] = 3
+    summary["evaluation_config"] = config
     summary["provider_name"] = provider_name
     if interactive:
         summary["context_mode"] = "model-selected"
@@ -883,9 +952,14 @@ def main() -> int:
     parser.add_argument("--repetitions", type=int, default=3)
     parser.add_argument("--max-repair-cycles", type=int, default=3)
     parser.add_argument("--output", type=str, default=None)
+    parser.add_argument("--checkpoint", type=Path, default=None)
     parser.add_argument("--interactive-tools", action="store_true")
     parser.add_argument("--suite", choices=["default", "import-style", "all"], default="default")
     args = parser.parse_args()
+    if args.repetitions < 1 or args.max_repair_cycles < 0:
+        parser.error("repetitions must be positive and repair cycles non-negative")
+    if args.checkpoint and args.output and args.checkpoint.resolve() == Path(args.output).resolve():
+        parser.error("--checkpoint and --output must use different files")
 
     repo_root = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
     if args.suite == "default":
@@ -905,6 +979,16 @@ def main() -> int:
         model_name = args.model or "local-model"
         factory = lambda _cond: OpenAICompatibleProvider(base_url=args.base_url, api_key=args.api_key, model=model_name)
 
+    config = run_config(
+        Path(repo_root), provider=args.provider, model=model_name, base_url=args.base_url,
+        corpus=[{"task": item.task.to_dict(), "condition_instructions": item.condition_instructions,
+                 "condition_import_styles": item.condition_import_styles} for item in tasks],
+        parameters={"suite": args.suite, "repetitions": args.repetitions,
+                    "max_repair_cycles": args.max_repair_cycles, "interactive": args.interactive_tools,
+                    "temperature": 0.2, "max_tokens": 8192 if args.provider == "openai" else 4096,
+                    "oracle_revision": 3},
+        output_paths=(args.checkpoint, args.output),
+    )
     report = run_ab_cohort(
         tasks,
         factory,
@@ -915,6 +999,8 @@ def main() -> int:
         provider_name=args.provider,
         interactive=args.interactive_tools,
         comparison_axis=("import-style" if args.suite == "import-style" else "mixed" if args.suite == "all" else "semantic-prefetch"),
+        checkpoint_path=args.checkpoint,
+        checkpoint_config=config,
     )
     if args.output:
         os.makedirs(os.path.dirname(os.path.abspath(args.output)), exist_ok=True)
@@ -931,4 +1017,8 @@ def main() -> int:
 
 
 if __name__ == "__main__":
-    sys.exit(main())
+    try:
+        sys.exit(main())
+    except (RuntimeError, ValueError) as error:
+        print(f"Evaluation stopped: {error}", file=sys.stderr)
+        sys.exit(2)

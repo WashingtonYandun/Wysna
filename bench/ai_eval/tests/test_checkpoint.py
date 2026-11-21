@@ -94,3 +94,61 @@ def test_benchmark_recovers_after_failure_between_tasks(tmp_path):
 
     assert [result.task_id for result in summary.results] == ["TASK-1", "TASK-2"]
     resumed_evaluator.assert_called_once_with(second_task, provider)
+
+
+def test_ab_resume_preserves_completed_condition_and_rejects_changed_config(tmp_path, monkeypatch):
+    from bench.ai_eval.ab_cohort import CohortTask, ConditionHarness, run_ab_cohort
+    from bench.ai_eval.checkpoint import load_rows, COHORT_CHECKPOINT_SCHEMA
+
+    task = _task("PAIR-1")
+    cohort = [CohortTask(task, "authoring", ("main.wysna",))]
+    path = tmp_path / "ab.checkpoint.json"
+    config = {"model": "mock", "revision": "fixture"}
+    evaluate = Mock(side_effect=[_result(task), RuntimeError("interrupted")])
+    monkeypatch.setattr(ConditionHarness, "evaluate_task", evaluate)
+    with pytest.raises(RuntimeError, match="interrupted"):
+        run_ab_cohort(cohort, lambda _condition: MockProvider(), repo_root=str(REPO_ROOT),
+                      repetitions=1, checkpoint_path=path, checkpoint_config=config)
+    saved = load_rows(path, config, COHORT_CHECKPOINT_SCHEMA)
+    assert len(saved) == 1 and saved[0]["condition"] == "A"
+    assert saved[0]["task_result"]["task_id"] == task.id
+    evaluate = Mock(return_value=_result(task))
+    monkeypatch.setattr(ConditionHarness, "evaluate_task", evaluate)
+    report = run_ab_cohort(cohort, lambda _condition: MockProvider(), repo_root=str(REPO_ROOT),
+                           repetitions=1, checkpoint_path=path, checkpoint_config=config)
+    assert [row["condition"] for row in report["runs"]] == ["A", "B"]
+    evaluate.assert_called_once()
+    with pytest.raises(ValueError, match="configuration differs"):
+        run_ab_cohort(cohort, lambda _condition: MockProvider(), repo_root=str(REPO_ROOT),
+                      repetitions=1, checkpoint_path=path, checkpoint_config={"model": "changed"})
+
+
+def test_failed_atomic_replace_preserves_previous_checkpoint(tmp_path, monkeypatch):
+    from bench.ai_eval import checkpoint as module
+    path = tmp_path / "safe.json"
+    config = {"model": "mock"}
+    first = _result(_task("TASK-1"))
+    save_checkpoint(path, config, [first])
+    previous = path.read_bytes()
+    monkeypatch.setattr(module.os, "replace", Mock(side_effect=OSError("disk failure")))
+    with pytest.raises(OSError, match="disk failure"):
+        save_checkpoint(path, config, [first, _result(_task("TASK-2"))])
+    assert path.read_bytes() == previous
+    assert list(tmp_path.iterdir()) == [path]
+
+
+def test_source_fingerprint_ignores_reports_but_detects_changes(tmp_path):
+    import subprocess
+    from bench.ai_eval.checkpoint import run_config
+
+    subprocess.run(["git", "init", "-q", str(tmp_path)], check=True)
+    subprocess.run(["git", "-c", "user.name=Fixture", "-c", "user.email=fixture@example.invalid",
+                    "commit", "--allow-empty", "-qm", "Initialize fixture"], cwd=tmp_path, check=True)
+    arguments = {"provider": "mock", "model": "fixture", "base_url": "", "corpus": [], "parameters": {}}
+    original = run_config(tmp_path, **arguments)
+    results = tmp_path / "bench/ai_eval/results"
+    results.mkdir(parents=True)
+    (results / "generated.json").write_text("{}")
+    assert run_config(tmp_path, **arguments) == original
+    (tmp_path / "source.wysna").write_text("print(1)")
+    assert run_config(tmp_path, **arguments) != original

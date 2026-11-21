@@ -246,10 +246,10 @@ Antes de proponer cambios, se evalúan los nueve ejes solicitados desde la persp
 
 - **Pregunta:** Para una tarea equivalente, ¿la importación selectiva permite a un modelo escribir código Wysna correcto con menos reparaciones o tokens que la importación por namespace?
 - **Piloto disponible:** el archivo de resultados contiene una observación por forma y ambas tareas pasaron en A y B. Esto no permite elegir entre sintaxis: cada forma era una tarea distinta y A/B comparaba contexto semántico, no la forma de importación. Véase la procedencia en [AGT-R01-LANG-R01-ab-protocol.md](research/AGT-R01-LANG-R01-ab-protocol.md).
-- **Experimento corregido:** una tarea idéntica y un mismo oráculo en ambas condiciones; A solicita import ... as ... y B solicita from ... use { ... }. Ejecutar 3 repeticiones con orden alternado AB, BA, AB, el mismo modelo gratuito, presupuesto de reparación y corpus. Registrar Pass@1, Pass@3, errores de importación/API, turnos, tokens y tiempo.
+- **Experimento corregido:** tres tareas con objetivos y oráculos idénticos en ambas condiciones; A solicita import ... as ... y B solicita from ... use { ... }. Ejecutar 3 repeticiones con orden alternado AB, BA, AB, el mismo modelo gratuito, presupuesto de reparación y corpus. Registrar Pass@1, Pass@3, errores de importación/API, turnos, tokens y tiempo.
 - **Regla de decisión:** no deprecar ni retirar ninguna sintaxis con esta cohorte. Recomendar from ... use solo si no reduce la tasa de éxito y muestra una mejora repetida de al menos 20% en tokens o reparaciones. Si ambas formas empatan dentro del ruido de esta muestra, mantener ambas y documentar el resultado como inconcluso.
 - **Observación separada:** la fricción de std/result.map_error observada en prog_a_cli.wysna trata de transformar canales de error; no forma parte de esta hipótesis de imports ni se usará como evidencia a favor de una sintaxis.
 - **Componentes afectados:** bench/ai_eval/ab_cohort.py, bench/ai_eval/README.md, bench/ai_eval/tests/test_ab_cohort.py y este protocolo.
-- **Criterio de aceptación:** la suite genera una sola identidad de tarea, aplica una instrucción de sintaxis por condición, conserva el mismo oráculo y produce tres pares completos por forma.
+- **Criterio de aceptación:** la suite conserva tres identidades de tarea, aplica una instrucción de sintaxis por condición, valida el AST del import y produce tres repeticiones por tarea con oráculos de entrada variable.
 - **Requiere aprobación:** no.
-- **Estado:** investigación abierta; piloto anterior exploratorio; cohorte corregida pendiente de réplica.
+- **Estado:** investigación abierta; piloto anterior exploratorio; cohorte corregida y validada sin red; medición real aplazada por falta de acceso a modelos.

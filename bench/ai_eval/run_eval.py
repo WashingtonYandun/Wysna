@@ -6,11 +6,9 @@ Usage:
 """
 
 import argparse
-import hashlib
 import json
 import os
 from pathlib import Path
-import subprocess
 import sys
 
 # Load both the benchmark package and the compiler from the source checkout.
@@ -20,61 +18,18 @@ sys.path[:0] = [REPO_ROOT, os.path.join(REPO_ROOT, "src")]
 from bench.ai_eval.harness import EvaluationHarness
 from bench.ai_eval.models import Task
 from bench.ai_eval.providers import GeminiProvider, MockProvider, OpenAICompatibleProvider
-from bench.ai_eval.checkpoint import load_checkpoint, save_checkpoint
+from bench.ai_eval.checkpoint import load_checkpoint, save_checkpoint, run_config
+from bench.ai_eval.acceptance import evaluate_acceptance
 
 
 def _checkpoint_config(args, model_name: str, tasks_file: Path) -> dict:
-    """Identify the task corpus, compiler source, and provider settings for safe resume."""
-    revision = subprocess.run(
-        ["git", "rev-parse", "HEAD"], cwd=REPO_ROOT, capture_output=True, text=True, check=True,
-    ).stdout.strip()
-    diff = subprocess.run(
-        ["git", "diff", "HEAD", "--binary"], cwd=REPO_ROOT, capture_output=True, check=True,
-    ).stdout
-    untracked = subprocess.run(
-        ["git", "ls-files", "--others", "--exclude-standard", "-z"],
-        cwd=REPO_ROOT, capture_output=True, check=True,
-    ).stdout
-    output_paths = [
-        path.resolve() for path in (args.checkpoint, Path(args.output) if args.output else None)
-        if path is not None
-    ]
-    source_hash = hashlib.sha256(diff)
-    for relative_name in untracked.split(b"\0"):
-        if not relative_name:
-            continue
-        source_path = Path(REPO_ROOT) / os.fsdecode(relative_name)
-        resolved_path = source_path.resolve()
-        results_dir = (Path(REPO_ROOT) / "bench" / "ai_eval" / "results").resolve()
-        if resolved_path == results_dir or results_dir in resolved_path.parents:
-            continue
-        if any(
-            resolved_path == output_path
-            or (
-                resolved_path.parent == output_path.parent
-                and resolved_path.name.startswith(f".{output_path.name}.")
-                and resolved_path.name.endswith(".tmp")
-            )
-            for output_path in output_paths
-        ):
-            continue
-        file_bytes = source_path.read_bytes()
-        source_hash.update(len(relative_name).to_bytes(8, "big"))
-        source_hash.update(relative_name)
-        source_hash.update(len(file_bytes).to_bytes(8, "big"))
-        source_hash.update(file_bytes)
-    source_digest = source_hash.hexdigest()
-    endpoint_digest = hashlib.sha256(args.base_url.encode("utf-8")).hexdigest()
-    return {
-        "compiler_commit": revision,
-        "compiler_source_sha256": source_digest,
-        "tasks_sha256": hashlib.sha256(tasks_file.read_bytes()).hexdigest(),
-        "provider": args.provider,
-        "model": model_name,
-        "endpoint_sha256": endpoint_digest if args.provider == "openai" else None,
-        "task_filter": args.task,
-        "max_repair_cycles": args.max_repair_cycles,
-    }
+    return run_config(
+        Path(REPO_ROOT), provider=args.provider, model=model_name, base_url=args.base_url,
+        corpus=json.loads(tasks_file.read_text(encoding="utf-8")),
+        parameters={"task_filter": args.task, "max_repair_cycles": args.max_repair_cycles,
+                    "temperature": 0.2, "max_tokens": 8192 if args.provider == "openai" else 4096},
+        output_paths=(args.checkpoint, args.output),
+    )
 
 
 def format_markdown_table(summary: dict) -> str:
@@ -186,9 +141,8 @@ def main() -> int:
         if not args.task or task.id == args.task or args.task in task.domain
     ]
     completed_results = []
-    checkpoint_config = None
+    checkpoint_config = _checkpoint_config(args, model_name, tasks_file)
     if args.checkpoint:
-        checkpoint_config = _checkpoint_config(args, model_name, tasks_file)
         selected_ids = {task.id for task in selected_tasks}
         completed_results = load_checkpoint(args.checkpoint, checkpoint_config, selected_ids)
         save_checkpoint(args.checkpoint, checkpoint_config, completed_results)
@@ -211,6 +165,8 @@ def main() -> int:
     )
 
     summary_dict = summary.to_dict()
+    summary_dict["evaluation_config"] = checkpoint_config
+    summary_dict["acceptance"] = evaluate_acceptance(summary_dict)
     md_output = format_markdown_table(summary_dict)
     print("\n" + md_output)
 
@@ -226,4 +182,8 @@ def main() -> int:
 if __name__ == "__main__":
     # Redirected Windows streams may not represent every character in a task report.
     sys.stdout.reconfigure(errors="backslashreplace")
-    sys.exit(main())
+    try:
+        sys.exit(main())
+    except (RuntimeError, ValueError) as error:
+        print(f"Evaluation stopped: {error}", file=sys.stderr)
+        sys.exit(2)

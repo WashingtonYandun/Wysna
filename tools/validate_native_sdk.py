@@ -396,6 +396,23 @@ def validate(sdk, report, strict_source=False, compiler_source=None, application
                 'critical_events': 1, 'health_score': 35, 'total_events': 4,
                 'total_tokens': 1650, 'warning_events': 1,
             }, demo.stdout)
+            ingest = project / ('ingest' + suffix)
+            run('ops-ingest-build', ['project', 'build', *app_options, '--target', 'ingest', '-o', ingest])
+            input_path = project / 'events.json'
+            report_path = project / 'report.json'
+            input_path.write_text('[{"service":"worker","status_code":503,"latency_ms":1800,"token_cost":40}]',
+                                  encoding='utf-8')
+            run('ops-ingest-valid', ['project', 'run', *app_options, '--target', 'ingest', '--', input_path, report_path])
+            require(json.loads(report_path.read_text()) == {
+                'critical_events': 1, 'health_score': 50, 'total_events': 1,
+                'total_tokens': 40, 'warning_events': 0,
+            }, report_path.read_text())
+            previous_report = report_path.read_bytes()
+            input_path.write_text('[{"service":"worker","status_code":600,"latency_ms":1,"token_cost":1}]',
+                                  encoding='utf-8')
+            run('ops-ingest-invalid-preserves-report',
+                ['run', app / 'src/ingest.wysna', '--', input_path, report_path], expected=1, error='status_code')
+            require(report_path.read_bytes() == previous_report, 'Invalid input replaced a valid report')
             tests = run('ops-project-test', ['project', 'test', *app_options])
             require(b'[PASS] audit-domain-contracts (native)' in tests.stdout, tests.stdout)
             graph = run('ops-graph-cli', ['graph', source_path, '--output-format=json-v1'])

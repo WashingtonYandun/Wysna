@@ -2,7 +2,7 @@
 
 ## Estado
 
-Hay un piloto real gratuito y un protocolo corregido para medir la sintaxis de imports. El piloto anterior es evidencia exploratoria del prefetch semántico; no responde directamente a las hipótesis actuales de AGT-R01 ni LANG-R01.
+Las campañas reales están aplazadas por decisión del mantenedor; no se volverá a llamar a proveedores de IA en este cierre. Hay un piloto real gratuito y un protocolo corregido para medir la sintaxis de imports. El piloto anterior es evidencia exploratoria del prefetch semántico; no responde directamente a las hipótesis actuales de AGT-R01 ni LANG-R01.
 
 - **Proveedor/modelo:** OpenRouter, nvidia/nemotron-3.5-super-vl:free.
 - **Modo:** proveedor compatible con OpenAI; context_mode=prefetched; una repetición en orden AB.
@@ -29,25 +29,27 @@ A/B aquí significa **sin contexto semántico prefijado** frente a **prefetch de
 
 Las tareas LANG-R01-IMPORT-AS y LANG-R01-FROM-USE pasaron en ambas condiciones, una observación por forma y condición. Sin embargo, eran tareas separadas: la condición A/B seguía midiendo el contexto, no la forma sintáctica. El objetivo y prompt tampoco eran idénticos. El piloto solo confirma que el modelo produjo una solución aceptada una vez para cada variante; **no permite decir que una sintaxis sea mejor**.
 
-La cohorte del harness se corrigió para tener una sola tarea con un mismo oráculo. A solicita import "std/parse" as parse; B solicita from "std/parse" use { parse_int }. Al no usar fixtures, ninguna condición recibe prefetch semántico.
+La cohorte del harness se corrigió para tener tres tareas pareadas (suma, producto y máximo), con el mismo objetivo y oráculo en A y B. La revisión 3 comprueba la forma del import en el AST y emplea entradas variables para rechazar respuestas constantes. A solicita import "std/parse" as parse; B solicita from "std/parse" use { parse_int }. Al no usar fixtures, ninguna condición recibe prefetch semántico.
 
 ## 3. Protocolo gratuito corregido
 
-Ejecutar dos cohortes separadas, cada una con tres repeticiones que alternan el orden AB, BA, AB y el mismo límite de reparaciones. La primera mide prefetch semántico sobre seis tareas; la segunda mide la forma de importación sobre una tarea equivalente.
+Ejecutar dos cohortes separadas, cada una con tres repeticiones que alternan el orden AB, BA, AB y el mismo límite de reparaciones. La primera mide prefetch semántico sobre seis tareas; la segunda mide la forma de importación sobre tres tareas equivalentes por condición.
 
     # OPENROUTER_API_KEY debe estar en el entorno y no debe guardarse en el reporte.
     python3 bench/ai_eval/ab_cohort.py \
       --provider=openai --base-url=https://openrouter.ai/api/v1 \
       --model=nvidia/nemotron-3.5-super-vl:free --suite=default \
       --repetitions=3 --max-repair-cycles=3 \
+      --checkpoint=bench/ai_eval/results/v08_nemotron_prefetch_3rep.checkpoint.json \
       --output=bench/ai_eval/results/v08_nemotron_prefetch_3rep.json
 
     python3 bench/ai_eval/ab_cohort.py \
       --provider=openai --base-url=https://openrouter.ai/api/v1 \
       --model=nvidia/nemotron-3.5-super-vl:free --suite=import-style \
       --repetitions=3 --max-repair-cycles=3 \
+      --checkpoint=bench/ai_eval/results/v08_nemotron_import_style_3rep.checkpoint.json \
       --output=bench/ai_eval/results/v08_nemotron_import_style_3rep.json
-No se debe sustituir el modelo por una variante de pago ni añadir fallback a modelos de pago. El token de OpenRouter no se escribe en archivos ni se pasa en texto plano como argumento de línea de comandos. La réplica queda pendiente hasta que se restablezca la cuota gratuita.
+No se debe sustituir el modelo por una variante de pago ni añadir fallback a modelos de pago. El token de OpenRouter no se escribe en archivos ni se pasa en texto plano como argumento de línea de comandos. La réplica queda aplazada indefinidamente hasta que el mantenedor disponga de acceso y solicite ejecutarla; el reinicio de cuota no autoriza una nueva llamada.
 
 ### Criterios de interpretación
 
@@ -57,7 +59,7 @@ No se debe sustituir el modelo por una variante de pago ni añadir fallback a mo
 
 ## 4. Benchmark de 30 tareas con reanudación
 
-El intento previo de run_eval.py terminó con código 1 y no dejó reporte final. Ejecutar en el worktree que tenga los cambios de provider de PR #169 y checkpointing:
+El intento previo de run_eval.py terminó con código 1 y no dejó reporte final. Cuando se retome expresamente la campaña, usar el worktree que contenga el provider y los checkpoints:
 
     python3 bench/ai_eval/run_eval.py \
       --provider=openai \
@@ -71,4 +73,4 @@ Después de una interrupción, repetir exactamente el mismo comando y conservar 
 
 ## 5. Verificación del harness sin red
 
-Las notas anteriores registran la validación de MockProvider del 2026-11-21 (17 passed y cohortes mock inconclusas). No se repitió esa validación durante la corrección actual; la CI del PR es la verificación pendiente.
+Las notas anteriores registran la validación de MockProvider del 2026-11-21 (17 passed y cohortes mock inconclusas). La suite ampliada se valida sin red en este cierre; los resultados y limitaciones están en [11-CIERRE-SIN-LLM.md](../11-CIERRE-SIN-LLM.md).

@@ -399,6 +399,8 @@ class EvaluationHarness:
                     record = AttemptRecord(
                         attempt_index=cycle,
                         code=entrypoint_code,
+                        response=completion,
+                        files=dict(extracted_files),
                         check_passed=False,
                         raw_check_passed=False,
                         post_autofix_check_passed=False,
@@ -448,6 +450,8 @@ class EvaluationHarness:
                 record = AttemptRecord(
                     attempt_index=cycle,
                     code=entrypoint_code,
+                    response=completion,
+                    files=dict(extracted_files),
                     check_passed=check_passed,
                     raw_check_passed=raw_check_passed,
                     post_autofix_check_passed=post_autofix_check_passed,
