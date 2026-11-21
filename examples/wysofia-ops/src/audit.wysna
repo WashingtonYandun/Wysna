@@ -100,8 +100,14 @@ fn decode_event(entry: json.Value) -> AuditEvent ! JsonError {
     let status = json.get_int(entry, "status_code")?
     let latency = json.get_int(entry, "latency_ms")?
     let cost = json.get_int(entry, "token_cost")?
-    if status < 100 or status > 599 or latency < 0 or cost < 0 {
-        return Err(JsonError { offset: 0, message: "event fields out of valid operational bounds" })
+    if status < 100 or status > 599 {
+        return Err(json.error(0, f"status_code: expected a status in 100..599, found {status}"))
+    }
+    if latency < 0 {
+        return Err(json.error(0, f"latency_ms: expected a nonnegative integer, found {latency}"))
+    }
+    if cost < 0 {
+        return Err(json.error(0, f"token_cost: expected a nonnegative integer, found {cost}"))
     }
     return Ok(AuditEvent { service: service, status_code: status, latency_ms: latency, token_cost: cost })
 }
@@ -117,27 +123,23 @@ pub fn parse_events_json(raw: str) -> list[AuditEvent] ! AuditError {
         return Err(AuditError { reason: "expected top-level JSON array of events" })
     }
     let mut out: list[AuditEvent] = []
-    for entry in items {
-        out.append(result_ops.map_error(decode_event(entry), audit_json_error)?)
+    for index, entry in enumerate(items) {
+        let event = decode_event(entry) else issue {
+            return Err(AuditError { reason: f"events[{index}].{issue.message}" })
+        }
+        out.append(event)
     }
     return Ok(out)
-}
-
-fn json_int_val(n: int) -> json.Value {
-    let res = json.number(str(n)) else _err {
-        return json.null()
-    }
-    return res
 }
 
 ## Renders an AuditSummary as compact deterministic JSON.
 pub fn render_summary_json(summary: AuditSummary) -> str {
     let payload: dict[str, json.Value] = {
-        "total_events": json_int_val(summary.total_events),
-        "critical_events": json_int_val(summary.critical_events),
-        "warning_events": json_int_val(summary.warning_events),
-        "total_tokens": json_int_val(summary.total_tokens),
-        "health_score": json_int_val(summary.health_score),
+        "total_events": json.from_int(summary.total_events),
+        "critical_events": json.from_int(summary.critical_events),
+        "warning_events": json.from_int(summary.warning_events),
+        "total_tokens": json.from_int(summary.total_tokens),
+        "health_score": json.from_int(summary.health_score),
     }
     let text = json.stringify(json.object(payload)) else _err {
         return "{}"

@@ -850,7 +850,8 @@ class TypeChecker:
             self._check_statement_sequence(block.statements, recovering=True)
             if block.tail_expr:
                 self.expected_type = old_expected
-                return self._check_expr(block.tail_expr, is_statement_context=is_statement_context)
+                result_match = isinstance(block.tail_expr, MatchExpr) and isinstance(old_expected, ResultType)
+                return self._check_expr(block.tail_expr, is_statement_context=is_statement_context and not result_match)
             return None
         finally:
             self.current_scope = old_scope
@@ -1130,6 +1131,17 @@ class TypeChecker:
         else:
             return None
         return symbol.type if symbol and isinstance(symbol.type, ModuleType) else None
+
+    def _enum_owner(self, expression):
+        if isinstance(expression, IdentExpr):
+            symbol = self.current_scope.lookup_symbol(expression.name)
+            if symbol is None or symbol.kind not in ("var", "param"):
+                return self.current_scope.lookup_type(expression.name) or self.generic_enum_templates.get(expression.name)
+        elif isinstance(expression, MemberExpr):
+            module = self._module_receiver(expression.object)
+            if module is not None:
+                return module.scope.lookup_type(expression.property)
+        return None
 
     def _check_expr(self, expr: Expr, is_statement_context: bool = False, allow_module: bool = False) -> WysnaType:
         handler = EXPRESSION_RULES.handler_for(expr, self.file)

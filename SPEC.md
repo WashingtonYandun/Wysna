@@ -370,6 +370,7 @@ match tok.kind {
 }
 ```
 * If an `enum` case is missing and no `else =>` fallback is provided, compilation fails with an exhaustiveness error.
+* A statement-position `match` evaluates the chosen arm for its effects and discards its value. Its arms may have different result types. A match used as a value still requires compatible types across the arms that produce that value.
 * Imported enum patterns may use the module-qualified owner (`status.State.Ready(value)`)
   or an owner bound with a selective import (`State.Ready(value)`). The owner must resolve
   to the enum of the subject.

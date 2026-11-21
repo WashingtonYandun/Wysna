@@ -603,7 +603,8 @@ def evaluate_match_expr(interpreter: "Interpreter", expr: MatchExpr, env: Enviro
                 arm_env.declare(k, v, is_mut=False)
             if arm.guard is not None and not interpreter.eval_expr(arm.guard, arm_env).value:
                 continue
-            return interpreter.eval_block(arm.body, arm_env)
+            value = interpreter.eval_block(arm.body, arm_env)
+            return WysnaUnit() if getattr(expr, "discard_result", False) else value
     # No arm matched. The checker requires a `_ =>` fallback whenever a match
     # produces a value, so reaching this point means it is a statement-position
     # match, where the compiled backends simply fall through. Panicking here made

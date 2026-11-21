@@ -106,6 +106,7 @@ def check_match_expr(checker: "TypeChecker", expr: MatchExpr, is_statement_conte
     covered_variants: Set[str] = set()
     has_wildcard = False
     arm_types: List[WysnaType] = []
+    expr.discard_result = is_statement_context
 
     # Determine expected variants and variant payload types for subject_t
     expected_variants: Optional[Set[str]] = None
@@ -240,12 +241,14 @@ def check_match_expr(checker: "TypeChecker", expr: MatchExpr, is_statement_conte
             has_wildcard = previous_wildcard
         checker.expected_type = None if is_statement_context else arm_expected
         try:
-            arm_t = checker._check_block(arm.body, initial_bindings=arm_bindings) or UnitType
+            arm_t = checker._check_block(arm.body, is_statement_context=is_statement_context,
+                                         initial_bindings=arm_bindings) or UnitType
         finally:
             checker.expected_type = outer_expected
         if not is_statement_context and arm_expected is None and arm_t != UnitType:
             arm_expected = arm_t
-        arm_types.append(arm_t)
+        if not is_statement_context:
+            arm_types.append(arm_t)
 
     # Guards do not contribute unconditional coverage. Specialize the
     # pattern matrix to account for nested variants and payload products.
@@ -260,9 +263,9 @@ def check_match_expr(checker: "TypeChecker", expr: MatchExpr, is_statement_conte
         # it yields a value: a falling-through arm would return nothing where a
         # value is required, which the backends used to reject with an internal
         # error. A statement-position match may legitimately fall through.
-        yields_value = (
+        yields_value = not is_statement_context and (
             any(at != UnitType for at in arm_types)
-            or (not is_statement_context and outer_expected is not None and outer_expected != UnitType)
+            or (outer_expected is not None and outer_expected != UnitType)
         )
         if yields_value and not has_wildcard:
             raise TypeError(

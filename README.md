@@ -77,7 +77,7 @@ Each affected entry comes with a chain of relationships that leads to the change
 | Inspect effects and describe tool inputs | `explain` and `schema` |
 | Connect an editor or a coding agent | `lsp`, `mcp`, and the [VS Code extension](editors/vscode-wysna/README.md) |
 
-The [agent guide](docs/AI_AGENT_GUIDE.md) covers the workflow and output formats. The [A/B evaluation](bench/ai_eval/README.md) compares reading source files with model-selected graph queries.
+The [agent guide](docs/AI_AGENT_GUIDE.md) covers the workflow and output formats. The [evaluation tools](bench/ai_eval/README.md) compare model-selected graph queries with source reads and measure test impact against observed changes in real projects.
 
 ## Examples
 

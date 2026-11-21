@@ -389,6 +389,15 @@ enum ConnectionState[T] {
 ```
 
 ### 7.2 Coincidencia de Patrones (`match`)
+
+Cuando `match` es una sentencia, cada brazo ejecuta sus efectos y descarta su
+valor final. Un brazo que termina en `count += amount` puede convivir con un
+brazo vacío. Si usas el resultado de `match` en una asignación o como retorno,
+los brazos que producen el valor deben tener tipos compatibles.
+
+Un enum importado admite tanto `module.State.Ready(value)` como
+`State.Ready(value)` cuando `State` se importó por separado. La misma
+calificación sirve para construir y para reconocer una variante.
 La sentencia `match` evalúa exhaustivamente todas las variantes de un enum, uniones de errores (`ParseErr(e) => ...`), tuplas o valores primitivos. Si una variante no está contemplada y no se define el comodín canónico `_ =>`, el compilador genera un error estático `W2003` (el formateador normaliza `else =>` a `_ =>`):
 
 ```wysna

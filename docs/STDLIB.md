@@ -37,6 +37,7 @@ Wysna distributes modules under `std/` imported via canonical paths such as `imp
   - `Value` supports null, boolean, number, string, array and object values. Numbers preserve their JSON source spelling as `str`, avoiding silent binary64 precision loss.
   - `json.null()`, `boolean()`, `number()`, `string()`, `array()` and `object()` construct values. `number()` validates its input.
   - `json.is_null()`, `as_bool()`, `as_number()`, `as_string()`, `as_array()`, `as_object()`, `get()` and `at()` inspect values; optional accessors return `none` for a type mismatch or missing index/key.
+  - Los accesos tipados `get_str`, `get_int`, `get_float`, `get_bool` y sus variantes `get_optional_*` indican el campo y los tipos esperado y recibido. Por ejemplo, `status_code: expected JSON integer, found JSON string`. Las claves con puntos se representan entre corchetes para diferenciarlas de una ruta anidada. `to_int` devuelve `JsonError` si el número supera el rango de un entero de 64 bits.
   - Objects use string keys. Repeated keys during parsing keep the last value. Parsing rejects unpaired UTF-16 surrogates, malformed number syntax, trailing content and inputs beyond the selected budgets.
 - `std/text`: string manipulation, Unicode normalization, and query operations.
   - `text.join(parts, separator) -> str`: join string list with separator.
