@@ -83,7 +83,7 @@ def run_ci_harness_tests():
         try:
             harness.execute = simulate
             result = harness.run_engine('selfhost', '', 'probe.wysna', '/standalone-selfhost', temporary, True)
-            assert commands[0][0] == '/standalone-selfhost'
+            assert commands[0][:3] == ['/standalone-selfhost', '--stdlib-root', str(harness.ROOT / 'stdlib')]
             assert result.infrastructure_error == 'memory or sanitizer failure'
             assert not harness.compare([result], '')[0]
         finally:

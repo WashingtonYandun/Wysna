@@ -63,6 +63,8 @@ def _run_fixture(
             stack.enter_context(patch('tests.unit.' + module + '.' + name, return_value=True))
 
         def execute(command, **options):
+            if command[0] == str(artifacts.compiler):
+                assert command[1:3] == ['--stdlib-root', str(root.resolve() / 'stdlib')], command
             cmd_text = ' '.join(str(part) for part in command)
             if seed_c99_failure and 'beta.c' in cmd_text:
                 return SimpleNamespace(returncode=1, stdout='', stderr='synthetic c99 compile failure')
