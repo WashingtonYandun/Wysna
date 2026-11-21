@@ -8,7 +8,7 @@ import subprocess
 import tempfile
 import time
 
-from codegen.BrowserBindings import generate_browser_bindings
+from codegen.BrowserBindings import generate_browser_bindings, generate_zig_browser_runtime
 from common.WasmModule import inspect_wasm
 
 
@@ -43,36 +43,66 @@ class BrowserLibraryToolchain:
 
     def __init__(self, repo_root, compiler_path=None):
         self.repo_root = Path(repo_root).resolve()
-        selected = compiler_path or os.environ.get("EMCC") or "emcc"
+        explicit = compiler_path or os.environ.get("EMCC") or os.environ.get("WYSNA_EMCC")
+        self._explicit_emcc = bool(explicit)
+        selected = explicit or "emcc"
         candidate = Path(selected).expanduser()
         if candidate.is_file():
             self.compiler_path = str(candidate.resolve())
         else:
             self.compiler_path = shutil.which(str(candidate))
 
+    def _find_zig(self):
+        exe = "zig.exe" if os.name == "nt" else "zig"
+        bundled = self.repo_root / "toolchain" / "zig" / exe
+        if bundled.is_file():
+            return bundled
+        found = shutil.which("zig")
+        return Path(found).resolve() if found else None
+
     def _compiler(self):
-        if not self.compiler_path or not Path(self.compiler_path).is_file():
-            raise BrowserLibraryCompilationError(
-                "configuration",
-                f"Emscripten {EMSCRIPTEN_VERSION} was not found; install emsdk and set EMCC to emcc.",
-            )
-        try:
-            result = subprocess.run([self.compiler_path, "--version"], capture_output=True,
-                                    text=True, timeout=15)
-        except (OSError, subprocess.TimeoutExpired) as error:
-            raise BrowserLibraryCompilationError(
-                "configuration", f"cannot inspect Emscripten compiler: {error}") from error
-        if result.returncode != 0:
-            raise BrowserLibraryCompilationError(
-                "configuration", result.stderr or "cannot inspect Emscripten compiler",
-                result.returncode)
-        version = (result.stdout or result.stderr).splitlines()[0].strip()
-        if EMSCRIPTEN_VERSION not in version:
-            raise BrowserLibraryCompilationError(
-                "configuration",
-                f"browser-library requires Emscripten {EMSCRIPTEN_VERSION}; found '{version}'.",
-            )
-        return version
+        if self.compiler_path and Path(self.compiler_path).is_file():
+            compiler_name = Path(self.compiler_path).name.lower()
+            is_zig = compiler_name == "zig" or compiler_name == "zig.exe"
+            inspect_cmd = [self.compiler_path, "version" if is_zig else "--version"]
+            try:
+                result = subprocess.run(inspect_cmd, capture_output=True, text=True, timeout=15)
+            except (OSError, subprocess.TimeoutExpired) as error:
+                raise BrowserLibraryCompilationError(
+                    "configuration", f"cannot inspect browser Wasm compiler: {error}") from error
+            if result.returncode != 0:
+                raise BrowserLibraryCompilationError(
+                    "configuration", result.stderr or "cannot inspect browser Wasm compiler",
+                    result.returncode)
+            version = (result.stdout or result.stderr).splitlines()[0].strip()
+            if is_zig:
+                return self.compiler_path, f"zig {version}", "zig"
+            if EMSCRIPTEN_VERSION not in version:
+                raise BrowserLibraryCompilationError(
+                    "configuration",
+                    f"browser-library requires Emscripten {EMSCRIPTEN_VERSION}; found '{version}'.",
+                )
+            return self.compiler_path, version, "emscripten"
+
+        if not self._explicit_emcc:
+            zig = self._find_zig()
+            if zig is not None:
+                try:
+                    result = subprocess.run([str(zig), "version"], capture_output=True, text=True, timeout=15)
+                except (OSError, subprocess.TimeoutExpired) as error:
+                    raise BrowserLibraryCompilationError(
+                        "configuration", f"cannot inspect Zig compiler: {error}") from error
+                if result.returncode != 0:
+                    raise BrowserLibraryCompilationError(
+                        "configuration", result.stderr or "cannot inspect Zig compiler",
+                        result.returncode)
+                version = (result.stdout or result.stderr).splitlines()[0].strip()
+                return str(zig), f"zig {version}", "zig"
+
+        raise BrowserLibraryCompilationError(
+            "configuration",
+            f"Emscripten {EMSCRIPTEN_VERSION} or Zig was not found; install emsdk (set EMCC) or bundle zig.",
+        )
 
     @staticmethod
     def _output_paths(output):
@@ -84,7 +114,7 @@ class BrowserLibraryToolchain:
         return wrapper, runtime_module, wasm
 
     def build(self, c_source, output, abi_exports, *, memory_limit_mb=128):
-        compiler_version = self._compiler()
+        compiler, compiler_version, mode = self._compiler()
         if not abi_exports:
             raise BrowserLibraryCompilationError(
                 "target-validation", "browser-library requires at least one supported public function.")
@@ -100,40 +130,59 @@ class BrowserLibraryToolchain:
             "_wysna_web_init", "_wysna_web_destroy", "_wysna_web_alloc", "_wysna_web_free",
             *("_" + item["symbol"] for item in abi_exports),
         ]
-        command = [
-            self.compiler_path, "-std=c99", "-O2", f"-I{self.repo_root}",
-            "-Wl,--no-entry",
-            "-sMODULARIZE=1", "-sEXPORT_ES6=1", "-sEXPORT_NAME=createWysnaModule",
-            "-sENVIRONMENT=web,node", "-sNO_EXIT_RUNTIME=1", "-sFILESYSTEM=0",
-            "-sWASM_BIGINT=1", "-sALLOW_MEMORY_GROWTH=1",
-            "-sEXPORTED_RUNTIME_METHODS=" + ",".join(EMSCRIPTEN_RUNTIME_METHODS),
-            f"-sINITIAL_MEMORY={initial_memory_bytes}",
-            f"-sMAXIMUM_MEMORY={memory_limit_bytes}", "-sSTACK_SIZE=1048576",
-            "-sERROR_ON_UNDEFINED_SYMBOLS=1",
-            "-sEXPORTED_FUNCTIONS=" + json.dumps(exported_symbols, separators=(",", ":")),
-        ]
+        if mode == "emscripten":
+            command = [
+                compiler, "-std=c99", "-O2", f"-I{self.repo_root}",
+                "-Wl,--no-entry",
+                "-sMODULARIZE=1", "-sEXPORT_ES6=1", "-sEXPORT_NAME=createWysnaModule",
+                "-sENVIRONMENT=web,node", "-sNO_EXIT_RUNTIME=1", "-sFILESYSTEM=0",
+                "-sWASM_BIGINT=1", "-sALLOW_MEMORY_GROWTH=1",
+                "-sEXPORTED_RUNTIME_METHODS=" + ",".join(EMSCRIPTEN_RUNTIME_METHODS),
+                f"-sINITIAL_MEMORY={initial_memory_bytes}",
+                f"-sMAXIMUM_MEMORY={memory_limit_bytes}", "-sSTACK_SIZE=1048576",
+                "-sERROR_ON_UNDEFINED_SYMBOLS=1",
+                "-sEXPORTED_FUNCTIONS=" + json.dumps(exported_symbols, separators=(",", ":")),
+            ]
+        else:
+            command = [
+                compiler, "cc", "-target", "wasm32-wasi", "-mexec-model=reactor",
+                "-std=c99", "-O2", f"-I{self.repo_root}",
+                f"-Wl,--initial-memory={initial_memory_bytes}",
+                f"-Wl,--max-memory={memory_limit_bytes}",
+                "-Wl,-z,stack-size=1048576",
+                *(f"-Wl,--export={sym.lstrip('_')}" for sym in exported_symbols),
+            ]
 
-        with tempfile.TemporaryDirectory(prefix="wysna-emscripten-", dir=wrapper_path.parent) as temporary:
+        with tempfile.TemporaryDirectory(prefix="wysna-wasm-", dir=wrapper_path.parent) as temporary:
             temporary_path = Path(temporary)
             source_path = temporary_path / "program.c"
             runtime_candidate = temporary_path / runtime_module_path.name
             wasm_candidate = runtime_candidate.with_suffix(".wasm")
             wrapper_candidate = temporary_path / wrapper_path.name
             source_path.write_text(c_source, encoding="utf-8")
+            compile_target = runtime_candidate if mode == "emscripten" else wasm_candidate
             started = time.perf_counter()
             try:
-                result = subprocess.run(command + [str(source_path), "-o", str(runtime_candidate)],
+                result = subprocess.run(command + [str(source_path), "-o", str(compile_target)],
                                         capture_output=True, text=True, timeout=240)
             except (OSError, subprocess.TimeoutExpired) as error:
+                label = "Emscripten" if mode == "emscripten" else "Zig"
                 raise BrowserLibraryCompilationError(
-                    "compile", f"Emscripten invocation failed: {error}") from error
+                    "compile", f"{label} invocation failed: {error}") from error
             compile_ms = (time.perf_counter() - started) * 1000.0
             if result.returncode != 0:
-                detail = result.stderr.strip() or result.stdout.strip() or "Emscripten compilation failed"
+                label = "Emscripten" if mode == "emscripten" else "Zig"
+                detail = result.stderr.strip() or result.stdout.strip() or f"{label} compilation failed"
                 raise BrowserLibraryCompilationError("compile", detail, result.returncode)
+            if mode == "zig":
+                runtime_candidate.write_text(
+                    generate_zig_browser_runtime(wasm_path.name, abi_exports),
+                    encoding="utf-8",
+                )
             if not runtime_candidate.is_file() or not wasm_candidate.is_file():
+                label = "Emscripten" if mode == "emscripten" else "Zig"
                 raise BrowserLibraryCompilationError(
-                    "compile", "Emscripten did not produce both the ES module and WebAssembly module.")
+                    "compile", f"{label} did not produce both the ES module and WebAssembly module.")
 
             try:
                 info = inspect_wasm(wasm_candidate)
@@ -149,7 +198,7 @@ class BrowserLibraryToolchain:
 
         return BrowserLibraryBuildResult(
             str(wrapper_path), (str(wrapper_path), str(runtime_module_path), str(wasm_path)),
-            compile_ms, self.compiler_path, compiler_version, info.exports, info.imports,
+            compile_ms, compiler, compiler_version, info.exports, info.imports,
             memory_limit_bytes,
         )
 
