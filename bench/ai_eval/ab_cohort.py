@@ -197,6 +197,356 @@ def _build_default_cohort_tasks() -> List[CohortTask]:
             family="diagnosis",
             allowed_edit_files=("main.wysna",),
         ),
+        CohortTask(
+            task=Task(
+                id="AB-MULTIFILE-06",
+                domain="multi_module",
+                title="Localized rule update in >300 LOC 5-module ledger pipeline",
+                status="supported",
+                instruction=(
+                    "Update `validator.wysna` only so `validate_item` also rejects items whose "
+                    "`amount_cents > 50000`, and `reject_reasons` appends `sku + \":amount_exceeds_limit\"` "
+                    "for those items while preserving all other checks and untouched sibling modules."
+                ),
+                fixtures={
+                    "input_ledger.txt": "SKU-01,ops,12000\nSKU-02,cloud,75000\nSKU-03,travel,5000\n,ops,300\n",
+                    "models.wysna": (
+                        "pub struct LineItem {\n"
+                        "    sku: str,\n"
+                        "    category: str,\n"
+                        "    amount_cents: int,\n"
+                        "}\n\n"
+                        "pub struct LedgerSummary {\n"
+                        "    valid_count: int,\n"
+                        "    rejected_count: int,\n"
+                        "    total_cents: int,\n"
+                        "    ops_cents: int,\n"
+                        "    cloud_cents: int,\n"
+                        "    other_cents: int,\n"
+                        "    first_rejection: str,\n"
+                        "}\n\n"
+                        "pub fn make_item(sku: str, category: str, amount_cents: int) -> LineItem {\n"
+                        "    return LineItem { sku: sku, category: category, amount_cents: amount_cents }\n"
+                        "}\n\n"
+                        "pub fn make_summary(\n"
+                        "    valid_count: int,\n"
+                        "    rejected_count: int,\n"
+                        "    total_cents: int,\n"
+                        "    ops_cents: int,\n"
+                        "    cloud_cents: int,\n"
+                        "    other_cents: int,\n"
+                        "    first_rejection: str,\n"
+                        ") -> LedgerSummary {\n"
+                        "    return LedgerSummary {\n"
+                        "        valid_count: valid_count,\n"
+                        "        rejected_count: rejected_count,\n"
+                        "        total_cents: total_cents,\n"
+                        "        ops_cents: ops_cents,\n"
+                        "        cloud_cents: cloud_cents,\n"
+                        "        other_cents: other_cents,\n"
+                        "        first_rejection: first_rejection,\n"
+                        "    }\n"
+                        "}\n\n"
+                        "pub fn format_cents(cents: int) -> str {\n"
+                        "    let dollars = cents / 100\n"
+                        "    let rem = cents % 100\n"
+                        "    if rem < 10 {\n"
+                        "        return str(dollars) + \".0\" + str(rem)\n"
+                        "    }\n"
+                        "    return str(dollars) + \".\" + str(rem)\n"
+                        "}\n\n"
+                        "pub fn is_priority_category(category: str) -> bool {\n"
+                        "    return category == \"ops\" or category == \"cloud\"\n"
+                        "}\n\n"
+                        "pub fn item_label(item: LineItem) -> str {\n"
+                        "    return item.sku + \"[\" + item.category + \"]=\" + format_cents(item.amount_cents)\n"
+                        "}\n\n"
+                        "pub fn empty_summary() -> LedgerSummary {\n"
+                        "    return make_summary(0, 0, 0, 0, 0, 0, \"none\")\n"
+                        "}\n\n"
+                        "pub fn item_amount_dollars(item: LineItem) -> int {\n"
+                        "    return item.amount_cents / 100\n"
+                        "}\n\n"
+                        "pub fn is_high_value(item: LineItem, threshold: int) -> bool {\n"
+                        "    return item.amount_cents >= threshold\n"
+                        "}\n\n"
+                        "pub fn summary_total_items(summary: LedgerSummary) -> int {\n"
+                        "    return summary.valid_count + summary.rejected_count\n"
+                        "}\n"
+                    ),
+                    "parser.wysna": (
+                        "import \"std/parse\" as parse\n"
+                        "import \"models.wysna\" as models\n\n"
+                        "pub fn normalize_category(raw: str) -> str {\n"
+                        "    let cleaned = raw.trim().to_lower()\n"
+                        "    if cleaned == \"\" {\n"
+                        "        return \"other\"\n"
+                        "    }\n"
+                        "    return cleaned\n"
+                        "}\n\n"
+                        "pub fn parse_row(line: str) -> models.LineItem ! str {\n"
+                        "    let trimmed = line.trim()\n"
+                        "    let cols = trimmed.split(\",\")\n"
+                        "    if len(cols) != 3 {\n"
+                        "        return Err(\"expected 3 columns\")\n"
+                        "    }\n"
+                        "    let sku = cols[0].trim()\n"
+                        "    let cat = normalize_category(cols[1])\n"
+                        "    let amount = parse.parse_int(cols[2].trim()) else _err {\n"
+                        "        return Err(\"invalid integer amount\")\n"
+                        "    }\n"
+                        "    return Ok(models.make_item(sku, cat, amount))\n"
+                        "}\n\n"
+                        "pub fn parse_lines(raw: str) -> list[models.LineItem] ! str {\n"
+                        "    let rows = raw.trim().split(\"\\n\")\n"
+                        "    let mut out: list[models.LineItem] = []\n"
+                        "    for row in rows {\n"
+                        "        let t = row.trim()\n"
+                        "        if t == \"\" {\n"
+                        "            continue\n"
+                        "        }\n"
+                        "        let parsed = parse_row(t)?\n"
+                        "        out.append(parsed)\n"
+                        "    }\n"
+                        "    return Ok(out)\n"
+                        "}\n\n"
+                        "pub fn count_raw_rows(raw: str) -> int {\n"
+                        "    let rows = raw.trim().split(\"\\n\")\n"
+                        "    let mut total = 0\n"
+                        "    for row in rows {\n"
+                        "        if row.trim() != \"\" {\n"
+                        "            total = total + 1\n"
+                        "        }\n"
+                        "    }\n"
+                        "    return total\n"
+                        "}\n\n"
+                        "pub fn extract_skus(items: list[models.LineItem]) -> list[str] {\n"
+                        "    let mut skus: list[str] = []\n"
+                        "    for item in items {\n"
+                        "        skus.append(item.sku)\n"
+                        "    }\n"
+                        "    return skus\n"
+                        "}\n\n"
+                        "pub fn filter_category(items: list[models.LineItem], cat: str) -> list[models.LineItem] {\n"
+                        "    let target = normalize_category(cat)\n"
+                        "    let mut matched: list[models.LineItem] = []\n"
+                        "    for item in items {\n"
+                        "        if item.category == target {\n"
+                        "            matched.append(item)\n"
+                        "        }\n"
+                        "    }\n"
+                        "    return matched\n"
+                        "}\n\n"
+                        "pub fn sum_raw_amounts(items: list[models.LineItem]) -> int {\n"
+                        "    let mut acc = 0\n"
+                        "    for item in items {\n"
+                        "        acc = acc + item.amount_cents\n"
+                        "    }\n"
+                        "    return acc\n"
+                        "}\n"
+                    ),
+                    "validator.wysna": (
+                        "import \"models.wysna\" as models\n\n"
+                        "pub fn has_nonempty_sku(sku: str) -> bool {\n"
+                        "    return sku.trim() != \"\"\n"
+                        "}\n\n"
+                        "pub fn has_valid_category(category: str) -> bool {\n"
+                        "    return category.trim() != \"\"\n"
+                        "}\n\n"
+                        "pub fn validate_item(item: models.LineItem) -> bool {\n"
+                        "    if not has_nonempty_sku(item.sku) {\n"
+                        "        return false\n"
+                        "    }\n"
+                        "    if not has_valid_category(item.category) {\n"
+                        "        return false\n"
+                        "    }\n"
+                        "    if item.amount_cents <= 0 {\n"
+                        "        return false\n"
+                        "    }\n"
+                        "    return true\n"
+                        "}\n\n"
+                        "pub fn rejection_tag(item: models.LineItem) -> str {\n"
+                        "    if not has_nonempty_sku(item.sku) {\n"
+                        "        return \"missing_sku\"\n"
+                        "    }\n"
+                        "    if not has_valid_category(item.category) {\n"
+                        "        return item.sku + \":missing_category\"\n"
+                        "    }\n"
+                        "    if item.amount_cents <= 0 {\n"
+                        "        return item.sku + \":non_positive_amount\"\n"
+                        "    }\n"
+                        "    return \"\"\n"
+                        "}\n\n"
+                        "pub fn filter_valid(items: list[models.LineItem]) -> list[models.LineItem] {\n"
+                        "    let mut out: list[models.LineItem] = []\n"
+                        "    for item in items {\n"
+                        "        if validate_item(item) {\n"
+                        "            out.append(item)\n"
+                        "        }\n"
+                        "    }\n"
+                        "    return out\n"
+                        "}\n\n"
+                        "pub fn reject_reasons(items: list[models.LineItem]) -> list[str] {\n"
+                        "    let mut reasons: list[str] = []\n"
+                        "    for item in items {\n"
+                        "        if not validate_item(item) {\n"
+                        "            reasons.append(rejection_tag(item))\n"
+                        "        }\n"
+                        "    }\n"
+                        "    return reasons\n"
+                        "}\n\n"
+                        "pub fn count_rejected(items: list[models.LineItem]) -> int {\n"
+                        "    let reasons = reject_reasons(items)\n"
+                        "    return len(reasons)\n"
+                        "}\n\n"
+                        "pub fn all_items_valid(items: list[models.LineItem]) -> bool {\n"
+                        "    return count_rejected(items) == 0\n"
+                        "}\n"
+                    ),
+                    "reporter.wysna": (
+                        "import \"models.wysna\" as models\n\n"
+                        "pub fn summarize(valid: list[models.LineItem], rejected: list[str]) -> models.LedgerSummary {\n"
+                        "    let mut total_cents = 0\n"
+                        "    let mut ops_cents = 0\n"
+                        "    let mut cloud_cents = 0\n"
+                        "    let mut other_cents = 0\n"
+                        "    for item in valid {\n"
+                        "        total_cents = total_cents + item.amount_cents\n"
+                        "        if item.category == \"ops\" {\n"
+                        "            ops_cents = ops_cents + item.amount_cents\n"
+                        "        } elif item.category == \"cloud\" {\n"
+                        "            cloud_cents = cloud_cents + item.amount_cents\n"
+                        "        } else {\n"
+                        "            other_cents = other_cents + item.amount_cents\n"
+                        "        }\n"
+                        "    }\n"
+                        "    let first_rej = if len(rejected) > 0 { rejected[0] } else { \"none\" }\n"
+                        "    return models.make_summary(\n"
+                        "        len(valid),\n"
+                        "        len(rejected),\n"
+                        "        total_cents,\n"
+                        "        ops_cents,\n"
+                        "        cloud_cents,\n"
+                        "        other_cents,\n"
+                        "        first_rej,\n"
+                        "    )\n"
+                        "}\n\n"
+                        "pub fn format_summary_line(summary: models.LedgerSummary) -> str {\n"
+                        "    let total_str = models.format_cents(summary.total_cents)\n"
+                        "    return \"valid=\" + str(summary.valid_count) + \" rejected=\" + str(summary.rejected_count) + \" total=\" + total_str + \" first=\" + summary.first_rejection\n"
+                        "}\n\n"
+                        "pub fn category_share(part: int, whole: int) -> int {\n"
+                        "    if whole <= 0 {\n"
+                        "        return 0\n"
+                        "    }\n"
+                        "    return (part * 100) / whole\n"
+                        "}\n\n"
+                        "pub fn format_breakdown(summary: models.LedgerSummary) -> str {\n"
+                        "    let ops_pct = category_share(summary.ops_cents, summary.total_cents)\n"
+                        "    let cloud_pct = category_share(summary.cloud_cents, summary.total_cents)\n"
+                        "    return \"ops=\" + str(ops_pct) + \"% cloud=\" + str(cloud_pct) + \"%\"\n"
+                        "}\n\n"
+                        "pub fn format_other_breakdown(summary: models.LedgerSummary) -> str {\n"
+                        "    let other_pct = category_share(summary.other_cents, summary.total_cents)\n"
+                        "    return \"other=\" + str(other_pct) + \"%\"\n"
+                        "}\n\n"
+                        "pub fn format_full_report(summary: models.LedgerSummary) -> str {\n"
+                        "    return format_summary_line(summary) + \"\\n\" + format_breakdown(summary) + \" \" + format_other_breakdown(summary)\n"
+                        "}\n"
+                    ),
+                    "main.wysna": (
+                        "import \"std/environment\" as environment\n"
+                        "import \"std/io\" as io\n"
+                        "import \"parser.wysna\" as parser\n"
+                        "import \"validator.wysna\" as validator\n"
+                        "import \"reporter.wysna\" as reporter\n\n"
+                        "fn run_ledger(input_path: str) -> int {\n"
+                        "    let raw = io.read_text(input_path) else _err {\n"
+                        "        eprint(\"read_failed\")\n"
+                        "        return 2\n"
+                        "    }\n"
+                        "    let items = parser.parse_lines(raw) else err {\n"
+                        "        eprint(err)\n"
+                        "        return 3\n"
+                        "    }\n"
+                        "    let valid = validator.filter_valid(items)\n"
+                        "    let rejected = validator.reject_reasons(items)\n"
+                        "    let summary = reporter.summarize(valid, rejected)\n"
+                        "    print(reporter.format_summary_line(summary))\n"
+                        "    print(reporter.format_breakdown(summary))\n"
+                        "    return 0\n"
+                        "}\n\n"
+                        "fn main() -> unit {\n"
+                        "    let argv = environment.arguments()\n"
+                        "    if len(argv) < 2 {\n"
+                        "        eprint(\"usage: ledger <path>\")\n"
+                        "        exit(2)\n"
+                        "        return\n"
+                        "    }\n"
+                        "    let code = run_ledger(argv[1])\n"
+                        "    if code != 0 {\n"
+                        "        exit(code)\n"
+                        "    }\n"
+                        "}\n"
+                        "main()\n"
+                    ),
+                },
+                test_cases=[
+                    TaskTestCase(
+                        name="ledger_rejects_over_limit_and_missing_sku",
+                        args=["input_ledger.txt"],
+                        expected_stdout="valid=2 rejected=2 total=170.00 first=SKU-02:amount_exceeds_limit\nops=70% cloud=0%\n",
+                        expected_exit=0,
+                    ),
+                ],
+            ),
+            family="refactor",
+            allowed_edit_files=("validator.wysna",),
+        ),
+    ]
+
+
+def build_import_style_ab_tasks() -> List[CohortTask]:
+    """Return LANG-R01 paired tasks comparing `import as` vs `from ... use` syntax."""
+    common_cases = [
+        TaskTestCase(
+            name="summary",
+            expected_stdout="sum=9\n",
+            expected_exit=0,
+        ),
+    ]
+    return [
+        CohortTask(
+            task=Task(
+                id="LANG-R01-IMPORT-AS",
+                domain="cli_scripting",
+                title="Namespace import syntax (`import \"std/...\" as ...`)",
+                status="supported",
+                instruction=(
+                    "Write `main.wysna` using namespace imports (`import \"std/json\" as json` / "
+                    "`import \"std/parse\" as parse`) that parses `\"4,5\"`, sums the integers, "
+                    "and prints `sum=9`."
+                ),
+                test_cases=common_cases,
+            ),
+            family="authoring",
+            allowed_edit_files=("main.wysna",),
+        ),
+        CohortTask(
+            task=Task(
+                id="LANG-R01-FROM-USE",
+                domain="cli_scripting",
+                title="Direct symbol import syntax (`from \"std/...\" use { ... }`)",
+                status="supported",
+                instruction=(
+                    "Write `main.wysna` using selective symbol imports (`from \"std/parse\" use { parse_int }`) "
+                    "that splits `\"4,5\"`, parses each integer, sums them, and prints `sum=9`."
+                ),
+                test_cases=common_cases,
+            ),
+            family="authoring",
+            allowed_edit_files=("main.wysna",),
+        ),
     ]
 
 
@@ -534,10 +884,16 @@ def main() -> int:
     parser.add_argument("--repetitions", type=int, default=3)
     parser.add_argument("--output", type=str, default=None)
     parser.add_argument("--interactive-tools", action="store_true")
+    parser.add_argument("--suite", choices=["default", "import-style", "all"], default="default")
     args = parser.parse_args()
 
     repo_root = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
-    tasks = _build_default_cohort_tasks()
+    if args.suite == "default":
+        tasks = _build_default_cohort_tasks()
+    elif args.suite == "import-style":
+        tasks = build_import_style_ab_tasks()
+    else:
+        tasks = _build_default_cohort_tasks() + build_import_style_ab_tasks()
 
     if args.provider == "mock":
         model_name = args.model or "mock-deterministic"
