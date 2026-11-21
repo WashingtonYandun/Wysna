@@ -15,11 +15,11 @@ Fecha: 2026-11-21. El mantenedor aplazó todas las mediciones con modelos reales
 
 ## Evidencia local
 
-- 46 pruebas y 14 subtests pasaron para evaluador, contratos de CI y empaquetado nativo.
+- 46 pruebas y 14 subtests pasaron para evaluador, contratos de CI y empaquetado nativo. La comprobación adicional de cohorte y autonomía/dogfooding nativo pasó 18 pruebas y 4 subtests; esos conteos se superponen y no se suman como tests únicos.
 - Se descargó el SDK macOS del run 44941044666 de PR #169, se verificó el SHA-256 del artefacto y se validó fuera del checkout, con PATH aislado. La aceptación ampliada pasó 70 comprobaciones, incluyendo bootstrap nativo, checksums y el nuevo flujo de ingesta.
 - El validador del flujo de archivos pasó seis casos con salida y persistencia idénticas en Seed y en el binario compilado por el SDK instalado: válido, vacío, status fuera de rango, costo negativo, JSON malformado y archivo ausente.
 - Python ejecutó los validadores y la comparación Seed. Los procesos del SDK usaron sus herramientas empaquetadas con PATH aislado. No se afirma independencia de Python para Seed.
-- El SDK identifica como origen `54e1233`, no el futuro merge de este PR. Su fuente del compilador coincide con la fuente comprobada mediante el validador; los cambios actuales son del evaluador y del ejemplo.
+- El manifiesto del SDK identifica como origen `81fe638` (commit de prueba de merge del run de PR #169, cuyo head era `54e1233`), no el futuro merge de este PR. Su fuente del compilador coincide con la fuente comprobada mediante el validador; los cambios actuales son del evaluador y del ejemplo.
 
 La prueba CLI con mock completó las 30 tareas y 18 condiciones de imports y reanudó ambos checkpoints sin repetir resultados. Este ejercicio comprueba el protocolo, no la calidad de autoría. Su resumen está en [protocolo sin red](evidence/offline-eval-protocol.json).
 
