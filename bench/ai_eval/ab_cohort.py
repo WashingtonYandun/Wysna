@@ -882,6 +882,7 @@ def main() -> int:
     parser.add_argument("--base-url", type=str, default="http://localhost:1234/v1")
     parser.add_argument("--api-key", type=str, default=None)
     parser.add_argument("--repetitions", type=int, default=3)
+    parser.add_argument("--max-repair-cycles", type=int, default=3)
     parser.add_argument("--output", type=str, default=None)
     parser.add_argument("--interactive-tools", action="store_true")
     parser.add_argument("--suite", choices=["default", "import-style", "all"], default="default")
@@ -910,6 +911,7 @@ def main() -> int:
         factory,
         repo_root=repo_root,
         repetitions=args.repetitions,
+        max_repair_cycles=args.max_repair_cycles,
         model_name=model_name,
         provider_name=args.provider,
         interactive=args.interactive_tools,

@@ -265,3 +265,88 @@ def test_interactive_cohort_uses_model_selected_queries_and_counts_extra_turns()
     assert "fn main" not in providers["A"].call_history[0]["user_prompt"]
     assert "fn main" in providers["A"].call_history[1]["user_prompt"]
     assert "wysna.inspect/1" in providers["B"].call_history[1]["user_prompt"]
+
+
+def test_openai_compatible_provider_retries_429_and_handles_null_content(monkeypatch):
+    import io
+    import urllib.error
+    from bench.ai_eval.providers import OpenAICompatibleProvider
+
+    attempts = {"count": 0}
+    seen_headers = []
+
+    class FakeResp:
+        def __init__(self, payload):
+            self._body = json.dumps(payload).encode("utf-8")
+
+        def read(self):
+            return self._body
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *args):
+            return False
+
+    def fake_urlopen(req, context=None, timeout=None):
+        attempts["count"] += 1
+        seen_headers.append(dict(req.header_items()))
+        if attempts["count"] == 1:
+            raise urllib.error.HTTPError(
+                req.full_url, 429, "Too Many Requests", {"Retry-After": "0"}, io.BytesIO(b'{"error":"rate limit"}')
+            )
+        return FakeResp({
+            "choices": [{"message": {"content": None, "reasoning": "thinking"}}],
+            "usage": {"prompt_tokens": 10, "completion_tokens": 20},
+        })
+
+    monkeypatch.setattr("bench.ai_eval.providers.urllib.request.urlopen", fake_urlopen)
+    monkeypatch.setattr("bench.ai_eval.providers.time.sleep", lambda _s: None)
+    monkeypatch.setenv("OPENROUTER_API_KEY", "test-dummy-token")
+    monkeypatch.delenv("OPENAI_API_KEY", raising=False)
+
+    provider = OpenAICompatibleProvider(
+        base_url="https://openrouter.ai/api/v1",
+        model="nvidia/nemotron-3.5-super-vl:free",
+        min_interval_sec=0.0,
+    )
+    text, tokens, _latency = provider.generate("sys", "usr")
+    assert attempts["count"] == 2
+    assert text == ""
+    assert tokens == {"prompt_tokens": 10, "completion_tokens": 20}
+    assert seen_headers[0].get("Http-referer") == "https://github.com/WashingtonYandun/Wysna"
+    assert seen_headers[0].get("X-title") == "Wysna AI Eval"
+
+
+def test_openrouter_rate_limit_is_shared_between_provider_instances(monkeypatch):
+    import bench.ai_eval.providers as providers
+
+    current_time = {"value": 0.0}
+    delays = []
+
+    def fake_sleep(delay):
+        delays.append(delay)
+        current_time["value"] += delay
+
+    class FakeResp:
+        def read(self):
+            return json.dumps({"choices": [{"message": {"content": "ok"}}]}).encode("utf-8")
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *args):
+            return False
+
+    monkeypatch.setenv("OPENROUTER_API_KEY", "test-dummy-token")
+    monkeypatch.setattr(providers, "_openrouter_next_request_at", 0.0)
+    monkeypatch.setattr(providers.time, "monotonic", lambda: current_time["value"])
+    monkeypatch.setattr(providers.time, "sleep", fake_sleep)
+    monkeypatch.setattr(providers.urllib.request, "urlopen", lambda *args, **kwargs: FakeResp())
+
+    first = providers.OpenAICompatibleProvider(base_url="https://openrouter.ai/api/v1")
+    second = providers.OpenAICompatibleProvider(base_url="https://openrouter.ai/api/v1")
+    first.generate("system", "first")
+    second.generate("system", "second")
+
+    assert delays == [3.5]
