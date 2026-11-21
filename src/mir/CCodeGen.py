@@ -21,6 +21,13 @@ class CCodeGen:
         classes = [layout for layout in module.layouts.values() if layout.kind == 'class']
         lines = ['#include "runtime/wysna_runtime.h"', '/* Verified MIR: explicit CFG, places and ownership. */', '']
         lines += [f'static WVal {slot.name};' for slot in module.globals]
+        self.layout_key_symbols = {}
+        for idx, (layout_id, layout) in enumerate(module.layouts.items()):
+            if layout.kind in ('struct', 'class') and layout.fields:
+                sym = f'wysna_keys_{idx}'
+                self.layout_key_symbols[layout_id] = sym
+                keys_literal = ', '.join(quote(name) for name, _ in layout.fields)
+                lines.append(f'static const char* const {sym}[{len(layout.fields)}] = {{ {keys_literal} }};')
         lines += [f'static const WClassVTable wysna_vtable_{layout.name};' for layout in classes]
         for function in module.functions:
             params = ', '.join(self.ctype(function.slots[index].type_id) + ' ' + function.slots[index].name for index in function.params) or 'void'
@@ -709,9 +716,10 @@ class CCodeGen:
         if kind == 'construct':
             category = data['kind']
             if category in ('struct', 'object'):
-                layout = self.layouts[data['layout']]
-                keys = '(const char*[]){ ' + ', '.join(quote(name) for name, _ in layout.fields) + ' }' if layout.fields else 'NULL'
-                call = f'wysna_make_{category}({quote(layout.name)}, {len(args)}, {keys}, {self.array(args)})'
+                layout_id = data['layout']
+                layout = self.layouts[layout_id]
+                keys = self.layout_key_symbols.get(layout_id, 'NULL')
+                call = f'wysna_make_{category}_static({quote(layout.name)}, {len(args)}, {keys}, {self.array(args)})'
             elif category == 'dict':
                 call = f'wysna_make_dict({len(args) // 2}, {self.array(args[::2])}, {self.array(args[1::2])})'
             else:

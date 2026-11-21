@@ -941,28 +941,39 @@ static inline void wysna_struct_detach(WVal* v) {
     wysna_check_refcount(rc, "detach/struct");
     if (rc <= 1) return;
     int32_t cap = old_b->len > 0 ? old_b->len : 1;
-    size_t keys_size = sizeof(const char*) * (size_t)cap;
+    bool inline_keys = old_b->keys == (const char**)((char*)old_b + sizeof(WStructBuf));
+    size_t keys_size = inline_keys ? (sizeof(const char*) * (size_t)cap) : 0;
+    size_t vals_offset = inline_keys
+        ? (sizeof(WStructBuf) + keys_size)
+        : (((sizeof(WStructBuf) + sizeof(WVal) - 1) / sizeof(WVal)) * sizeof(WVal));
     size_t vals_size = sizeof(WVal) * (size_t)cap;
-    size_t total = sizeof(WStructBuf) + keys_size + vals_size;
+    size_t total = vals_offset + vals_size;
     WStructBuf* new_b = (WStructBuf*)wysna_alloc_safe(total);
     new_b->refcount = 1;
     new_b->control = NULL;
     new_b->vtable = NULL;
     new_b->name = old_b->name;
     new_b->len = old_b->len;
-    new_b->keys = (const char**)((char*)new_b + sizeof(WStructBuf));
-    new_b->vals = (WVal*)((char*)new_b + sizeof(WStructBuf) + keys_size);
+    if (inline_keys) {
+        new_b->keys = (const char**)((char*)new_b + sizeof(WStructBuf));
+    } else {
+        new_b->keys = old_b->keys;
+    }
+    new_b->vals = (WVal*)((char*)new_b + vals_offset);
     wysna_mem_on_alloc();
 
     /* B02: CoW detach telemetry */
     wysna_atomic_add_i64(&wysna_g_cow_detach_struct, 1);
     wysna_atomic_add_i64(&wysna_g_cow_copied_slots, old_b->len);
-    wysna_atomic_add_i64(&wysna_g_cow_copied_bytes, (int64_t)((sizeof(const char*) + sizeof(WVal)) * old_b->len));
-    wysna_atomic_add_i64(&wysna_g_cow_allocated_bytes, (int64_t)(sizeof(WStructBuf) + (sizeof(const char*) * cap) + (sizeof(WVal) * cap)));
+    size_t copied_key_bytes = inline_keys ? (sizeof(const char*) * (size_t)old_b->len) : 0;
+    wysna_atomic_add_i64(&wysna_g_cow_copied_bytes, (int64_t)(copied_key_bytes + (sizeof(WVal) * (size_t)old_b->len)));
+    wysna_atomic_add_i64(&wysna_g_cow_allocated_bytes, (int64_t)(vals_offset + (sizeof(WVal) * (size_t)cap)));
     wysna_atomic_add_i64(&wysna_g_cow_alloc_count, 1);
 
     for (int32_t i = 0; i < old_b->len; i++) {
-        new_b->keys[i] = old_b->keys[i];
+        if (inline_keys) {
+            new_b->keys[i] = old_b->keys[i];
+        }
         new_b->vals[i] = wysna_clone(old_b->vals[i]);
     }
     *v = wysna_make_hi_ptr(WVAL_HI_STRUCT, new_b);

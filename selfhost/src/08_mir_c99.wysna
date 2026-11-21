@@ -185,10 +185,8 @@ fn mir_c_operation(module: MirModule, function: MirFunction, operation: MirOpera
         let mut value = "wysna_make_" + category + "(" + str(len(arguments)) + ", " + mir_c_array(arguments) + ")"
         if category == "struct" or category == "object" {
             let record = mir_find_record(module.records, operation.value.integer, operation.source)
-            let mut keys = "(const char*[]){"
-            for i in 0..len(record.fields) { if i > 0 { keys = keys + ", " } keys = keys + escape_c_str(record.fields[i].name) }
-            keys = if len(record.fields) == 0 { "NULL" } else { keys + "}" }
-            value = "wysna_make_" + category + "(" + escape_c_str(module.types[record.type_id].name) + ", " + str(len(arguments)) + ", " + keys + ", " + mir_c_array(arguments) + ")"
+            let keys = if len(record.fields) == 0 { "NULL" } else { "wysna_rec_keys_" + str(record.type_id) }
+            value = "wysna_make_" + category + "_static(" + escape_c_str(module.types[record.type_id].name) + ", " + str(len(arguments)) + ", " + keys + ", " + mir_c_array(arguments) + ")"
         }
         if category == "dict" {
             let mut keys: list[str] = []
@@ -563,7 +561,14 @@ fn mir_emit_c(module: MirModule) -> str {
     let mut parts: list[str] = []
     for external in module.externs { if external.native == "wysna_host_http_request" { parts.append("#define WYSNA_HAS_HTTP 1\n") } }
     parts.append("#include \"runtime/wysna_runtime.h\"\n/* Verified Compiler MIR: explicit CFG and ownership. */\n")
-    for record in module.records { if module.types[record.type_id].kind == "class" { parts.append("static const WClassVTable wysna_vtable_" + module.types[record.type_id].name + ";\n") } }
+    for record in module.records {
+        if len(record.fields) > 0 {
+            let mut kparts: list[str] = []
+            for field in record.fields { kparts.append(escape_c_str(field.name)) }
+            parts.append("static const char* const wysna_rec_keys_" + str(record.type_id) + "[" + str(len(record.fields)) + "] = { " + join_strings(kparts, ", ") + " };\n")
+        }
+        if module.types[record.type_id].kind == "class" { parts.append("static const WClassVTable wysna_vtable_" + module.types[record.type_id].name + ";\n") }
+    }
     for global in module.globals { parts.append("static WVal " + global.name + ";\n") }
     for function in module.functions { parts.append(mir_c_signature(function) + ";\n") }
     parts.append(mir_c_externs(module))

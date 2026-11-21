@@ -50,6 +50,23 @@ int main(void) {
     assert(wysna_g_cow_allocated_bytes == sizeof(WStructBuf) + sizeof(char*) + sizeof(WVal));
     assert(wysna_g_cow_alloc_count == 1);
     wysna_release(alias); wysna_release(record);
+    static const char* const static_point_keys[2] = {"x", "y"};
+    WVal point_vals[2] = {wysna_int(10), wysna_int(20)};
+    WVal static_st = wysna_make_struct_static("Point", 2, static_point_keys, point_vals);
+    WVal static_alias = wysna_clone(static_st);
+    wysna_cow_reset_stats();
+    wysna_struct_detach(&static_st);
+    assert(wysna_as_struct(static_st)->keys == static_point_keys);
+    assert(strcmp(wysna_as_struct(static_st)->keys[0], "x") == 0);
+    assert(strcmp(wysna_as_struct(static_st)->keys[1], "y") == 0);
+    assert(wysna_as_int(wysna_as_struct(static_st)->vals[0]) == 10);
+    assert(wysna_as_int(wysna_as_struct(static_st)->vals[1]) == 20);
+    assert(wysna_g_cow_detach_struct == 1 && wysna_g_cow_copied_slots == 2);
+    assert(wysna_g_cow_copied_bytes == (int64_t)(2 * sizeof(WVal)));
+    assert(wysna_g_cow_allocated_bytes == (int64_t)(wysna_struct_vals_offset() + 2 * sizeof(WVal)));
+    assert(wysna_g_cow_alloc_count == 1);
+    wysna_release(static_alias); wysna_release(static_st);
+    assert(wysna_g_alloc_count == wysna_g_free_count && wysna_g_live_objects == 0);
     WVal rows[3] = {wysna_make_list(2, items), wysna_make_list(2, items), wysna_make_list(2, items)};
     WVal matrix = wysna_make_list(3, rows);
     for (int i = 0; i < 3; i++) wysna_release(rows[i]);
@@ -122,6 +139,19 @@ def run_metrics_contract():
             assert lines[1].startswith('[WYSNA_COW_CHECKPOINT:ordinary]') if enabled else lines[1] == marker
             assert len(lines) == (3 if enabled else 2), result.stderr
     print('  [PASS] CoW opt-in output, import lifetime and native ABI/capacity accounting')
+
+
+def test_shared_static_struct_keys_and_cow_detach(tmp_path):
+    from compiler.CompilerService import CompilerService
+
+    run_metrics_contract()
+    src = 'struct Point { x: int, y: int }\nfn main() -> int {\n    let p = Point { x: 1, y: 2 }\n    return p.x + p.y\n}\n'
+    target = tmp_path / 'static_keys.wysna'
+    target.write_text(src, encoding='utf-8')
+    service = CompilerService(project_root=str(Path(__file__).resolve().parents[2]))
+    emission = service.emit_c(service.check(src, str(target)))
+    assert 'static const char* const wysna_keys_' in emission.source
+    assert 'wysna_make_struct_static(' in emission.source
 
 
 if __name__ == '__main__':
