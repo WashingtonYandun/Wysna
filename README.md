@@ -1,33 +1,33 @@
 <p align="center">
-  <img src="assets/wawi.jpg" alt="Wawi, mascota de Wysna" width="112" />
+  <img src="assets/wawi.jpg" alt="Wawi, the Wysna mascot" width="112" />
 </p>
 
 # Wysna
 
-**Un lenguaje compilado para automatizaciones y herramientas que personas y agentes pueden mantener juntos.**
+**A compiled language for automation and tools that developers and coding agents can maintain together.**
 
-Wysna tiene tipado estático y genera ejecutables nativos a través de C99. Puedes usarlo para crear una CLI que procesa JSON, validar datos antes de guardarlos o compartir una regla de negocio entre una herramienta local y el navegador. El compilador también expone la estructura del código, el impacto de un cambio y los diagnósticos en formatos que un editor o un agente puede consultar.
+Wysna is statically typed and builds native executables through C99. Use it to process JSON, validate data before saving it, or share a business rule between a command-line tool and the browser. The compiler provides structured diagnostics and a semantic graph that editors and agents can query to see how a change affects the project.
 
-[Descargas](https://github.com/WashingtonYandun/Wysna/releases) · [Primer proyecto](#primer-proyecto) · [Grafo de impacto](#grafo-de-impacto) · [Documentación](docs/README.md)
+[Downloads](https://github.com/WashingtonYandun/Wysna/releases) · [First project](#first-project) · [Project impact](#project-impact) · [Documentation](docs/README.md)
 
-[![CI en main](https://github.com/WashingtonYandun/Wysna/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/WashingtonYandun/Wysna/actions/workflows/ci.yml)
-[![Última versión publicada](https://img.shields.io/github/v/release/WashingtonYandun/Wysna)](https://github.com/WashingtonYandun/Wysna/releases/latest)
-[![Licencia Apache 2.0](https://img.shields.io/badge/licencia-Apache%202.0-blue)](LICENSE)
+[![CI on main](https://github.com/WashingtonYandun/Wysna/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/WashingtonYandun/Wysna/actions/workflows/ci.yml)
+[![Latest release](https://img.shields.io/github/v/release/WashingtonYandun/Wysna)](https://github.com/WashingtonYandun/Wysna/releases/latest)
+[![Apache 2.0 license](https://img.shields.io/badge/license-Apache%202.0-blue)](LICENSE)
 
-## Instalación
+## Installation
 
-Elige la distribución de tu plataforma en [GitHub Releases](https://github.com/WashingtonYandun/Wysna/releases). Los recorridos del SDK y del grafo de proyecto de esta guía requieren **Wysna 0.8.0 o posterior**.
+Choose a distribution for your platform on [GitHub Releases](https://github.com/WashingtonYandun/Wysna/releases). The native SDK and project impact workflows shown here require **Wysna 0.8.0 or later**.
 
-| Distribución | Cuándo usarla | Plataformas |
+| Distribution | Use it for | Platforms |
 | --- | --- | --- |
-| [SDK nativo](docs/NATIVE_SDK.md) | Proyectos C99, pruebas y herramientas para agentes. Incluye el compilador escrito en Wysna, Zig y la biblioteca estándar. Funciona sin Python. | Windows x64, macOS arm64 y Linux x64 |
-| [Seed](docs/SEED_DISTRIBUTION.md) | WebAssembly/WASI, LLVM directo y el compilador de referencia e intérprete (`wysna repl`, oráculo AST). Sus instaladores incluyen CPython y Zig. | Windows x64, macOS arm64 y Linux x64 |
+| [Native SDK](docs/NATIVE_SDK.md) | C99 projects, tests, and agent tools. It includes the self-hosted compiler, Zig, and the standard library. It runs without Python. | Windows x64, macOS arm64, Linux x64 |
+| [Seed](docs/SEED_DISTRIBUTION.md) | WebAssembly, WASI, direct LLVM compilation, and the reference interpreter and REPL. Installers include CPython and Zig. | Windows x64, macOS arm64, Linux x64 |
 
-Para usar el SDK nativo, extrae el archivo y añade su carpeta `bin` al PATH. En Windows también puedes abrir `open-terminal.cmd` desde la carpeta extraída. Verifica la descarga con `SHA256SUMS` y confirma la instalación con `wysna --version`.
+To use the native SDK, verify the archive against `SHA256SUMS`, extract it, and add its `bin` directory to your PATH. On Windows, you can also open `open-terminal.cmd` from the extracted folder. Confirm the installation with `wysna --version`.
 
-## Primer proyecto
+## First project
 
-Guarda este programa como `quote.wysna`. El contrato exige una cantidad positiva y un precio no negativo. El cálculo usa enteros para representar los centavos.
+Save this program as `quote.wysna`. The contract requires a positive quantity and a nonnegative price. The calculation represents prices in integer cents.
 
 ```wysna
 pub fn quote_total(quantity: int, unit_price_cents: int) -> int
@@ -46,9 +46,9 @@ wysna run quote.wysna
 wysna build quote.wysna -o quote
 ```
 
-El programa imprime `3897`. Puedes distribuir el ejecutable sin instalar Python en la máquina de destino. Si enlazas bibliotecas externas, distribúyelas según el contrato de tu plataforma.
+The program prints `3897`. The resulting executable runs without Python. If your program links against external libraries, follow your platform's rules for distributing them.
 
-Para generar la estructura de un proyecto con manifiesto y una prueba inicial:
+Create a project with a manifest and an initial test:
 
 ```sh
 wysna project new my-app
@@ -57,48 +57,48 @@ wysna project lock
 wysna project test --frozen
 ```
 
-El SDK nativo genera y verifica los locks tanto en proyectos sin dependencias como en proyectos con dependencias de paquetes locales. La [guía de proyectos](docs/PROJECTS.md) describe los manifiestos, las dependencias locales y los destinos.
+The native SDK generates and verifies lockfiles for projects with or without local package dependencies. See the [project guide](docs/PROJECTS.md) for manifests, local dependencies, and build targets.
 
-## Grafo de impacto
+## Project impact
 
-El grafo responde preguntas sobre código comprobado por el compilador. En el ejemplo de [cotizaciones](examples/shared-browser-app/README.md), la CLI, el servicio y la web comparten una regla. Desde un checkout del repositorio puedes consultar qué volver a probar si cambia esa regla:
+The semantic graph traces relationships in code checked by the compiler. In the [quote example](examples/shared-browser-app/README.md), the CLI, service, and browser share a pricing rule. From a checkout of this repository, run this query to see which project entries to retest when that rule changes:
 
 ```sh
 wysna graph --manifest examples/shared-browser-app/wysna.toml --symbol quote_validation_code --rel impact
 ```
 
-El informe identifica las entradas afectadas y muestra las relaciones que llegan hasta el símbolo. También señala fronteras del análisis, como las llamadas desde JavaScript o el código C enlazado. El mismo informe se puede pedir con **Wysna: Show Project Impact** en VS Code o con `wysna_graph` a través de MCP.
+Each affected entry comes with a chain of relationships that leads to the changed symbol, including references to functions passed as values. The report marks uncertain entries when the compiler cannot resolve an indirect call or sees a boundary such as JavaScript or linked C code. Run **Wysna: Show Project Impact** in VS Code, or call `wysna_graph` over MCP for the same report.
 
-| Tarea | Herramienta |
+| Task | Tool |
 | --- | --- |
-| Localizar dependientes y ver el código relevante | `graph` e `inspect --with-deps` |
-| Procesar errores del compilador de forma automática | `check --output-format=json-v1` |
-| Aplicar una edición por símbolo sobre la revisión esperada | `patch --expect-graph-hash` |
-| Consultar efectos y describir entradas de herramientas | `explain` y `schema` |
-| Conectar un editor o un agente | `lsp`, `mcp` y la [extensión de VS Code](editors/vscode-wysna/README.md) |
+| Find dependent code and inspect a focused excerpt | `graph` and `inspect --with-deps` |
+| Read structured compiler diagnostics | `check --output-format=json-v1` |
+| Edit a declaration against an expected graph revision | `patch --expect-graph-hash` |
+| Inspect effects and describe tool inputs | `explain` and `schema` |
+| Connect an editor or a coding agent | `lsp`, `mcp`, and the [VS Code extension](editors/vscode-wysna/README.md) |
 
-La [guía para agentes](docs/AI_AGENT_GUIDE.md) documenta el flujo y los formatos. La [evaluación A/B](bench/ai_eval/README.md) permite comparar lectura de archivos con consultas al grafo elegidas por el modelo.
+The [agent guide](docs/AI_AGENT_GUIDE.md) covers the workflow and output formats. The [A/B evaluation](bench/ai_eval/README.md) compares reading source files with model-selected graph queries.
 
-## Ejemplos
+## Examples
 
-| Proyecto | Qué muestra |
+| Project | What it demonstrates |
 | --- | --- |
-| [Auditoría operativa](examples/wysofia-ops/README.md) | Valida eventos JSON y calcula un informe. Tiene un destino opcional con SQLite. |
-| [Sincronización de mediciones](examples/automation-sync/README.md) | Descarga un lote acotado de datos y lo importa a SQLite en una transacción. |
-| [Cotizaciones](examples/shared-browser-app/README.md) | Comparte reglas de validación y cálculo entre CLI, servicio y WebAssembly. |
+| [Operations audit](examples/wysofia-ops/README.md) | Validate JSON events and produce an audit report, with an optional SQLite target. |
+| [Measurement sync](examples/automation-sync/README.md) | Fetch a bounded batch and import it into SQLite in a transaction. |
+| [Quote application](examples/shared-browser-app/README.md) | Share validation and pricing logic across a CLI, a service, and WebAssembly. |
 
-## Estado y arquitectura
+## Status and architecture
 
-Wysna está en desarrollo **pre-1.0**. C99 es el destino nativo principal. Seed es la implementación de referencia en Python y conserva perfiles adicionales. El SDK nativo usa el compilador autoalojado, escrito en Wysna. Ambos caminos nativos pasan por una representación intermedia verificada antes de generar C. La [arquitectura](docs/COMPILER_ARCHITECTURE.md) y la [matriz de conformidad](docs/ENGINE_PARITY_MATRIX.md) describen qué se prueba en cada motor.
+Wysna is pre-1.0. C99 is the primary native target, with verified intermediate representations before C generation. Seed is the Python reference implementation. The native SDK uses the self-hosted compiler written in Wysna. The [compiler architecture](docs/COMPILER_ARCHITECTURE.md) and [conformance matrix](docs/ENGINE_PARITY_MATRIX.md) describe the engines and the behavior covered by their tests.
 
-El lenguaje incluye contratos, errores tipados, coincidencia de patrones, genéricos y `async`/`await`. El runtime usa conteo de referencias y copia en escritura para las colecciones. El backend LLVM directo es experimental. Consulta el [alcance](docs/SCOPE.md) y los [límites conocidos](docs/KNOWN_LIMITS.md).
+Wysna supports contracts, typed errors, pattern matching, generics, and `async`/`await`. The runtime uses reference counting and copy-on-write collections. The direct LLVM backend is experimental. See the [supported scope](docs/SCOPE.md) and [known limits](docs/KNOWN_LIMITS.md).
 
-Los ejecutables nativos se ejecutan con los permisos del proceso que los invoca. Los [contratos de efectos](docs/EFFECTS.md) y la [política de seguridad](SECURITY.md) detallan qué superficies se pueden analizar o limitar, incluida la frontera con código C externo.
+Native executables inherit the permissions of their process. See the [effect model](docs/EFFECTS.md) and [security policy](SECURITY.md) for the boundaries of effect analysis and enforcement, including calls into external C code.
 
-## Documentación y contribución
+## Documentation and contribution
 
-- [Sintaxis](WYSNA_SINTAXIS.md) · [Especificación](SPEC.md) · [Biblioteca estándar](docs/STDLIB.md)
-- [Guías y arquitectura](docs/README.md) · [Historial de cambios](CHANGELOG.md)
-- [Contribuir desde código fuente](CONTRIBUTING.md) · [Código de conducta](CODE_OF_CONDUCT.md)
+- [Syntax reference](WYSNA_SINTAXIS.md) · [Language specification](SPEC.md) · [Standard library](docs/STDLIB.md)
+- [Documentation index](docs/README.md) · [Changelog](CHANGELOG.md)
+- [Contributing](CONTRIBUTING.md) · [Code of conduct](CODE_OF_CONDUCT.md)
 
-Wysna se distribuye bajo la [licencia Apache 2.0](LICENSE). Consulta [NOTICE](NOTICE) para las atribuciones.
+Wysna is distributed under the [Apache License 2.0](LICENSE). See [NOTICE](NOTICE) for attribution.

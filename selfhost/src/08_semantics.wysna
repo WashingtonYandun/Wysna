@@ -1725,6 +1725,9 @@ fn sem_expression(context: SemanticContext, minimum: int, allow_struct: bool) ->
             if context.expected_type >= 0 and sem_kind(context, context.expected_type) == "result" and (result_kind == "ok" or result_kind == "err") and sem_assignable(context, actual, context.expected_type) {
                 left = sem_value(context.expected_type)
             } else { left = sem_value(actual) }
+            if sem_kind(context, callee.type_id) == "builtin" and context.types[callee.type_id].name == "exit" {
+                left.terminates = true
+            }
             if context.capture_nodes {
                 let target = context.nodes[callee.node]
                 let mut nodes = argument_nodes

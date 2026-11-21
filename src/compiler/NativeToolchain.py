@@ -44,11 +44,12 @@ class CompilerEmissionResult:
 class NativeCompilationError(Exception):
     """A failed process with the legacy label retained for presentation adapters."""
 
-    def __init__(self, phase, label, stderr, returncode):
+    def __init__(self, phase, label, stderr, returncode, *, stdout=""):
         super().__init__(stderr)
         self.phase = phase
         self.label = label
         self.stderr = stderr
+        self.stdout = stdout
         self.returncode = returncode
 
 
@@ -237,17 +238,20 @@ class NativeToolchain:
         """Use the independent selfhost compiler binary to check a source file without emitting code."""
         input_path = os.path.abspath(os.fspath(file))
         input_directory = os.path.dirname(input_path) or os.getcwd()
-        check_flag = "--check-json" if json_output else "--check"
+        flags = ["--check-json" if json_output is True else "--check"]
+        if json_output == "json-v1":
+            flags.append("--output-format=json-v1")
         started = time.perf_counter()
         result = subprocess.run(
             [os.fspath(compiler_path), "--stdlib-root", str(Path(self.repo_root) / "stdlib"),
-             check_flag, input_path],
+             *flags, input_path],
             capture_output=True, text=True, cwd=input_directory, timeout=300,
         )
         check_ms = (time.perf_counter() - started) * 1000.0
         if result.returncode != 0:
             raise NativeCompilationError(
                 'selfhost', 'Wysna Compiler Check Error', result.stderr, result.returncode,
+                stdout=result.stdout,
             )
         return result.stdout, check_ms
 

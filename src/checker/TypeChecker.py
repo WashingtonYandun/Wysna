@@ -1224,6 +1224,11 @@ class TypeChecker:
             owners.add("Option")
         elif isinstance(expected_type, ResultType):
             owners.add("Result")
+        if isinstance(expected_type, EnumType):
+            resolved_owner = self._lookup_type_name(pattern.enum_name)
+            template = getattr(expected_type, "template_name", None)
+            if resolved_owner == expected_type or (template and getattr(resolved_owner, "name", None) == template):
+                return
         if pattern.enum_name not in owners:
             raise TypeError(
                 message=f"Pattern '{pattern.enum_name}.{pattern.variant}' is incompatible with match subject '{expected_type}'",

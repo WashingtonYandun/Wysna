@@ -171,7 +171,9 @@ fn diag_primary_span_json(file: str, line: int, col: int, src: str) -> str {
 
 fn diag_record_json(code: str, stage: str, severity: str, msg: str, file: str, line: int, col: int, src: str) -> str {
     let span_json = diag_primary_span_json(file, line, col, src)
-    return "{\"code\":" + diag_json_quote(code) + ",\"severity\":" + diag_json_quote(severity) + ",\"stage\":" + diag_json_quote(stage) + ",\"message\":" + diag_json_quote(msg) + ",\"primary_span\":" + span_json + ",\"related\":[],\"data\":{},\"fixes\":[]}"
+    let data_json = if code == "W2001" { fix_mismatch_data_json(msg) } else { "{}" }
+    let fixes_json = if span_json != "null" { fix_diagnostic_edits_json(code, msg, file, src, line, col) } else { "[]" }
+    return "{\"code\":" + diag_json_quote(code) + ",\"severity\":" + diag_json_quote(severity) + ",\"stage\":" + diag_json_quote(stage) + ",\"message\":" + diag_json_quote(msg) + ",\"primary_span\":" + span_json + ",\"related\":[],\"data\":" + data_json + ",\"fixes\":" + fixes_json + "}"
 }
 
 fn diag_tool_envelope_json(command: str, status: str, exit_code: int, diagnostics_json: str, result_key: str, result_json: str, artifacts_json: str) -> str {
@@ -4120,6 +4122,9 @@ fn sem_expression(context: SemanticContext, minimum: int, allow_struct: bool) ->
             if context.expected_type >= 0 and sem_kind(context, context.expected_type) == "result" and (result_kind == "ok" or result_kind == "err") and sem_assignable(context, actual, context.expected_type) {
                 left = sem_value(context.expected_type)
             } else { left = sem_value(actual) }
+            if sem_kind(context, callee.type_id) == "builtin" and context.types[callee.type_id].name == "exit" {
+                left.terminates = true
+            }
             if context.capture_nodes {
                 let target = context.nodes[callee.node]
                 let mut nodes = argument_nodes
@@ -7503,9 +7508,15 @@ fn mir_call(context: MirBuilder, node: CheckedNode) -> int {
         if len(function.type_params) > 0 { mir_unsupported(node.source, "generic calls") }
         return mir_op(context, "call", returned, arguments, mir_abi_name(function.name), mir_literal_unit(), node.source)
     }
+    if node.text == "exit" {
+        let result = mir_op(context, "runtime", returned, arguments, "wysna_builtin_exit", mir_literal_unit(), node.source)
+        let targets: list[int] = []
+        mir_terminate(context, "unreachable", targets, -1, node.source)
+        return result
+    }
     if node.text == "weak" { return mir_op(context, "runtime", returned, arguments, "wysna_builtin_weak_owned", mir_literal_unit(), node.source) }
     if node.text == "contract_assert" or node.text == "__wysna_contract_assert" { return mir_op(context, "runtime", returned, arguments, "wysna_builtin_contract_assert_at", mir_literal_unit(), node.source) }
-    let builtins: list[str] = ["upgrade", "print", "eprint", "int", "float", "str", "len", "ord", "chr", "slice", "bytes", "args", "env", "unix_time", "exit", "join_strings", "enumerate", "dict_items", "read_file", "write_file"]
+    let builtins: list[str] = ["upgrade", "print", "eprint", "int", "float", "str", "len", "ord", "chr", "slice", "bytes", "args", "env", "unix_time", "join_strings", "enumerate", "dict_items", "read_file", "write_file"]
     for name in builtins { if node.text == name { return mir_op(context, "runtime", returned, arguments, "wysna_builtin_" + name, mir_literal_unit(), node.source) } }
     mir_unsupported(node.source, "builtin call " + node.text)
     return -1
@@ -8886,7 +8897,7 @@ fn mir_emit_c(module: MirModule) -> str {
     let mut returned = 1
     for function in module.functions { if function.name == "wysna_program" { returned = function.return_type } }
     parts.append("int main(int argc, char** argv) {\n    wysna_init_args(argc, argv);\n    WVal result = " + mir_c_box("wysna_program()", returned) + ";\n")
-    parts.append("    int status = 0;\n    if (wysna_is_err(result)) { wysna_report_entrypoint_error(wysna_as_box(result)->val); status = 1; }\n    wysna_release(result);\n")
+    parts.append("    int status = wysna_entry_status(result);\n    wysna_release(result);\n")
     for global in module.globals { parts.append("    wysna_release(" + global.name + ");\n") }
     parts.append("    wysna_runtime_cleanup();\n    return status;\n}\n")
     return join_strings(parts, "")
@@ -8917,6 +8928,7 @@ class ToolGraphNode {
     end_char: int
     visibility: str
     is_async: bool
+    indirect_call: bool
     signature: str
     owner: str
     super_class: str
@@ -8949,6 +8961,7 @@ class ToolGraphNode {
         this.end_char = end_char
         this.visibility = visibility
         this.is_async = is_async
+        this.indirect_call = false
         this.signature = signature
         this.owner = owner
         this.super_class = ""
@@ -9517,6 +9530,28 @@ fn tool_walk_subtree(program: CheckedProgram, graph: ToolGraph, caller_idx: int,
     let caller_id = graph.nodes[caller_idx].id
     let line = node.source.line
     let file = node.source.file
+    if node.kind == "indirect_call" or node.kind == "virtual_call" {
+        graph.nodes[caller_idx].indirect_call = true
+    }
+    if node.kind == "callee" and node.target >= 0 {
+        let name = program.signatures[node.target].name
+        let short_name = tool_short_name(name)
+        let mut target_idx = -1
+        for function in program.functions {
+            if function.name != name { continue }
+            for i in 0..len(graph.nodes) {
+                if graph.nodes[i].kind == "fn" and graph.nodes[i].name == short_name and
+                     graph.nodes[i].file == function.source.file {
+                    target_idx = i
+                    break
+                }
+            }
+            break
+        }
+        if target_idx >= 0 {
+            tool_add_edge(graph, caller_id, graph.nodes[target_idx].id, "references_function", name, file, line)
+        }
+    }
     if node.kind == "new" or node.kind == "struct" or node.kind == "struct_call" {
         let t = program.types[node.type_id]
         let target_id = tool_resolve_nominal_id(graph, t.name)
@@ -9675,7 +9710,7 @@ fn tool_build_checked_graph(src: str, canonical: str, expanded: list[Token], pro
     let mut payload_parts: list[str] = ["src:", diag_sha256_hex(src), "|nodes:"]
     let mut node_sigs: list[str] = []
     for n in graph.nodes {
-        node_sigs.append(n.id + "@" + str(n.start_byte) + ":" + str(n.end_byte) + ":" + n.signature + ":" + tool_str_list_json(n.implements_list) + ":" + n.super_class)
+        node_sigs.append(n.id + "@" + str(n.start_byte) + ":" + str(n.end_byte) + ":" + n.signature + ":" + tool_str_list_json(n.implements_list) + ":" + n.super_class + (if n.indirect_call { ":indirect" } else { "" }))
     }
     payload_parts.append(join_strings(tool_sort_strings(node_sigs), ";"))
     payload_parts.append("|edges:")
@@ -9698,6 +9733,7 @@ fn tool_edge_json(e: ToolGraphEdge) -> str {
 
 fn tool_node_json(n: ToolGraphNode) -> str {
     let mut p: list[str] = ["{\"id\":" + diag_json_quote(n.id)]
+    if n.indirect_call { p.append(",\"indirect_call\":true") }
     p.append(",\"name\":" + diag_json_quote(n.name))
     p.append(",\"qualified_name\":" + diag_json_quote(n.qualified_name))
     p.append(",\"kind\":" + diag_json_quote(n.kind))
@@ -13389,6 +13425,25 @@ fn fix_extract_expected_found(msg: str) -> list[str] {
     return empty
 }
 
+fn fix_propagation_requirement(expected: str, found: str) -> str {
+    if found == expected + "?" { return "an optional return type" }
+    let prefix = expected + " ! "
+    if len(found) > len(prefix) and slice(found, 0, len(prefix)) == prefix {
+        return "a result return type that accepts " + slice(found, len(prefix), len(found))
+    }
+    return ""
+}
+
+fn fix_mismatch_data_json(msg: str) -> str {
+    let types = fix_extract_expected_found(msg)
+    if len(types) != 2 { return "{}" }
+    let base = "{\"kind\":\"type_mismatch\",\"expected\":" + diag_json_quote(types[0]) + ",\"found\":" + diag_json_quote(types[1])
+    let requirement = fix_propagation_requirement(types[0], types[1])
+    if requirement == "" { return base + "}" }
+    let help = "'?' can return early and requires " + requirement + " on the enclosing function. Use 'else' for a local fallback."
+    return base + ",\"unwrap_hint\":\"?\",\"help\":" + diag_json_quote(help) + "}"
+}
+
 fn fix_postfix_end_token(tokens: list[Token], start_idx: int) -> int {
     if start_idx < 0 or start_idx >= len(tokens) { return -1 }
     let first_kind = tokens[start_idx].kind
@@ -13468,10 +13523,7 @@ fn fix_plan_w2001(src: str, tokens: list[Token], start_byte: int, msg: str) -> l
     if len(ef) != 2 { return out }
     let exp = ef[0]
     let fnd = ef[1]
-    let is_opt = fnd == exp + "?"
-    let res_prefix = exp + " ! "
-    let is_res = len(fnd) > len(res_prefix) and slice(fnd, 0, len(res_prefix)) == res_prefix
-    if not is_opt and not is_res { return out }
+    if fix_propagation_requirement(exp, fnd) == "" { return out }
     let start_char = lsp_char_offset_from_utf8_byte(src, start_byte)
     let lc = fix_line_col_from_char(src, start_char)
     let tok_idx = fix_tok_index_at(tokens, lc[0], lc[1])
@@ -13483,7 +13535,7 @@ fn fix_plan_w2001(src: str, tokens: list[Token], start_byte: int, msg: str) -> l
     let orig = slice(src, c0, c1)
     let b0 = diag_utf8_byte_at(src, c0)
     let b1 = diag_utf8_byte_at(src, c1)
-    out.append(new FixEdit("W2001", "append '?' to unwrap/propagate '" + orig + "'", "maybe", b0, b1, orig + "?"))
+    out.append(new FixEdit("W2001", "append '?' to '" + orig + "' to propagate failure by returning early", "maybe", b0, b1, orig + "?"))
     return out
 }
 
@@ -13691,6 +13743,30 @@ fn fix_plan_w3004(src: str, tokens: list[Token], start_byte: int, end_byte: int,
     return out
 }
 
+fn fix_plan_diagnostic(code: str, src: str, tokens: list[Token], start_byte: int, end_byte: int, msg: str) -> list[FixEdit] {
+    if code == "W2001" { return fix_plan_w2001(src, tokens, start_byte, msg) }
+    if code == "W1001" { return fix_plan_w1001(src, tokens, start_byte, end_byte, msg) }
+    if code == "W3001" { return fix_plan_w3001(src, tokens, start_byte, msg) }
+    if code == "W3004" { return fix_plan_w3004(src, tokens, start_byte, end_byte, msg) }
+    return []
+}
+
+fn fix_diagnostic_edits_json(code: str, msg: str, file: str, src: str, line: int, col: int) -> str {
+    if code != "W2001" and code != "W1001" and code != "W3001" and code != "W3004" { return "[]" }
+    let start_char = diag_char_offset_at(src, line, col)
+    let end_char = diag_char_span_width(src, start_char)
+    if start_char < 0 or end_char <= start_char { return "[]" }
+    let fixes = fix_plan_diagnostic(code, src, tokenize(src, file), diag_utf8_byte_at(src, start_char), diag_utf8_byte_at(src, end_char), msg)
+    if len(fixes) == 0 { return "[]" }
+    let source = "{\"source_id\":" + diag_json_quote(file) + ",\"source_sha256\":" + diag_json_quote(diag_sha256_hex(src))
+    let mut parts: list[str] = []
+    for fix in fixes {
+        let edit = source + ",\"start_byte\":" + str(fix.start_byte) + ",\"end_byte\":" + str(fix.end_byte) + ",\"replacement\":" + diag_json_quote(fix.replacement) + "}"
+        parts.append("{\"description\":" + diag_json_quote(fix.description) + ",\"applicability\":" + diag_json_quote(fix.applicability) + ",\"edits\":[" + edit + "]}")
+    }
+    return "[" + join_strings(parts, ",") + "]"
+}
+
 fn fix_apply_non_overlapping(src: str, edits: list[FixEdit]) -> str {
     # Sort descending by start_byte
     let mut sorted: list[FixEdit] = []
@@ -13793,16 +13869,7 @@ fn tool_handle_fix(args: list[str], json_mode_in: bool) -> unit {
             let sb = lsp_json_int(sp, "start_byte", -1)
             let eb = lsp_json_int(sp, "end_byte", -1)
             if sb < 0 or eb <= sb { continue }
-            let mut gen: list[FixEdit] = []
-            if code == "W3001" {
-                gen = fix_plan_w3001(current_src, tokens, sb, msg)
-            } elif code == "W2001" {
-                gen = fix_plan_w2001(current_src, tokens, sb, msg)
-            } elif code == "W1001" {
-                gen = fix_plan_w1001(current_src, tokens, sb, eb, msg)
-            } elif code == "W3004" {
-                gen = fix_plan_w3004(current_src, tokens, sb, eb, msg)
-            }
+            let gen = fix_plan_diagnostic(code, current_src, tokens, sb, eb, msg)
             for g in gen {
                 if g.applicability == "machine" or (include_maybe and g.applicability == "maybe") {
                     cands.append(g)
@@ -15355,6 +15422,7 @@ fn proj_impact_entry_json(item: ProjectImpactEntry, target: ToolGraphNode, root:
 
     let mut paths: list[str] = []
     let mut labels: list[str] = []
+    let mut entry_ids: list[str] = []
     let mut boundaries: list[str] = []
     if item.profile == "browser-library" { boundaries.append("javascript") }
     for n in graph.nodes {
@@ -15365,6 +15433,7 @@ fn proj_impact_entry_json(item: ProjectImpactEntry, target: ToolGraphNode, root:
         let is_root = if item.profile == "browser-library" { n.kind == "fn" and n.visibility == "public" }
             else { n.kind == "entrypoint" or (n.kind == "fn" and n.name == "main") }
         if not is_root { continue }
+        entry_ids.append(n.id)
         let mut route: list[str] = []
         let mut description = n.id
         let mut cursor = -1
@@ -15383,15 +15452,33 @@ fn proj_impact_entry_json(item: ProjectImpactEntry, target: ToolGraphNode, root:
         paths.append("{\"entry_symbol\":" + diag_json_quote(n.id) + ",\"chain\":[" + join_strings(route, ",") + "]}")
         labels.append(description)
     }
+    let mut visited = entry_ids
+    let mut head = 0
+    while head < len(visited) {
+        let id = visited[head]
+        head = head + 1
+        let idx = tool_find_node_idx(graph, id)
+        if idx >= 0 and graph.nodes[idx].indirect_call {
+            boundaries.append("indirect-call")
+            break
+        }
+        for edge in graph.edges {
+            if edge.from_id == id and not tool_str_contains(visited, edge.to_id) {
+                visited.append(edge.to_id)
+            }
+        }
+    }
     let affected = len(paths) > 0
+    let impact_status = if affected { "affected" } elif len(boundaries) > 0 { "uncertain" } else { "no-static-path" }
     if not output_json {
-        print(item.kind + " " + item.name + " (" + item.entry + "): " + (if affected { "affected" } else { "no static path" }))
+        print(item.kind + " " + item.name + " (" + item.entry + "): " + (if impact_status == "no-static-path" { "no static path" } else { impact_status }))
         for label in labels { print("  " + label) }
         if len(boundaries) > 0 { print("  External boundaries: " + join_strings(boundaries, ", ")) }
     }
     return "{\"kind\":" + diag_json_quote(item.kind) + ",\"name\":" + diag_json_quote(item.name) +
         ",\"entry\":" + diag_json_quote(item.entry) + ",\"profile\":" + diag_json_quote(item.profile) +
         ",\"affected\":" + (if affected { "true" } else { "false" }) +
+        ",\"impact_status\":" + diag_json_quote(impact_status) +
         ",\"paths\":[" + join_strings(paths, ",") + "],\"unanalyzed_boundaries\":" + tool_str_list_json(boundaries) + "}"
 }
 
@@ -16402,7 +16489,7 @@ fn tool_handle_api(args: list[str], _json_mode: bool) -> unit {
         let clean_rel = if proj_str_ends_with(rel, ".wysna") { slice(rel, 0, len(rel) - 6) } else { rel }
         api_collect_stdlib_file(acc, resolved[1], "std/" + clean_rel)
     } else {
-        let known: list[str] = ["algorithms", "async", "buffer", "bytes", "crypto", "environment", "files", "fs", "http", "io", "json", "parse", "path", "process", "resources", "test", "text", "time"]
+        let known: list[str] = ["algorithms", "async", "buffer", "bytes", "crypto", "environment", "files", "fs", "http", "io", "json", "parse", "path", "process", "resources", "result", "test", "text", "time"]
         for name in known {
             let resolved = api_resolve_stdlib_module(stdlib_root, name)
             if resolved[0] == "1" {

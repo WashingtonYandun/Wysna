@@ -325,7 +325,7 @@ print("verified")
             ('let outer = "same" + str(1)\nif true { let outer = "inner" + str(2)\nprint(outer) }\nprint(outer)', "inner2\nsame1\n"),
             ('fn side() -> bool { let value = "skip-" + str(1)\nprint(value)\ntrue }\nprint(false and side(), true or side())', "false true\n"),
             ('fn recurse(n: int, value: str) -> str { if n == 0 { return value }\nreturn recurse(n - 1, value + str(n)) }\nprint(recurse(4, "r"))', "r4321\n"),
-            ('fn main() -> int { let value = "main-" + str(7)\nprint(value)\nreturn 12 }', "main-7\n"),
+            ('fn main() -> int { let value = "main-" + str(7)\nprint(value)\nreturn 0 }', "main-7\n"),
             ('let mut i = 0\nlet mut value = "initial"\nwhile i < 500 { let local = str(i) + "-suffix"\nvalue = slice(local, 0, 3)\ni = i + 1 }\nprint(value)', "499\n"),
         ]
         with tempfile.TemporaryDirectory(prefix="wysna-managed-mir-") as temporary:

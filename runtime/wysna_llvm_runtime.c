@@ -150,9 +150,10 @@ void wysna_llvm_set_vtable(void* value, const void* table) {
     wysna_set_vtable(*(WVal*)value, (const WClassVTable*)table);
 }
 int32_t wysna_llvm_entry_status(const void* input) {
-    WVal value = *(const WVal*)input;
-    if (wysna_is_err(value)) { wysna_report_entrypoint_error(wysna_as_box(value)->val); return 1; }
-    return 0;
+    return wysna_entry_status(*(const WVal*)input);
+}
+int32_t wysna_llvm_integer_entry_status(int64_t value) {
+    return wysna_integer_entry_status(value);
 }
 int64_t wysna_llvm_async_spawn(const void* fn) {
     return wysna_async_spawn_handle(*(const WVal*)fn);

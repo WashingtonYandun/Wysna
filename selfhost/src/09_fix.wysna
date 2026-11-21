@@ -259,6 +259,25 @@ fn fix_extract_expected_found(msg: str) -> list[str] {
     return empty
 }
 
+fn fix_propagation_requirement(expected: str, found: str) -> str {
+    if found == expected + "?" { return "an optional return type" }
+    let prefix = expected + " ! "
+    if len(found) > len(prefix) and slice(found, 0, len(prefix)) == prefix {
+        return "a result return type that accepts " + slice(found, len(prefix), len(found))
+    }
+    return ""
+}
+
+fn fix_mismatch_data_json(msg: str) -> str {
+    let types = fix_extract_expected_found(msg)
+    if len(types) != 2 { return "{}" }
+    let base = "{\"kind\":\"type_mismatch\",\"expected\":" + diag_json_quote(types[0]) + ",\"found\":" + diag_json_quote(types[1])
+    let requirement = fix_propagation_requirement(types[0], types[1])
+    if requirement == "" { return base + "}" }
+    let help = "'?' can return early and requires " + requirement + " on the enclosing function. Use 'else' for a local fallback."
+    return base + ",\"unwrap_hint\":\"?\",\"help\":" + diag_json_quote(help) + "}"
+}
+
 fn fix_postfix_end_token(tokens: list[Token], start_idx: int) -> int {
     if start_idx < 0 or start_idx >= len(tokens) { return -1 }
     let first_kind = tokens[start_idx].kind
@@ -338,10 +357,7 @@ fn fix_plan_w2001(src: str, tokens: list[Token], start_byte: int, msg: str) -> l
     if len(ef) != 2 { return out }
     let exp = ef[0]
     let fnd = ef[1]
-    let is_opt = fnd == exp + "?"
-    let res_prefix = exp + " ! "
-    let is_res = len(fnd) > len(res_prefix) and slice(fnd, 0, len(res_prefix)) == res_prefix
-    if not is_opt and not is_res { return out }
+    if fix_propagation_requirement(exp, fnd) == "" { return out }
     let start_char = lsp_char_offset_from_utf8_byte(src, start_byte)
     let lc = fix_line_col_from_char(src, start_char)
     let tok_idx = fix_tok_index_at(tokens, lc[0], lc[1])
@@ -353,7 +369,7 @@ fn fix_plan_w2001(src: str, tokens: list[Token], start_byte: int, msg: str) -> l
     let orig = slice(src, c0, c1)
     let b0 = diag_utf8_byte_at(src, c0)
     let b1 = diag_utf8_byte_at(src, c1)
-    out.append(new FixEdit("W2001", "append '?' to unwrap/propagate '" + orig + "'", "maybe", b0, b1, orig + "?"))
+    out.append(new FixEdit("W2001", "append '?' to '" + orig + "' to propagate failure by returning early", "maybe", b0, b1, orig + "?"))
     return out
 }
 
@@ -561,6 +577,30 @@ fn fix_plan_w3004(src: str, tokens: list[Token], start_byte: int, end_byte: int,
     return out
 }
 
+fn fix_plan_diagnostic(code: str, src: str, tokens: list[Token], start_byte: int, end_byte: int, msg: str) -> list[FixEdit] {
+    if code == "W2001" { return fix_plan_w2001(src, tokens, start_byte, msg) }
+    if code == "W1001" { return fix_plan_w1001(src, tokens, start_byte, end_byte, msg) }
+    if code == "W3001" { return fix_plan_w3001(src, tokens, start_byte, msg) }
+    if code == "W3004" { return fix_plan_w3004(src, tokens, start_byte, end_byte, msg) }
+    return []
+}
+
+fn fix_diagnostic_edits_json(code: str, msg: str, file: str, src: str, line: int, col: int) -> str {
+    if code != "W2001" and code != "W1001" and code != "W3001" and code != "W3004" { return "[]" }
+    let start_char = diag_char_offset_at(src, line, col)
+    let end_char = diag_char_span_width(src, start_char)
+    if start_char < 0 or end_char <= start_char { return "[]" }
+    let fixes = fix_plan_diagnostic(code, src, tokenize(src, file), diag_utf8_byte_at(src, start_char), diag_utf8_byte_at(src, end_char), msg)
+    if len(fixes) == 0 { return "[]" }
+    let source = "{\"source_id\":" + diag_json_quote(file) + ",\"source_sha256\":" + diag_json_quote(diag_sha256_hex(src))
+    let mut parts: list[str] = []
+    for fix in fixes {
+        let edit = source + ",\"start_byte\":" + str(fix.start_byte) + ",\"end_byte\":" + str(fix.end_byte) + ",\"replacement\":" + diag_json_quote(fix.replacement) + "}"
+        parts.append("{\"description\":" + diag_json_quote(fix.description) + ",\"applicability\":" + diag_json_quote(fix.applicability) + ",\"edits\":[" + edit + "]}")
+    }
+    return "[" + join_strings(parts, ",") + "]"
+}
+
 fn fix_apply_non_overlapping(src: str, edits: list[FixEdit]) -> str {
     # Sort descending by start_byte
     let mut sorted: list[FixEdit] = []
@@ -663,16 +703,7 @@ fn tool_handle_fix(args: list[str], json_mode_in: bool) -> unit {
             let sb = lsp_json_int(sp, "start_byte", -1)
             let eb = lsp_json_int(sp, "end_byte", -1)
             if sb < 0 or eb <= sb { continue }
-            let mut gen: list[FixEdit] = []
-            if code == "W3001" {
-                gen = fix_plan_w3001(current_src, tokens, sb, msg)
-            } elif code == "W2001" {
-                gen = fix_plan_w2001(current_src, tokens, sb, msg)
-            } elif code == "W1001" {
-                gen = fix_plan_w1001(current_src, tokens, sb, eb, msg)
-            } elif code == "W3004" {
-                gen = fix_plan_w3004(current_src, tokens, sb, eb, msg)
-            }
+            let gen = fix_plan_diagnostic(code, current_src, tokens, sb, eb, msg)
             for g in gen {
                 if g.applicability == "machine" or (include_maybe and g.applicability == "maybe") {
                     cands.append(g)

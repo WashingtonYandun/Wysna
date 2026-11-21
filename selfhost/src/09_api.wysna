@@ -763,7 +763,7 @@ fn tool_handle_api(args: list[str], _json_mode: bool) -> unit {
         let clean_rel = if proj_str_ends_with(rel, ".wysna") { slice(rel, 0, len(rel) - 6) } else { rel }
         api_collect_stdlib_file(acc, resolved[1], "std/" + clean_rel)
     } else {
-        let known: list[str] = ["algorithms", "async", "buffer", "bytes", "crypto", "environment", "files", "fs", "http", "io", "json", "parse", "path", "process", "resources", "test", "text", "time"]
+        let known: list[str] = ["algorithms", "async", "buffer", "bytes", "crypto", "environment", "files", "fs", "http", "io", "json", "parse", "path", "process", "resources", "result", "test", "text", "time"]
         for name in known {
             let resolved = api_resolve_stdlib_module(stdlib_root, name)
             if resolved[0] == "1" {

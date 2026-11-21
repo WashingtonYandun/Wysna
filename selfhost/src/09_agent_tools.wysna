@@ -22,6 +22,7 @@ class ToolGraphNode {
     end_char: int
     visibility: str
     is_async: bool
+    indirect_call: bool
     signature: str
     owner: str
     super_class: str
@@ -54,6 +55,7 @@ class ToolGraphNode {
         this.end_char = end_char
         this.visibility = visibility
         this.is_async = is_async
+        this.indirect_call = false
         this.signature = signature
         this.owner = owner
         this.super_class = ""
@@ -622,6 +624,28 @@ fn tool_walk_subtree(program: CheckedProgram, graph: ToolGraph, caller_idx: int,
     let caller_id = graph.nodes[caller_idx].id
     let line = node.source.line
     let file = node.source.file
+    if node.kind == "indirect_call" or node.kind == "virtual_call" {
+        graph.nodes[caller_idx].indirect_call = true
+    }
+    if node.kind == "callee" and node.target >= 0 {
+        let name = program.signatures[node.target].name
+        let short_name = tool_short_name(name)
+        let mut target_idx = -1
+        for function in program.functions {
+            if function.name != name { continue }
+            for i in 0..len(graph.nodes) {
+                if graph.nodes[i].kind == "fn" and graph.nodes[i].name == short_name and
+                     graph.nodes[i].file == function.source.file {
+                    target_idx = i
+                    break
+                }
+            }
+            break
+        }
+        if target_idx >= 0 {
+            tool_add_edge(graph, caller_id, graph.nodes[target_idx].id, "references_function", name, file, line)
+        }
+    }
     if node.kind == "new" or node.kind == "struct" or node.kind == "struct_call" {
         let t = program.types[node.type_id]
         let target_id = tool_resolve_nominal_id(graph, t.name)
@@ -780,7 +804,7 @@ fn tool_build_checked_graph(src: str, canonical: str, expanded: list[Token], pro
     let mut payload_parts: list[str] = ["src:", diag_sha256_hex(src), "|nodes:"]
     let mut node_sigs: list[str] = []
     for n in graph.nodes {
-        node_sigs.append(n.id + "@" + str(n.start_byte) + ":" + str(n.end_byte) + ":" + n.signature + ":" + tool_str_list_json(n.implements_list) + ":" + n.super_class)
+        node_sigs.append(n.id + "@" + str(n.start_byte) + ":" + str(n.end_byte) + ":" + n.signature + ":" + tool_str_list_json(n.implements_list) + ":" + n.super_class + (if n.indirect_call { ":indirect" } else { "" }))
     }
     payload_parts.append(join_strings(tool_sort_strings(node_sigs), ";"))
     payload_parts.append("|edges:")
@@ -803,6 +827,7 @@ fn tool_edge_json(e: ToolGraphEdge) -> str {
 
 fn tool_node_json(n: ToolGraphNode) -> str {
     let mut p: list[str] = ["{\"id\":" + diag_json_quote(n.id)]
+    if n.indirect_call { p.append(",\"indirect_call\":true") }
     p.append(",\"name\":" + diag_json_quote(n.name))
     p.append(",\"qualified_name\":" + diag_json_quote(n.qualified_name))
     p.append(",\"kind\":" + diag_json_quote(n.kind))

@@ -355,7 +355,7 @@ def _synthesize_unwrap_fixes(error, filename, source):
         return []
 
     return [{
-        "description": f"append '?' to unwrap/propagate '{orig}'",
+        "description": f"append '?' to '{orig}' to propagate failure by returning early",
         "applicability": "maybe",
         "edits": [{
             "source_id": filename,

@@ -27,6 +27,8 @@ Wysna distributes modules under `std/` imported via canonical paths such as `imp
 - `std/parse`: recoverable numeric parsing returning `Result` with `ParseError`.
   - `parse.parse_int(text) -> int ! ParseError`: parse 64-bit signed integer with whitespace trimming, optional sign, and overflow checks.
   - `parse.parse_float(text) -> float ! ParseError`: parse IEEE-754 64-bit float with fractional and exponent support.
+- `std/result` transforma errores entre capas de una aplicación.
+  - `result.map_error(value: T ! E, convert: fn(E) -> F) -> T ! F` conserva el valor exitoso y llama a `convert` solo si recibe `Err`. Importa el módulo con `import "std/result"`.
 - `std/json`: bounded JSON parsing and deterministic compact serialization.
   - `json.parse(text) -> Value ! JsonError`: parse one JSON value with defaults of 1,048,576 UTF-8 input bytes, 32 nested arrays/objects, and 100,000 JSON values; error offsets count Unicode scalar values.
   - `json.parse_with_limits(text, max_input_bytes, max_depth, max_nodes) -> Value ! JsonError`: set per-call budgets. Bytes range from 1 to 16,777,216 (the default is 1,048,576); depth and node budgets can be reduced from hard maxima of 32 and 100,000. Invalid budgets return `JsonError` at offset 0.
