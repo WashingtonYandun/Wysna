@@ -69,6 +69,27 @@ python3 bench/ai_eval/run_eval.py \
   --output=bench/ai_eval/results/local_baseline.json
 ```
 
+### Resumable Real-Model Evaluation
+
+Pass `--checkpoint` to persist each completed task atomically. If the process
+stops because of a provider quota, interruption, or network failure, rerun the
+same command with the same checkpoint path. The runner resumes only when the
+model, endpoint, task corpus, source revision/tree, task filter, and repair
+budget still match. Use a different path for `--output`; the final JSON report
+is written after the remaining tasks finish.
+
+```bash
+python3 bench/ai_eval/run_eval.py \
+  --provider=openai \
+  --base-url=https://openrouter.ai/api/v1 \
+  --model=nvidia/nemotron-3.5-super-vl:free \
+  --checkpoint=bench/ai_eval/results/nemotron_30.checkpoint.json \
+  --output=bench/ai_eval/results/nemotron_30.json
+```
+
+The API key is read from `OPENROUTER_API_KEY` (or can be provided through the
+provider's supported configuration). Do not use a paid model for this run.
+
 ---
 
 ## 5. Running Tests

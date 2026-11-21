@@ -245,5 +245,5 @@ Tal como establecen las reglas de este plan, **los conteos de tokens por sí sol
 
 ### `AGT-R01` · Hipótesis: `wysna patch --symbol` reduce errores de edición de agentes frente a reemplazo de líneas estándar en archivos de `>300` LOC
 
-- **Estado:** **Sin medir con modelos reales.**
+- **Estado:** **La hipótesis concreta sigue sin medir.** El piloto exploratorio del protocolo conjunto midió prefetch semántico, no el uso de wysna patch --symbol; sus resultados no permiten aceptar ni descartar esta hipótesis.
 - **Cómo falsificarla:** Una vez implementado **`AGT-06`**, ejecutar `bench/ai_eval/ab_cohort.py --interactive-tools` con un modelo real (por ejemplo, Gemini 2.5 Flash o Qwen 2.5 Coder) comparando edición vía `wysna_patch` frente a edición directa validada con `wysna_check` sobre las tareas multi-módulo. Si `wysna_patch` no reduce la tasa de fallos de edición ni los turnos de reparación, se congela `wysna patch` y se deja de recomendar en `docs/AI_AGENT_GUIDE.md` como paso primario de edición.

@@ -31,6 +31,7 @@ class CohortTask:
     family: str
     allowed_edit_files: Tuple[str, ...]
     invariant_checker: Optional[Callable[[str, TaskEvaluationResult], Optional[str]]] = None
+    condition_instructions: Tuple[Tuple[str, str], ...] = ()
 
 
 def _build_default_cohort_tasks() -> List[CohortTask]:
@@ -507,7 +508,7 @@ def _build_default_cohort_tasks() -> List[CohortTask]:
 
 
 def build_import_style_ab_tasks() -> List[CohortTask]:
-    """Return LANG-R01 paired tasks comparing `import as` vs `from ... use` syntax."""
+    """Return one task whose A/B conditions differ only by import syntax."""
     common_cases = [
         TaskTestCase(
             name="summary",
@@ -518,34 +519,22 @@ def build_import_style_ab_tasks() -> List[CohortTask]:
     return [
         CohortTask(
             task=Task(
-                id="LANG-R01-IMPORT-AS",
+                id="LANG-R01-IMPORT-STYLE",
                 domain="cli_scripting",
-                title="Namespace import syntax (`import \"std/...\" as ...`)",
+                title="Parse and sum two comma-separated integers",
                 status="supported",
                 instruction=(
-                    "Write `main.wysna` using namespace imports (`import \"std/json\" as json` / "
-                    "`import \"std/parse\" as parse`) that parses `\"4,5\"`, sums the integers, "
-                    "and prints `sum=9`."
+                    "Write `main.wysna` to split the string `\"4,5\"`, parse both values as integers, "
+                    "sum them, and print exactly `sum=9`. Use the import form specified for this run."
                 ),
                 test_cases=common_cases,
             ),
             family="authoring",
             allowed_edit_files=("main.wysna",),
-        ),
-        CohortTask(
-            task=Task(
-                id="LANG-R01-FROM-USE",
-                domain="cli_scripting",
-                title="Direct symbol import syntax (`from \"std/...\" use { ... }`)",
-                status="supported",
-                instruction=(
-                    "Write `main.wysna` using selective symbol imports (`from \"std/parse\" use { parse_int }`) "
-                    "that splits `\"4,5\"`, parses each integer, sums them, and prints `sum=9`."
-                ),
-                test_cases=common_cases,
+            condition_instructions=(
+                ("A", 'Use `import "std/parse" as parse` and call `parse.parse_int(...)`.'),
+                ("B", 'Use `from "std/parse" use { parse_int }` and call `parse_int(...)`.'),
             ),
-            family="authoring",
-            allowed_edit_files=("main.wysna",),
         ),
     ]
 
@@ -804,6 +793,7 @@ def run_ab_cohort(
     model_name: str = "mock-deterministic",
     provider_name: str = "mock",
     interactive: bool = False,
+    comparison_axis: str = "semantic-prefetch",
 ) -> Dict[str, Any]:
     """Execute alternating blinded A/B repetitions with fresh isolated workspaces per run."""
     runs: List[Dict[str, Any]] = []
@@ -817,6 +807,9 @@ def run_ab_cohort(
                 )
                 provider = provider_factory(condition)
                 task_copy = Task.from_dict(cohort_item.task.to_dict())
+                condition_instruction = dict(cohort_item.condition_instructions).get(condition)
+                if condition_instruction:
+                    task_copy.instruction = f"{task_copy.instruction}\n\n[CONDITION]\n{condition_instruction}"
                 semantic_queries = 0
                 files_read = len(task_copy.fixtures)
                 if condition == "B" and not interactive:
@@ -867,7 +860,13 @@ def run_ab_cohort(
     summary = evaluate_expansion_gate(runs)
     summary["oracle_revision"] = 2
     summary["provider_name"] = provider_name
-    summary["context_mode"] = "model-selected" if interactive else "prefetched"
+    if interactive:
+        summary["context_mode"] = "model-selected"
+    elif comparison_axis == "import-style":
+        summary["context_mode"] = "none"
+    else:
+        summary["context_mode"] = "prefetched"
+    summary["comparison_axis"] = comparison_axis
     summary["model_name"] = model_name
     summary["repetitions"] = repetitions
     summary["families_covered"] = sorted({item.family for item in cohort_tasks})
@@ -915,6 +914,7 @@ def main() -> int:
         model_name=model_name,
         provider_name=args.provider,
         interactive=args.interactive_tools,
+        comparison_axis=("import-style" if args.suite == "import-style" else "mixed" if args.suite == "all" else "semantic-prefetch"),
     )
     if args.output:
         os.makedirs(os.path.dirname(os.path.abspath(args.output)), exist_ok=True)

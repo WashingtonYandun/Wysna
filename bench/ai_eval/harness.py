@@ -15,7 +15,7 @@ import subprocess
 import sys
 import tempfile
 import time
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Callable, Dict, List, Optional, Tuple
 
 from bench.ai_eval.models import (
     SCHEMA_VERSION,
@@ -554,13 +554,16 @@ class EvaluationHarness:
         provider_name: str = "generic",
         model_name: str = "unknown",
         task_filter: Optional[str] = None,
+        completed_results: Optional[List[TaskEvaluationResult]] = None,
+        on_task_complete: Optional[Callable[[TaskEvaluationResult, List[TaskEvaluationResult]], None]] = None,
     ) -> EvaluationSummary:
         """Runs the benchmark over the given tasks collection."""
         selected_tasks = tasks
         if task_filter:
             selected_tasks = [t for t in tasks if t.id == task_filter or task_filter in t.domain]
 
-        results: List[TaskEvaluationResult] = []
+        results: List[TaskEvaluationResult] = list(completed_results or [])
+        completed_task_ids = {result.task_id for result in results}
         error_dist: Dict[str, int] = {}
         raw_first_check_pass_count = 0
         post_autofix_first_check_pass_count = 0
@@ -586,9 +589,15 @@ class EvaluationHarness:
             pass
 
         for task in selected_tasks:
+            if task.id in completed_task_ids:
+                continue
             res = self.evaluate_task(task, provider)
             results.append(res)
+            completed_task_ids.add(task.id)
+            if on_task_complete is not None:
+                on_task_complete(res, results)
 
+        for res in results:
             if res.status == "blocked":
                 blocked_count += 1
             else:

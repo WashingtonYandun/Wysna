@@ -6,8 +6,11 @@ Usage:
 """
 
 import argparse
+import hashlib
 import json
 import os
+from pathlib import Path
+import subprocess
 import sys
 
 # Load both the benchmark package and the compiler from the source checkout.
@@ -17,6 +20,61 @@ sys.path[:0] = [REPO_ROOT, os.path.join(REPO_ROOT, "src")]
 from bench.ai_eval.harness import EvaluationHarness
 from bench.ai_eval.models import Task
 from bench.ai_eval.providers import GeminiProvider, MockProvider, OpenAICompatibleProvider
+from bench.ai_eval.checkpoint import load_checkpoint, save_checkpoint
+
+
+def _checkpoint_config(args, model_name: str, tasks_file: Path) -> dict:
+    """Identify the task corpus, compiler source, and provider settings for safe resume."""
+    revision = subprocess.run(
+        ["git", "rev-parse", "HEAD"], cwd=REPO_ROOT, capture_output=True, text=True, check=True,
+    ).stdout.strip()
+    diff = subprocess.run(
+        ["git", "diff", "HEAD", "--binary"], cwd=REPO_ROOT, capture_output=True, check=True,
+    ).stdout
+    untracked = subprocess.run(
+        ["git", "ls-files", "--others", "--exclude-standard", "-z"],
+        cwd=REPO_ROOT, capture_output=True, check=True,
+    ).stdout
+    output_paths = [
+        path.resolve() for path in (args.checkpoint, Path(args.output) if args.output else None)
+        if path is not None
+    ]
+    source_hash = hashlib.sha256(diff)
+    for relative_name in untracked.split(b"\0"):
+        if not relative_name:
+            continue
+        source_path = Path(REPO_ROOT) / os.fsdecode(relative_name)
+        resolved_path = source_path.resolve()
+        results_dir = (Path(REPO_ROOT) / "bench" / "ai_eval" / "results").resolve()
+        if resolved_path == results_dir or results_dir in resolved_path.parents:
+            continue
+        if any(
+            resolved_path == output_path
+            or (
+                resolved_path.parent == output_path.parent
+                and resolved_path.name.startswith(f".{output_path.name}.")
+                and resolved_path.name.endswith(".tmp")
+            )
+            for output_path in output_paths
+        ):
+            continue
+        file_bytes = source_path.read_bytes()
+        source_hash.update(len(relative_name).to_bytes(8, "big"))
+        source_hash.update(relative_name)
+        source_hash.update(len(file_bytes).to_bytes(8, "big"))
+        source_hash.update(file_bytes)
+    source_digest = source_hash.hexdigest()
+    endpoint_digest = hashlib.sha256(args.base_url.encode("utf-8")).hexdigest()
+    return {
+        "compiler_commit": revision,
+        "compiler_source_sha256": source_digest,
+        "tasks_sha256": hashlib.sha256(tasks_file.read_bytes()).hexdigest(),
+        "provider": args.provider,
+        "model": model_name,
+        "endpoint_sha256": endpoint_digest if args.provider == "openai" else None,
+        "task_filter": args.task,
+        "max_repair_cycles": args.max_repair_cycles,
+    }
 
 
 def format_markdown_table(summary: dict) -> str:
@@ -84,13 +142,18 @@ def main() -> int:
     )
     parser.add_argument("--task", type=str, default=None, help="Filter for single task ID or domain")
     parser.add_argument("--output", type=str, default=None, help="Path to write JSON results file")
+    parser.add_argument("--checkpoint", type=Path, default=None,
+                        help="Atomically save each completed task and resume matching runs")
+    parser.add_argument("--max-repair-cycles", type=int, default=3,
+                        help="Maximum diagnostic repair submissions per task")
     parser.add_argument("--base-url", type=str, default="http://localhost:1234/v1", help="OpenAI-compatible base URL")
     parser.add_argument("--api-key", type=str, default=None, help="API key for provider")
 
     args = parser.parse_args()
 
     # Load tasks
-    with open(args.tasks_file, "r", encoding="utf-8") as f:
+    tasks_file = Path(args.tasks_file).resolve()
+    with tasks_file.open("r", encoding="utf-8") as f:
         corpus_data = json.load(f)
 
     tasks = [Task.from_dict(t) for t in corpus_data.get("tasks", [])]
@@ -113,7 +176,25 @@ def main() -> int:
         print(f"Unknown provider: {args.provider}", file=sys.stderr)
         return 1
 
-    harness = EvaluationHarness(repo_root=REPO_ROOT)
+    if args.max_repair_cycles < 0:
+        parser.error("--max-repair-cycles must be non-negative")
+    if args.checkpoint and args.output and args.checkpoint.resolve() == Path(args.output).resolve():
+        parser.error("--checkpoint and --output must use different files")
+
+    selected_tasks = [
+        task for task in tasks
+        if not args.task or task.id == args.task or args.task in task.domain
+    ]
+    completed_results = []
+    checkpoint_config = None
+    if args.checkpoint:
+        checkpoint_config = _checkpoint_config(args, model_name, tasks_file)
+        selected_ids = {task.id for task in selected_tasks}
+        completed_results = load_checkpoint(args.checkpoint, checkpoint_config, selected_ids)
+        save_checkpoint(args.checkpoint, checkpoint_config, completed_results)
+        print(f"Checkpoint: {len(completed_results)}/{len(selected_tasks)} tasks already complete")
+
+    harness = EvaluationHarness(repo_root=REPO_ROOT, max_repair_cycles=args.max_repair_cycles)
     print(f"=== Starting Wysna AI Benchmark ({len(tasks)} tasks loaded) ===")
     print(f"Provider: {args.provider} | Model: {model_name}")
 
@@ -123,6 +204,10 @@ def main() -> int:
         provider_name=args.provider,
         model_name=model_name,
         task_filter=args.task,
+        completed_results=completed_results,
+        on_task_complete=(
+            lambda _result, results: save_checkpoint(args.checkpoint, checkpoint_config, results)
+        ) if args.checkpoint else None,
     )
 
     summary_dict = summary.to_dict()

@@ -132,6 +132,10 @@ class AttemptRecord:
             "completion_tokens": self.completion_tokens,
         }
 
+    @classmethod
+    def from_dict(cls, data: Dict[str, Any]) -> AttemptRecord:
+        return cls(**{name: data[name] for name in cls.__dataclass_fields__ if name in data})
+
 
 @dataclass
 class TaskEvaluationResult:
@@ -175,6 +179,12 @@ class TaskEvaluationResult:
             "total_tokens": self.total_tokens,
             "final_error_category": self.final_error_category,
         }
+
+    @classmethod
+    def from_dict(cls, data: Dict[str, Any]) -> TaskEvaluationResult:
+        values = {name: data[name] for name in cls.__dataclass_fields__ if name in data and name != "attempts"}
+        values["attempts"] = [AttemptRecord.from_dict(item) for item in data.get("attempts", [])]
+        return cls(**values)
 
 
 @dataclass

@@ -215,7 +215,11 @@ def test_multifile_over_300_loc_task_and_import_style_ab_suite():
     assert all(r["passed"] and r["collateral_lines_changed"] == 0 for r in report["runs"]), report["runs"]
 
     import_tasks = build_import_style_ab_tasks()
-    assert [t.task.id for t in import_tasks] == ["LANG-R01-IMPORT-AS", "LANG-R01-FROM-USE"]
+    assert [t.task.id for t in import_tasks] == ["LANG-R01-IMPORT-STYLE"]
+    assert dict(import_tasks[0].condition_instructions) == {
+        "A": 'Use `import "std/parse" as parse` and call `parse.parse_int(...)`.',
+        "B": 'Use `from "std/parse" use { parse_int }` and call `parse_int(...)`.',
+    }
     sol_as = (
         '```wysna\nimport "std/parse" as parse\nfn main() {\n'
         '    let parts = "4,5".split(",")\n'
@@ -230,14 +234,28 @@ def test_multifile_over_300_loc_task_and_import_style_ab_suite():
         '    let b = parse_int(parts[1]) else _err { 0 }\n'
         '    print("sum=" + str(a + b))\n}\nmain()\n```'
     )
+    lang_providers = {}
+
+    def lang_factory(condition):
+        solution = sol_as if condition == "A" else sol_use
+        provider = MockProvider({"LANG-R01-IMPORT-STYLE": [solution]})
+        lang_providers[condition] = provider
+        return provider
+
     lang_report = run_ab_cohort(
         import_tasks,
-        lambda _c: MockProvider({"LANG-R01-IMPORT-AS": [sol_as], "LANG-R01-FROM-USE": [sol_use]}),
+        lang_factory,
         repo_root=REPO_ROOT,
         repetitions=1,
         max_repair_cycles=0,
+        comparison_axis="import-style",
     )
     assert all(r["passed"] for r in lang_report["runs"]), lang_report["runs"]
+    assert [r["condition"] for r in lang_report["runs"]] == ["A", "B"]
+    assert lang_report["context_mode"] == "none"
+    assert lang_report["comparison_axis"] == "import-style"
+    assert 'Use `import "std/parse" as parse`' in lang_providers["A"].call_history[0]["user_prompt"]
+    assert 'Use `from "std/parse" use { parse_int }`' in lang_providers["B"].call_history[0]["user_prompt"]
 
 
 def test_interactive_cohort_uses_model_selected_queries_and_counts_extra_turns():
