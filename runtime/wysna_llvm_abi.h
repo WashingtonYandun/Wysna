@@ -21,6 +21,8 @@ void wysna_llvm_concat(void* out, const void* left, const void* right);
 int32_t wysna_llvm_compare(const void* left, const void* right, int32_t kind);
 int32_t wysna_llvm_range_count(int64_t start, int64_t end, int32_t inclusive);
 void wysna_llvm_position(const char* file, int32_t line, int32_t col);
+void wysna_llvm_push_frame(const char* name, const char* file, int32_t line);
+void wysna_llvm_pop_frame(void);
 void wysna_llvm_fail(const char* code, const char* message, const char* file, int32_t line, int32_t col);
 void wysna_llvm_exit(int64_t status);
 void wysna_llvm_none(void* out);

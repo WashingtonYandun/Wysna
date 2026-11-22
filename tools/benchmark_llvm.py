@@ -17,7 +17,9 @@ import tempfile
 import time
 
 ROOT = Path(__file__).resolve().parents[1]
-sys.path.insert(0, str(ROOT))
+for entry in (ROOT / 'src', ROOT):
+    if str(entry) not in sys.path:
+        sys.path.insert(0, str(entry))
 from bench.run_bench import BENCHMARK_ORDER
 from tools.ci_conformance import source_fingerprint
 

@@ -7,6 +7,23 @@ LLVM is an explicit option; C99 remains the default. Wysna Compiler and its
 Python-free native SDK continue to use C99. The separate [Seed LLVM SDK](LLVM_SDK.md)
 bundles pinned native LLVM tools and Zig and explicitly requires host Python.
 
+## Mantenimiento de la calificación
+
+La congelación conserva la reparación de regresiones y los controles existentes.
+Los pánicos deben conservar código, ubicación y stack de llamadas idénticos a C99,
+también en `release` y `size`. El emisor LLVM registra y retira los frames de las
+funciones síncronas mediante el puente del runtime; los retornos normales no deben
+dejar frames activos y los nombres de módulos se presentan igual que en C99.
+Esto no modifica la ABI 3 de valores ni amplía el contrato de funciones async.
+
+`python -m tests.unit.test_llvm_backend` comprueba la paridad de los pánicos,
+incluidos imports y retornos escalares, gestionados y unitarios.
+`python -m tests.unit.test_llvm_evidence` compila y ejecuta un programa mediante
+el CLI del benchmark desde un directorio temporal con Python aislado (`-I`).
+El benchmark declara sus rutas de importación sin depender de `PYTHONPATH`.
+La calificación completa sigue comparando íntegramente salida, error y estado
+de terminación; sus perfiles, muestras y umbrales permanecen vigentes.
+
 ## Installation and commands
 
 For source or wheel development, use Python 3.10+ on macOS arm64 or Linux x64:

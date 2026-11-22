@@ -69,6 +69,10 @@ int32_t wysna_llvm_range_count(int64_t start, int64_t end, int32_t inclusive) {
     return wysna_range_count_i64(start, end, inclusive != 0);
 }
 void wysna_llvm_position(const char* file, int32_t line, int32_t col) { wysna_runtime_set_position(file, line, col); }
+void wysna_llvm_push_frame(const char* name, const char* file, int32_t line) {
+    wysna_runtime_push_frame(name, file, line);
+}
+void wysna_llvm_pop_frame(void) { wysna_runtime_pop_frame(); }
 void wysna_llvm_fail(const char* code, const char* message, const char* file, int32_t line, int32_t col) {
     wysna_runtime_set_position(file, line, col); wysna_runtime_fail(code, message);
 }
