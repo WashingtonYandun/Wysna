@@ -231,7 +231,7 @@ fn api_parse_fn_symbol(c: SchemaTokCursor, lines: list[str], owner_prefix: str, 
                     c.pos = c.pos + 1
                     ptype_text = schema_type_text(schema_parse_type(c))
                 }
-                params.append(new ApiParam(pname, ptype_text))
+                params.append(ApiParam(pname, ptype_text))
                 schema_skip_newlines(c)
                 if schema_cur_kind(c) == "COMMA" { c.pos = c.pos + 1 } else { break }
             } else {
@@ -266,7 +266,7 @@ fn api_parse_fn_symbol(c: SchemaTokCursor, lines: list[str], owner_prefix: str, 
     for p in params { sig_params.append(p.name + ": " + p.type_text) }
     let signature = "fn " + name + gen_str + "(" + join_strings(sig_params, ", ") + ") -> " + ret_text
     let identity = owner_prefix + "#" + kind + "/" + name
-    let sym = new ApiSymbol(identity, name, kind, signature, module_id, package_id)
+    let sym = ApiSymbol(identity, name, kind, signature, module_id, package_id)
     sym.type_parameters = tps
     sym.parameters = params
     sym.return_type = ret_text
@@ -277,10 +277,10 @@ fn api_parse_fn_symbol(c: SchemaTokCursor, lines: list[str], owner_prefix: str, 
 }
 
 fn api_extract_module(src: str, file_path: str, module_id: str, package_id: str) -> ApiModuleRecord {
-    let rec = new ApiModuleRecord(module_id)
+    let rec = ApiModuleRecord(module_id)
     let tokens = tokenize(src, file_path)
     let lines = schema_split_lines(src)
-    let c = new SchemaTokCursor(tokens)
+    let c = SchemaTokCursor(tokens)
     let mut depth = 0
     let mut is_pub = false
     let mut is_extern = false
@@ -342,7 +342,7 @@ fn api_extract_module(src: str, file_path: str, module_id: str, package_id: str)
             c.pos = c.pos + 1
             let _tps = api_skip_generics_names(c)
             schema_skip_newlines(c)
-            let sym = new ApiSymbol(module_id + "#struct/" + name, name, "struct", "struct " + name, module_id, package_id)
+            let sym = ApiSymbol(module_id + "#struct/" + name, name, "struct", "struct " + name, module_id, package_id)
             api_set_doc(sym, lines, line_1)
             if schema_cur_kind(c) == "LBRACE" {
                 c.pos = c.pos + 1
@@ -355,7 +355,7 @@ fn api_extract_module(src: str, file_path: str, module_id: str, package_id: str)
                         if schema_cur_kind(c) == "COLON" {
                             c.pos = c.pos + 1
                             let ftype = schema_type_text(schema_parse_type(c))
-                            sym.fields.append(new ApiField(fname, ftype))
+                            sym.fields.append(ApiField(fname, ftype))
                             while schema_cur_kind(c) != "NEWLINE" and schema_cur_kind(c) != "COMMA" and schema_cur_kind(c) != "RBRACE" and schema_cur_kind(c) != "EOF" {
                                 c.pos = c.pos + 1
                             }
@@ -378,7 +378,7 @@ fn api_extract_module(src: str, file_path: str, module_id: str, package_id: str)
             c.pos = c.pos + 1
             let _tps = api_skip_generics_names(c)
             schema_skip_newlines(c)
-            let sym = new ApiSymbol(module_id + "#enum/" + name, name, "enum", "enum " + name, module_id, package_id)
+            let sym = ApiSymbol(module_id + "#enum/" + name, name, "enum", "enum " + name, module_id, package_id)
             api_set_doc(sym, lines, line_1)
             if schema_cur_kind(c) == "LBRACE" {
                 c.pos = c.pos + 1
@@ -388,7 +388,7 @@ fn api_extract_module(src: str, file_path: str, module_id: str, package_id: str)
                     if schema_cur_kind(c) == "IDENT" {
                         let vname = schema_cur_val(c)
                         c.pos = c.pos + 1
-                        let vari = new ApiVariant(vname)
+                        let vari = ApiVariant(vname)
                         if schema_cur_kind(c) == "LPAREN" {
                             c.pos = c.pos + 1
                             while schema_cur_kind(c) != "RPAREN" and schema_cur_kind(c) != "EOF" {
@@ -417,7 +417,7 @@ fn api_extract_module(src: str, file_path: str, module_id: str, package_id: str)
             let _tps = api_skip_generics_names(c)
             while schema_cur_kind(c) != "LBRACE" and schema_cur_kind(c) != "EOF" { c.pos = c.pos + 1 }
             let owner = module_id + "#interface/" + name
-            let sym = new ApiSymbol(owner, name, "interface", "interface " + name, module_id, package_id)
+            let sym = ApiSymbol(owner, name, "interface", "interface " + name, module_id, package_id)
             api_set_doc(sym, lines, line_1)
             if schema_cur_kind(c) == "LBRACE" {
                 c.pos = c.pos + 1
@@ -446,7 +446,7 @@ fn api_extract_module(src: str, file_path: str, module_id: str, package_id: str)
             let _tps = api_skip_generics_names(c)
             while schema_cur_kind(c) != "LBRACE" and schema_cur_kind(c) != "EOF" { c.pos = c.pos + 1 }
             let owner = module_id + "#class/" + name
-            let sym = new ApiSymbol(owner, name, "class", "class " + name, module_id, package_id)
+            let sym = ApiSymbol(owner, name, "class", "class " + name, module_id, package_id)
             api_set_doc(sym, lines, line_1)
             if schema_cur_kind(c) == "LBRACE" {
                 c.pos = c.pos + 1
@@ -716,7 +716,7 @@ fn tool_handle_api(args: list[str], _json_mode: bool) -> unit {
             dep_aliases.append(d.alias)
             dep_roots.append(d.source_root_abs)
         }
-        let loader = new ModuleLoader()
+        let loader = ModuleLoader()
         loader.project_sources_root = m.source_root_abs
         loader.dep_aliases = dep_aliases
         loader.dep_roots = dep_roots
@@ -761,7 +761,7 @@ fn tool_handle_api(args: list[str], _json_mode: bool) -> unit {
         exit(0)
     }
 
-    let acc = new ApiIndexCollector(stdlib_root)
+    let acc = ApiIndexCollector(stdlib_root)
     if has_mod {
         let resolved = api_resolve_stdlib_module(stdlib_root, mod_arg)
         if resolved[0] != "1" {

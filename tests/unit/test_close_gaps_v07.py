@@ -124,7 +124,7 @@ pub class Box[T] {
     fn init(value: T) { this.value = value }
 
     public fn transform[R](f: fn(T) -> R) -> Box[R] {
-        return new Box[R](f(this.value))
+        return Box[R](f(this.value))
     }
 
     public fn pair_with[U](other: U) -> tuple[T, U] {
@@ -147,14 +147,14 @@ class Util {{
 }}
 
 fn main() -> unit {{
-    let b: ChildBox[int] = new ChildBox[int](21)
+    let b: ChildBox[int] = ChildBox[int](21)
     let mapped = b.transform[str](|n: int| => str(n * 2))
     let inferred = b.transform(|n: int| => n + 9)
     let pair = b.pair_with[bool](true)
     match pair {{
         (p0, p1) => {{
-            let u = new Util()
-            print(mapped.value, inferred.value, p0, p1, u.render[Tag](new Tag("v07")))
+            let u = Util()
+            print(mapped.value, inferred.value, p0, p1, u.render[Tag](Tag("v07")))
         }},
     }}
 }}
@@ -184,14 +184,14 @@ main()
         self.assertEqual(ctx.exception.code, "W2001")
 
         bad_type_arity = '''class A { public fn f[T, U](x: T) -> T { x } }
-fn main() -> unit { let a = new A(); print(a.f[int](1)) }
+fn main() -> unit { let a = A(); print(a.f[int](1)) }
 '''
         with self.assertRaises(WysnaError) as ctx2:
             self.service.check(bad_type_arity, file="bad_type_arity.wysna")
         self.assertIn(ctx2.exception.code, ("W2001", "W2004"))
 
         bad_val_arity = '''class A { public fn f[T](x: T) -> T { x } }
-fn main() -> unit { let a = new A(); print(a.f[int](1, 2)) }
+fn main() -> unit { let a = A(); print(a.f[int](1, 2)) }
 '''
         with self.assertRaises(WysnaError) as ctx2b:
             self.service.check(bad_val_arity, file="bad_val_arity.wysna")
@@ -199,14 +199,14 @@ fn main() -> unit { let a = new A(); print(a.f[int](1, 2)) }
 
         bad_bound = '''interface Named { fn name() -> str }
 class A { public fn show[T: Named](x: T) -> str { x.name() } }
-fn main() -> unit { let a = new A(); print(a.show[int](1)) }
+fn main() -> unit { let a = A(); print(a.show[int](1)) }
 '''
         with self.assertRaises(WysnaError) as ctx3:
             self.service.check(bad_bound, file="bad_bound.wysna")
         self.assertEqual(ctx3.exception.code, "W2001")
 
         uncalled = '''class A { public fn id[T](x: T) -> T { x } }
-fn main() -> unit { let a = new A(); let _ = a.id }
+fn main() -> unit { let a = A(); let _ = a.id }
 '''
         with self.assertRaises(WysnaError) as ctx4:
             self.service.check(uncalled, file="uncalled.wysna")
@@ -228,7 +228,7 @@ struct ParseErr {
 
 fn step(mode: int) -> int ! NetworkErr | ParseErr {
     if mode == 0 { return Ok(99) }
-    if mode == 1 { return Err(new NetworkErr(503, "down")) }
+    if mode == 1 { return Err(NetworkErr(503, "down")) }
     return Err(ParseErr { line: 12 })
 }
 

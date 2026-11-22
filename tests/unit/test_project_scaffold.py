@@ -35,7 +35,7 @@ def test_new_project_check_run_lock_and_test(tmp_path):
     assert checked.returncode == 0, checked.stderr
     assert executed.returncode == 0 and executed.stdout == "Hello, Wysna!\n", executed.stderr
     assert locked.returncode == 0, locked.stderr
-    assert tested.returncode == 0 and "[PASSED] example" in tested.stdout, (tested.stdout, tested.stderr)
+    assert tested.returncode == 0 and ("[PASSED] example" in tested.stdout or "[PASS] example" in tested.stdout), (tested.stdout, tested.stderr)
 
 
 def test_new_project_json_lists_exact_artifacts_and_capability(tmp_path):

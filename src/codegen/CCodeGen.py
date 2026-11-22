@@ -4,7 +4,7 @@ from typing import Dict, List, Optional, Set, Tuple
 from node.NodeType import (
     LambdaExpr, Program, Stmt, Expr, TypeNode, ResultType,
     GenericType, NamedType, OptionalType as AstOptionalType, ListType as AstListType, DictType as AstDictType,
-    Pattern, IdentifierPattern, TuplePattern, EnumPattern, ErrorTypePattern, LiteralPattern, WildcardPattern,
+    Pattern, IdentifierPattern, TuplePattern, EnumPattern, ErrorTypePattern, LiteralPattern, WildcardPattern, OrPattern, RangePattern, StructPattern,
     Block, ExprStmt, Param, FnDecl, StructDecl, EnumDecl, ImportDecl,
     InterfaceDecl, ClassDecl, ClassField, MethodDecl,
     LetDecl, WhileStmt, ForStmt, ReturnStmt, BreakStmt, ContinueStmt,
@@ -645,9 +645,34 @@ class CCodeGen:
         reject_unknown_node(stmt, self.file, "codegen", "statement")
 
     def _emit_pattern_bindings(self, pattern: Pattern, val_expr: str, out: List[str]) -> None:
+        if isinstance(pattern, OrPattern):
+            from checker.PatternTraversal import binding_names
+            targets = set(binding_names(pattern.alternatives[0]))
+            previous = getattr(self, '_pattern_assignment', set())
+            for name in sorted(targets - previous):
+                self._declare_owned_var('v_' + name, 'wysna_unit()', out)
+            self._pattern_assignment = previous | targets
+            try:
+                for index, alternative in enumerate(pattern.alternatives):
+                    condition = self._emit_pattern_cond(alternative, val_expr, out)
+                    out.append(('if' if index == 0 else 'else if') + ' (' + condition + ') {')
+                    self._push_scope('block')
+                    self._emit_pattern_bindings(alternative, val_expr, out)
+                    self._pop_scope(out)
+                    out.append('}')
+            finally:
+                self._pattern_assignment = previous
+            return
+        if isinstance(pattern, StructPattern):
+            for field in pattern.fields:
+                self._emit_pattern_bindings(field.pattern, f'wysna_member_get({val_expr}, {self.escape_c_str(field.name)})', out)
+            return
         if isinstance(pattern, IdentifierPattern):
             if pattern.name not in ("None", "none"):
-                self._declare_owned_var(f"v_{pattern.name}", f"wysna_clone({val_expr})", out)
+                if pattern.name in getattr(self, '_pattern_assignment', set()):
+                    out.append(f"wysna_assign(&v_{pattern.name}, wysna_clone({val_expr}));")
+                else:
+                    self._declare_owned_var(f"v_{pattern.name}", f"wysna_clone({val_expr})", out)
         elif isinstance(pattern, TuplePattern):
             for idx, elem_pat in enumerate(pattern.elements):
                 sub_expr = (f"wysna_tuple_get_at({val_expr}, {idx}, {self.escape_c_str(self.file)}, "
@@ -686,6 +711,14 @@ class CCodeGen:
                         self._emit_pattern_bindings(arg_pat, sub_val, out)
 
     def _emit_pattern_cond(self, pattern: Pattern, val_expr: str, out: List[str]) -> str:
+        if isinstance(pattern, OrPattern):
+            return '(' + ' || '.join(self._emit_pattern_cond(part, val_expr, out) for part in pattern.alternatives) + ')'
+        if isinstance(pattern, RangePattern):
+            lower = 'INT64_MIN' if pattern.start == -(1 << 63) else str(pattern.start) + 'LL'
+            upper = 'INT64_MIN' if pattern.end == -(1 << 63) else str(pattern.end) + 'LL'
+            return f'(wysna_as_int({val_expr}) >= {lower} && wysna_as_int({val_expr}) {"<=" if pattern.inclusive else "<"} {upper})'
+        if isinstance(pattern, StructPattern):
+            return '(' + ' && '.join(self._emit_pattern_cond(field.pattern, f'wysna_member_get({val_expr}, {self.escape_c_str(field.name)})', out) for field in pattern.fields) + ')' if pattern.fields else 'true'
         if isinstance(pattern, WildcardPattern):
             return "true"
         if isinstance(pattern, IdentifierPattern):

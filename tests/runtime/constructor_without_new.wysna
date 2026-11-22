@@ -27,7 +27,7 @@ class Admin extends User {
 
 fn main() -> unit {
     let u1 = User("Washington", 24)
-    let u2 = new User("Washo", 24)
+    let u2 = User("Washo", 24)
     let adm: User = Admin("Sofia", 26, "GM")
     let u1_alias = u1
     u1_alias.age = 25

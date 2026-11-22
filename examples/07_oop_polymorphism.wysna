@@ -81,14 +81,14 @@ fn main() -> unit {
     let mut p2 = p1
     p2.x = 99
     print("struct CoW:", p1.x, p2.x)
-    let rect = new Rectangle(1, p1, 4, 5)
+    let rect = Rectangle(1, p1, 4, 5)
     let alias: Shape = rect
     alias.move_by(2, 3)
     rect.scale(2)
     print("class ref:", alias.render())
     print("same instance:", alias == rect)
-    let sq = new Square(2, Point { x: 0, y: 0 }, 6)
-    let shapes: list[Shape] = [rect, sq, new Shape(3, "OriginMarker", Point { x: 5, y: 5 })]
+    let sq = Square(2, Point { x: 0, y: 0 }, 6)
+    let shapes: list[Shape] = [rect, sq, Shape(3, "OriginMarker", Point { x: 5, y: 5 })]
     for s in shapes {
         print(s.render(), "perim=" + str(s.perimeter()))
     }

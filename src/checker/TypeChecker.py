@@ -761,10 +761,10 @@ class TypeChecker:
     # The synthetic parameter name introduced by closure conversion. Captured
     # variables are immutable snapshots today, so a mutation attempt is rejected -- but
     # the diagnostic has to name the captured variable, not a compiler internal.
-    CLOSURE_ENVIRONMENT_PARAMETER = '__wysna_internal_environment'
+    CLOSURE_ENVIRONMENT_PARAMETERS = ('__wysna_environment', '__wysna_internal_environment')
 
     def _binding_error_name(self, symbol) -> str:
-        if symbol is not None and getattr(symbol, 'name', None) == self.CLOSURE_ENVIRONMENT_PARAMETER:
+        if symbol is not None and getattr(symbol, 'name', None) in self.CLOSURE_ENVIRONMENT_PARAMETERS:
             return "a captured variable"
         return symbol.name if symbol is not None else "a captured variable"
 
@@ -774,9 +774,9 @@ class TypeChecker:
         A captured variable is a snapshot in the closure environment, so the reason
         differs from a plain `let` binding and the message must say which one applies.
         """
-        if symbol is not None and getattr(symbol, 'name', None) == self.CLOSURE_ENVIRONMENT_PARAMETER:
+        if symbol is not None and getattr(symbol, 'name', None) in self.CLOSURE_ENVIRONMENT_PARAMETERS:
             return (f"Cannot {action} on a captured variable: closures capture values "
-                    f"as immutable snapshots")
+                    f"as immutable snapshots (use a `class` for shared mutable state or return the updated value)")
         return f"Cannot {action} on immutable binding '{self._binding_error_name(symbol)}'"
 
     def _find_value_root_symbol(self, expr: Expr) -> Optional[Symbol]:
@@ -960,9 +960,13 @@ class TypeChecker:
                 code="W2001"
             )
 
-        if isinstance(stmt.initializer, NoneLiteral) and stmt.type_ann is None:
+        if stmt.type_ann is None and (
+            isinstance(stmt.initializer, NoneLiteral)
+            or (isinstance(stmt.initializer, IdentExpr) and stmt.initializer.name == "None"
+                and self.current_scope.lookup_symbol("None") is None)
+        ):
             raise TypeError(
-                message="Cannot infer type of 'none'; explicit optional type annotation required",
+                message="Cannot infer type of 'None'; explicit optional type annotation required",
                 line=stmt.line,
                 col=stmt.col,
                 file=self.file,
@@ -999,7 +1003,7 @@ class TypeChecker:
                     file=self.file,
                     code="W2001",
                     help=("If this value can be absent, consider an optional type."
-                          if isinstance(stmt.initializer, NoneLiteral) else None),
+                          if init_type == NoneType or isinstance(stmt.initializer, NoneLiteral) else None),
                 )
             var_type = expected_type
         else:
@@ -1143,6 +1147,20 @@ class TypeChecker:
                 return module.scope.lookup_type(expression.property)
         return None
 
+    def _enum_owner_with_type_args(self, member_expr):
+        explicit_args = getattr(member_expr, "enum_type_args", None)
+        if explicit_args is not None:
+            owner = self._enum_owner(member_expr.object)
+            if isinstance(owner, GenericEnumTemplate):
+                return owner, explicit_args
+        if isinstance(member_expr.object, IndexExpr) and getattr(member_expr.object, "type_args_alternative", None):
+            owner = self._enum_owner(member_expr.object.object)
+            if isinstance(owner, GenericEnumTemplate):
+                args = member_expr.object.type_args_alternative
+                member_expr.object = member_expr.object.object
+                return owner, args
+        return self._enum_owner(member_expr.object), None
+
     def _check_expr(self, expr: Expr, is_statement_context: bool = False, allow_module: bool = False) -> WysnaType:
         handler = EXPRESSION_RULES.handler_for(expr, self.file)
         inferred_type = handler(self, expr, is_statement_context)
@@ -1247,54 +1265,8 @@ class TypeChecker:
                 line=pattern.line, col=pattern.col, file=self.file, code="W2001")
 
     def _bind_pattern_type(self, pattern: Pattern, expected_type: WysnaType, bindings: Dict[str, WysnaType], line: int, col: int) -> None:
-        pattern.inferred_type_id = self.interner.intern(expected_type)
-        pattern.session_arena_id = self.interner.arena_id
-        if isinstance(pattern, IdentifierPattern):
-            if pattern.name in bindings:
-                raise TypeError(message=f"Duplicate pattern binding '{pattern.name}'",
-                                line=pattern.line, col=pattern.col, file=self.file, code="W1002")
-            bindings[pattern.name] = expected_type
-        elif isinstance(pattern, WildcardPattern):
-            pass
-        elif isinstance(pattern, TuplePattern):
-            if not isinstance(expected_type, TupleType) or len(pattern.elements) != len(expected_type.elements):
-                raise TypeError(
-                    message=f"Tuple pattern cannot match type '{expected_type}'",
-                    line=line,
-                    col=col,
-                    file=self.file,
-                    code="W2001"
-                )
-            for sub_p, sub_t in zip(pattern.elements, expected_type.elements):
-                self._bind_pattern_type(sub_p, sub_t, bindings, line, col)
-        elif isinstance(pattern, EnumPattern):
-            self._validate_pattern_owner(pattern, expected_type)
-            optional = self._builtin_arguments(expected_type, "Option")
-            result = self._builtin_arguments(expected_type, "Result")
-            if optional:
-                payloads = {"Some": optional, "None": []}
-            elif result:
-                payloads = {"Ok": [result[0]], "Err": [result[1]]}
-            elif isinstance(expected_type, EnumType):
-                payloads = expected_type.variant_payloads
-                pattern.enum_name = expected_type.name
-            else:
-                raise TypeError("Enum pattern requires enum type", line=line, col=col, file=self.file, code="W2001")
-            types = payloads.get(pattern.variant)
-            if types is None or len(types) != len(pattern.args):
-                raise TypeError("Enum pattern payload does not match variant", line=line, col=col, file=self.file, code="W2001")
-            for child, child_type in zip(pattern.args, types):
-                self._bind_pattern_type(child, child_type, bindings, line, col)
-        elif isinstance(pattern, LiteralPattern):
-            lit_t = self._check_expr(pattern.literal)
-            if not self.type_relations.is_assignable(lit_t, expected_type):
-                raise TypeError(
-                    message=f"Literal pattern type '{lit_t}' incompatible with '{expected_type}'",
-                    line=line,
-                    col=col,
-                    file=self.file,
-                    code="W2001"
-                )
+        from checker.PatternRules import bind_pattern
+        bind_pattern(self, pattern, expected_type, bindings)
 
     # ==========================================
     # Generics and Monomorphization Helpers

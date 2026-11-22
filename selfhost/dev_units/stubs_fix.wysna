@@ -1,0 +1,4 @@
+# Minimal diagnostic-fix stubs for standalone dev tooling units (mcp, project, compiler-core).
+
+fn fix_mismatch_data_json(msg: str) -> str { return "{}" }
+fn fix_diagnostic_edits_json(code: str, msg: str, file: str, src: str, line: int, col: int) -> str { return "[]" }

@@ -10,7 +10,7 @@ fn find_tag(id: int) -> str? {
     if id == 1 {
         return "v0.1"
     }
-    return none
+    return None
 }
 
 fn main() -> unit {

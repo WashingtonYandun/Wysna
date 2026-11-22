@@ -19,38 +19,7 @@ class McpServerState {
     }
 }
 
-fn mcp_getcwd() -> str {
-    let buf = wysna_host_buffer_new()
-    let sz = wysna_host_getcwd(buf)
-    let raw = if sz > 0 { lsp_buf_to_str(buf, sz) } else { "" }
-    wysna_host_close(buf)
-    return raw
-}
-
-fn mcp_is_abs_path(p: str) -> bool {
-    if len(p) == 0 { return false }
-    if p[0] == "/" or p[0] == "\\" { return true }
-    if len(p) >= 2 and p[1] == ":" { return true }
-    return false
-}
-
-fn mcp_norm_cmp_prefix(p: str, is_win_drive: bool) -> str {
-    if is_win_drive { return lsp_ascii_lower(p) }
-    return p
-}
-
-fn mcp_is_within_root(cand: str, root: str) -> bool {
-    if cand == "" or root == "" { return false }
-    let win_drive = len(cand) >= 2 and cand[1] == ":" and len(root) >= 2 and root[1] == ":"
-    let c_cmp = mcp_norm_cmp_prefix(cand, win_drive)
-    let r_cmp = mcp_norm_cmp_prefix(root, win_drive)
-    if c_cmp == r_cmp { return true }
-    if r_cmp == "/" { return len(c_cmp) > 0 and c_cmp[0] == "/" }
-    if len(c_cmp) > len(r_cmp) and slice(c_cmp, 0, len(r_cmp)) == r_cmp and c_cmp[len(r_cmp)] == "/" {
-        return true
-    }
-    return false
-}
+# mcp_getcwd, mcp_is_abs_path, mcp_is_within_root live in 01_tool_common.wysna.
 
 fn mcp_resolve_with_ancestors(joined: str) -> str {
     let direct = module_canonical_resolved(joined)
@@ -109,193 +78,7 @@ fn mcp_confine_path(root: str, raw_path: str) -> list[str] {
     return ["1", resolved]
 }
 
-fn mcp_json_error() -> LspJson {
-    return new LspJson("error")
-}
-
-fn mcp_hex_digit(code: int) -> int {
-    if code >= 48 and code <= 57 { return code - 48 }
-    if code >= 65 and code <= 70 { return code - 55 }
-    if code >= 97 and code <= 102 { return code - 87 }
-    return -1
-}
-
-fn mcp_strict_hex4(c: LspJsonCursor) -> int {
-    if c.pos + 4 > len(c.src) { return -1 }
-    let mut acc = 0
-    for k in 0..4 {
-        let d = mcp_hex_digit(ord(c.src[c.pos + k]))
-        if d < 0 { return -1 }
-        acc = acc * 16 + d
-    }
-    c.pos = c.pos + 4
-    return acc
-}
-
-fn mcp_strict_parse_str_wrap(c: LspJsonCursor) -> list[str] {
-    let n = len(c.src)
-    if c.pos >= n or c.src[c.pos] != "\"" { return ["0", ""] }
-    c.pos = c.pos + 1
-    let mut parts: list[str] = []
-    while c.pos < n {
-        let ch = c.src[c.pos]
-        let code = ord(ch)
-        if code < 32 { return ["0", ""] }
-        c.pos = c.pos + 1
-        if ch == "\"" { return ["1", join_strings(parts, "")] }
-        if ch == "\\" {
-            if c.pos >= n { return ["0", ""] }
-            let esc = c.src[c.pos]
-            c.pos = c.pos + 1
-            if esc == "\"" { parts.append("\"") }
-            elif esc == "\\" { parts.append("\\") }
-            elif esc == "/" { parts.append("/") }
-            elif esc == "b" { parts.append(chr(8)) }
-            elif esc == "f" { parts.append(chr(12)) }
-            elif esc == "n" { parts.append("\n") }
-            elif esc == "r" { parts.append("\r") }
-            elif esc == "t" { parts.append("\t") }
-            elif esc == "u" {
-                let cp_hi = mcp_strict_hex4(c)
-                if cp_hi < 0 { return ["0", ""] }
-                if cp_hi >= 55296 and cp_hi <= 56319 and c.pos + 2 <= n and c.src[c.pos] == "\\" and c.src[c.pos + 1] == "u" {
-                    c.pos = c.pos + 2
-                    let cp_lo = mcp_strict_hex4(c)
-                    if cp_lo < 56320 or cp_lo > 57343 { return ["0", ""] }
-                    parts.append(chr(65536 + ((cp_hi - 55296) * 1024) + (cp_lo - 56320)))
-                } else {
-                    parts.append(chr(cp_hi))
-                }
-            } else {
-                return ["0", ""]
-            }
-        } else {
-            parts.append(ch)
-        }
-    }
-    return ["0", ""]
-}
-
-fn mcp_strict_parse_val(c: LspJsonCursor) -> LspJson {
-    lsp_jc_skip_ws(c)
-    let n = len(c.src)
-    if c.pos >= n { return mcp_json_error() }
-    let ch = c.src[c.pos]
-    if ch == "\"" {
-        let sres = mcp_strict_parse_str_wrap(c)
-        if sres[0] != "1" { return mcp_json_error() }
-        let out = new LspJson("str")
-        out.str_val = sres[1]
-        return out
-    }
-    if ch == "{" {
-        c.pos = c.pos + 1
-        let obj = new LspJson("object")
-        lsp_jc_skip_ws(c)
-        if c.pos < n and c.src[c.pos] == "}" {
-            c.pos = c.pos + 1
-            return obj
-        }
-        while true {
-            lsp_jc_skip_ws(c)
-            if c.pos >= n or c.src[c.pos] != "\"" { return mcp_json_error() }
-            let kres = mcp_strict_parse_str_wrap(c)
-            if kres[0] != "1" { return mcp_json_error() }
-            lsp_jc_skip_ws(c)
-            if c.pos >= n or c.src[c.pos] != ":" { return mcp_json_error() }
-            c.pos = c.pos + 1
-            let val = mcp_strict_parse_val(c)
-            if val.kind == "error" { return mcp_json_error() }
-            obj.keys.append(kres[1])
-            obj.vals.append(val)
-            lsp_jc_skip_ws(c)
-            if c.pos >= n { return mcp_json_error() }
-            if c.src[c.pos] == "," {
-                c.pos = c.pos + 1
-                continue
-            }
-            if c.src[c.pos] == "}" {
-                c.pos = c.pos + 1
-                return obj
-            }
-            return mcp_json_error()
-        }
-        return mcp_json_error()
-    }
-    if ch == "[" {
-        c.pos = c.pos + 1
-        let arr = new LspJson("array")
-        lsp_jc_skip_ws(c)
-        if c.pos < n and c.src[c.pos] == "]" {
-            c.pos = c.pos + 1
-            return arr
-        }
-        while true {
-            let item = mcp_strict_parse_val(c)
-            if item.kind == "error" { return mcp_json_error() }
-            arr.items.append(item)
-            lsp_jc_skip_ws(c)
-            if c.pos >= n { return mcp_json_error() }
-            if c.src[c.pos] == "," {
-                c.pos = c.pos + 1
-                continue
-            }
-            if c.src[c.pos] == "]" {
-                c.pos = c.pos + 1
-                return arr
-            }
-            return mcp_json_error()
-        }
-        return mcp_json_error()
-    }
-    if ch == "t" and c.pos + 4 <= n and slice(c.src, c.pos, c.pos + 4) == "true" {
-        c.pos = c.pos + 4
-        let out = new LspJson("bool")
-        out.bool_val = true
-        return out
-    }
-    if ch == "f" and c.pos + 5 <= n and slice(c.src, c.pos, c.pos + 5) == "false" {
-        c.pos = c.pos + 5
-        let out = new LspJson("bool")
-        out.bool_val = false
-        return out
-    }
-    if ch == "n" and c.pos + 4 <= n and slice(c.src, c.pos, c.pos + 4) == "null" {
-        c.pos = c.pos + 4
-        return lsp_json_null()
-    }
-    let start = c.pos
-    if c.src[c.pos] == "-" { c.pos = c.pos + 1 }
-    if c.pos >= n or not is_digit(ord(c.src[c.pos])) { return mcp_json_error() }
-    let int_start = c.pos
-    while c.pos < n and is_digit(ord(c.src[c.pos])) { c.pos = c.pos + 1 }
-    let int_str = slice(c.src, start, c.pos)
-    if c.pos < n and c.src[c.pos] == "." {
-        c.pos = c.pos + 1
-        if c.pos >= n or not is_digit(ord(c.src[c.pos])) { return mcp_json_error() }
-        while c.pos < n and is_digit(ord(c.src[c.pos])) { c.pos = c.pos + 1 }
-    }
-    if c.pos < n and (c.src[c.pos] == "e" or c.src[c.pos] == "E") {
-        c.pos = c.pos + 1
-        if c.pos < n and (c.src[c.pos] == "+" or c.src[c.pos] == "-") { c.pos = c.pos + 1 }
-        if c.pos >= n or not is_digit(ord(c.src[c.pos])) { return mcp_json_error() }
-        while c.pos < n and is_digit(ord(c.src[c.pos])) { c.pos = c.pos + 1 }
-    }
-    if int_start == c.pos { return mcp_json_error() }
-    let num = new LspJson("int")
-    num.int_val = lsp_parse_int(int_str, 0)
-    num.str_val = slice(c.src, int_start, c.pos)
-    return num
-}
-
-fn mcp_parse_json_strict(src: str) -> LspJson {
-    let cursor = new LspJsonCursor(src)
-    let val = mcp_strict_parse_val(cursor)
-    if val.kind == "error" { return val }
-    lsp_jc_skip_ws(cursor)
-    if cursor.pos != len(cursor.src) { return mcp_json_error() }
-    return val
-}
+# Strict JSON parser (mcp_parse_json_strict) lives in 01_tool_common.wysna.
 
 fn mcp_write_line(json_body: str) -> unit {
     let out = lsp_buf_from_str(json_body + "\n")
@@ -602,7 +385,7 @@ fn mcp_handle_tool_call(state: McpServerState, id_raw: str, params: LspJson) -> 
     if not known {
         return mcp_rpc_error(id_raw, -32602, "unknown tool: " + name)
     }
-    let mut arguments = new LspJson("object")
+    let mut arguments = LspJson("object")
     if lsp_json_has(params, "arguments") {
         let raw_args = lsp_json_get(params, "arguments")
         if raw_args.kind != "null" {
@@ -685,7 +468,7 @@ fn mcp_serve(args: list[str]) -> unit {
         eprint("wysna mcp: invalid root directory: " + raw_root)
         exit(2)
     }
-    let state = new McpServerState(root, lsp_self_exe_path(), lsp_stdlib_root_arg(), lsp_tmp_dir())
+    let state = McpServerState(root, lsp_compiler_exe_path(), lsp_stdlib_root_arg(), lsp_tmp_dir())
     while true {
         let buf = wysna_host_buffer_new()
         let st = wysna_host_stdin_read_line(buf)

@@ -6,6 +6,6 @@ class Repository[T] implements Collection[T] {
     fn init(value: T) { this.value = value }
     public fn get() -> T { return this.value }
 }
-let repository: Collection[int] = new Repository[int](42)
+let repository: Collection[int] = Repository[int](42)
 let text = Repository[str]("hello")
 print(repository.get(), text.get())

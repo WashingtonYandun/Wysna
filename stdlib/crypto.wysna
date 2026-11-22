@@ -45,7 +45,7 @@ pub fn bytes_to_hex(data: buffer.Bytes) -> str {
 }
 
 pub fn sha256_bytes(data: buffer.Bytes) -> buffer.Bytes ! CryptoError {
-    let out = new buffer.Bytes()
+    let out = buffer.Bytes()
     let status = wysna_host_crypto_sha256(data.borrow(), out.borrow())
     if status != 0 {
         out.close()
@@ -64,7 +64,7 @@ pub fn sha256(text: str) -> str ! CryptoError {
 }
 
 pub fn hmac_sha256_bytes(key: buffer.Bytes, message: buffer.Bytes) -> buffer.Bytes ! CryptoError {
-    let out = new buffer.Bytes()
+    let out = buffer.Bytes()
     let status = wysna_host_crypto_hmac_sha256(key.borrow(), message.borrow(), out.borrow())
     if status != 0 {
         out.close()
@@ -85,7 +85,7 @@ pub fn hmac_sha256(key: str, message: str) -> str ! CryptoError {
 }
 
 pub fn sha512_bytes(data: buffer.Bytes) -> buffer.Bytes ! CryptoError {
-    let out = new buffer.Bytes()
+    let out = buffer.Bytes()
     let status = wysna_host_crypto_sha512(data.borrow(), out.borrow())
     if status != 0 {
         out.close()
@@ -104,7 +104,7 @@ pub fn sha512(text: str) -> str ! CryptoError {
 }
 
 pub fn hmac_sha512_bytes(key: buffer.Bytes, message: buffer.Bytes) -> buffer.Bytes ! CryptoError {
-    let out = new buffer.Bytes()
+    let out = buffer.Bytes()
     let status = wysna_host_crypto_hmac_sha512(key.borrow(), message.borrow(), out.borrow())
     if status != 0 {
         out.close()
@@ -125,7 +125,7 @@ pub fn hmac_sha512(key: str, message: str) -> str ! CryptoError {
 }
 
 pub fn md5_bytes(data: buffer.Bytes) -> buffer.Bytes ! CryptoError {
-    let out = new buffer.Bytes()
+    let out = buffer.Bytes()
     let status = wysna_host_crypto_md5(data.borrow(), out.borrow())
     if status != 0 {
         out.close()
@@ -147,7 +147,7 @@ pub fn random_bytes(count: int) -> buffer.Bytes ! CryptoError {
     if count <= 0 {
         return Err(CryptoError { message: "Count must be greater than zero" })
     }
-    let out = new buffer.Bytes()
+    let out = buffer.Bytes()
     let status = wysna_host_crypto_random_bytes(out.borrow(), count)
     if status != 0 {
         out.close()
@@ -186,7 +186,7 @@ pub fn aead_seal(key: buffer.Bytes, nonce: buffer.Bytes, aad: buffer.Bytes, plai
     if nonce.size() != 12 {
         return Err(CryptoError { message: "ChaCha20-Poly1305 nonce must be 12 bytes" })
     }
-    let out = new buffer.Bytes()
+    let out = buffer.Bytes()
     let status = wysna_host_crypto_chacha20_poly1305_seal(key.borrow(), nonce.borrow(), aad.borrow(), plaintext.borrow(), out.borrow())
     if status != 0 {
         out.close()
@@ -205,7 +205,7 @@ pub fn aead_open(key: buffer.Bytes, nonce: buffer.Bytes, aad: buffer.Bytes, seal
     if sealed.size() < 16 {
         return Err(CryptoError { message: "sealed message is shorter than the authentication tag" })
     }
-    let out = new buffer.Bytes()
+    let out = buffer.Bytes()
     let status = wysna_host_crypto_chacha20_poly1305_open(key.borrow(), nonce.borrow(), aad.borrow(), sealed.borrow(), out.borrow())
     if status == -2 {
         out.close()

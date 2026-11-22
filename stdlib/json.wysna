@@ -404,55 +404,55 @@ pub fn number(value: str) -> Value ! JsonError {
 pub fn is_null(value: Value) -> bool {
     return match value {
         Value.Null => true,
-        else => false,
+        _ => false,
     }
 }
 
 pub fn as_bool(value: Value) -> bool? {
     return match value {
         Value.Bool(result) => Some(result),
-        else => none,
+        _ => None,
     }
 }
 
 pub fn as_number(value: Value) -> str? {
     return match value {
         Value.Number(result) => Some(result),
-        else => none,
+        _ => None,
     }
 }
 
 pub fn as_string(value: Value) -> str? {
     return match value {
         Value.String(result) => Some(result),
-        else => none,
+        _ => None,
     }
 }
 
 pub fn as_array(value: Value) -> list[Value]? {
     return match value {
         Value.Array(result) => Some(result),
-        else => none,
+        _ => None,
     }
 }
 
 pub fn as_object(value: Value) -> dict[str, Value]? {
     return match value {
         Value.Object(result) => Some(result),
-        else => none,
+        _ => None,
     }
 }
 
 pub fn get(value: Value, key: str) -> Value? {
     return match value {
         Value.Object(fields) => fields.get(key),
-        else => none,
+        _ => None,
     }
 }
 
 fn array_at(values: list[Value], index: int) -> Value? {
     if index < 0 or index >= len(values) {
-        return none
+        return None
     }
     return Some(values[index])
 }
@@ -460,7 +460,7 @@ fn array_at(values: list[Value], index: int) -> Value? {
 pub fn at(value: Value, index: int) -> Value? {
     return match value {
         Value.Array(values) => array_at(values, index),
-        else => none,
+        _ => None,
     }
 }
 
@@ -503,7 +503,7 @@ fn validate_number(raw: str) -> str ! JsonError {
         Value.Number(value) => {
             return value
         },
-        else => {
+        _ => {
             return Err(JsonError { offset: 0, message: "number value must contain one JSON number" })
         },
     }
@@ -602,28 +602,28 @@ fn type_mismatch(value: Value, expected: str) -> JsonError {
 pub fn to_str(value: Value) -> str ! JsonError {
     return match value {
         Value.String(result) => Ok(result),
-        else => Err(type_mismatch(value, "string")),
+        _ => Err(type_mismatch(value, "string")),
     }
 }
 
 pub fn to_bool(value: Value) -> bool ! JsonError {
     return match value {
         Value.Bool(result) => Ok(result),
-        else => Err(type_mismatch(value, "boolean")),
+        _ => Err(type_mismatch(value, "boolean")),
     }
 }
 
 pub fn to_array(value: Value) -> list[Value] ! JsonError {
     return match value {
         Value.Array(result) => Ok(result),
-        else => Err(type_mismatch(value, "array")),
+        _ => Err(type_mismatch(value, "array")),
     }
 }
 
 pub fn to_object(value: Value) -> dict[str, Value] ! JsonError {
     return match value {
         Value.Object(result) => Ok(result),
-        else => Err(type_mismatch(value, "object")),
+        _ => Err(type_mismatch(value, "object")),
     }
 }
 
@@ -642,7 +642,7 @@ pub fn to_int(value: Value) -> int ! JsonError {
             }
             return Ok(integer)
         },
-        else => {
+        _ => {
             return Err(type_mismatch(value, "integer"))
         },
     }
@@ -654,7 +654,7 @@ pub fn to_float(value: Value) -> float ! JsonError {
             let validated = validate_number(raw)?
             return Ok(float(validated))
         },
-        else => {
+        _ => {
             return Err(type_mismatch(value, "number"))
         },
     }
@@ -669,7 +669,7 @@ pub fn get_required(value: Value, key: str) -> Value ! JsonError {
                 None => Err(error(0, field_label(key) + ": missing required JSON field")),
             }
         },
-        else => {
+        _ => {
             let issue = type_mismatch(value, "object")
             return Err(error(issue.offset, field_label(key) + ": " + issue.message))
         },
@@ -712,7 +712,7 @@ pub fn get_bool(value: Value, key: str) -> bool ! JsonError {
 }
 
 pub fn get_optional_str(value: Value, key: str) -> str? ! JsonError {
-    let empty: str? = none
+    let empty: str? = None
     let item = get(value, key)
     match item {
         None => {
@@ -729,7 +729,7 @@ pub fn get_optional_str(value: Value, key: str) -> str? ! JsonError {
 }
 
 pub fn get_optional_int(value: Value, key: str) -> int? ! JsonError {
-    let empty: int? = none
+    let empty: int? = None
     let item = get(value, key)
     match item {
         None => {
@@ -746,7 +746,7 @@ pub fn get_optional_int(value: Value, key: str) -> int? ! JsonError {
 }
 
 pub fn get_optional_float(value: Value, key: str) -> float? ! JsonError {
-    let empty: float? = none
+    let empty: float? = None
     let item = get(value, key)
     match item {
         None => {
@@ -763,7 +763,7 @@ pub fn get_optional_float(value: Value, key: str) -> float? ! JsonError {
 }
 
 pub fn get_optional_bool(value: Value, key: str) -> bool? ! JsonError {
-    let empty: bool? = none
+    let empty: bool? = None
     let item = get(value, key)
     match item {
         None => {

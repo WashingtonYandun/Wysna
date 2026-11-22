@@ -16,5 +16,5 @@ print((value = 7), (value = 8), value)
 
 let maybe: int? = Some(4)
 print(maybe ?? (value = 9), value)
-let empty: int? = none
+let empty: int? = None
 print(empty ?? (value = 10), value)

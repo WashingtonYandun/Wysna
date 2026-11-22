@@ -52,7 +52,7 @@ print(values[Key.Item(7)], len(values))
             "declared_first": "enum Key { Item(list[int]) }\nstruct Holder { value: dict[Key, int] }",
             "nested": "enum Outer { Item(Inner) }\nstruct Holder { value: dict[Outer, int] }\nenum Inner { Item(float) }",
             "optional": "let values: dict[Option[int], int] = {}",
-            "optional_payload": "enum Key { Item(Option[int]) }\nlet x: Option[int] = none\nlet values = {Key.Item(x): 1}",
+            "optional_payload": "enum Key { Item(Option[int]) }\nlet x: Option[int] = None\nlet values = {Key.Item(x): 1}",
             "generic": "enum Key[T] { Item(T) }\nstruct Holder { value: dict[Key[list[int]], int] }",
         }
         with tempfile.TemporaryDirectory(prefix="wysna-dict-key-invalid-") as temporary:

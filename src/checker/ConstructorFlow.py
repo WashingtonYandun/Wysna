@@ -86,7 +86,10 @@ def check_constructor(declaration, class_type, method, file, match_is_exhaustive
             if after_left is None:
                 return None
             after_right = expression(node.right, set(after_left))
-            if isinstance(node.left, A.NoneLiteral):
+            if isinstance(node.left, A.NoneLiteral) or (
+                isinstance(node.left, A.IdentExpr) and node.left.name == "None"
+                and getattr(node.left, "resolved_symbol", None) is None
+            ):
                 return after_right
             if after_right is None:
                 return after_left

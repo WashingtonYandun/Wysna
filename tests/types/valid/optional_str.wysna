@@ -1,1 +1,1 @@
-let name: str? = none
+let name: str? = None

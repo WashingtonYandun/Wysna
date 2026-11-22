@@ -21,6 +21,7 @@ from node.NodeType import (
 )
 from checker.WysnaType import (
     WysnaType,
+    UnitType,
     StructType,
     EnumType,
     ClassType,
@@ -123,6 +124,10 @@ class Instantiator:
         finally:
             checker._active_type_subst = previous_subst
         fn_type = FunctionType(params=p_types, ret=ret_t, is_async=getattr(cloned_fn, "is_async", False))
+        if ret_t == UnitType and not cloned_fn.is_async:
+            if any(attribute.name == 'must_use' for attribute in cloned_fn.attributes):
+                raise TypeError('@must_use requires a non-unit result', file=checker.file,
+                                line=line, col=col, code='W2001')
         fn_sym = Symbol(mangled, fn_type, is_mut=False, kind="fn", line=line, col=col)
         entry = SpecializationEntry(key=key, state=SpecializationState.SPECIALIZING, specialized_symbol=fn_sym, ast_decl=cloned_fn)
         checker.specializations[key] = entry

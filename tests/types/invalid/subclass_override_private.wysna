@@ -17,5 +17,5 @@ class Derived extends Base {
 }
 
 fn main() {
-    let d = new Derived()
+    let d = Derived()
 }

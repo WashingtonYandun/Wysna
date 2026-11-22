@@ -1,5 +1,20 @@
 # Changelog
 
+## Sin publicar
+
+### Arquitectura híbrida y tooling nativo
+
+- Mantiene cuatro motores como oráculo del lenguaje hasta v1.0 y delega `project`, `packages`, `mcp`, `lsp` y `schema` a Selfhost. `packages` es exclusivamente nativo; los proyectos WASI/Browser conservan Seed.
+- Añade build dev incremental por unidad con caché SHA-256, fuzzing diferencial multiarchivo, sandbox nativo `W5006` y lints nativos `W6001`/`W6002`.
+- Añade paquetes USTAR v1 fijados por SHA-256, restauración offline, 19 regresiones de seguridad y el flujo `OPS-A01`; el SDK instalado comprueba restauración y ejecución con lock congelado.
+
+### Cambios del lenguaje que requieren migración
+
+- Retira `new Class(...)`, el opcional vacío `none` y los comodines `* =>`/`else =>`: usar `Class(...)`, `None` y `_ =>`. Los patrones de tupla requieren paréntesis.
+- Formaliza capturas de closures como snapshots inmutables con diagnóstico accionable `W3001` al intentar mutarlas.
+- Añade patrones alternativos `|`, rangos Int64 `..`/`..=`, patrones de struct anidados y advertencia de ramas inalcanzables `W6003`.
+- Añade `@deprecated("mensaje")` y `@must_use` en funciones superiores, con advertencias `W6004`/`W6005` en CLI JSON y LSP. Son atributos cerrados y no ejecutan código durante la compilación.
+
 ## 0.8.0 — 2026-11-20
 
 ### Native SDK Autonomy, Parameterized Interfaces & 11/11 MCP

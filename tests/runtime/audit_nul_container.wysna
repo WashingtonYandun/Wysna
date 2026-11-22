@@ -1,2 +1,2 @@
-let value: int? = none
+let value: int? = None
 print(["a\0b"], ("a\0b",), str(1))

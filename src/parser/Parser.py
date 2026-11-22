@@ -8,6 +8,7 @@ from node.NodeType import (
     clone_ast, ExternFnDecl, LambdaExpr, FunctionType as AstFunctionType, Node, Program, Stmt, Expr, TypeNode, Pattern, Block,
     NamedType, GenericType, TypeParam, OptionalType, ListType, DictType, TupleType, ResultType, ErrorUnionType,
     IdentifierPattern, TuplePattern, EnumPattern, LiteralPattern, WildcardPattern,
+    OrPattern, RangePattern, StructPatternField, StructPattern, StaticAttribute,
     FnDecl, Param, StructDecl, StructField, EnumDecl, VariantDecl,
     InterfaceDecl, InterfaceMethod, ClassDecl, ClassField, MethodDecl,
     ImportDecl, UseDecl, UseSymbol, LetDecl,
@@ -335,20 +336,123 @@ class Parser:
     # Pattern Parsing
     # ==========================================
 
-    def parse_pattern(self, allow_tuple: bool = True) -> Pattern:
+    def _starts_struct_pattern_brace(self) -> bool:
+        if not self.check(TokenType.LBRACE):
+            return False
+        idx = self.pos + 1
+        while idx < len(self.tokens) and self.tokens[idx].type == TokenType.NEWLINE:
+            idx += 1
+        if idx >= len(self.tokens):
+            return False
+        first = self.tokens[idx].type
+        if first not in (TokenType.RBRACE, TokenType.DOT_DOT, TokenType.IDENTIFIER):
+            return False
+        if first == TokenType.IDENTIFIER:
+            nxt_idx = idx + 1
+            if nxt_idx >= len(self.tokens):
+                return False
+            nxt = self.tokens[nxt_idx].type
+            if nxt not in (TokenType.COLON, TokenType.COMMA, TokenType.RBRACE, TokenType.NEWLINE):
+                return False
+        # Find matching closing brace and check following token
+        depth = 0
+        scan = self.pos
+        while scan < len(self.tokens):
+            t = self.tokens[scan].type
+            if t == TokenType.LBRACE:
+                depth += 1
+            elif t == TokenType.RBRACE:
+                depth -= 1
+                if depth == 0:
+                    after = self.tokens[scan + 1].type if scan + 1 < len(self.tokens) else TokenType.EOF
+                    return after in (
+                        TokenType.FAT_ARROW, TokenType.IF, TokenType.PIPE,
+                        TokenType.COMMA, TokenType.RPAREN, TokenType.RBRACE, TokenType.NEWLINE,
+                    )
+            scan += 1
+        return False
+
+    def _parse_struct_pattern(self, struct_name: str, type_args: Optional[List[TypeNode]], start_tok: Token, allow_or: bool) -> StructPattern:
+        self.expect(TokenType.LBRACE, code="W0006", msg="Expected '{' in struct pattern")
+        fields: List[StructPatternField] = []
+        has_rest = False
+        while True:
+            while self.match(TokenType.NEWLINE):
+                pass
+            if self.check(TokenType.RBRACE) or self.is_at_end():
+                break
+            if self.match(TokenType.DOT_DOT):
+                has_rest = True
+                while self.match(TokenType.NEWLINE):
+                    pass
+                self.match(TokenType.COMMA)
+                while self.match(TokenType.NEWLINE):
+                    pass
+                break
+            ftok = self.expect(TokenType.IDENTIFIER, code="W0001", msg="Expected field name or '..' in struct pattern")
+            if self.match(TokenType.COLON):
+                sub_pat = self.parse_pattern(allow_tuple=False, allow_or=allow_or)
+                fields.append(StructPatternField(name=ftok.value, pattern=sub_pat, shorthand=False, line=ftok.line, col=ftok.col))
+            else:
+                fields.append(StructPatternField(
+                    name=ftok.value,
+                    pattern=IdentifierPattern(name=ftok.value, line=ftok.line, col=ftok.col),
+                    shorthand=True,
+                    line=ftok.line,
+                    col=ftok.col,
+                ))
+            while self.match(TokenType.NEWLINE):
+                pass
+            if not self.match(TokenType.COMMA):
+                break
+        while self.match(TokenType.NEWLINE):
+            pass
+        self.expect(TokenType.RBRACE, code="W0006", msg="Expected '}' after struct pattern")
+        return StructPattern(struct_name=struct_name, fields=fields, has_rest=has_rest, line=start_tok.line, col=start_tok.col, type_args=type_args)
+
+    def _parse_pattern_int_bound(self) -> int:
+        tok = self.at()
+        if self.match(TokenType.MINUS):
+            lit_tok = self.expect(TokenType.INT, code="W0002", msg="Expected an integer after unary '-' in range pattern")
+            mag = int(lit_tok.value)
+            if mag > 1 << 63:
+                raise ParserError(
+                    message=f"Integer literal '-{mag}' is below the int64 minimum",
+                    line=tok.line, col=tok.col, file=self.file, code="W0002",
+                )
+            return -mag
+        lit_tok = self.expect(TokenType.INT, code="W0002", msg="Expected integer bound in range pattern")
+        return int(lit_tok.value)
+
+    def parse_pattern(self, allow_tuple: bool = True, allow_or: bool = True) -> Pattern:
+        first = self._parse_atom_pattern(allow_tuple=allow_tuple, allow_or=allow_or)
+        if allow_or and self.check(TokenType.PIPE):
+            alternatives: List[Pattern] = [first]
+            while self.match(TokenType.PIPE):
+                alternatives.append(self._parse_atom_pattern(allow_tuple=False, allow_or=allow_or))
+            return OrPattern(alternatives=alternatives, line=first.line, col=first.col)
+        return first
+
+    def _parse_atom_pattern(self, allow_tuple: bool = True, allow_or: bool = True) -> Pattern:
         token = self.at()
 
         if self.match(TokenType.STAR):
-            return WildcardPattern(line=token.line, col=token.col)
+            raise ParserError(
+                message="Wildcard '* =>' has been removed in match; use canonical '_ =>'",
+                line=token.line,
+                col=token.col,
+                file=self.file,
+                code="W0001",
+            )
 
         if self.match(TokenType.LPAREN):
             elements: List[Pattern] = []
             if not self.check(TokenType.RPAREN):
-                elements.append(self.parse_pattern(allow_tuple=False))
+                elements.append(self.parse_pattern(allow_tuple=False, allow_or=allow_or))
                 while self.match(TokenType.COMMA):
                     if self.check(TokenType.RPAREN):
                         break
-                    elements.append(self.parse_pattern(allow_tuple=False))
+                    elements.append(self.parse_pattern(allow_tuple=False, allow_or=allow_or))
             self.expect(TokenType.RPAREN, code="W0006", msg="Expected ')' after tuple pattern")
             if len(elements) == 1:
                 return elements[0]
@@ -371,45 +475,58 @@ class Parser:
                 pat_type_args = None
                 if self.check(TokenType.LBRACKET):
                     saved_pat = self.pos
-                    maybe_args = self._try_parse_generic_type_args(allow_struct_init=False)
-                    if maybe_args and self.check(TokenType.LPAREN):
+                    maybe_args = self._try_parse_generic_type_args(allow_struct_init=False, allow_pattern=True)
+                    if maybe_args and (self.check(TokenType.LPAREN) or self._starts_struct_pattern_brace()):
                         pat_type_args = maybe_args
                     else:
                         self.pos = saved_pat
+                if self._starts_struct_pattern_brace():
+                    return self._parse_struct_pattern(".".join(owner + [variant_tok.value]), pat_type_args, token, allow_or)
                 payload_args: List[Pattern] = []
                 if self.match(TokenType.LPAREN):
                     if not self.check(TokenType.RPAREN):
-                        payload_args.append(self.parse_pattern(allow_tuple=False))
+                        payload_args.append(self.parse_pattern(allow_tuple=False, allow_or=allow_or))
                         while self.match(TokenType.COMMA):
                             if self.check(TokenType.RPAREN):
                                 break
-                            payload_args.append(self.parse_pattern(allow_tuple=False))
+                            payload_args.append(self.parse_pattern(allow_tuple=False, allow_or=allow_or))
                     self.expect(TokenType.RPAREN, code="W0006", msg="Expected ')' after pattern arguments")
                 return EnumPattern(enum_name=".".join(owner), variant=variant_tok.value, args=payload_args, line=token.line, col=token.col, type_args=pat_type_args)
 
-            # Check for generic error/enum pattern: Name[T](x)
+            # Check for generic error/enum/struct pattern: Name[T](x) or Name[T] { ... }
             pat_type_args = None
             if self.check(TokenType.LBRACKET):
                 saved_pat = self.pos
-                maybe_args = self._try_parse_generic_type_args(allow_struct_init=False)
-                if maybe_args and self.check(TokenType.LPAREN):
+                maybe_args = self._try_parse_generic_type_args(allow_struct_init=False, allow_pattern=True)
+                if maybe_args and (self.check(TokenType.LPAREN) or self._starts_struct_pattern_brace()):
                     pat_type_args = maybe_args
                 else:
                     self.pos = saved_pat
+
+            if self._starts_struct_pattern_brace():
+                return self._parse_struct_pattern(first_name, pat_type_args, token, allow_or)
 
             # Check for unqualified Enum variant / error type pattern: Some(x), BoxErr[int](e)
             if self.match(TokenType.LPAREN):
                 payload_args = []
                 if not self.check(TokenType.RPAREN):
-                    payload_args.append(self.parse_pattern(allow_tuple=False))
+                    payload_args.append(self.parse_pattern(allow_tuple=False, allow_or=allow_or))
                     while self.match(TokenType.COMMA):
                         if self.check(TokenType.RPAREN):
                             break
-                        payload_args.append(self.parse_pattern(allow_tuple=False))
+                        payload_args.append(self.parse_pattern(allow_tuple=False, allow_or=allow_or))
                 self.expect(TokenType.RPAREN, code="W0006", msg="Expected ')' after pattern arguments")
                 return EnumPattern(enum_name=None, variant=first_name, args=payload_args, line=token.line, col=token.col, type_args=pat_type_args)
 
-            if first_name in ("None", "none"):
+            if first_name == "none":
+                raise ParserError(
+                    message="Lowercase 'none' pattern has been removed; use canonical 'None'",
+                    line=token.line,
+                    col=token.col,
+                    file=self.file,
+                    code="W0001",
+                )
+            if first_name == "None":
                 return EnumPattern(enum_name=None, variant="None", args=[], line=token.line, col=token.col)
 
             # Check for TuplePattern: a, b
@@ -423,6 +540,11 @@ class Parser:
             return IdentifierPattern(name=first_name, line=token.line, col=token.col)
 
         if self.match(TokenType.INT):
+            start_val = int(token.value)
+            if self.match(TokenType.DOT_DOT) or self.match(TokenType.DOT_DOT_EQ):
+                inclusive = self.tokens[self.pos - 1].type == TokenType.DOT_DOT_EQ
+                end_val = self._parse_pattern_int_bound()
+                return RangePattern(start=start_val, end=end_val, inclusive=inclusive, line=token.line, col=token.col)
             lit = IntLiteral(token.value, line=token.line, col=token.col)
             return LiteralPattern(literal=lit, line=token.line, col=token.col)
 
@@ -441,7 +563,12 @@ class Parser:
                     file=self.file,
                     code="W0002",
                 )
-            literal = IntLiteral(value=-magnitude, line=token.line, col=token.col)
+            start_val = -magnitude
+            if self.match(TokenType.DOT_DOT) or self.match(TokenType.DOT_DOT_EQ):
+                inclusive = self.tokens[self.pos - 1].type == TokenType.DOT_DOT_EQ
+                end_val = self._parse_pattern_int_bound()
+                return RangePattern(start=start_val, end=end_val, inclusive=inclusive, line=token.line, col=token.col)
+            literal = IntLiteral(value=start_val, line=token.line, col=token.col)
             return LiteralPattern(literal=literal, line=token.line, col=token.col)
 
         if self.match(TokenType.STR):
@@ -464,8 +591,50 @@ class Parser:
     # Statement & Declaration Parsing
     # ==========================================
 
+    def parse_attributed_function(self, allow_top_level):
+        start = self.at()
+        if not allow_top_level:
+            raise ParserError('Static attributes require a top-level function declaration',
+                              file=self.file, line=start.line, col=start.col, code='W0006')
+        attributes, names = [], set()
+        while self.match(TokenType.AT):
+            token = self.expect(TokenType.IDENTIFIER, code='W0006', msg='Expected static attribute name')
+            if token.value not in ('deprecated', 'must_use'):
+                raise ParserError('Unknown static attribute; supported attributes are @deprecated and @must_use',
+                                  file=self.file, line=token.line, col=token.col, code='W0006')
+            if token.value in names:
+                raise ParserError('Duplicate static attribute: ' + token.value, file=self.file,
+                                  line=token.line, col=token.col, code='W1002')
+            names.add(token.value)
+            message = ''
+            if token.value == 'deprecated':
+                self.expect(TokenType.LPAREN, code='W0006', msg='@deprecated requires one non-empty string literal')
+                literal = self.expect(TokenType.STR, code='W0006', msg='@deprecated requires one non-empty string literal')
+                if not literal.value.strip(' \t\r\n'):
+                    raise ParserError('@deprecated requires a non-empty message', file=self.file,
+                                      line=literal.line, col=literal.col, code='W0006')
+                message = literal.value
+                self.expect(TokenType.RPAREN, code='W0006', msg='@deprecated requires exactly one string literal')
+            elif self.check(TokenType.LPAREN):
+                raise ParserError('@must_use does not accept arguments', file=self.file,
+                                  line=token.line, col=token.col, code='W0006')
+            attributes.append(StaticAttribute(token.value, message, start.line, start.col))
+            self._skip_statement_separators()
+            start = self.at()
+        declaration = self.parse_stmt(allow_top_level=True)
+        if not isinstance(declaration, FnDecl) or isinstance(declaration, ExternFnDecl):
+            raise ParserError('Static attributes require a top-level function declaration', file=self.file,
+                              line=declaration.line, col=declaration.col, code='W0006')
+        declaration.attributes = attributes
+        return declaration
+
     def parse_stmt(self, allow_top_level: bool = False) -> Stmt:
+        if self.check(TokenType.AT):
+            return self.parse_attributed_function(allow_top_level)
         if self.match(TokenType.PUB):
+            if self.check(TokenType.AT):
+                raise ParserError('Place static attributes before pub', file=self.file,
+                                  line=self.at().line, col=self.at().col, code='W0006')
             if not allow_top_level:
                 raise ParserError("pub requires a top-level declaration", file=self.file, code="W0006")
             statement = self.parse_stmt(allow_top_level=True)
@@ -1172,10 +1341,10 @@ class Parser:
                         left = MemberExpr(object=left, property=prop_tok.value, line=dot.line, col=dot.col)
 
                 elif self.check(TokenType.LBRACKET):
-                    if isinstance(left, MemberExpr):
+                    if isinstance(left, (IdentExpr, MemberExpr)):
                         saved = self.pos
-                        type_args = self._try_parse_generic_type_args()
-                        if type_args and self.match(TokenType.LPAREN):
+                        type_args = self._try_parse_generic_type_args(allow_struct_init, allow_dot=True)
+                        if type_args and isinstance(left, MemberExpr) and self.match(TokenType.LPAREN):
                             args = []
                             if not self.check(TokenType.RPAREN):
                                 args.append(self.parse_expr())
@@ -1187,12 +1356,42 @@ class Parser:
                             left = CallExpr(left, args, type_args, line=left.line, col=left.col)
                             left.index_alternative = self._parse_index_alternative(saved, type_args)
                             continue
+                        if allow_struct_init and isinstance(left, MemberExpr) and type_args and self._starts_struct_init_brace():
+                            chain_name = self._member_chain_name(left)
+                            if chain_name is not None:
+                                left = self._parse_struct_init_body(chain_name, type_args, left.line, left.col)
+                                continue
+                        if type_args and self.check(TokenType.DOT) and self.peek(1).type == TokenType.IDENTIFIER:
+                            is_primitive = (
+                                len(type_args) == 1
+                                and isinstance(type_args[0], NamedType)
+                                and type_args[0].name in ("int", "float", "bool", "str", "unit", "none")
+                            )
+                            alt = None if is_primitive else self._parse_index_alternative(saved, type_args=None)
+                            if alt is None:
+                                dot = self.advance()
+                                prop_tok = self.expect(TokenType.IDENTIFIER, code="W0001", msg="Expected property name after '.'")
+                                member = MemberExpr(object=left, property=prop_tok.value, line=dot.line, col=dot.col)
+                                member.enum_type_args = type_args
+                                left = member
+                                continue
+                            bracket_tok = self.tokens[saved]
+                            idx_expr = IndexExpr(object=left, index=alt, line=bracket_tok.line, col=bracket_tok.col)
+                            idx_expr.type_args_alternative = type_args
+                            left = idx_expr
+                            continue
                         self.pos = saved
                     # Indexing
                     bracket = self.advance()
                     index_expr = self.parse_expr()
                     self.expect(TokenType.RBRACKET, code="W0006", msg="Expected ']' after index")
                     left = IndexExpr(object=left, index=index_expr, line=bracket.line, col=bracket.col)
+
+                elif allow_struct_init and isinstance(left, MemberExpr) and self._starts_struct_init_brace():
+                    chain_name = self._member_chain_name(left)
+                    if chain_name is None:
+                        break
+                    left = self._parse_struct_init_body(chain_name, None, left.line, left.col)
 
                 elif min_prec < 10 and self.check(TokenType.QUESTION):
                     # Postfix try / unwrap
@@ -1287,6 +1486,53 @@ class Parser:
         finally:
             self.pos = previous
 
+    def _member_chain_name(self, expr: Expr) -> Optional[str]:
+        parts: List[str] = []
+        current = expr
+        while isinstance(current, MemberExpr):
+            parts.append(current.property)
+            current = current.object
+        if not isinstance(current, IdentExpr):
+            return None
+        parts.append(current.name)
+        parts.reverse()
+        return ".".join(parts)
+
+    def _parse_struct_init_body(
+        self,
+        struct_name: str,
+        type_args: Optional[List[TypeNode]],
+        line: int,
+        col: int,
+    ) -> StructInitExpr:
+        self.advance()  # consume '{'
+        fields: List[FieldInit] = []
+        spread: Optional[Expr] = None
+        while not self.check(TokenType.RBRACE) and not self.is_at_end():
+            self._skip_statement_separators()
+            if self.check(TokenType.RBRACE) or self.is_at_end():
+                break
+            if self.match(TokenType.DOT_DOT):
+                dot_tok = self.tokens[self.pos - 1]
+                if spread is not None:
+                    raise ParserError(
+                        message="Struct initializer accepts at most one '..' base expression",
+                        line=dot_tok.line,
+                        col=dot_tok.col,
+                        file=self.file,
+                        code="W0006",
+                    )
+                spread = self.parse_expr()
+                self.match(TokenType.COMMA)
+                continue
+            f_tok = self.expect(TokenType.IDENTIFIER, code="W0001", msg="Expected struct field name")
+            self.expect(TokenType.COLON, code="W0001", msg="Expected ':' after struct field name")
+            f_val = self.parse_expr()
+            fields.append(FieldInit(name=f_tok.value, value=f_val, line=f_tok.line, col=f_tok.col))
+            self.match(TokenType.COMMA)
+        self.expect(TokenType.RBRACE, code="W0006", msg="Unterminated struct initializer, expected '}'")
+        return StructInitExpr(struct_name=struct_name, fields=fields, type_args=type_args, line=line, col=col, spread=spread)
+
     def _starts_struct_init_brace(self) -> bool:
         return self.check(TokenType.LBRACE) and (
             self.peek(1).type == TokenType.RBRACE
@@ -1294,7 +1540,7 @@ class Parser:
             or (self.peek(1).type == TokenType.IDENTIFIER and self.peek(2).type == TokenType.COLON)
         )
 
-    def _try_parse_generic_type_args(self, allow_struct_init: bool = True) -> Optional[List[TypeNode]]:
+    def _try_parse_generic_type_args(self, allow_struct_init: bool = True, allow_dot: bool = False, allow_pattern: bool = False) -> Optional[List[TypeNode]]:
         if not self.check(TokenType.LBRACKET):
             return None
         saved_pos = self.pos
@@ -1311,8 +1557,13 @@ class Parser:
             if not self.match(TokenType.RBRACKET):
                 self.pos = saved_pos
                 return None
-            # Only treat as generic args if followed by '{' or '('
-            if not (self.check(TokenType.LPAREN) or (allow_struct_init and self._starts_struct_init_brace())):
+            # Only treat as generic args if followed by '(', '{', or (when enabled) '.Variant'
+            if not (
+                self.check(TokenType.LPAREN)
+                or (allow_struct_init and self._starts_struct_init_brace())
+                or (allow_pattern and self._starts_struct_pattern_brace())
+                or (allow_dot and self.check(TokenType.DOT) and self.peek(1).type == TokenType.IDENTIFIER)
+            ):
                 self.pos = saved_pos
                 return None
             return args
@@ -1376,37 +1627,24 @@ class Parser:
         if self.match(TokenType.FALSE):
             return BoolLiteral(value=False, line=token.line, col=token.col)
 
-        if self.match(TokenType.NONE):
-            return NoneLiteral(line=token.line, col=token.col)
-
         if self.match(TokenType.THIS):
             return ThisExpr(line=token.line, col=token.col)
 
         if self.match(TokenType.SUPER):
             return SuperExpr(line=token.line, col=token.col)
 
-        if self.match(TokenType.NEW):
-            cls_tok = self.expect(TokenType.IDENTIFIER, code="W0006", msg="Expected class name after 'new'")
-            class_name = cls_tok.value
-            while self.match(TokenType.DOT):
-                class_name += "." + self.expect(TokenType.IDENTIFIER).value
-            type_args = self._try_parse_generic_type_args(False) if self.check(TokenType.LBRACKET) else None
-            self.expect(TokenType.LPAREN, code="W0006", msg="Expected '(' after class name in 'new' expression")
-            args: List[Expr] = []
-            if not self.check(TokenType.RPAREN):
-                args.append(self.parse_expr())
-                while self.match(TokenType.COMMA):
-                    if self.check(TokenType.RPAREN):
-                        break
-                    args.append(self.parse_expr())
-            self.expect(TokenType.RPAREN, code="W0006", msg="Expected ')' after 'new' arguments")
-            expression = NewExpr(class_name=class_name, args=args, line=token.line, col=token.col)
-            expression.type_args = type_args
-            return expression
-
         # Identifiers & Named Struct Initializations
         if self.match(TokenType.IDENTIFIER) or (self.check(TokenType.ASYNC) and self.peek(1).type != TokenType.FN and self.advance()):
             ident_name = token.value
+
+            if ident_name == "new" and self.check(TokenType.IDENTIFIER):
+                raise ParserError(
+                    message="The 'new' keyword has been removed; construct classes directly with 'ClassName(...)'",
+                    line=token.line,
+                    col=token.col,
+                    file=self.file,
+                    code="W0006",
+                )
 
             type_args: Optional[List[TypeNode]] = None
             bracket_start = self.pos
@@ -1435,33 +1673,7 @@ class Parser:
 
             # Check if this is a Struct Initialization: Identifier { field: val, ... } or Identifier { ..base, ... }
             if allow_struct_init and self._starts_struct_init_brace():
-                self.advance()  # consume '{'
-                fields: List[FieldInit] = []
-                spread: Optional[Expr] = None
-                while not self.check(TokenType.RBRACE) and not self.is_at_end():
-                    self._skip_statement_separators()
-                    if self.check(TokenType.RBRACE) or self.is_at_end():
-                        break
-                    if self.match(TokenType.DOT_DOT):
-                        dot_tok = self.tokens[self.pos - 1]
-                        if spread is not None:
-                            raise ParserError(
-                                message="Struct initializer accepts at most one '..' base expression",
-                                line=dot_tok.line,
-                                col=dot_tok.col,
-                                file=self.file,
-                                code="W0006",
-                            )
-                        spread = self.parse_expr()
-                        self.match(TokenType.COMMA)
-                        continue
-                    f_tok = self.expect(TokenType.IDENTIFIER, code="W0001", msg="Expected struct field name")
-                    self.expect(TokenType.COLON, code="W0001", msg="Expected ':' after struct field name")
-                    f_val = self.parse_expr()
-                    fields.append(FieldInit(name=f_tok.value, value=f_val, line=f_tok.line, col=f_tok.col))
-                    self.match(TokenType.COMMA)
-                self.expect(TokenType.RBRACE, code="W0006", msg="Unterminated struct initializer, expected '}'")
-                return StructInitExpr(struct_name=ident_name, fields=fields, type_args=type_args, line=token.line, col=token.col, spread=spread)
+                return self._parse_struct_init_body(ident_name, type_args, token.line, token.col)
 
             return IdentExpr(name=ident_name, line=token.line, col=token.col)
 
@@ -1546,6 +1758,9 @@ class Parser:
         if self.check(TokenType.MATCH):
             return self.parse_match_expr()
 
+        if token.type == TokenType.AT:
+            raise ParserError('Static attributes require a top-level function declaration',
+                              file=self.file, line=token.line, col=token.col, code='W0006')
         raise ParserError(
             message=f"Unexpected token '{token.type.name}' in expression",
             line=token.line,
@@ -1603,9 +1818,24 @@ class Parser:
             arm_tok = self.at()
             pattern: Pattern
             if self.match(TokenType.ELSE):
-                pattern = WildcardPattern(line=arm_tok.line, col=arm_tok.col)
+                raise ParserError(
+                    message="Wildcard 'else =>' has been removed in match; use canonical '_ =>'",
+                    line=arm_tok.line,
+                    col=arm_tok.col,
+                    file=self.file,
+                    code="W0001",
+                )
             else:
-                pattern = self.parse_pattern()
+                pattern = self.parse_pattern(allow_tuple=False)
+                if self.check(TokenType.COMMA):
+                    comma_tok = self.at()
+                    raise ParserError(
+                        message="Unparenthesized tuple patterns are not allowed in match; use '(a, b) =>'",
+                        line=comma_tok.line,
+                        col=comma_tok.col,
+                        file=self.file,
+                        code="W0001",
+                    )
 
             guard: Optional[Expr] = None
             if self.match(TokenType.IF):

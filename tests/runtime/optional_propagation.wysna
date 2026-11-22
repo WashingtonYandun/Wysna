@@ -4,7 +4,7 @@ fn try_double(x: int?) -> int? {
 }
 
 let res1 = try_double(21)
-let res2 = try_double(none)
+let res2 = try_double(None)
 
 print(res1 ?? 0)
 print(res2 ?? 999)

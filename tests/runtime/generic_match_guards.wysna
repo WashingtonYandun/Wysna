@@ -9,4 +9,4 @@ fn guarded(x: Option[Result[int, str]]) -> str {
 print(guarded(Some(Ok(5))))
 print(guarded(Some(Ok(200))))
 print(guarded(Some(Err("failed"))))
-print(guarded(none))
+print(guarded(None))

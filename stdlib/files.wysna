@@ -20,7 +20,7 @@ pub class File {
     }
     public fn is_open() -> bool { return wysna_host_is_open(this.handle) == 1 }
     public fn read(count: int) -> buffer.Bytes ! FileError {
-        let data = new buffer.Bytes()
+        let data = buffer.Bytes()
         if wysna_host_file_read(this.handle, data.borrow(), count) < 0 {
             let code = wysna_host_last_error()
             let domain = wysna_host_last_error_domain()

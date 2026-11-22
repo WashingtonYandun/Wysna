@@ -311,8 +311,8 @@ def check_assignment_expr(checker: "TypeChecker", expr: AssignmentExpr, is_state
 
 
 def check_member_expr(checker: "TypeChecker", expr: MemberExpr, is_statement_context: bool = False) -> WysnaType:
-    # Enum variant access: Enum.Variant
-    enum_t = checker._enum_owner(expr.object)
+    # Enum variant access: Enum.Variant or Enum[T].Variant
+    enum_t, explicit_args = checker._enum_owner_with_type_args(expr)
     if isinstance(enum_t, EnumType):
         if expr.property not in enum_t.variants:
             raise TypeError(f"Enum '{enum_t.name}' has no variant '{expr.property}'", file=checker.file,
@@ -326,7 +326,7 @@ def check_member_expr(checker: "TypeChecker", expr: MemberExpr, is_statement_con
         return enum_t
     if isinstance(enum_t, GenericEnumTemplate):
         template = enum_t
-        if template.name == "Option" and expr.property in ("None", "none"):
+        if template.name == "Option" and expr.property == "None":
             return NoneType
         variant = next((variant for variant in template.ast_decl.variants if variant.name == expr.property), None)
         if variant is None:
@@ -335,11 +335,16 @@ def check_member_expr(checker: "TypeChecker", expr: MemberExpr, is_statement_con
         if variant.payload_types:
             raise TypeError(f"Variant '{expr.property}' requires a payload", file=checker.file,
                             line=expr.line, col=expr.col, code="W2005")
-        ctx_t = checker.expected_type
-        if isinstance(ctx_t, EnumType) and ctx_t.template_name == template.name and ctx_t.type_args:
-            concrete_args = ctx_t.type_args
+        if explicit_args:
+            concrete_args = [checker._resolve_type_node(a) for a in explicit_args]
+            if hasattr(expr, "enum_type_args"):
+                expr.enum_type_args = None
         else:
-            concrete_args = [TypeParamType(param.name, owner=template.name) for param in template.type_params]
+            ctx_t = checker.expected_type
+            if isinstance(ctx_t, EnumType) and ctx_t.template_name == template.name and ctx_t.type_args:
+                concrete_args = ctx_t.type_args
+            else:
+                concrete_args = [TypeParamType(param.name, owner=template.name) for param in template.type_params]
         enum_t = checker._monomorphize_enum(template, concrete_args, expr.line, expr.col)
         receiver = expr.object
         expr.object = IdentExpr(enum_t.name, receiver.line, receiver.col)

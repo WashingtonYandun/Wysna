@@ -25,7 +25,7 @@ fn append_length(target: buffer.Bytes, length: int) -> unit ! ProcessError {
 
 fn encode_arguments(arguments: list[str]) -> buffer.Bytes ! ProcessError {
     if len(arguments) > 256 { return Err(encode_failure("too many arguments")) }
-    let result = new buffer.Bytes()
+    let result = buffer.Bytes()
     for argument in arguments {
         let encoded = bytes(argument)
         if len(encoded) > 1048576 or result.size() + len(encoded) + 4 > 16777216 {
@@ -72,8 +72,8 @@ pub fn capture(executable: str, arguments: list[str], timeout_ms: int, max_outpu
         command.close()
         return Err(error)
     }
-    let stdout_buf = new buffer.Bytes()
-    let stderr_buf = new buffer.Bytes()
+    let stdout_buf = buffer.Bytes()
+    let stderr_buf = buffer.Bytes()
     let status = wysna_host_process_capture(
         command.borrow(),
         encoded_arguments.borrow(),

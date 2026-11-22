@@ -207,6 +207,16 @@ fn checked_verify_pattern(program: CheckedProgram, id: int, expected: int) {
     let type_ = program.types[expected]
     let source = pattern.source
     if pattern.type_id != expected { report_error_at("W9999", source, "checked pattern subject mismatch") }
+    if pattern.name == "or" {
+        if len(pattern.children) < 2 { report_error_at("W9999", source, "invalid checked or-pattern") }
+        for child in pattern.children { checked_verify_pattern(program, child, expected) }
+        return
+    }
+    if pattern.name == "range" or pattern.name == "range_inclusive" {
+        if type_.kind != "int" or len(pattern.children) != 2 { report_error_at("W9999", source, "invalid checked range pattern") }
+        for child in pattern.children { checked_verify_pattern(program, child, expected) }
+        return
+    }
     if pattern.name == "*" {
         if len(pattern.children) != 0 { report_error_at("W9999", source, "invalid checked binding pattern") }
         return
@@ -216,7 +226,11 @@ fn checked_verify_pattern(program: CheckedProgram, id: int, expected: int) {
         return
     }
     let mut payloads: list[int] = []
-    if type_.kind == "tuple" and pattern.name == "tuple" { payloads = type_.args }
+    if type_.kind == "struct" and pattern.name == "struct" {
+        let record = checked_record(program, expected)
+        for field in record.fields { payloads.append(field.type_id) }
+    }
+    elif type_.kind == "tuple" and pattern.name == "tuple" { payloads = type_.args }
     elif type_.kind == "optional" and (pattern.name == "Some" or pattern.name == "None") { if pattern.name == "Some" { payloads = type_.args } }
     elif type_.kind == "result" and (pattern.name == "Ok" or pattern.name == "Err") { payloads = [type_.args[if pattern.name == "Ok" { 0 } else { 1 }]] }
     elif type_.kind == "error_union" {

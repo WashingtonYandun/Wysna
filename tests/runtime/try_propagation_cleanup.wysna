@@ -2,7 +2,7 @@ fn parse_num(s: str) -> int? {
     if len(s) > 0 {
         return len(s)
     }
-    return none
+    return None
 }
 
 fn step_fallible(a: str, b: str) -> int? {

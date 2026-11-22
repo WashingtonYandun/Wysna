@@ -44,8 +44,8 @@ class Service {
 }
 
 pub async fn run_pipeline(name: str) -> str {
-    let console = new ConsoleLogger("SYS")
-    let svc = new Service(console)
+    let console = ConsoleLogger("SYS")
+    let svc = Service(console)
     let out = svc.execute(name)
     print(out)
     return out
@@ -238,7 +238,7 @@ def test_selfhost_cross_module_graph_and_native_driver_c_passthrough(tmp_path):
         "class DiskStore implements Store {\n"
         "    public fn save(key: str) -> int { return len(key) }\n"
         "}\n"
-        "fn main() { let s = new DiskStore()\nprint(s.save(\"hi\")) }\n",
+        "fn main() { let s = DiskStore()\nprint(s.save(\"hi\")) }\n",
         encoding="utf-8",
     )
     res_cross = _run_compiler("graph", app, "--output-format=json-v1")

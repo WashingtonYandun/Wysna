@@ -42,7 +42,7 @@ def run_phase_a_tests():
         'fn bad(x: (int?) ! str) -> int ! str { let inner = x?\nreturn inner? }',
         'fn bad(x: int ! bool) -> int ! str { return x? }',
         'enum Result[T, E] { Ok(T), Err(E) }',
-        'let value: int? = none\nlet ambiguous: (int?)? = value',
+        'let value: int? = None\nlet ambiguous: (int?)? = value',
         'fn bad(x: Option[Result[int, str]]) -> int { match x { Some(Ok(v)) => v, None => 0 } }',
         'enum Pair[A, B] { Item(A, B) }\nfn bad(x: Pair[bool, bool]) -> int { match x { Item(true, false) => 1, Item(false, true) => 2 } }',
         'fn bad(x: Option[int]) -> int { match x { Some(v) if true => v, None => 0 } }',

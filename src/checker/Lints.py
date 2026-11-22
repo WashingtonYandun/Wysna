@@ -76,3 +76,93 @@ def lint_discarded_expressions(program, file: str) -> List[WysnaError]:
             ).with_data(kind="discarded_expression"))
     warnings.sort(key=lambda w: (w.line, w.col))
     return warnings
+
+
+def lint_unreachable_match_arms(program, file):
+    from node.NodeType import MatchExpr
+    from checker.PatternTraversal import subsumed
+    warnings = []
+    for node in _walk(program):
+        if not isinstance(node, MatchExpr):
+            continue
+        covered = []
+        for arm in node.arms:
+            if subsumed(covered, arm.pattern):
+                warnings.append(WysnaError('Match arm is unreachable: earlier unguarded patterns cover it',
+                    line=arm.pattern.line, col=arm.pattern.col, file=file, code='W6003', severity='warning',
+                    stage='lint', help='Remove this arm or place the more specific pattern before the covering arm.'))
+            if arm.guard is None:
+                covered.append(arm.pattern)
+    return warnings
+
+
+def lint_static_attributes(program, file):
+    """Diagnose statically resolved calls without evaluating annotation arguments."""
+    from node.NodeType import (
+        CallExpr, ElseErrExpr, FnDecl, MethodDecl, ForStmt, IfExpr, MatchExpr,
+        ResultType as AstResultType, WhileStmt,
+    )
+    from checker.WysnaType import ResultType, UnitType
+
+    warnings, seen = [], set()
+
+    def unit_like(type_):
+        if isinstance(type_, AstResultType):
+            return getattr(type_.ok_type, 'name', '') == 'unit'
+        if isinstance(type_, ResultType):
+            return type_.ok == UnitType
+        return getattr(type_, 'name', '') == 'unit'
+
+    def visit(node, discarded=False):
+        if node is None:
+            return
+        if isinstance(node, (FnDecl, MethodDecl)):
+            visit(node.body, unit_like(node.return_type))
+        elif isinstance(node, Block):
+            for statement in node.statements:
+                visit(statement)
+            visit(node.tail_expr, discarded)
+        elif isinstance(node, ExprStmt):
+            visit(node.expr, True)
+        elif isinstance(node, (WhileStmt, ForStmt)):
+            visit(getattr(node, 'condition', getattr(node, 'iterable', None)))
+            visit(node.body, True)
+        elif isinstance(node, IfExpr):
+            branch_discard = (discarded or getattr(node, 'discard_result', False)
+                              or unit_like(getattr(node, 'inferred_type', None)))
+            visit(node.condition)
+            visit(node.then_branch, branch_discard)
+            for branch in node.elif_branches:
+                visit(branch.condition)
+                visit(branch.body, branch_discard)
+            visit(node.else_branch, branch_discard)
+        elif isinstance(node, MatchExpr):
+            visit(node.subject)
+            arm_discard = (discarded or getattr(node, 'discard_result', False)
+                           or unit_like(getattr(node, 'inferred_type', None)))
+            for arm in node.arms:
+                visit(arm.guard)
+                visit(arm.body, arm_discard)
+        elif isinstance(node, ElseErrExpr):
+            visit(node.operand)
+            visit(node.handler, discarded or unit_like(getattr(node, 'inferred_type', None)))
+        else:
+            if isinstance(node, CallExpr):
+                for attribute in getattr(node, 'static_attributes', []):
+                    code = 'W6004' if attribute.name == 'deprecated' else 'W6005'
+                    if code == 'W6005' and not discarded:
+                        continue
+                    key = (code, node.line, node.col)
+                    if key in seen:
+                        continue
+                    seen.add(key)
+                    message = ('Call to deprecated function: ' + attribute.message if code == 'W6004'
+                               else 'Result of @must_use function is discarded')
+                    warnings.append(WysnaError(message, file=file, line=node.line, col=node.col,
+                        code=code, severity='warning', stage='lint',
+                        help=attribute.message if code == 'W6004' else 'Bind, return, or consume this result.'))
+            for child in _children(node):
+                visit(child)
+
+    visit(program)
+    return sorted(warnings, key=lambda warning: (warning.line, warning.col, warning.code))

@@ -13,5 +13,5 @@ fn display[T: Printable](item: T) {
     item.print_val()
 }
 
-let d = new Duck()
+let d = Duck()
 display(d)

@@ -1,0 +1,34 @@
+# In-process project check adapter used by the full self-hosted compiler bundle.
+
+fn proj_execute_check(m: ProjectManifest, target_arg: str, dep_aliases: list[str], dep_roots: list[str], json_mode: bool) -> unit {
+    let tname = proj_resolve_target_name(m, target_arg)
+    let tidx = proj_find_target_idx(m, tname)
+    if tidx < 0 {
+        proj_emit_error_and_exit("check", json_mode, "W5002", "unknown target '" + tname + "'")
+    }
+    let target = m.targets[tidx]
+    let entry_path = m.root + "/" + target.entry
+    let src = read_file(entry_path) else err {
+        proj_emit_error_and_exit("check", json_mode, "W5004", "cannot read project entry '" + entry_path + "': " + err.message)
+        ""
+    }
+    let loader = ModuleLoader()
+    loader.project_sources_root = m.source_root_abs
+    loader.dep_aliases = dep_aliases
+    loader.dep_roots = dep_roots
+    module_expand(loader, src, entry_path, true)
+    loader.output.append(Token { kind: "EOF", val: "", line: 1, col: 1, file: module_normalize(entry_path) })
+    let checked = check_program(loader.output, module_canonical(entry_path), true)
+    for node in checked.nodes {
+        if node.kind == "unsupported" {
+            report_error_at("W2013", node.source, "Compiler native-core-v1 does not support expression " + node.text)
+        }
+    }
+    let mod_count = str(len(loader.paths))
+    if json_mode {
+        diag_write_output(proj_check_envelope_json("project.check", "ok", 0, "[]", proj_target_meta_json(target.profile), "[]"))
+    } else {
+        print("[OK] Project check passed: " + m.name + " (" + mod_count + " modules)")
+    }
+    exit(0)
+}

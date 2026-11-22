@@ -56,14 +56,14 @@ pub fn ends_with(text: str, suffix: str) -> bool {
 
 pub fn find(text: str, pattern: str) -> int? {
     if len(pattern) > len(text) {
-        return none
+        return None
     }
     for index in 0..=len(text) - len(pattern) {
         if slice(text, index, index + len(pattern)) == pattern {
             return index
         }
     }
-    return none
+    return None
 }
 
 pub fn split(text: str, separator: str) -> list[str] {
@@ -97,7 +97,7 @@ pub fn replace(text: str, pattern: str, replacement: str) -> str {
 }
 
 pub fn contains(text: str, pattern: str) -> bool {
-    return find(text, pattern) != none
+    return find(text, pattern) != None
 }
 
 pub fn trim_start(text: str) -> str {
@@ -173,7 +173,7 @@ pub fn repeat(text: str, count: int) -> str {
 # Unicode canonical normalization (UAX #15). Text is already valid UTF-8 by construction.
 fn normalize(value: str, form: int) -> str {
     let input = buffer.from_text(value)
-    let output = new buffer.Bytes()
+    let output = buffer.Bytes()
     let status = wysna_host_unicode_normalize(input.borrow(), form, output.borrow())
     input.close()
     if status != 0 {

@@ -108,7 +108,7 @@ class SchemaParam {
     fn init(name: str, t: SchemaType) {
         this.name = name
         this.t = t
-        this.bound = new SchemaBound()
+        this.bound = SchemaBound()
     }
 }
 
@@ -134,7 +134,7 @@ class SchemaFn {
         let ps: list[SchemaParam] = []
         this.params = ps
         this.has_ret = false
-        this.ret = new SchemaType("named", "unit")
+        this.ret = SchemaType("named", "unit")
         let rs: list[str] = []
         this.req_strs = rs
         let es: list[str] = []
@@ -171,23 +171,7 @@ class SchemaDeclSet {
     }
 }
 
-fn schema_split_lines(src: str) -> list[str] {
-    let mut lines: list[str] = []
-    let mut start = 0
-    let n = len(src)
-    for i in 0..n {
-        if src[i] == "\n" {
-            let mut end_idx = i
-            if end_idx > start and src[end_idx - 1] == "\r" { end_idx = end_idx - 1 }
-            lines.append(slice(src, start, end_idx))
-            start = i + 1
-        }
-    }
-    let mut tail_end = n
-    if tail_end > start and src[tail_end - 1] == "\r" { tail_end = tail_end - 1 }
-    lines.append(slice(src, start, tail_end))
-    return lines
-}
+# schema_split_lines lives in 01_tool_common.wysna.
 
 fn schema_leading_doc(lines: list[str], decl_line: int) -> list[str] {
     let mut idx = decl_line - 2
@@ -228,9 +212,9 @@ fn schema_parse_primary_type(c: SchemaTokCursor) -> SchemaType {
     schema_skip_newlines(c)
     let k = schema_cur_kind(c)
     let v = schema_cur_val(c)
-    if k == "NONE" {
+    if k == "IDENT" and (v == "none" or v == "None") {
         c.pos = c.pos + 1
-        return new SchemaType("named", "none")
+        return SchemaType("named", "none")
     }
     if k == "LPAREN" {
         c.pos = c.pos + 1
@@ -244,13 +228,13 @@ fn schema_parse_primary_type(c: SchemaTokCursor) -> SchemaType {
         }
         if schema_cur_kind(c) == "RPAREN" { c.pos = c.pos + 1 }
         if len(items) == 1 { return items[0] }
-        let tup = new SchemaType("tuple", "tuple")
+        let tup = SchemaType("tuple", "tuple")
         tup.args = items
         return tup
     }
     if k == "IDENT" and v == "fn" or k == "FN" {
         c.pos = c.pos + 1
-        let fn_t = new SchemaType("function", "fn")
+        let fn_t = SchemaType("function", "fn")
         if schema_cur_kind(c) == "LPAREN" {
             c.pos = c.pos + 1
             while schema_cur_kind(c) != "RPAREN" and schema_cur_kind(c) != "EOF" {
@@ -263,7 +247,7 @@ fn schema_parse_primary_type(c: SchemaTokCursor) -> SchemaType {
             c.pos = c.pos + 1
             fn_t.args.append(schema_parse_type(c))
         } else {
-            fn_t.args.append(new SchemaType("named", "unit"))
+            fn_t.args.append(SchemaType("named", "unit"))
         }
         return fn_t
     }
@@ -284,35 +268,35 @@ fn schema_parse_primary_type(c: SchemaTokCursor) -> SchemaType {
             }
             if schema_cur_kind(c) == "RBRACKET" { c.pos = c.pos + 1 }
             if name == "list" and len(args) == 1 {
-                let lt = new SchemaType("list", "list")
+                let lt = SchemaType("list", "list")
                 lt.args = args
                 return lt
             }
             if name == "dict" and len(args) == 2 {
-                let dt = new SchemaType("dict", "dict")
+                let dt = SchemaType("dict", "dict")
                 dt.args = args
                 return dt
             }
             if name == "tuple" {
-                let tt = new SchemaType("tuple", "tuple")
+                let tt = SchemaType("tuple", "tuple")
                 tt.args = args
                 return tt
             }
-            let gt = new SchemaType("generic", name)
+            let gt = SchemaType("generic", name)
             gt.args = args
             return gt
         }
-        return new SchemaType("named", name)
+        return SchemaType("named", name)
     }
     c.pos = c.pos + 1
-    return new SchemaType("named", "unknown")
+    return SchemaType("named", "unknown")
 }
 
 fn schema_parse_postfix_type(c: SchemaTokCursor) -> SchemaType {
     let mut base = schema_parse_primary_type(c)
     while schema_cur_kind(c) == "QUESTION" {
         c.pos = c.pos + 1
-        let opt = new SchemaType("optional", "optional")
+        let opt = SchemaType("optional", "optional")
         opt.args.append(base)
         base = opt
     }
@@ -322,7 +306,7 @@ fn schema_parse_postfix_type(c: SchemaTokCursor) -> SchemaType {
 fn schema_parse_error_union_or_single(c: SchemaTokCursor) -> SchemaType {
     let first = schema_parse_postfix_type(c)
     if schema_cur_kind(c) != "PIPE" { return first }
-    let eu = new SchemaType("error_union", "error_union")
+    let eu = SchemaType("error_union", "error_union")
     eu.args.append(first)
     while schema_cur_kind(c) == "PIPE" {
         c.pos = c.pos + 1
@@ -336,7 +320,7 @@ fn schema_parse_type(c: SchemaTokCursor) -> SchemaType {
     if schema_cur_kind(c) == "BANG" {
         c.pos = c.pos + 1
         let err_t = schema_parse_error_union_or_single(c)
-        let res_t = new SchemaType("result", "result")
+        let res_t = SchemaType("result", "result")
         res_t.args.append(ok_t)
         res_t.args.append(err_t)
         return res_t
@@ -708,7 +692,7 @@ fn schema_skip_brace_block(c: SchemaTokCursor) -> unit {
 }
 
 fn schema_collect_decls(tokens: list[Token], out: SchemaDeclSet) -> unit {
-    let c = new SchemaTokCursor(tokens)
+    let c = SchemaTokCursor(tokens)
     let mut depth = 0
     let mut is_pub = false
     let mut is_extern = false
@@ -742,7 +726,7 @@ fn schema_collect_decls(tokens: list[Token], out: SchemaDeclSet) -> unit {
             let name = schema_cur_val(c)
             c.pos = c.pos + 1
             let tps = schema_skip_brackets(c)
-            let st = new SchemaStruct(name, line_1, len(tps) > 0)
+            let st = SchemaStruct(name, line_1, len(tps) > 0)
             schema_skip_newlines(c)
             if schema_cur_kind(c) == "LBRACE" {
                 c.pos = c.pos + 1
@@ -755,7 +739,7 @@ fn schema_collect_decls(tokens: list[Token], out: SchemaDeclSet) -> unit {
                         if schema_cur_kind(c) == "COLON" {
                             c.pos = c.pos + 1
                             let ftype = schema_parse_type(c)
-                            let fbound = new SchemaBound()
+                            let fbound = SchemaBound()
                             while schema_cur_kind(c) == "IDENT" and schema_cur_val(c) == "requires" {
                                 c.pos = c.pos + 1
                                 let mut rtoks: list[Token] = []
@@ -779,7 +763,7 @@ fn schema_collect_decls(tokens: list[Token], out: SchemaDeclSet) -> unit {
                                     schema_apply_tokens_to_targets(rtoks, 0, len(rtoks), tnames, tbounds)
                                 }
                             }
-                            st.fields.append(new SchemaField(fname, ftype, fbound))
+                            st.fields.append(SchemaField(fname, ftype, fbound))
                             continue
                         }
                     }
@@ -798,7 +782,7 @@ fn schema_collect_decls(tokens: list[Token], out: SchemaDeclSet) -> unit {
             let name = schema_cur_val(c)
             c.pos = c.pos + 1
             let tps = schema_skip_brackets(c)
-            let en = new SchemaEnum(name, line_1, len(tps) > 0)
+            let en = SchemaEnum(name, line_1, len(tps) > 0)
             schema_skip_newlines(c)
             if schema_cur_kind(c) == "LBRACE" {
                 c.pos = c.pos + 1
@@ -808,7 +792,7 @@ fn schema_collect_decls(tokens: list[Token], out: SchemaDeclSet) -> unit {
                     if schema_cur_kind(c) == "IDENT" {
                         let vname = schema_cur_val(c)
                         c.pos = c.pos + 1
-                        let vari = new SchemaVariant(vname)
+                        let vari = SchemaVariant(vname)
                         if schema_cur_kind(c) == "LPAREN" {
                             c.pos = c.pos + 1
                             while schema_cur_kind(c) != "RPAREN" and schema_cur_kind(c) != "EOF" {
@@ -841,7 +825,7 @@ fn schema_collect_decls(tokens: list[Token], out: SchemaDeclSet) -> unit {
             c.pos = c.pos + 1
             let name = schema_cur_val(c)
             c.pos = c.pos + 1
-            let f = new SchemaFn(name, line_1, is_pub)
+            let f = SchemaFn(name, line_1, is_pub)
             f.type_params = schema_skip_brackets(c)
             if schema_cur_kind(c) == "LPAREN" {
                 c.pos = c.pos + 1
@@ -852,7 +836,7 @@ fn schema_collect_decls(tokens: list[Token], out: SchemaDeclSet) -> unit {
                         if schema_cur_kind(c) == "COLON" {
                             c.pos = c.pos + 1
                             let ptype = schema_parse_type(c)
-                            f.params.append(new SchemaParam(pname, ptype))
+                            f.params.append(SchemaParam(pname, ptype))
                         }
                     }
                     if schema_cur_kind(c) == "COMMA" { c.pos = c.pos + 1 } else { break }
@@ -1022,7 +1006,7 @@ fn schema_tool_json(f: SchemaFn, lines: list[str], known_defs: list[str], graph:
     let in_schema = "{\"type\":\"object\",\"properties\":" + join_strings(props, "") + ",\"required\":" + join_strings(reqs, "") + ",\"additionalProperties\":false}"
 
     let mut fallible = false
-    let mut out_base_t = new SchemaType("named", "unit")
+    let mut out_base_t = SchemaType("named", "unit")
     let mut err_json = "null"
     if f.has_ret {
         if f.ret.kind == "result" and len(f.ret.args) == 2 {
@@ -1033,7 +1017,7 @@ fn schema_tool_json(f: SchemaFn, lines: list[str], known_defs: list[str], graph:
             out_base_t = f.ret
         }
     }
-    let out_bound = new SchemaBound()
+    let out_bound = SchemaBound()
     let res_names: list[str] = ["result"]
     let res_bounds: list[SchemaBound] = [out_bound]
     for ens_toks in f.ens_clauses {
@@ -1361,7 +1345,7 @@ fn tool_handle_schema(args: list[str], json_mode_in: bool) -> unit {
 
     let tokens = tokenize(src, file)
     let lines = schema_split_lines(src)
-    let decls = new SchemaDeclSet()
+    let decls = SchemaDeclSet()
     schema_collect_decls(tokens, decls)
     let structs = decls.structs
     let enums = decls.enums

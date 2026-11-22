@@ -1,5 +1,5 @@
-let x: str? = none
-let y: list[int]? = none
+let x: str? = None
+let y: list[int]? = None
 fn find(id: int) -> User? {
-    return none
+    return None
 }

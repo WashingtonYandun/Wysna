@@ -53,6 +53,7 @@ def validate(sdk, report, strict_source=False, compiler_source=None, application
             'Native fixed point is missing')
     require(not strict_source or manifest['source_dirty'] is False, 'CI package source was dirty')
     require(manifest['target'] == manifest['components']['zig']['target'], 'Target provenance mismatch')
+    require('packages' in manifest['commands'], 'Native package commands are missing from SDK discovery')
     for name, expected in manifest['files'].items():
         path = sdk / name
         require(path.is_relative_to(sdk) and '..' not in Path(name).parts, 'Invalid manifest path: ' + name)
@@ -80,8 +81,8 @@ def validate(sdk, report, strict_source=False, compiler_source=None, application
         (project / 'runtime').mkdir()
         (project / 'runtime/wysna_runtime.h').write_text('#error Wrong runtime selected\n', encoding='utf-8')
 
-        def run(name, arguments, expected=0, stdout=None, error=None, custom=None, timeout=180, stdin=None):
-            result = subprocess.run([str(cli)] + [str(value) for value in arguments], cwd=project,
+        def run(name, arguments, expected=0, stdout=None, error=None, custom=None, timeout=180, stdin=None, directory=None):
+            result = subprocess.run([str(cli)] + [str(value) for value in arguments], cwd=directory or project,
                                     env=custom or environment, capture_output=True, timeout=timeout, input=stdin)
             require(result.returncode == expected, (name, result.returncode,
                     result.stdout.decode('utf-8', 'replace')[-4000:], result.stderr.decode('utf-8', 'replace')[-4000:]))
@@ -204,11 +205,23 @@ def validate(sdk, report, strict_source=False, compiler_source=None, application
                                    'fn init(value: T) { this.value = value }\n'
                                    'fn get() -> T { this.value }\n'
                                    'fn set(value: T) { this.value = value } }\n'
-                                   'let a: Box[int] = new Box[int](42)\n'
-                                   'let b: Box[str] = new Box[str]("hello")\n'
+                                   'let a: Box[int] = Box[int](42)\n'
+                                   'let b: Box[str] = Box[str]("hello")\n'
                                    'print(a.get(), b.get())\n'
                                    'a.set(7)\nb.set("world")\nprint(a.get(), b.get())\n', encoding='utf-8')
         run('generic-class-methods', ['run', generic_methods], stdout=b'42 hello\n7 world\n')
+        annotations = project / 'static-attributes.wysna'
+        annotations.write_text('struct Box { value: int, label: str }\n'
+                               '@deprecated("use current")\n@must_use\n'
+                               'fn old(box: Box) -> int { match box {\n'
+                               'Box { value: 0 | 1, .. } => 7,\n'
+                               'Box { value: 2..=9, .. } => 42, _ => 0 } }\n'
+                               'let box = Box { value: 3, label: "SDK" }\n'
+                               'print(old(box))\nold(box)\n', encoding='utf-8')
+        run('compound-patterns-with-static-attributes', ['run', annotations], stdout=b'42\n')
+        annotated = run('static-attribute-json-warnings', ['check', annotations, '--output-format=json-v1'])
+        codes = [item['code'] for item in json.loads(annotated.stdout)['diagnostics']]
+        require(codes.count('W6004') == 2 and codes.count('W6005') == 1, ('attribute diagnostics', codes))
         if language_fixtures:
             programs = project / 'language combinations'
             shutil.copytree(language_fixtures, programs)
@@ -361,6 +374,12 @@ def validate(sdk, report, strict_source=False, compiler_source=None, application
         sk_env = json.loads(sk_res.stdout.decode('utf-8'))
         require(sk_env.get('status') == 'ok' and sk_env.get('result', {}).get('schema_version') == 'wysna.skills/1', sk_env)
 
+        discovered = run('agent-package-discovery', ['capabilities', '--output-format=json-v1'])
+        catalog = json.loads(discovered.stdout)['result']
+        package_commands = {'packages.pack', 'packages.fetch', 'packages.add', 'packages.remove', 'packages.restore'}
+        require(package_commands <= set(catalog['commands'])
+                and package_commands <= set(catalog['machine_output']['commands']), catalog)
+
         sch_res = run('agent-schema-json-v1', ['schema', '--output-format=json-v1', source])
         sch_env = json.loads(sch_res.stdout.decode('utf-8'))
         require(sch_env.get('status') == 'ok' and sch_env.get('result', {}).get('schema_version') == 'wysna.schema/1', sch_env)
@@ -369,6 +388,33 @@ def validate(sdk, report, strict_source=False, compiler_source=None, application
         api_env = json.loads(api_res.stdout.decode('utf-8'))
         require(api_env.get('status') == 'ok' and api_env.get('result', {}).get('schema_version') == 'wysna.api-index/1', api_env)
         require(any(m.get('identity') == 'std/json' for m in api_env.get('result', {}).get('modules', [])), api_env)
+
+        dependency = work / 'dependency'
+        run('package-create-dependency', ['project', 'new', dependency.name], directory=work)
+        (dependency / 'src/values.wysna').write_text('pub fn answer() -> int { 42 }\n', encoding='utf-8')
+        package_archive = work / 'dependency.tar'
+        packed = run('package-pack-ustar', ['packages', 'pack', '--manifest', dependency / 'wysna.toml',
+                     '-o', package_archive, '--output-format=json-v1'])
+        pin = json.loads(packed.stdout)['result']['archive_sha256']
+        require(pin == digest(package_archive), 'Package pin differs from archive bytes')
+        consumer = work / 'consumer'
+        run('package-create-consumer', ['project', 'new', consumer.name], directory=work)
+        consumer_manifest = consumer / 'wysna.toml'
+        (consumer / 'src/main.wysna').write_text('import "pkg/values/values" as values\nprint(values.answer())\n', encoding='utf-8')
+        package_cache = work / 'package cache'
+        run('package-fetch-pinned', ['packages', 'fetch', '--manifest', consumer_manifest,
+            '--sha256', pin, '--archive', package_archive, '--cache', package_cache])
+        run('package-add-dependency', ['packages', 'add', 'values', '--manifest', consumer_manifest,
+            '--path', 'vendor/' + pin])
+        run('package-lock', ['project', 'lock', '--manifest', consumer_manifest])
+        locked = (consumer / 'wysna.lock').read_bytes()
+        shutil.rmtree(consumer / 'vendor')
+        package_archive.unlink()
+        run('package-restore-offline', ['packages', 'restore', '--manifest', consumer_manifest, '--cache', package_cache])
+        require((consumer / 'wysna.lock').read_bytes() == locked, 'Restore changed the frozen lock')
+        require((consumer / 'vendor' / pin / 'src/values.wysna').read_bytes()
+                == (dependency / 'src/values.wysna').read_bytes(), 'Restored package differs from source')
+        run('package-consumer-frozen-run', ['project', 'run', '--manifest', consumer_manifest, '--frozen'], stdout=b'42\n')
 
         proj_dir = work / 'native_project_smoke'
         (proj_dir / 'src').mkdir(parents=True)

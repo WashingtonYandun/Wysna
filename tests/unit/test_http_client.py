@@ -148,7 +148,7 @@ fn main() -> unit ! http.HttpError | json.JsonError {{
         Ok(text) => print("CLOSED-BODY-ACCEPTED"),
         Err(error) => match error.kind {{
             InvalidResponse => print("CLOSED-BODY", error.code),
-            else => print("CLOSED-BODY-WRONG"),
+            _ => print("CLOSED-BODY-WRONG"),
         }},
     }}
 
@@ -159,14 +159,14 @@ fn main() -> unit ! http.HttpError | json.JsonError {{
     print("STATUS", error_status.status)
     error_status.body.close()
 
-    let empty = new buffer.Bytes()
+    let empty = buffer.Bytes()
     let large = http.request("{http_url}/large", "GET", [], empty, 30000, 16)
     empty.close()
     match large {{
         Ok(response) => {{ response.body.close() print("LIMIT-MISSING") }},
         Err(error) => match error.kind {{
             LimitExceeded => print("BODY-LIMIT-OK"),
-            else => print("BODY-LIMIT-WRONG"),
+            _ => print("BODY-LIMIT-WRONG"),
         }},
     }}
 
@@ -175,18 +175,18 @@ fn main() -> unit ! http.HttpError | json.JsonError {{
         Ok(response) => {{ response.body.close() print("HEADER-LIMIT-MISSING") }},
         Err(error) => match error.kind {{
             LimitExceeded => print("HEADER-LIMIT-OK"),
-            else => print("HEADER-LIMIT-WRONG"),
+            _ => print("HEADER-LIMIT-WRONG"),
         }},
     }}
 
-    let timeout_body = new buffer.Bytes()
+    let timeout_body = buffer.Bytes()
     let slow = http.request("{http_url}/slow", "GET", [], timeout_body, 100, 1024)
     timeout_body.close()
     match slow {{
         Ok(response) => {{ response.body.close() print("TIMEOUT-MISSING") }},
         Err(error) => match error.kind {{
             Timeout => print("TIMEOUT-OK"),
-            else => print("TIMEOUT-WRONG"),
+            _ => print("TIMEOUT-WRONG"),
         }},
     }}
 
@@ -195,7 +195,7 @@ fn main() -> unit ! http.HttpError | json.JsonError {{
         Ok(response) => {{ response.body.close() print("TLS-MISSING") }},
         Err(error) => match error.kind {{
             Tls => print("TLS-VERIFY-OK"),
-            else => print("TLS-VERIFY-WRONG"),
+            _ => print("TLS-VERIFY-WRONG"),
         }},
     }}
 }}

@@ -3,7 +3,7 @@ import math
 from typing import List, Optional
 from node.NodeType import (
     ExternFnDecl, LambdaExpr, FunctionType as AstFunctionType, Program, Stmt, Expr, TypeNode, NamedType, GenericType, TypeParam, OptionalType, ListType, DictType, TupleType, ResultType, ErrorUnionType,
-    Pattern, IdentifierPattern, TuplePattern, EnumPattern, ErrorTypePattern, LiteralPattern, WildcardPattern,
+    Pattern, IdentifierPattern, TuplePattern, EnumPattern, ErrorTypePattern, LiteralPattern, WildcardPattern, OrPattern, RangePattern, StructPattern,
     Block, ExprStmt, Param, FnDecl, StructField, StructDecl, EnumDecl,
     InterfaceMethod, InterfaceDecl, ClassField, MethodDecl, ClassDecl,
     ImportDecl, UseDecl, UseSymbol, LetDecl, WhileStmt, ForStmt, ReturnStmt, BreakStmt, ContinueStmt,
@@ -96,6 +96,17 @@ class Formatter:
     # ==========================================
 
     def format_pattern(self, p: Pattern) -> str:
+        if isinstance(p, OrPattern):
+            return " | ".join(self.format_pattern(part) for part in p.alternatives)
+        if isinstance(p, RangePattern):
+            return str(p.start) + ("..=" if p.inclusive else "..") + str(p.end)
+        if isinstance(p, StructPattern):
+            fields = [field.name if field.shorthand else field.name + ": " + self.format_pattern(field.pattern)
+                      for field in p.fields]
+            if p.has_rest:
+                fields.append("..")
+            arguments = "[" + ", ".join(self.format_type(arg) for arg in p.type_args) + "]" if p.type_args else ""
+            return p.struct_name + arguments + " { " + ", ".join(fields) + " }"
         if isinstance(p, WildcardPattern):
             return "_"
         if isinstance(p, IdentifierPattern):
@@ -122,6 +133,12 @@ class Formatter:
         if getattr(stmt, "is_exported", False):
             indent = self._indent(level)
             rendered = indent + "pub " + rendered[len(indent):]
+        attributes = getattr(stmt, 'attributes', [])
+        if attributes:
+            lines = [self._indent(level) + '@' + attribute.name +
+                     ('(' + self._escape_str(attribute.message) + ')' if attribute.name == 'deprecated' else '')
+                     for attribute in attributes]
+            rendered = '\n'.join(lines) + '\n' + rendered
         return rendered
 
     def _format_stmt(self, stmt: Stmt, level: int) -> str:
@@ -336,7 +353,7 @@ class Formatter:
             return "true" if expr.value else "false"
 
         if isinstance(expr, NoneLiteral):
-            return "none"
+            return "None"
 
         if isinstance(expr, IdentExpr):
             return expr.name
@@ -416,7 +433,8 @@ class Formatter:
 
         if isinstance(expr, MemberExpr):
             obj_str = self.format_expr(expr.object, level, parent_prec=15)
-            return f"{obj_str}.{expr.property}"
+            targs = f"[{', '.join([self.format_type(a) for a in expr.enum_type_args])}]" if getattr(expr, "enum_type_args", None) else ""
+            return f"{obj_str}{targs}.{expr.property}"
 
         if isinstance(expr, IndexExpr):
             obj_str = self.format_expr(expr.object, level, parent_prec=15)

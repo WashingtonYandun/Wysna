@@ -153,7 +153,7 @@ pub fn request(
         return Err(HttpError { kind: HttpErrorKind.InvalidRequest, code: 0 })
     }
 
-    let encoded_headers = new buffer.Bytes()
+    let encoded_headers = buffer.Bytes()
     let mut header_size = 0
     for header in headers {
         let line = header.name + ": " + header.value
@@ -172,8 +172,8 @@ pub fn request(
 
     let encoded_url = buffer.from_text(url)
     let encoded_method = buffer.from_text(method)
-    let response_headers = new buffer.Bytes()
-    let response_body = new buffer.Bytes()
+    let response_headers = buffer.Bytes()
+    let response_body = buffer.Bytes()
     let status = wysna_host_http_request(
         encoded_url.borrow(),
         encoded_method.borrow(),
@@ -210,7 +210,7 @@ pub fn request(
 }
 
 pub fn get(url: str) -> Response ! HttpError {
-    let empty_body = new buffer.Bytes()
+    let empty_body = buffer.Bytes()
     let result = request(url, "GET", [], empty_body, 30000, 1048576)
     empty_body.close()
     return result
@@ -243,7 +243,7 @@ pub fn header(response: Response, name: str) -> str? {
     for item in response.headers {
         if equal_ascii_case(item.name, name) { return Some(item.value) }
     }
-    return none
+    return None
 }
 
 pub fn response_json(response: Response) -> json.Value ! HttpError | json.JsonError {
@@ -257,8 +257,8 @@ pub struct AsyncRequest {
 }
 
 pub fn get_async(url: str) -> AsyncRequest ! HttpError {
-    let empty_headers = new buffer.Bytes()
-    let empty_body = new buffer.Bytes()
+    let empty_headers = buffer.Bytes()
+    let empty_body = buffer.Bytes()
     let encoded_url = buffer.from_text(url)
     let encoded_method = buffer.from_text("GET")
     let handle = wysna_host_http_async_start(
@@ -293,8 +293,8 @@ pub fn finish(request: AsyncRequest) -> Response ! HttpError {
     if request.handle < 0 {
         return Err(HttpError { kind: HttpErrorKind.InvalidRequest, code: 0 })
     }
-    let response_headers = new buffer.Bytes()
-    let response_body = new buffer.Bytes()
+    let response_headers = buffer.Bytes()
+    let response_body = buffer.Bytes()
     let status = wysna_host_http_async_finish(
         request.handle,
         response_headers.borrow(),
@@ -359,26 +359,26 @@ pub fn batch_get(urls: list[str]) -> list[BatchItemResult] {
         let target_url = urls[index]
         let req = requests[index]
         let mut item_ok = true
-        let mut item_err: HttpError? = none
+        let mut item_err: HttpError? = None
         let empty_headers: list[Header] = []
         let resp = finish(req) else err {
             item_ok = false
             item_err = Some(err)
-            Response { status: 0, headers: empty_headers, body: new buffer.Bytes() }
+            Response { status: 0, headers: empty_headers, body: buffer.Bytes() }
         }
         if item_ok {
             results.append(BatchItemResult {
                 url: target_url,
                 ok: true,
                 response: Some(resp),
-                error: none,
+                error: None,
             })
         } else {
             resp.body.close()
             results.append(BatchItemResult {
                 url: target_url,
                 ok: false,
-                response: none,
+                response: None,
                 error: item_err,
             })
         }

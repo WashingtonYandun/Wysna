@@ -66,6 +66,16 @@ wysna build program.wysna --include-dir vendor/include --link vendor/adapter.c -
 
 `--link` accepts a file, `--library` a library name, and `--include-dir` and `--library-dir` existing directories. These are argument-vector operations, never shell fragments. Libraries must be compatible with the SDK target and architecture; a host SDK that supplies only arm64e symbols is not sufficient for an arm64 target. HTTP requires separately installed libcurl 8.3 or newer and its include/link inputs; libcurl is not part of the offline core bundle.
 
+## Paquetes reproducibles para agentes
+
+`wysna packages pack|fetch|add|remove|restore` se ejecuta en Selfhost. El SDK lo
+anuncia en `native-sdk.json` y admite archivos USTAR v1 fijados por SHA-256.
+`fetch` verifica el archivo y crea la caché; `add` modifica explícitamente el
+manifiesto; `project lock` registra el contenido. `restore` reconstruye `vendor/`
+desde la caché sin red y conserva `wysna.lock`. Las operaciones admiten
+`--output-format=json-v1`. No se ejecutan hooks de instalación ni se requiere
+Python. No existe todavía un registro público ni resolución de versiones remotas.
+
 ## Files, caches and updates
 
 Build and file-emission outputs are staged in a private directory beside the destination and renamed only after success. Existing output survives source and compiler errors. A source file, a source alias and a `.wysna` destination are rejected. Relative imports resolve beside their importing source; standard-library resolution uses this installed SDK, rejects parent traversal and symlinks outside the standard-library root, and never falls back to the current directory when a bundled module is missing. These checks do not make an installation writable by an adversary into a filesystem sandbox.

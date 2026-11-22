@@ -33,7 +33,7 @@ extern "C" fn wysna_host_active_handles() -> int
 extern "C" fn wysna_host_active_bytes() -> int
 extern "C" fn wysna_host_buffer_size(handle: opaque) -> int
 fn request() -> unit ! files.FileError {
-    let data = new buffer.Bytes()
+    let data = buffer.Bytes()
     data.append(255) else error { exit(21) return }
     let alias = data
     let copied = buffer.clone(alias) else error { exit(21) return }

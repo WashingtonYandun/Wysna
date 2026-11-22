@@ -65,7 +65,7 @@ def check_none_literal(checker: "TypeChecker", expr: NoneLiteral, is_statement_c
 
 def check_ident_expr(checker: "TypeChecker", expr: IdentExpr, is_statement_context: bool = False) -> WysnaType:
     sym = checker.current_scope.lookup_symbol(expr.name)
-    if expr.name in ("None", "none") and sym is None:
+    if expr.name == "None" and sym is None:
         return NoneType
     if sym is not None:
         if sym.kind == 'builtin' and not getattr(expr, 'is_callee', False):
@@ -98,11 +98,19 @@ def check_ident_expr(checker: "TypeChecker", expr: IdentExpr, is_statement_conte
     for tmpl in checker.generic_enum_templates.values():
         var_names = [v.name if hasattr(v, "name") else str(v) for v in tmpl.ast_decl.variants]
         if expr.name in var_names:
-            if tmpl.name == "Option" and expr.name in ("None", "none"):
+            if tmpl.name == "Option" and expr.name == "None":
                 return NoneType
             concrete_args = [TypeParamType(p.name if hasattr(p, "name") else str(p), owner=tmpl.name)
                              for p in tmpl.type_params]
             return checker._monomorphize_enum(tmpl, concrete_args, expr.line, expr.col)
+    if expr.name == "none":
+        raise TypeError(
+            message="Unknown identifier 'none' (lowercase 'none' has been removed; use canonical 'None')",
+            line=expr.line,
+            col=expr.col,
+            file=checker.file,
+            code="W1001",
+        )
     raise suggest(TypeError(
         message=f"Unknown identifier '{expr.name}'",
         line=expr.line,

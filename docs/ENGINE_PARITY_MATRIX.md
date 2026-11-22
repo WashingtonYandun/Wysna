@@ -13,7 +13,7 @@ Wysna Compiler's `native-core-v1` profile uses verified MIR for its normal C99 r
 The table comes from an actual `tools/ci_conformance.py --profile=release` run. Its
 `summary.json` records the Git revision and hashes of the source, fixture and harness
 inputs; the measured input digest is
-`7a3d494dc85ea545b5308c4bf04f3ab0d00063dcd5c8a2a52226360ad8cc3cef`.
+`2e8064730c0828e5294d9176e4059aa43ff931f2c3f227fd841848a230e79c41`. La revisión medida es `ed05906`.
 Release CI uploads that evidence with the run. The matrix covers the public runtime
 examples and negative fixtures, with no unsupported exclusions. The separate sanitizer
 gate checks memory safety; neither gate establishes universal language parity or measures
@@ -27,11 +27,12 @@ code coverage.
 | **`generics`** | 15 | ✅ 15/15 | ✅ 15/15 | ✅ 15/15 | ✅ 15/15 | Declared supported |
 | **`generic_class_methods`** | 1 | ✅ 1/1 | ✅ 1/1 | ✅ 1/1 | ✅ 1/1 | Declared supported |
 | **`checked_modules`** | 1 | ✅ 1/1 | ✅ 1/1 | ✅ 1/1 | ✅ 1/1 | Declared supported |
+| **`compound_match_patterns`** | 3 | ✅ 3/3 | ✅ 3/3 | ✅ 3/3 | ✅ 3/3 | Declared supported |
 | **`error_unions`** | 8 | ✅ 8/8 | ✅ 8/8 | ✅ 8/8 | ✅ 8/8 | Declared supported |
 | **`functions`** | 5 | ✅ 5/5 | ✅ 5/5 | ✅ 5/5 | ✅ 5/5 | Declared supported |
 | **`stdlib`** | 6 | ✅ 6/6 | ✅ 6/6 | ✅ 6/6 | ✅ 6/6 | Declared supported |
 | **`regressions`** | 13 | ✅ 13/13 | ✅ 13/13 | ✅ 13/13 | ✅ 13/13 | Declared supported |
-| **Total Verified** | **209** | **209/209 (100.0%)** | **209/209 (100.0%)** | **209/209 (100.0%)** | **209/209 (100.0%)** | _measured_ |
+| **Total Verified** | **212** | **212/212 (100.0%)** | **212/212 (100.0%)** | **212/212 (100.0%)** | **212/212 (100.0%)** | _measured_ |
 
 <!-- GENERATED TABLE END -->
 
@@ -42,6 +43,7 @@ than inventing success from `tests/engine_profiles.json`.
 The core category includes primitive operations, control flow, tuples, classes,
 copy-on-write, ownership, diagnostics, nested patterns, Result closures and cyclic
 formatting. Panic fixtures require a nonzero exit and their declared diagnostic code.
+Compound match patterns have three dedicated fixtures covering or patterns, Int64 ranges and nested struct payloads.
 Generics include functions, structs, recursive ADTs, concrete parameterized classes
 with methods, and rejected invalid layouts. `generic_class_methods` is a separately
 measured category so its support cannot be inferred from generic functions or structs.
@@ -50,7 +52,7 @@ nominal error identity, exhaustive handlers and managed payload cleanup. Concret
 struct/enum/class alternatives, specialization identity, and generic union rejection
 have an additional targeted gate in `tests/unit/test_native_generic_error_unions.py`,
 using `tests/fixtures/generic_error_union_members.wysna`. These targeted cases do not
-change the measured 209-fixture historical table above.
+change the measured 212-fixture table above.
 
 ## Expansion boundaries
 

@@ -30,7 +30,49 @@ fn mir_pattern(context: MirBuilder, value: int, id: int, failure: int) {
     let type_id = context.slots[value].type_id
     let type_ = context.types[type_id]
     if pattern.name == "*" {
-        if pattern.binding >= 0 { context.bindings.append(MirBinding { symbol: pattern.binding, slot: value }) }
+        if pattern.binding >= 0 {
+            let mut destination = -1
+            for binding in context.bindings { if binding.symbol == pattern.binding { destination = binding.slot } }
+            if destination >= 0 { mir_store(context, destination, value, source) }
+            else { context.bindings.append(MirBinding { symbol: pattern.binding, slot: value }) }
+        }
+        return
+    }
+    if pattern.name == "or" {
+        for symbol in mir_or_bindings(context, pattern.children[0]) {
+            let mut known = false
+            for binding in context.bindings { if binding.symbol == symbol { known = true } }
+            if not known {
+                let slot = mir_slot(context, mir_type(context, context.program.bindings[symbol].type_id, source), "", false)
+                context.bindings.append(MirBinding { symbol: symbol, slot: slot })
+            }
+        }
+        let done = mir_new_block(context, source)
+        for child in pattern.children {
+            let following = mir_new_block(context, source)
+            mir_pattern(context, value, child, following)
+            mir_jump(context, done, source)
+            context.current = following
+        }
+        mir_jump(context, failure, source)
+        context.current = done
+        return
+    }
+    if pattern.name == "range" or pattern.name == "range_inclusive" {
+        let lower = mir_pattern_literal(context, context.program.patterns[pattern.children[0]])
+        let upper = mir_pattern_literal(context, context.program.patterns[pattern.children[1]])
+        let first = mir_op(context, "runtime", 2, [value, lower], "wysna_ge", mir_literal_unit(), source)
+        let second = mir_op(context, "runtime", 2, [value, upper], if pattern.name == "range_inclusive" { "wysna_le" } else { "wysna_lt" }, mir_literal_unit(), source)
+        mir_pattern_branch(context, first, failure, true, source)
+        mir_pattern_branch(context, second, failure, true, source)
+        return
+    }
+    if pattern.name == "struct" {
+        let record = mir_find_record(context.records, type_id, source)
+        for i in 0..len(pattern.children) {
+            let item = mir_load_field(context, value, i, record.fields[i].type_id, source)
+            mir_pattern(context, item, pattern.children[i], failure)
+        }
         return
     }
     if len(pattern.name) >= 8 and slice(pattern.name, 0, 8) == "literal:" {
@@ -166,4 +208,13 @@ fn mir_verify_test(module: MirModule, operation: MirOperation, slots: list[MirSl
         for member in type_.args { if member == operation.owner_type { return true } }
     }
     return false
+}
+
+fn mir_or_bindings(context: MirBuilder, id: int) -> list[int] {
+    let pattern = context.program.patterns[id]
+    let mut bindings: list[int] = []
+    if pattern.binding >= 0 { bindings.append(pattern.binding) }
+    let children = if pattern.name == "or" { [pattern.children[0]] } else { pattern.children }
+    for child in children { for binding in mir_or_bindings(context, child) { bindings.append(binding) } }
+    return bindings
 }

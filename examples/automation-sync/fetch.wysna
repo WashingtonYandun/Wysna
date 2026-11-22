@@ -65,7 +65,7 @@ fn write_atomic(destination: str, text: str) -> unit ! PublishError {
 fn run() -> int {
     let arguments = args()
     if len(arguments) != 3 { eprint("usage: measurement-fetch URL measurements.json") return 2 }
-    let body = new buffer.Bytes()
+    let body = buffer.Bytes()
     let response = http.request(arguments[1], "GET", [], body, 5000, 65536) else error {
         body.close()
         eprint("HTTP request failed", error.code)

@@ -9,7 +9,7 @@ fn failed() -> int ! str {
 }
 fn absent() -> int? {
     return
-        none
+        None
 }
 print(number(), empty(), absent())
 print(failed() else error { print(error)

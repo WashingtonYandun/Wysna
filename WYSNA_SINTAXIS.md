@@ -127,7 +127,7 @@ literal: {{ok}}
 | **POO** | `class`, `interface`, `extends`, `implements`, `new`, `this`, `super`, `public`, `private` |
 | **Control de Flujo** | `if`, `elif`, `else`, `for`, `while`, `in`, `match`, `return`, `break`, `continue` |
 | **Asincronía (contextual)** | `async`, `await` |
-| **Literales Booleanos** | `true`, `false`, `none` |
+| **Literales Booleanos** | `true`, `false` (`None` para opcional vacío) |
 | **Operadores Lógicos** | `and`, `or`, `not` |
 | **Aritmética** | `+`, `-`, `*`, `/`, `%` |
 | **Comparación** | `==`, `!=`, `<`, `<=`, `>`, `>=` |
@@ -173,20 +173,20 @@ graph TD
 * **`bool`:** Valor lógico booleano (`true` o `false`).
 * **`str`:** Cadena UTF-8 inmutable con búfer gestionado por ARC.
 * **`unit`:** Tipo unitario vacío (equivalente a `void` funcional). Toda función sin tipo de retorno explícito retorna `unit`.
-* **`none`:** Representa la ausencia de valor (utilizado con tipos opcionales `T?`).
+* **`None`:** Representa la ausencia de valor canónica (utilizado con tipos opcionales `T?`).
 
 ### 3.2 Colecciones Copy-on-Write y Tuplas
 * **`list[T]`:** Lista dinámica redimensionable con semántica Copy-on-Write (`WListBuf`).
   * **Representación en memoria:** Los elementos se almacenan en un arreglo contiguo de palabras NaN-boxed `WVal` de 8 bytes (donde `int`, `float` y `bool` se empaquetan en 8 bytes sin asignaciones individuales en heap para escalares estándar) con desprendimiento CoW vía `memcpy` cuando el refcount > 1; en MIR, las variables locales escalares (`int64_t`, `double`, `bool`) operan desenpaquetadas en registros nativos.
 * **`dict[K, V]`:** Tabla hash asociativa. Las claves (`K`) deben ser tipos comparables (`int`, `str`, `bool`, `enum` o tuplas hashables).
-* **`tuple[T1, T2, ...]` (atajo `(T1, T2, ...)`):** Producto heterogéneo inmutable de tamaño fijo (su tipo se anota como `tuple[int, str]` o `(int, str)`, sus elementos se leen posicionalmente con `pair.0`, `nested.0.1`, y se desestructura directamente en `let (a, b) = pair`, `match` o `for a, b in ...`).
+* **`tuple[T1, T2, ...]` (atajo `(T1, T2, ...)`):** Producto heterogéneo inmutable de tamaño fijo (su tipo se anota como `tuple[int, str]` o `(int, str)`, sus elementos se leen posicionalmente con `pair.0`, `nested.0.1`, y se desestructura directamente en `let (a, b) = pair`, `match` con `(a, b) => ...` o `for a, b in ...`).
 
 ### 3.3 Tipos Opcionales (`T?`)
-Cualquier tipo puede marcarse como opcional agregando el sufijo `?`. Su valor puede ser una instancia de `T` o `none`:
+Cualquier tipo puede marcarse como opcional agregando el sufijo `?`. Su valor puede ser una instancia de `T` o `None`:
 
 ```wysna
 let possible_name: str? = "Washo"
-let missing_name: str? = none
+let missing_name: str? = None
 
 # Operador de coalescencia nula (??)
 let display_name: str = possible_name ?? "Anónimo"
@@ -293,7 +293,7 @@ let str_val = identity[str]("WySofia")
 ```
 
 ### 5.4 Funciones Lambda, Closures y Funciones Asíncronas (`async` / `await`)
-Las funciones anónimas se declaran mediante `|params| => expr`, y las corrutinas cooperativas sin pila usan los modificadores contextuales `async fn` y `await`:
+Las funciones anónimas se declaran mediante `|params| => expr`, y las corrutinas cooperativas sin pila usan los modificadores contextuales `async fn` y `await`. Por diseño final (v1.0), los *closures* capturan variables externas como **instantáneas inmutables** (*immutable snapshots*): mutar una variable de valor capturada produce `[W3001]`; para estado mutable compartido entre llamadas, utiliza una `class` (tipo referencia) o retorna el valor actualizado:
 
 ```wysna
 let square = |n: int| => n * n
@@ -347,7 +347,7 @@ Permite capturar el error en el sitio de la llamada (`else err { ... }`) o recup
 let port = parse_port("") else err { 3000 }
 
 # Recuperación de opcional sin binding de error
-fn find_user(id: int) -> str? { return none }
+fn find_user(id: int) -> str? { return None }
 let user = find_user(1) else { "invitado" }
 
 # Desempaquetado con retorno temprano
@@ -368,6 +368,26 @@ fn setup_server(port_str: str) -> unit ! str {
 ```
 
 ---
+
+### Atributos estáticos cerrados
+
+```wysna
+@deprecated("usa current")
+@must_use
+pub fn old() -> int { 42 }
+
+let value = old() # W6004; result retained
+old()            # W6004 and W6005
+```
+
+Solo se aceptan `@deprecated("mensaje no vacío")` y `@must_use`, antes de funciones
+de nivel superior (`pub`, genéricas o `async` incluidas). No son decoradores
+ejecutables ni macros. `@must_use` exige un resultado distinto de `unit` en
+funciones síncronas, también al especializar genéricos; en `async` protege la
+tarea. Las llamadas indirectas mediante callbacks no heredan los atributos.
+Los imports y el formatter conservan las anotaciones. Los argumentos o destinos
+inválidos producen `W0006`; los duplicados, `W1002`. CLI y LSP exponen `W6004`
+y `W6005` como advertencias; no alteran el comportamiento del programa.
 
 ## 7. Tipos de Datos Algebraicos y Pattern Matching
 
@@ -398,7 +418,7 @@ los brazos que producen el valor deben tener tipos compatibles.
 Un enum importado admite tanto `module.State.Ready(value)` como
 `State.Ready(value)` cuando `State` se importó por separado. La misma
 calificación sirve para construir y para reconocer una variante.
-La sentencia `match` evalúa exhaustivamente todas las variantes de un enum, uniones de errores (`ParseErr(e) => ...`), tuplas o valores primitivos. Si una variante no está contemplada y no se define el comodín canónico `_ =>`, el compilador genera un error estático `W2003` (el formateador normaliza `else =>` a `_ =>`):
+La sentencia `match` evalúa exhaustivamente todas las variantes de un enum, uniones de errores (`ParseErr(e) => ...`), tuplas parentizadas (`(a, b) => ...`) o valores primitivos. Si una variante no está contemplada y no se define el comodín canónico `_ =>`, el compilador genera un error estático `W2003` (`else =>` y `* =>` ya no son válidos):
 
 ```wysna
 fn execute(cmd: Command) -> str {
@@ -415,6 +435,34 @@ fn describe_code(code: int) -> str {
         404 => "No encontrado",
         _ => "Otro",
     }
+}
+```
+
+
+#### Patrones compuestos y cobertura
+
+`|` agrupa alternativas de un mismo brazo. Todas deben enlazar los mismos nombres
+con los mismos tipos; la guarda se evalúa una sola vez después de seleccionar la
+primera alternativa que coincide. El sujeto de `match` también se evalúa una sola vez.
+Los patrones se pueden anidar dentro de tuplas, variantes y structs.
+
+`inicio..fin` excluye el extremo final; `inicio..=fin` lo incluye. Los dos extremos
+son constantes enteras de 64 bits, con signo opcional. Los rangos vacíos, invertidos
+o aplicados a otro tipo se rechazan. La cobertura puede combinar intervalos hasta
+cubrir todo `int64`; las guardas no aportan cobertura incondicional.
+
+`Point { x: 0 | 1, y }` reconoce campos y enlaza `y`. Un campo omitido requiere `..`,
+por ejemplo `Box[Point] { value: Point { x, .. }, .. }`. La identidad nominal, los
+argumentos genéricos, los campos y sus tipos se verifican antes de generar código.
+No se permiten campos repetidos o desconocidos. Un struct cuyos campos estén
+cubiertos puede tener un `match` exhaustivo sin `_`.
+
+`W6003` advierte cuando patrones anteriores sin guarda cubren un brazo posterior.
+La advertencia no altera la ejecución ni hace que una guarda aporte cobertura.
+
+```wysna
+fn category(value: int) -> str {
+    match value { 0 | 1 => "small", 2..=10 => "medium", _ => "large" }
 }
 ```
 

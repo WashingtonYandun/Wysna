@@ -1,2 +1,2 @@
-let opt: str? = none
+let opt: str? = None
 let x = opt ?? 10

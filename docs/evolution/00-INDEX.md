@@ -7,7 +7,18 @@
 
 ---
 
-## Estado de cierre y siguiente ciclo
+## Estado vigente del candidato híbrido
+
+El ciclo del 2026-11-22 está implementado en PR #176 y pendiente de integración;
+`main`/`develop` siguen en `8d2f95c`. Consultar primero
+[ADR-05](ADR-05-arquitectura-hibrida-tooling-selfhost.md) y el
+[candidato y su evidencia](12-SIGUIENTE-CICLO-LENGUAJE.md#candidato-híbrido-del-2026-11-22).
+`SIMP-R01` ya tiene una decisión implementada: lenguaje con oráculo de cuatro
+motores y tooling en Selfhost, con paquetes exclusivamente nativos. Los bloques
+1–4 tienen código y regresiones; CI e integración se verifican por separado.
+Las mediciones con modelos continúan aplazadas por decisión del mantenedor.
+
+## Estado histórico de cierre y siguiente ciclo
 
 La tabla de 37 ítems conserva el backlog de la auditoría inicial y sus marcas de implementación. No es una certificación universal de paridad ni una medición de eficacia con agentes. Los capítulos 01–10 conservan evidencia histórica de `a2549fa`; sus secciones «problema» y «antes» no describen automáticamente el producto actual.
 

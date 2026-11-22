@@ -11,5 +11,5 @@ class Penguin implements Flyable {
 }
 
 fn main() {
-    let p = new Penguin("Pingu")
+    let p = Penguin("Pingu")
 }

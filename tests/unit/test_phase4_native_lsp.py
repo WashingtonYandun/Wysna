@@ -153,7 +153,7 @@ class Phase4NativeLspTests(unittest.TestCase):
             main_src = (
                 'from "contracts.wysna" use { Greeter, ConsoleGreeter }\n'
                 'fn run_greet(msg: str) -> str {\n'
-                '    let g = new ConsoleGreeter("ok")\n'
+                '    let g = ConsoleGreeter("ok")\n'
                 '    print(msg)\n'
                 '    return g.greet(msg)\n'
                 '}\n'
@@ -266,7 +266,7 @@ class Phase4NativeLspTests(unittest.TestCase):
                 # Restore main_src with clean syntax for formatting and cross-file dependency test
                 client.notify("textDocument/didChange", {
                     "textDocument": {"uri": m_uri, "version": 4},
-                    "contentChanges": [{"text": "from \"contracts.wysna\" use { Greeter, ConsoleGreeter }\nfn main() -> unit {\n  let g = new ConsoleGreeter(\"x\")\n  print(g.greet(\"y\"))\n}\n"}],
+                    "contentChanges": [{"text": "from \"contracts.wysna\" use { Greeter, ConsoleGreeter }\nfn main() -> unit {\n  let g = ConsoleGreeter(\"x\")\n  print(g.greet(\"y\"))\n}\n"}],
                 })
                 self.assertEqual(client.wait_diagnostics(m_uri), [])
 

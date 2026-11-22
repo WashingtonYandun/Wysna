@@ -92,6 +92,7 @@ fn diag_stage_for_code(code: str) -> str {
     if len(code) >= 2 and code[0] == "W" and (code[1] == "2" or code[1] == "3") { return "type" }
     if len(code) >= 2 and code[0] == "W" and code[1] == "4" { return "runtime" }
     if code == "W5005" { return "patch" }
+    if code == "W5006" { return "capability-policy" }
     if len(code) >= 2 and code[0] == "W" and code[1] == "5" { return "toolchain" }
     if len(code) >= 2 and code[0] == "W" and code[1] == "6" { return "lint" }
     return "internal"
@@ -146,6 +147,17 @@ fn diag_char_span_width(src: str, start_char: int) -> int {
             } else {
                 break
             }
+        }
+    } elif c == 34 {
+        while end_c < n {
+            let ch = ord(src[end_c])
+            if ch == 10 or ch == 13 { break }
+            if ch == 92 and end_c + 1 < n {
+                end_c = end_c + 2
+                continue
+            }
+            end_c = end_c + 1
+            if ch == 34 { break }
         }
     }
     return end_c
@@ -278,15 +290,58 @@ fn diag_cli_command() -> str {
     return "check"
 }
 
+fn diag_render_source_excerpt(src: str, target_line: int, target_col: int) -> str {
+    if src == "" or target_line < 1 or target_col < 1 { return "" }
+    let n = len(src)
+    let mut cur = 1
+    let mut i = 0
+    while cur < target_line and i < n {
+        let code = ord(src[i])
+        if code == 13 {
+            if i + 1 < n and ord(src[i + 1]) == 10 { i = i + 2 } else { i = i + 1 }
+            cur = cur + 1
+        } elif code == 10 {
+            i = i + 1
+            cur = cur + 1
+        } else {
+            i = i + 1
+        }
+    }
+    if cur != target_line { return "" }
+    let mut end_i = i
+    while end_i < n {
+        let c = ord(src[end_i])
+        if c == 10 or c == 13 { break }
+        end_i = end_i + 1
+    }
+    let text = slice(src, i, end_i)
+    let line_label = str(target_line)
+    let mut pad_parts: list[str] = []
+    for _k in 0..len(line_label) { pad_parts.append(" ") }
+    let mut caret_parts: list[str] = []
+    let mut spaces = target_col - 1
+    if spaces < 0 { spaces = 0 }
+    if spaces > len(text) { spaces = len(text) }
+    for _s in 0..spaces { caret_parts.append(" ") }
+    let start_char = i + spaces
+    let end_char = diag_char_span_width(src, start_char)
+    let mut width = end_char - start_char
+    if width < 1 { width = 1 }
+    for _c in 0..width { caret_parts.append("^") }
+    return line_label + " | " + text + "\n" + join_strings(pad_parts, "") + " | " + join_strings(caret_parts, "")
+}
+
 fn diag_emit_and_exit(file: str, code: str, line: int, col: int, msg: str) -> unit {
     let mode = diag_cli_json_mode()
-    if mode == "" {
-        eprint("[" + code + "] " + file + ":" + str(line) + ":" + str(col) + " - " + msg)
-        exit(1)
-    }
     let mut src = ""
     if file != "" and file != "<stdin>" and file != "<unknown>" and file != "<cli>" {
         src = diag_read_snippet_source(file)
+    }
+    if mode == "" {
+        eprint("[" + code + "] " + file + ":" + str(line) + ":" + str(col) + " - " + msg)
+        let excerpt = diag_render_source_excerpt(src, line, col)
+        if excerpt != "" { eprint(excerpt) }
+        exit(1)
     }
     let stage = diag_stage_for_code(code)
     let diag_json = diag_record_json(code, stage, "error", msg, file, line, col, src)

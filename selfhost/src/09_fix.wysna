@@ -64,72 +64,7 @@ fn fix_run_check_subprocess(canonical_file: str, candidate_src: str, pass_idx: i
     return diag_raw
 }
 
-fn fix_extract_json_delimited_field(raw: str, field_key: str, open_ch: str, close_ch: str, fallback: str) -> str {
-    let needle = "\"" + field_key + "\""
-    let n = len(raw)
-    let klen = len(needle)
-    let mut i = 0
-    let mut in_str = false
-    let mut depth = 0
-    while i < n {
-        let ch = raw[i]
-        if in_str {
-            if ch == "\\" and i + 1 < n {
-                i = i + 2
-                continue
-            }
-            if ch == "\"" { in_str = false }
-            i = i + 1
-        } else {
-            if ch == "\"" {
-                if depth == 1 and i + klen <= n and slice(raw, i, i + klen) == needle {
-                    let mut p = i + klen
-                    while p < n and (raw[p] == " " or raw[p] == "\t" or raw[p] == "\r" or raw[p] == "\n") { p = p + 1 }
-                    if p < n and raw[p] == ":" {
-                        p = p + 1
-                        while p < n and (raw[p] == " " or raw[p] == "\t" or raw[p] == "\r" or raw[p] == "\n") { p = p + 1 }
-                        if p < n and raw[p] == open_ch {
-                            let start = p
-                            let mut bdepth = 0
-                            let mut instr2 = false
-                            while p < n {
-                                let c2 = raw[p]
-                                if instr2 {
-                                    if c2 == "\\" and p + 1 < n { p = p + 2 continue }
-                                    if c2 == "\"" { instr2 = false }
-                                    p = p + 1
-                                } else {
-                                    if c2 == "\"" { instr2 = true }
-                                    elif c2 == open_ch { bdepth = bdepth + 1 }
-                                    elif c2 == close_ch {
-                                        bdepth = bdepth - 1
-                                        if bdepth == 0 { return slice(raw, start, p + 1) }
-                                    }
-                                    p = p + 1
-                                }
-                            }
-                        }
-                    }
-                }
-                in_str = true
-            } elif ch == "{" or ch == "[" {
-                depth = depth + 1
-            } elif ch == "}" or ch == "]" {
-                if depth > 0 { depth = depth - 1 }
-            }
-            i = i + 1
-        }
-    }
-    return fallback
-}
-
-fn fix_extract_json_array_field(raw: str, field_key: str) -> str {
-    return fix_extract_json_delimited_field(raw, field_key, "[", "]", "[]")
-}
-
-fn fix_extract_json_object_field(raw: str, field_key: str) -> str {
-    return fix_extract_json_delimited_field(raw, field_key, "{", "}", "")
-}
+# fix_extract_json_* helpers live in 01_tool_common.wysna.
 
 fn fix_line_col_from_char(src: str, target_char: int) -> list[int] {
     let mut line = 1
@@ -350,7 +285,7 @@ fn fix_plan_w2001(src: str, tokens: list[Token], start_byte: int, msg: str) -> l
         let orig = slice(src, span[0], span[1])
         let b0 = diag_utf8_byte_at(src, span[0])
         let b1 = diag_utf8_byte_at(src, span[1])
-        out.append(new FixEdit("W2001", "wrap '" + orig + "' in str(...)", "machine", b0, b1, "str(" + orig + ")"))
+        out.append(FixEdit("W2001", "wrap '" + orig + "' in str(...)", "machine", b0, b1, "str(" + orig + ")"))
         return out
     }
     let ef = fix_extract_expected_found(msg)
@@ -369,7 +304,7 @@ fn fix_plan_w2001(src: str, tokens: list[Token], start_byte: int, msg: str) -> l
     let orig = slice(src, c0, c1)
     let b0 = diag_utf8_byte_at(src, c0)
     let b1 = diag_utf8_byte_at(src, c1)
-    out.append(new FixEdit("W2001", "append '?' to '" + orig + "' to propagate failure by returning early", "maybe", b0, b1, orig + "?"))
+    out.append(FixEdit("W2001", "append '?' to '" + orig + "' to propagate failure by returning early", "maybe", b0, b1, orig + "?"))
     return out
 }
 
@@ -408,7 +343,7 @@ fn fix_plan_w3001(src: str, tokens: list[Token], start_byte: int, msg: str) -> l
     if slice(src, lc_off, lc_off + 3) != "let" { return out }
     let b0 = diag_utf8_byte_at(src, lc_off)
     let b1 = diag_utf8_byte_at(src, lc_off + 3)
-    out.append(new FixEdit("W3001", "mark binding '" + var_name + "' as mutable (`let mut`)", "machine", b0, b1, "let mut"))
+    out.append(FixEdit("W3001", "mark binding '" + var_name + "' as mutable (`let mut`)", "machine", b0, b1, "let mut"))
     return out
 }
 
@@ -559,7 +494,7 @@ fn fix_plan_w1001(src: str, tokens: list[Token], start_byte: int, end_byte: int,
     }
     if tie or best_name == "" or best_sim < 600 { return out }
     let app = if best_sim >= 800 { "machine" } else { "maybe" }
-    out.append(new FixEdit("W1001", "replace unknown identifier '" + bad + "' with '" + best_name + "'", app, start_byte, end_byte, best_name))
+    out.append(FixEdit("W1001", "replace unknown identifier '" + bad + "' with '" + best_name + "'", app, start_byte, end_byte, best_name))
     return out
 }
 
@@ -573,7 +508,7 @@ fn fix_plan_w3004(src: str, tokens: list[Token], start_byte: int, end_byte: int,
     let tok_idx = fix_tok_index_at(tokens, lc[0], lc[1])
     if tok_idx < 0 or tok_idx >= len(tokens) or tokens[tok_idx].kind != "IDENT" { return out }
     let orig = slice(src, start_char, end_char)
-    out.append(new FixEdit("W3004", "rename constructor 'fn " + orig + "' to 'fn init'", "machine", start_byte, end_byte, "init"))
+    out.append(FixEdit("W3004", "rename constructor 'fn " + orig + "' to 'fn init'", "machine", start_byte, end_byte, "init"))
     return out
 }
 
@@ -723,7 +658,7 @@ fn tool_handle_fix(args: list[str], json_mode_in: bool) -> unit {
                 }
             }
             if overlaps {
-                skipped_all.append(new FixSkipped(c.code, c.description, "overlaps another edit"))
+                skipped_all.append(FixSkipped(c.code, c.description, "overlaps another edit"))
             } else {
                 taken_start.append(c.start_byte)
                 taken_end.append(c.end_byte)

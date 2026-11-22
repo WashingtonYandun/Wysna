@@ -1,0 +1,164 @@
+# Recursive patterns preserve one subject evaluation and one guard evaluation.
+fn sem_pattern_remap(context: SemanticContext, id: int, incoming_vars: list[SemVar], original_vars: list[SemVar]) {
+    let binding = context.patterns[id].binding
+    if binding >= 0 {
+        for variable in incoming_vars {
+            if variable.binding == binding {
+                for original in original_vars { if original.name == variable.name { context.patterns[id].binding = original.binding } }
+            }
+        }
+    }
+    for child in context.patterns[id].children { sem_pattern_remap(context, child, incoming_vars, original_vars) }
+}
+fn sem_pattern(context: SemanticContext, subject: int) -> str {
+    let start = len(context.variables)
+    let first = sem_pattern_atom(context, subject)
+    if not sem_is(context, "PIPE") { return first }
+    let source = context.patterns[context.last_pattern].source
+    let mut alternatives: list[int] = [context.last_pattern]
+    let original = context.variables
+    let bindings = slice(original, start, len(original))
+    while sem_match(context, "PIPE") {
+        context.variables = slice(original, 0, start)
+        sem_pattern_atom(context, subject)
+        let id = context.last_pattern
+        let incoming = slice(context.variables, start, len(context.variables))
+        if len(incoming) != len(bindings) { report_error_at("W2001", source, "every or-pattern alternative must bind the same names and types") }
+        for variable in incoming {
+            let mut found = false
+            for expected in bindings { if expected.name == variable.name and expected.type_id == variable.type_id { found = true } }
+            if not found { report_error_at("W2001", source, "every or-pattern alternative must bind the same names and types") }
+        }
+        sem_pattern_remap(context, id, incoming, bindings)
+        alternatives.append(id)
+    }
+    context.variables = original
+    let name = sem_record_pattern(context, "or", alternatives)
+    context.patterns[context.last_pattern].type_id = subject
+    context.patterns[context.last_pattern].source = source
+    return name
+}
+fn sem_pattern_int_text(context: SemanticContext, negative: bool, token: Token) -> str {
+    let limit = if negative { "9223372036854775808" } else { "9223372036854775807" }
+    if len(token.val) > 19 or (len(token.val) == 19 and tool_str_gt(token.val, limit)) {
+        report_error_at("W0002", token, "range pattern bound exceeds int64")
+    }
+    return (if negative { "-" } else { "" }) + token.val
+}
+fn sem_pattern_number(context: SemanticContext, subject: int, source: Token, negative: bool, token: Token) -> str {
+    sem_require_at(context, context.integer_type, subject, "W2001", source)
+    let lower = sem_pattern_int_text(context, negative, token)
+    let name = sem_leaf_pattern(context, "literal:" + lower)
+    if not sem_is(context, "DOT_DOT") and not sem_is(context, "DOT_DOT_EQ") { return name }
+    let lower_id = context.last_pattern
+    context.patterns[lower_id].type_id = subject
+    let inclusive = sem_take(context).kind == "DOT_DOT_EQ"
+    let upper_negative = sem_match(context, "MINUS")
+    let upper_token = sem_expect(context, "INT")
+    let upper = sem_pattern_int_text(context, upper_negative, upper_token)
+    if int(lower) > int(upper) or (lower == upper and not inclusive) { report_error_at("W2001", source, "range pattern must contain at least one integer") }
+    sem_leaf_pattern(context, "literal:" + upper)
+    let upper_id = context.last_pattern
+    context.patterns[upper_id].type_id = subject
+    return sem_record_pattern(context, if inclusive { "range_inclusive" } else { "range" }, [lower_id, upper_id])
+}
+fn sem_struct_pattern(context: SemanticContext, subject: int, source: Token) -> str {
+    let type_ = context.types[subject]
+    sem_expect(context, "LBRACE")
+    let mut fields: list[int] = []
+    for i in 0..len(context.fields) { if context.fields[i].owner == type_.name { fields.append(i) } }
+    let mut names: list[str] = []
+    let mut children: list[int] = []
+    let mut rest = false
+    while true {
+        sem_skip_separators(context)
+        if sem_is(context, "RBRACE") { break }
+        if sem_match(context, "DOT_DOT") { rest = true sem_match(context, "COMMA") sem_skip_separators(context) break }
+        let field_source = sem_expect(context, "IDENT")
+        if module_contains(names, field_source.val) { report_error_at("W1002", field_source, "duplicate struct pattern field") }
+        let index = sem_field(context, type_.name, field_source.val)
+        if index < 0 { report_error_at("W2001", field_source, "unknown struct pattern field") }
+        let mut field_type = context.fields[index].type_id
+        let generic = sem_generic_type(context, type_.name)
+        if generic >= 0 { field_type = sem_substitute_type(context, field_type, context.generic_types[generic].params, type_.args) }
+        if sem_match(context, "COLON") { sem_pattern(context, field_type) }
+        else {
+            if field_source.val == "_" { sem_leaf_pattern(context, "*") }
+            else { sem_binding_pattern(context, field_source.val, field_type) }
+            context.patterns[context.last_pattern].type_id = field_type
+            context.patterns[context.last_pattern].source = field_source
+        }
+        names.append(field_source.val)
+        children.append(context.last_pattern)
+        sem_skip_separators(context)
+        if not sem_match(context, "COMMA") { break }
+    }
+    sem_expect(context, "RBRACE")
+    if not rest and len(names) != len(fields) { report_error_at("W2001", source, "struct pattern must name every field or include '..'") }
+    let mut ordered: list[int] = []
+    for field in fields {
+        let mut selected = -1
+        for i in 0..len(names) { if context.fields[field].name == names[i] { selected = children[i] } }
+        if selected < 0 {
+            sem_leaf_pattern(context, "*")
+            selected = context.last_pattern
+            let generic = sem_generic_type(context, type_.name)
+            context.patterns[selected].type_id = if generic >= 0 { sem_substitute_type(context, context.fields[field].type_id, context.generic_types[generic].params, type_.args) } else { context.fields[field].type_id }
+        }
+        ordered.append(selected)
+    }
+    return sem_record_pattern(context, "struct", ordered)
+}
+fn sem_pattern_brace(tokens: list[Token], start: int) -> bool {
+    let mut depth = 0
+    let mut index = start
+    while index < len(tokens) {
+        if tokens[index].kind == "LBRACE" { depth = depth + 1 }
+        if tokens[index].kind == "RBRACE" {
+            depth = depth - 1
+            if depth == 0 {
+                return index + 1 < len(tokens) and (tokens[index + 1].kind == "FAT_ARROW" or tokens[index + 1].kind == "IF" or tokens[index + 1].kind == "PIPE")
+            }
+        }
+        index = index + 1
+    }
+    return false
+}
+fn sem_pattern_interval(context: SemanticContext, pattern: SemPattern) -> list[int] {
+    if pattern.name == "range" or pattern.name == "range_inclusive" {
+        let lower = int(slice(context.patterns[pattern.children[0]].name, 8, len(context.patterns[pattern.children[0]].name)))
+        let upper = int(slice(context.patterns[pattern.children[1]].name, 8, len(context.patterns[pattern.children[1]].name)))
+        return [lower, if pattern.name == "range" { upper - 1 } else { upper }]
+    }
+    if len(pattern.name) >= 8 and slice(pattern.name, 0, 8) == "literal:" {
+        let value = int(slice(pattern.name, 8, len(pattern.name)))
+        return [value, value]
+    }
+    let empty: list[int] = []
+    return empty
+}
+fn sem_integer_pattern_matrix(context: SemanticContext, tail: list[int], rows: list[list[int]]) -> bool {
+    let mut point = -9223372036854775807 - 1
+    let maximum = 9223372036854775807
+    while true {
+        let mut next = maximum
+        let mut has_next = false
+        let mut selected: list[list[int]] = []
+        for row in rows {
+            let pattern = context.patterns[row[0]]
+            if pattern.name == "*" { selected.append(slice(row, 1, len(row))) }
+            else {
+                let bounds = sem_pattern_interval(context, pattern)
+                if len(bounds) == 2 {
+                    if bounds[0] <= point and point <= bounds[1] { selected.append(slice(row, 1, len(row))) }
+                    if bounds[0] > point and (not has_next or bounds[0] < next) { next = bounds[0] has_next = true }
+                    if bounds[1] < maximum and bounds[1] + 1 > point and (not has_next or bounds[1] + 1 < next) { next = bounds[1] + 1 has_next = true }
+                }
+            }
+        }
+        if not sem_pattern_matrix(context, tail, selected) { return false }
+        if not has_next { return true }
+        point = next
+    }
+    return false
+}

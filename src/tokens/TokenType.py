@@ -82,6 +82,7 @@ class TokenType(Enum):
     # Optionals & Error Propagation
     QUESTION = auto()          # ?
     QUESTION_QUESTION = auto() # ??
+    AT = auto()                 # @
     EXCLAMATION = auto()       # !
 
     # Punctuation & Delimiters

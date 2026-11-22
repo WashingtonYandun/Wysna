@@ -14,12 +14,11 @@ KEYWORDS = {
     "import": TokenType.IMPORT,
     "from": TokenType.FROM,
 
-    # Object-Oriented (9)
+    # Object-Oriented (8)
     "class": TokenType.CLASS,
     "interface": TokenType.INTERFACE,
     "extends": TokenType.EXTENDS,
     "implements": TokenType.IMPLEMENTS,
-    "new": TokenType.NEW,
     "this": TokenType.THIS,
     "super": TokenType.SUPER,
     "public": TokenType.PUBLIC,
@@ -37,10 +36,9 @@ KEYWORDS = {
     "break": TokenType.BREAK,
     "continue": TokenType.CONTINUE,
 
-    # Primitive Literals (3)
+    # Primitive Literals (2)
     "true": TokenType.TRUE,
     "false": TokenType.FALSE,
-    "none": TokenType.NONE,
 
     # Logical Operators (3)
     "and": TokenType.AND,

@@ -23,7 +23,7 @@ fn main() -> unit ! parse.ParseError | buffer.BufferError | buffer.DecodeError {
         0 }
     data.append(1) else error { print(error.message) }
     print(copy.close())
-    let empty = new buffer.Bytes()
+    let empty = buffer.Bytes()
     print("empty", len(buffer.decode_utf8(empty)?))
     empty.append(65)?
     print("ascii", buffer.decode_utf8(empty)?)

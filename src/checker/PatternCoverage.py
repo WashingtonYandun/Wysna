@@ -2,7 +2,7 @@
 from node.NodeType import (WildcardPattern, IdentifierPattern, ErrorTypePattern,
                            EnumPattern, TuplePattern, LiteralPattern, NoneLiteral, BoolLiteral)
 from checker.WysnaType import (OptionalType, ResultType, EnumType, ErrorUnionType,
-                           TupleType, BoolType)
+                           TupleType, BoolType, IntType, StructType)
 
 
 def builtin_arguments(type_, name):
@@ -22,6 +22,13 @@ def error_pattern_name(type_):
 def pattern_matrix_exhaustive(types, rows, interner=None):
     def recurse(next_types, next_rows):
         return pattern_matrix_exhaustive(next_types, next_rows, interner)
+    # Disjunctions are rows in the same pattern matrix, including nested payloads.
+    for index in range(len(types)):
+        expanded = []
+        for row in rows:
+            alternatives = getattr(row[index], 'alternatives', None)
+            expanded.extend([row[:index] + [part] + row[index + 1:] for part in alternatives] if alternatives else [row])
+        rows = expanded
     if not types:
         return bool(rows)
     if not rows:
@@ -39,6 +46,20 @@ def pattern_matrix_exhaustive(types, rows, interner=None):
     if defaults and recurse(types[1:], defaults):
         return True
     first = types[0]
+    if first == IntType:
+        from checker.PatternTraversal import integer_interval
+        boundaries = {-(1 << 63), 1 << 63}
+        for row in rows:
+            interval = integer_interval(row[0])
+            if interval is not None:
+                boundaries.update((interval[0], interval[1] + 1))
+        points = sorted(boundaries)
+        for point in points[:-1]:
+            selected = [row[1:] for row in rows if wildcard(row[0]) or (
+                (interval := integer_interval(row[0])) is not None and interval[0] <= point <= interval[1])]
+            if not recurse(types[1:], selected):
+                return False
+        return True
     optional = builtin_arguments(first, "Option")
     result = builtin_arguments(first, "Result")
     if optional:
@@ -52,6 +73,8 @@ def pattern_matrix_exhaustive(types, rows, interner=None):
         }
     elif isinstance(first, EnumType):
         constructors = {name: first.variant_payloads.get(name, []) for name in first.variants}
+    elif isinstance(first, StructType):
+        constructors = {"struct": list(first.fields.values())}
     elif isinstance(first, TupleType):
         constructors = {"tuple": first.elements}
     elif first == BoolType:
@@ -80,6 +103,12 @@ def pattern_matrix_exhaustive(types, rows, interner=None):
                 specialized.append(pattern.args + row[1:])
             elif isinstance(pattern, HirEnumPattern) and pattern.variant_name == name:
                 specialized.append(pattern.subpatterns + row[1:])
+            elif name == 'struct' and type(pattern).__name__ in ('StructPattern', 'HirStructPattern'):
+                if type(pattern).__name__ == 'StructPattern':
+                    fields = {field.name: field.pattern for field in pattern.fields}
+                else:
+                    fields = dict(pattern.fields)
+                specialized.append([fields.get(field, WildcardPattern()) for field in first.fields] + row[1:])
             elif isinstance(pattern, TuplePattern) and name == "tuple":
                 specialized.append(pattern.elements + row[1:])
             elif isinstance(pattern, HirTuplePattern) and name == "tuple":

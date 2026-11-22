@@ -1,5 +1,34 @@
 # Siguiente ciclo: tipos, errores y garantías del lenguaje
 
+## Candidato híbrido del 2026-11-22
+
+`main`/`develop` parten de `8d2f95c` (PR #175). El trabajo nuevo vive en
+[PR #176](https://github.com/WashingtonYandun/Wysna/pull/176), rama
+`feat/selfhost-tooling-split-and-delegation`; todavía no está integrado.
+La decisión vigente es [ADR-05](ADR-05-arquitectura-hibrida-tooling-selfhost.md):
+el lenguaje conserva el oráculo diferencial de cuatro motores y el tooling se
+implementa en Selfhost; `packages` es exclusivamente nativo.
+
+Los cuatro bloques tienen implementación y regresiones: build incremental por
+unidad y delegación mínima; `FUZZ-A01`; sandbox/lints, paquetes USTAR y `OPS-A01`;
+y limpieza 1A, closures por snapshot inmutable, patrones compuestos de `match`
+y atributos estáticos cerrados. El routing de proyectos WASI se conserva en Seed.
+
+Sobre `ed05906` pasaron **212/212 casos en cada uno de los cuatro motores**,
+sin exclusiones, con fuentes intactas y bootstrap de tres etapas (`C0 == C1 == C2`).
+Las regresiones del compilador (`0cb0787`) pasaron 64 pruebas y 143 subcasos; fuzzing multiarchivo
+y limpieza sintáctica, 10 pruebas; la muestra adicional de atributos con valores
+administrados, closures y async pasó los cuatro motores con ASan/UBSan en los
+backends nativos. La aceptación macOS del SDK instalado, construido en `1b4f1ac`, pasó 93 comprobaciones,
+incluido empaquetar, fijar, restaurar sin archivo original y ejecutar un consumidor
+con lock congelado, sin Python ni toolchain del host para los procesos del SDK.
+La suite general sobre `1b4f1ac` pasó 878/878 controles; después, la ampliación de W6005 para `unit ! E` y `else err` pasó sus siete pruebas específicas. Estos conteos corresponden a suites distintas y no se suman como pruebas únicas.
+La [matriz](../ENGINE_PARITY_MATRIX.md) registra el digest medido; el CI del SHA
+final sigue siendo una puerta de integración independiente. No se ha publicado
+una nueva release ni realizado una campaña con modelos.
+
+> Las secciones siguientes conservan los hitos y la evidencia histórica con sus revisiones.
+
 Revisión del 2026-11-21 sobre main `fcdd1af`. Los PRs del evaluador se conservan separados. Este trabajo no usa modelos ni servicios externos de IA.
 
 Actualización del mismo día: `LANG-07` está integrado mediante PR #171, junto con los PRs #169/#170. El PR #172 completó los tres contratos host y las combinaciones de tipos en `c37fa4e`; cada PR pasó 39/39 checks. La [CI del commit final](https://github.com/WashingtonYandun/Wysna/actions/runs/44971203954) y el [publicador](https://github.com/WashingtonYandun/Wysna/actions/runs/44973834360) terminaron correctamente. [v0.8.0](https://github.com/WashingtonYandun/Wysna/releases/tag/v0.8.0) está publicada: 19 activos contrastados mediante checksums y procedencia, aceptación SDK Linux/macOS/Windows de 78/78/71 comprobaciones y repetición de 78 comprobaciones sobre el SDK macOS descargado de la release.

@@ -154,11 +154,11 @@ class StrongReferenceCyclesTests(unittest.TestCase):
         source = (
             "class Parent {\n"
             "    public child: Child?\n"
-            "    fn init() { this.child = none }\n"
+            "    fn init() { this.child = None }\n"
             "}\n"
             "class Child {\n"
             "    public parent: Parent?\n"
-            "    fn init() { this.parent = none }\n"
+            "    fn init() { this.parent = None }\n"
             "}\n"
         )
         service = CompilerService()
@@ -180,11 +180,11 @@ class StrongReferenceCyclesTests(unittest.TestCase):
         source = (
             "class Parent {\n"
             "    public child: Child?\n"
-            "    fn init() { this.child = none }\n"
+            "    fn init() { this.child = None }\n"
             "}\n"
             "class Child {\n"
             "    public parent: Parent?\n"
-            "    fn init() { this.parent = none }\n"
+            "    fn init() { this.parent = None }\n"
             "}\n"
         )
         with tempfile.TemporaryDirectory(prefix="wysna-cycles-cli-") as tmpdir:

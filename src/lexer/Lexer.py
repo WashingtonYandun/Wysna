@@ -823,6 +823,7 @@ class Lexer:
 
         # Single character operators & delimiters
         single_ops = {
+            '@': TokenType.AT,
             '|': TokenType.PIPE,
             '+': TokenType.PLUS,
             '*': TokenType.STAR,

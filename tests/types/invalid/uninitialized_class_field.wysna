@@ -8,5 +8,5 @@ class Person {
 }
 
 fn main() {
-    let p = new Person("Alice")
+    let p = Person("Alice")
 }

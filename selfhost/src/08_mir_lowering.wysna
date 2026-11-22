@@ -440,7 +440,7 @@ fn mir_optimize_parameter_reads(module: MirModule) -> MirModule {
 
 fn mir_build(program: CheckedProgram) -> MirModule {
     checked_verify(program)
-    let context = new MirBuilder(program)
+    let context = MirBuilder(program)
     # Export every declared enum so the arena carries its dictionary-key
     # capability even when the program never uses that enum value.
     for record in program.records {

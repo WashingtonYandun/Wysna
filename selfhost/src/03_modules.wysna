@@ -1,33 +1,4 @@
-# The compiler owns canonicalization buffers; no path storage crosses the ABI.
-extern "C" fn wysna_host_fs_canonical(path: opaque, output: opaque) -> int
-
-fn module_canonical_resolved(path: str) -> str {
-    let input = wysna_host_buffer_new()
-    let output = wysna_host_buffer_new()
-    for byte in bytes(path) { wysna_host_buffer_append(input, byte) }
-    let size = wysna_host_fs_canonical(input, output)
-    let mut parts: list[str] = []
-    let mut index = 0
-    if size >= 0 {
-        while index < size {
-            let first = wysna_host_buffer_get(output, index)
-            let width = if first < 128 { 1 } elif first < 224 { 2 } elif first < 240 { 3 } else { 4 }
-            let mut codepoint = if width == 1 { first } elif width == 2 { first % 32 } elif width == 3 { first % 16 } else { first % 8 }
-            for offset in 1..width { codepoint = codepoint * 64 + wysna_host_buffer_get(output, index + offset) % 64 }
-            parts.append(chr(codepoint))
-            index = index + width
-        }
-    }
-    wysna_host_close(input)
-    wysna_host_close(output)
-    if size < 0 { return "" }
-    return module_normalize(join_strings(parts, ""))
-}
-
-fn module_canonical(path: str) -> str {
-    let resolved = module_canonical_resolved(path)
-    return if resolved == "" { module_normalize(path) } else { resolved }
-}
+# Path canonicalization helpers live in 01_paths.wysna.
 
 fn module_read_with_overlays(path: str, ov_paths: list[str], ov_texts: list[str]) -> list[str] {
     let canon = module_canonical(path)
@@ -119,34 +90,6 @@ fn module_loader_file_readable(context: ModuleLoader, path: str) -> bool {
 }
 # Module expansion shares one token stream with the standalone semantic checker.
 
-fn module_normalize(path: str) -> str {
-    let mut parts: list[str] = []
-    let mut part = ""
-    for i in 0..len(path) + 1 {
-        let mut ch = "/"
-        if i < len(path) { ch = path[i] }
-        if ch == "\\" { ch = "/" }
-        if ch == "/" {
-            if part == ".." and len(parts) > 0 { parts.pop() }
-            elif part != "" and part != "." { parts.append(part) }
-            part = ""
-        } else { part = part + ch }
-    }
-    let mut result = ""
-    if len(path) > 0 and (path[0] == "/" or path[0] == "\\") { result = "/" }
-    if len(path) > 1 and (path[0] == "/" or path[0] == "\\") and (path[1] == "/" or path[1] == "\\") { result = "//" }
-    for i in 0..len(parts) {
-        if i > 0 { result = result + "/" }
-        result = result + parts[i]
-    }
-    return result
-}
-fn module_directory(path: str) -> str {
-    let mut boundary = -1
-    for i in 0..len(path) { if path[i] == "/" { boundary = i } }
-    if boundary < 0 { return "" }
-    return slice(path, 0, boundary + 1)
-}
 fn module_name(index: int, name: str) -> str { return "__wysna_module_" + str(index) + "__" + name }
 fn module_contains(names: list[str], name: str) -> bool {
     for candidate in names { if candidate == name { return true } }
@@ -592,7 +535,7 @@ fn module_expand(context: ModuleLoader, src: str, path: str, entry: bool) -> int
         let token = body[position]
 
         let mut consumed = false
-        if token.kind == "IDENT" {
+        if token.kind == "IDENT" and not (position > 0 and body[position - 1].kind == "AT") {
             for i in 0..len(aliases) {
                 if token.val == aliases[i] and position + 2 < len(body) and body[position + 1].kind == "DOT" {
                     let member = body[position + 2]
@@ -660,7 +603,7 @@ fn module_trace_name(context: ModuleLoader, source: Token, anchor: Token, target
     context.name_sites.append(ModuleNameSite { source: source, expanded: expanded, import_site: import_site, rewrite: rewrite })
 }
 fn module_tokens_with_overlays(src: str, path: str, ov_paths: list[str], ov_texts: list[str]) -> list[Token] {
-    let context = new ModuleLoader()
+    let context = ModuleLoader()
     context.ov_paths = ov_paths
     context.ov_texts = ov_texts
     module_expand(context, src, path, true)
@@ -669,7 +612,7 @@ fn module_tokens_with_overlays(src: str, path: str, ov_paths: list[str], ov_text
 }
 
 fn module_tokens_with_project(src: str, path: str, proj_src_root: str, dep_aliases: list[str], dep_roots: list[str]) -> list[Token] {
-    let context = new ModuleLoader()
+    let context = ModuleLoader()
     context.project_sources_root = proj_src_root
     context.dep_aliases = dep_aliases
     context.dep_roots = dep_roots

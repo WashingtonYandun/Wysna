@@ -16,7 +16,7 @@ fn binary_search(items: list[int], target: int) -> int? {
             high = mid - 1
         }
     }
-    return none
+    return None
 }
 
 fn main() -> unit {

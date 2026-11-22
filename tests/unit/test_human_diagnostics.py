@@ -51,12 +51,12 @@ def test_prelude_error_constructor_fields_are_type_checked(tmp_path):
 
 def test_none_mismatch_has_actionable_human_and_json_diagnostics(tmp_path):
     source = tmp_path / "example.wysna"
-    source.write_text("let name: str = none\n", encoding="utf-8")
+    source.write_text("let name: str = None\n", encoding="utf-8")
     command = [sys.executable, str(ROOT / "main.py"), "check", str(source)]
     human = subprocess.run(command, capture_output=True, text=True, cwd=tmp_path)
     assert human.returncode == 1
     assert ":1:17" in human.stderr
-    assert "1 | let name: str = none" in human.stderr
+    assert "1 | let name: str = None" in human.stderr
     assert "  |                 ^^^^" in human.stderr
     assert "help: If this value can be absent" in human.stderr
 
@@ -65,7 +65,7 @@ def test_none_mismatch_has_actionable_human_and_json_diagnostics(tmp_path):
     diagnostic = json.loads(machine.stdout)["diagnostics"][0]
     span = diagnostic["primary_span"]
     assert machine.returncode == 1 and machine.stderr == ""
-    assert source.read_bytes()[span["start_byte"]:span["end_byte"]] == b"none"
+    assert source.read_bytes()[span["start_byte"]:span["end_byte"]] == b"None"
     assert diagnostic["data"]["help"] == "If this value can be absent, consider an optional type."
 
 
@@ -176,7 +176,7 @@ def test_editor_diagnostic_uses_precise_range_and_help(tmp_path):
     messages = []
     server = LanguageServer(messages.append)
     uri = (tmp_path / "editor.wysna").as_uri()
-    server.update(uri, "let name: str = none\n", 1)
+    server.update(uri, "let name: str = None\n", 1)
     diagnostic = messages[-1]["params"]["diagnostics"][0]
     assert diagnostic["source"] == "Wysna"
     assert diagnostic["range"] == {
@@ -190,10 +190,10 @@ def test_editor_range_counts_utf16_code_units(tmp_path):
     messages = []
     server = LanguageServer(messages.append)
     uri = (tmp_path / "unicode.wysna").as_uri()
-    source = 'let emoji = "😀"; let name: str = none\n'
+    source = 'let emoji = "😀"; let name: str = None\n'
     server.update(uri, source, 1)
     diagnostic = messages[-1]["params"]["diagnostics"][0]
-    start = len(source[:source.index("none")].encode("utf-16-le")) // 2
+    start = len(source[:source.index("None")].encode("utf-16-le")) // 2
     assert diagnostic["range"] == {
         "start": {"line": 0, "character": start},
         "end": {"line": 0, "character": start + 4},

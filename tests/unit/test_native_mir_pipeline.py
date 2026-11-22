@@ -35,11 +35,11 @@ CASES = [('global',
  ('nested',
   'let values: list[list[str]] = [["a"], ["b", "c"]]\nfor value in values { print(value[0]) }'),
  ('optional',
-  'fn get(value: bool) -> str? { if value { Some("yes") } else { none } }\n'
+  'fn get(value: bool) -> str? { if value { Some("yes") } else { None } }\n'
   'print(get(true) ?? "no", get(false) ?? "no")'),
  ('optional_propagation',
   'fn get(value: str?) -> str? { Some(value?) }\n'
-  'print(get(Some("yes")) ?? "no", get(none) ?? "no")'),
+  'print(get(Some("yes")) ?? "no", get(None) ?? "no")'),
  ('destructure', 'for i, value in enumerate(["a", "b"]) { print(i, value) }'),
  ('result',
   'fn get() -> list[int] ! str { Ok([1, 2]) }\nlet values = get() else { [0] }\nprint(values)'),
@@ -96,7 +96,7 @@ CASES.extend([('class',
   'fn init(value: int) { this.value = value }\n'
   'fn add(amount: int) -> int { this.value = this.value + amount\n'
   'this.value } }\n'
-  'let counter = new Counter(3)\n'
+  'let counter = Counter(3)\n'
   'print(counter.add(4), counter.value)'),
  ('inheritance',
   'class Base { value: int\n'
@@ -107,7 +107,7 @@ CASES.extend([('class',
   'this.extra = 10 }\n'
   'fn read() -> int { super.read() + this.extra } }\n'
   'fn read(value: Base) -> int { value.read() }\n'
-  'let child = new Derived(3)\n'
+  'let child = Derived(3)\n'
   'print(read(child), child.read(), child.value)'),
  ('interface',
   'interface Reader { fn read() -> int }\n'
@@ -115,7 +115,7 @@ CASES.extend([('class',
   'fn init(value: int) { this.value = value }\n'
   'fn read() -> int { this.value } }\n'
   'fn read(value: Reader) -> int { value.read() }\n'
-  'print(read(new Counter(9)))'),
+  'print(read(Counter(9)))'),
  ('legacy_neterror_type',
   'fn describe(error: NetError) -> str { return error.message }\n'
   'print("ok")'),
@@ -134,65 +134,65 @@ CASES.extend([('class',
   'fn get() -> T { this.value }\n'
   'fn set(value: T) { this.value = value }\n'
   'fn again() -> T { this.get() } }\n'
-  'let a: Box[int] = new Box[int](42)\n'
-  'let b: Box[str] = new Box[str]("hello")\n'
+  'let a: Box[int] = Box[int](42)\n'
+  'let b: Box[str] = Box[str]("hello")\n'
   'print(a.get(), b.get())\n'
   'a.set(7)\nb.set("world")\nprint(a.again(), b.again())'),
  ('generic_class_phantom_method',
   'class Flag[T] { value: int\nfn get() -> int { this.value } }\n'
-  'let flag: Flag[str] = new Flag[str]()\nflag.value = 8\nprint(flag.get())'),
+  'let flag: Flag[str] = Flag[str]()\nflag.value = 8\nprint(flag.get())'),
  ('generic_class_methods_list',
   'class Box[T] { value: T\nfn init(value: T) { this.value = value }\nfn get() -> T { this.value } }\n'
-  'let x: Box[list[int]] = new Box[list[int]]([1, 2])\nprint(x.get())'),
+  'let x: Box[list[int]] = Box[list[int]]([1, 2])\nprint(x.get())'),
  ('generic_class_method_identity',
   'class Box[T] { value: T\nfn init(v: T) { this.value = v }\n'
   'fn set(v: T) { this.value = v }\nfn get() -> T { this.value } }\n'
-  'let a: Box[int] = new Box[int](1)\nlet b = a\nb.set(3)\nprint(a.get(), b.get(), a == b)'),
+  'let a: Box[int] = Box[int](1)\nlet b = a\nb.set(3)\nprint(a.get(), b.get(), a == b)'),
  ('generic_class_recursive_method',
   'class Counter[T] { value: T\nfn init(v: T) { this.value = v }\n'
   'fn calc(n: int) -> int { if n == 0 { 1 } else { n * this.calc(n - 1) } } }\n'
-  'let a: Counter[str] = new Counter[str]("x")\nprint(a.calc(5))'),
+  'let a: Counter[str] = Counter[str]("x")\nprint(a.calc(5))'),
  ('generic_class_method_list_of_objects',
   'class Box[T] { value: T\nfn init(v: T) { this.value = v }\nfn get() -> T { this.value } }\n'
-  'let items: list[Box[int]] = [new Box[int](1), new Box[int](2)]\n'
+  'let items: list[Box[int]] = [Box[int](1), Box[int](2)]\n'
   'for x in items { print(x.get()) }'),
  ('generic_class_nested_methods',
   'class Box[T] { value: T\nfn init(value: T) { this.value = value }\nfn get() -> T { this.value } }\n'
-  'let inner: Box[int] = new Box[int](8)\n'
-  'let outer: Box[Box[int]] = new Box[Box[int]](inner)\nprint(outer.get().get())'),
+  'let inner: Box[int] = Box[int](8)\n'
+  'let outer: Box[Box[int]] = Box[Box[int]](inner)\nprint(outer.get().get())'),
  ('generic_class_generic_operation',
   'class Box[T] { value: T\nfn init(value: T) { this.value = value }\n'
   'fn twice() -> T { this.value + this.value } }\n'
-  'let a: Box[int] = new Box[int](21)\nlet b: Box[str] = new Box[str]("go")\n'
+  'let a: Box[int] = Box[int](21)\nlet b: Box[str] = Box[str]("go")\n'
   'print(a.twice(), b.twice())'),
  ('generic_class_optional_method',
   'class Box[T] { value: T\nfn init(value: T) { this.value = value }\n'
   'fn get() -> T? { Some(this.value) } }\n'
-  'let value: Box[str] = new Box[str]("yes")\nprint(value.get() ?? "no")'),
+  'let value: Box[str] = Box[str]("yes")\nprint(value.get() ?? "no")'),
  ('generic_class',
   'class Box[T] { value: T }\n'
-  'let first: Box[int] = new Box[int]()\n'
+  'let first: Box[int] = Box[int]()\n'
   'first.value = 3\n'
-  'let second: Box[str] = new Box[str]()\n'
+  'let second: Box[str] = Box[str]()\n'
   'second.value = "text"\n'
   'print(first.value, second.value, first, second)'),
  ('generic_class_parameters',
   'class Pair[A, B] { first: A, second: B }\n'
-  'let pair: Pair[int, str] = new Pair[int, str]()\n'
+  'let pair: Pair[int, str] = Pair[int, str]()\n'
   'pair.first = 7\n'
   'pair.second = "seven"\n'
   'print(pair.first, pair.second, pair)'),
  ('generic_class_collection',
   'class Bag[T] { values: list[T] }\n'
-  'let bag: Bag[int] = new Bag[int]()\n'
+  'let bag: Bag[int] = Bag[int]()\n'
   'bag.values = [1, 2]\n'
   'print(bag.values, len(bag.values), bag)'),
  ('class_snapshot',
   'class Box { value: int\n'
   'fn init(value: int) { this.value = value } }\n'
-  'let mut first = new Box(1)\n'
+  'let mut first = Box(1)\n'
   'let original = first\n'
-  'let second = new Box(2)\n'
+  'let second = Box(2)\n'
   'first.value = (first = second).value\n'
   'print(original.value, first.value)')])
 
@@ -205,10 +205,10 @@ CASES.extend([('foreign_buffer',
 
 
 CASES.extend([
-    ("default_collections", 'class Item { values: list[int], pairs: dict[str, int] }\nlet item = new Item()\nfor value in item.values { print(value) }\nprint(item.values, item.pairs)'),
+    ("default_collections", 'class Item { values: list[int], pairs: dict[str, int] }\nlet item = Item()\nfor value in item.values { print(value) }\nprint(item.values, item.pairs)'),
     ("nested_for", 'for (number, (text, flag)) in [(1, ("yes", true)), (2, ("no", false))] { print(number, text, flag) }'),
     ("empty_nested", 'let values = [[]]\nlet pairs = [{}]\nprint(values, pairs)'),
-    ("weak_lifetime", 'class Item { value: int\nfn init(value: int) { this.value = value } }\nfn handle() -> Weak[Item] { weak(new Item(3)) }\nlet item = new Item(7)\nlet reference = weak(item)\nprint((upgrade(reference) ?? new Item(0)).value, upgrade(handle()))'),
+    ("weak_lifetime", 'class Item { value: int\nfn init(value: int) { this.value = value } }\nfn handle() -> Weak[Item] { weak(Item(3)) }\nlet item = Item(7)\nlet reference = weak(item)\nprint((upgrade(reference) ?? Item(0)).value, upgrade(handle()))'),
     ("lambda_block", 'let work = |value: int| { value + 1 }\nlet answer = || { return 42 }\nprint(work(4), answer())'),
     ("nested_result", 'fn value() -> (int ! str) ! bool { Ok(Err("inner")) }\nfn optional() -> (int ! str)? { Some(Ok(3)) }\nprint(value(), optional())'),
     ("generic_identity", 'fn identity[T](value: T) -> T { value }\nprint(identity(4), identity("hello"), identity[int](7))'),
@@ -225,7 +225,7 @@ CASES.extend([
     ("match_bool", 'fn label(value: bool) -> str { match value { true => "yes", false => "no" } }\nprint(label(true), label(false))'),
     ("match_string", 'fn label(value: str) -> int { match value { "yes" => 1, _ => 2 } }\nprint(label("yes"), label("other"))'),
     ("match_negative", 'let value = -15\nprint(match value { -15 => "yes", _ => "no" })'),
-    ("match_optional", 'fn label(value: str?) -> str { match value { Some(text) => text, None => "no" } }\nprint(label(Some("yes")), label(none))'),
+    ("match_optional", 'fn label(value: str?) -> str { match value { Some(text) => text, None => "no" } }\nprint(label(Some("yes")), label(None))'),
     ("match_result", 'fn label(value: int ! str) -> str { match value { Ok(number) => str(number), Err(error) => error } }\nprint(label(Ok(7)), label(Err("bad")))'),
     ("match_enum", 'enum Event { None, Value(int), Pair(str, int) }\nfn label(event: Event) -> str { match event { Event.None => "none", Event.Value(number) => str(number), Event.Pair(text, number) => text + str(number) } }\nprint(label(Event.None), label(Event.Value(3)), label(Event.Pair("v", 4)))'),
     ("match_tuple_guard", 'let value = (("hello", 3), true)\nprint(match value { ((text, number), true) if number > 5 => text, ((text, number), true) => text + str(number), _ => "no" })'),
@@ -239,7 +239,7 @@ CASES.extend([
     ('assignment_result_snapshot', 'let mut values = [[1]]\nlet snapshot = (values[0] = [2])\nvalues[0].append(3)\nprint(values, snapshot)'),
     ('imported_generic_display', 'import "generic.wysna" as generic\nprint(generic.make())'),
     ('recursive_generic_equality', 'enum Tree[T] { None, Next(Tree[T]) }\nlet value: Tree[int] = Tree.None\nprint(value == value)'),
-    ('class_function_identity', 'class Holder { callback: fn() -> int fn init(callback: fn() -> int) { this.callback = callback } }\nlet value = new Holder(|| => 1)\nprint(value == value)'),
+    ('class_function_identity', 'class Holder { callback: fn() -> int fn init(callback: fn() -> int) { this.callback = callback } }\nlet value = Holder(|| => 1)\nprint(value == value)'),
     ('generic_nominal_display', 'struct Box[T] { value: T }\nlet value: Box[int] = Box { value: 3 }\nprint(value)'),
     ('generic_nominal_name_collision', 'struct Box[T] { value: T }\nstruct Box__0 { text: str }\nlet value: Box[int] = Box { value: 3 }\nlet ordinary = Box__0 { text: "distinct" }\nprint(value.value, ordinary.text)'),
 ])
@@ -481,7 +481,7 @@ class NativeMirPipelineTests(unittest.TestCase):
 
     def test_default_collection_fields_fail_safely(self):
         cases = [
-            "class Item { values: tuple[int, int] }\nlet item = new Item()\nfor a, b in [item.values] { print(a, b) }",
+            "class Item { values: tuple[int, int] }\nlet item = Item()\nfor a, b in [item.values] { print(a, b) }",
         ]
         with tempfile.TemporaryDirectory() as temporary:
             directory = Path(temporary).resolve()
@@ -528,23 +528,23 @@ class NativeMirPipelineTests(unittest.TestCase):
         cases = [
             ('unix_time(1)', "W2005"),
             ('let value: str = unix_time()', "W2001"),
-            ('class Box[T] { value: T\nfn init(v: T) { this.value = v }\nfn set(v: T) { this.value = v } }\nlet b: Box[int] = new Box[int](1)\nb.set("bad")', 'W2001'),
-            ('class Box[T] { value: T\nfn init(v: T) { this.value = v }\nfn get() -> T { true } }\nlet b: Box[int] = new Box[int](1)\nprint(b.get())', 'W2004'),
-            ('class Box[T] { value: T\nfn init(v: T) {} }\nlet b: Box[int] = new Box[int](1)', 'W3004'),
-            ('class Box[T] { value: T\nfn init(v: T) { this.value = v }\nfn twice() -> T { this.value + this.value } }\nlet b: Box[bool] = new Box[bool](true)\nprint(b.twice())', 'W2001'),
+            ('class Box[T] { value: T\nfn init(v: T) { this.value = v }\nfn set(v: T) { this.value = v } }\nlet b: Box[int] = Box[int](1)\nb.set("bad")', 'W2001'),
+            ('class Box[T] { value: T\nfn init(v: T) { this.value = v }\nfn get() -> T { true } }\nlet b: Box[int] = Box[int](1)\nprint(b.get())', 'W2004'),
+            ('class Box[T] { value: T\nfn init(v: T) {} }\nlet b: Box[int] = Box[int](1)', 'W3004'),
+            ('class Box[T] { value: T\nfn init(v: T) { this.value = v }\nfn twice() -> T { this.value + this.value } }\nlet b: Box[bool] = Box[bool](true)\nprint(b.twice())', 'W2001'),
             ('class Box[T: Missing] { value: T }', 'W2012'),
-            ('interface Show { fn show() -> str }\nclass Box[T: Show] { value: T\n    fn init(v: T) { this.value = v } }\nlet b = new Box[int](1)', 'W2001'),
-            ('interface Show { fn show() -> str }\nclass Box[T] { value: T\n    fn init(v: T) { this.value = v }\n    fn render[U: Show](x: U) -> str { x.show() } }\nlet b = new Box[int](1)\nprint(b.render(42))', 'W2001'),
+            ('interface Show { fn show() -> str }\nclass Box[T: Show] { value: T\n    fn init(v: T) { this.value = v } }\nlet b = Box[int](1)', 'W2001'),
+            ('interface Show { fn show() -> str }\nclass Box[T] { value: T\n    fn init(v: T) { this.value = v }\n    fn render[U: Show](x: U) -> str { x.show() } }\nlet b = Box[int](1)\nprint(b.render(42))', 'W2001'),
             ('class Base { value: int }\nclass Box[T] extends Base { value: T }', 'W3003'),
             ('interface Reader[T] { fn get() -> T }\nclass Bad implements Reader { public fn get() -> int { 1 } }', 'W2001'),
             ('interface Reader[T] { fn get() -> T }\nclass Bad implements Reader[int, str] { public fn get() -> int { 1 } }', 'W2001'),
             ('interface Reader[T] { fn get() -> T }\nclass Bad implements Reader[int] { public fn get() -> str { "x" } }', 'W3003'),
-            ('interface Reader[T] { fn get() -> T }\nclass Box[T] implements Reader[T] { value: T\nfn init(v: T) { this.value = v }\npublic fn get() -> T { this.value } }\nlet r: Reader[int] = new Box[str]("x")', 'W2001'),
+            ('interface Reader[T] { fn get() -> T }\nclass Box[T] implements Reader[T] { value: T\nfn init(v: T) { this.value = v }\npublic fn get() -> T { this.value } }\nlet r: Reader[int] = Box[str]("x")', 'W2001'),
             ('interface Show { fn show() -> str }\ninterface ShowReader[T: Show] { fn get() -> T }\nclass Bad implements ShowReader[int] { public fn get() -> int { 1 } }', 'W2001'),
             ('enum Maybe[T] { None, Value(T) }\nprint(Maybe.None)', 'W2013'),
             ('enum Maybe[T] { None, Value(T) }\nprint(Maybe.None == Maybe.None)', 'W2013'),
-            ('class Box[T] { value: T }\nlet value: Box[int] = new Box[str]()', 'W2001'),
-            ('class Box[T] { value: T }\nlet value: Box[int] = new Box[int]()\nvalue.value = "bad"', 'W2001'),
+            ('class Box[T] { value: T }\nlet value: Box[int] = Box[str]()', 'W2001'),
+            ('class Box[T] { value: T }\nlet value: Box[int] = Box[int]()\nvalue.value = "bad"', 'W2001'),
             ('enum Tree[T] { None, Next(Tree[list[T]]) }\nlet value: Tree[int] = Tree.None\nprint(value)', 'W2011'),
             ('enum Tree[T] { None, Next(Tree[list[T]]) }\nlet value: Tree[int] = Tree.None\nprint(value == value)', 'W2011'),
             ('let value = || => 1\nprint(value == value)', 'W2001'),
@@ -562,7 +562,7 @@ class NativeMirPipelineTests(unittest.TestCase):
             ('for (value, (value, other)) in [(1, (2, 3))] { print(value) }', "W1002"),
             ('let callback = || { if true { return 1 } "bad" }', "W2004"),
             ('let values: list[int] = []\nvalues.append(1)', "W3001"),
-            ('fn value() -> str? { none }\nprint(value() else error { "bad" })', "W2006"),
+            ('fn value() -> str? { None }\nprint(value() else error { "bad" })', "W2006"),
             ('fn value() -> int ! str { Ok(1) }\nprint(value() else { [] })', "W2001"),
         ]
         with tempfile.TemporaryDirectory() as temporary:
@@ -589,7 +589,7 @@ class NativeMirPipelineTests(unittest.TestCase):
                 '    public fn init(v: T) { this.value = v }\n'
                 '    public fn show() -> str { this.value.show() }\n'
                 '    public fn transform[R: Show](f: fn(T) -> R) -> Box[R] {\n'
-                '        return new Box[R](f(this.value))\n'
+                '        return Box[R](f(this.value))\n'
                 '    }\n'
                 '}\n'
                 'pub class ChildBox[T: Show] extends Box[T] {\n'
@@ -610,9 +610,9 @@ class NativeMirPipelineTests(unittest.TestCase):
                 '    fn init(t: str) { this.text = t }\n'
                 '    fn show() -> str { "[" + this.text + "]" }\n'
                 '}\n'
-                'let base: LibBox[Label] = new LibBox[Label](new Label("ok"))\n'
-                'let child: ChildBox[Label] = new ChildBox[Label](new Label("sub"), "tag")\n'
-                'let mapped = base.transform(|l: Label| => new Label(l.show() + "!"))\n'
+                'let base: LibBox[Label] = LibBox[Label](Label("ok"))\n'
+                'let child: ChildBox[Label] = ChildBox[Label](Label("sub"), "tag")\n'
+                'let mapped = base.transform(|l: Label| => Label(l.show() + "!"))\n'
                 'print(base.show(), child.show(), mapped.show())\n',
                 encoding="utf-8",
             )
@@ -663,11 +663,11 @@ class NativeMirPipelineTests(unittest.TestCase):
                 '    public fn get() -> T { return this.item }\n'
                 '}\n'
                 'fn read_val[T](c: Collection[T]) -> T { return c.get() }\n'
-                'let a: Collection[int] = new IntHolder(7)\n'
-                'let b: Collection[int] = new Child(19)\n'
-                'let col_int: Collection[int] = new Repository[int](42)\n'
-                'let repo = new Repository[str]("ok")\n'
-                'let sb: ShowBox[Tag] = new StyledBox[Tag](new Tag("hi"))\n'
+                'let a: Collection[int] = IntHolder(7)\n'
+                'let b: Collection[int] = Child(19)\n'
+                'let col_int: Collection[int] = Repository[int](42)\n'
+                'let repo = Repository[str]("ok")\n'
+                'let sb: ShowBox[Tag] = StyledBox[Tag](Tag("hi"))\n'
                 'print(a.get(), b.get(), read_val(col_int), read_val[str](repo), sb.label())\n',
                 encoding="utf-8",
             )

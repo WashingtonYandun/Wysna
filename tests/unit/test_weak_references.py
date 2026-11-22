@@ -15,9 +15,9 @@ from tests.unit.test_weak_control_block import run_control_block_tests
 
 def run_weak_tests():
     run_control_block_tests()
-    invalid = ['let value = weak(1)', 'let value = weak(none)',
+    invalid = ['let value = weak(1)', 'let value = weak(None)',
                'let value = upgrade(1)', 'let value = weak()',
-               'let value = upgrade(none)',
+               'let value = upgrade(None)',
                'class Node {}\nlet value: Weak[int] = weak(Node())',
                'class Node {}\nlet value: Weak[Node, Node] = weak(Node())',
                'class Node { public id: int }\nlet value = weak(Node())\nprint(value.id)',

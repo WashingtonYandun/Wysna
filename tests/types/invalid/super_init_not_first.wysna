@@ -16,5 +16,5 @@ class Dog extends Animal {
 }
 
 fn main() {
-    let d = new Dog("Rex", "Husky")
+    let d = Dog("Rex", "Husky")
 }

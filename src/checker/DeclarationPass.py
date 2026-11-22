@@ -5,6 +5,7 @@ from typing import Dict, List, Set
 from node.NodeType import (
     Program,
     TypeNode,
+    NamedType,
     FnDecl,
     StructDecl,
     EnumDecl,
@@ -401,8 +402,13 @@ def resolve_declaration_signatures(checker: "TypeChecker", program: Program) -> 
                     cls_type.methods[m.name] = ClassMethodInfo(fn_type=fn_t, is_public=m.is_public, owner_class=stmt.name)
 
         elif isinstance(stmt, FnDecl):
+            attributes = getattr(stmt, 'attributes', [])
+            if any(attribute.name == 'must_use' for attribute in attributes) and isinstance(stmt.return_type, NamedType) and stmt.return_type.name == 'unit' and not stmt.is_async:
+                raise TypeError('@must_use requires a non-unit result', file=checker.file,
+                                line=stmt.line, col=stmt.col, code='W2001')
             if stmt.type_params:
                 template = GenericFnTemplate(name=stmt.name, type_params=stmt.type_params, ast_decl=stmt)
+                template.static_attributes = attributes
                 checker.generic_fn_templates[stmt.name] = template
                 checker.global_scope.define_symbol(
                     Symbol(stmt.name, template, is_mut=False, kind="fn", line=stmt.line, col=stmt.col),
@@ -412,6 +418,7 @@ def resolve_declaration_signatures(checker: "TypeChecker", program: Program) -> 
                 param_types: List[WysnaType] = [checker._resolve_type_node(p.type_ann) for p in stmt.params]
                 ret_type = checker._resolve_type_node(stmt.return_type)
                 fn_type = FunctionType(params=param_types, ret=ret_type, is_async=getattr(stmt, "is_async", False))
+                fn_type.static_attributes = attributes
                 checker.global_scope.define_symbol(
                     Symbol(stmt.name, fn_type, is_mut=False, kind="fn", line=stmt.line, col=stmt.col),
                     file=checker.file

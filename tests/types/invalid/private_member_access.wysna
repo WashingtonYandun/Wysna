@@ -11,6 +11,6 @@ class Vault {
 }
 
 fn main() {
-    let v = new Vault(42)
+    let v = Vault(42)
     print(v.secret)
 }

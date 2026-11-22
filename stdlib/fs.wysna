@@ -36,7 +36,7 @@ pub fn remove(path: str) -> unit ! FsError { let status = apply(path, "", 3, "re
 pub fn rename(path: str, target: str) -> unit ! FsError { let status = apply(path, target, 4, "rename")? }
 pub fn list_dir(path: str) -> list[str] ! FsError {
     let target = buffer.from_text(path)
-    let output = new buffer.Bytes()
+    let output = buffer.Bytes()
     let count = wysna_host_project_entries(target.borrow(), output.borrow())
     let code = wysna_host_last_error()
     let domain = wysna_host_last_error_domain()

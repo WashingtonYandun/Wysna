@@ -25,20 +25,20 @@ The language defines the following reserved keywords:
 DECLARATIONS (10):
 fn        let       mut       struct    enum      import    from      use       pub       extern
 
-OBJECT-ORIENTED (9):
-class     interface extends   implements new       this      super     public    private
+OBJECT-ORIENTED (8):
+class     interface extends   implements this      super     public    private
 
 CONTROL FLOW (10):
 if        elif      else      for       while     in        match     return    break     continue
 
-PRIMITIVE LITERALS (3):
-true      false     none
+PRIMITIVE LITERALS (2):
+true      false
 
 LOGICAL OPERATORS (3):
 and       or        not
 ```
 
-*Note on built-in types:* Primitive types (`int`, `float`, `bool`, `str`, `unit`) and standard library symbols (`len`, `enumerate`, `bytes`) are prelude identifiers in the global namespace, **not** language keywords.
+*Note on built-in types & canonical values:* Primitive types (`int`, `float`, `bool`, `str`, `unit`), canonical optional constructors (`Some`, `None`), and standard library symbols (`len`, `enumerate`, `bytes`) are prelude identifiers in the global namespace, **not** language keywords. Legacy `new Class(...)`, lowercase `none`, and `* =>` / `else =>` match wildcards are removed in favor of `Class(...)`, `None`, and `_ =>`.
 
 ---
 
@@ -56,7 +56,7 @@ Identifiers must start with an ASCII letter (`a-z`, `A-Z`) or underscore `_`, fo
   - **Infinities (`+Inf` / `-Inf`):** Overflowing floating-point operations or conversions (`float("inf")`, `float("-inf")`) obey IEEE-754 ordering (`-Inf < finite < +Inf`, `+Inf == +Inf` is `true`, `-Inf == -Inf` is `true`). Doing arithmetic such as `Inf - Inf` yields `NaN`.
   - **Float Division by Zero:** Explicit division by zero (`x / 0.0` or `x / -0.0`) triggers a deterministic runtime panic (`RuntimeError: Division by zero`) rather than silently producing `NaN` or `±Inf`.
 * **Booleans (`bool`):** `true` and `false`.
-* **None (`none`):** The singular value of an empty optional.
+* **None (`None`):** The canonical singular value of an empty optional (`Option.None`).
 
 ### 3.3 Strings (`str`) & Unicode Scalar Semantics
 * **UTF-8 Storage:** Strings are immutable and stored as UTF-8 in memory.
@@ -110,10 +110,10 @@ process(item)
 > the invariance of `list[T]` and `Weak[C]`.
 
 ### 4.2 Explicit Nullability (`T?`)
-* Types are **non-nullable by default**. Assigning `none` to a non-optional type is a compile-time error:
+* Types are **non-nullable by default**. Assigning `None` to a non-optional type is a compile-time error:
   ```wysna
-  let name: str = none     # COMPILE ERROR
-  let name: str? = none    # VALID: explicit optional
+  let name: str = None     # COMPILE ERROR
+  let name: str? = None    # VALID: explicit optional
   ```
 * Functions returning no value return `unit`:
   ```wysna
@@ -131,6 +131,8 @@ process(item)
 In block functions and lambdas declared as `unit`—including named functions with an omitted return type—the implicit tail expression is evaluated for its effects and discarded. An explicit `return` with an incompatible value is rejected. `unit ! E` preserves errors from its tail; a failed result does not become success when its value is discarded.
 
 A lambda without a return annotation or expected function type infers its result from explicit returns and its reachable tail. These candidates must have compatible types; incompatible returns report `W2004`. Named functions still default to `unit` when their return type is omitted.
+
+**Closure Capture Semantics (v1.0 Final):** Lambdas capture outer lexical bindings strictly as **immutable snapshots** at creation time (copy-on-write value snapshots for value types; strong references for `class` instances). Mutating or calling mutating methods on a captured value binding is rejected at compile time with `[W3001]`. For shared mutable state across closure invocations, use a `class` instance or return the updated value.
 
 A bare `return` is one that is followed by `}`, `)`, `]`, `,`, `else`, `elif` or EOF.
 It is **not** decided by line breaks: `return` followed by an expression on the next
@@ -226,7 +228,7 @@ class Dog extends Animal implements Describable {
 let d: Describable = Dog("Rex", "Husky")
 print(d.describe())
 ```
-* **Reference Semantics vs Value Semantics:** `struct` values use Copy-on-Write (`W_STRUCT`), whereas `class` instances allocated via `ClassName(...)` (or `new ClassName(...)`) have reference identity (`W_OBJECT`) managed via deterministic reference counting.
+* **Reference Semantics vs Value Semantics:** `struct` values use Copy-on-Write (`W_STRUCT`), whereas `class` instances allocated via `ClassName(...)` have reference identity (`W_OBJECT`) managed via deterministic reference counting.
 * **Constructor Syntax:** Classes are constructed with `ClassName(...)`.
 * **Functional Programming Synergy:** Interfaces with a single method (`interface`) and `fn(...) -> R` signatures are designed to interoperate seamlessly with functional programming constructs.
 
@@ -294,6 +296,32 @@ Equality is partitioned cleanly along the value vs reference boundary:
      ```
 
 ---
+
+### Atributos estáticos de funciones
+
+El conjunto cerrado admite `@deprecated("mensaje")` y `@must_use` antes de una
+función de nivel superior, incluyendo `pub`, genéricos y `async`. No admite
+macros, expresiones como argumentos ni ejecución durante la compilación.
+
+```wysna
+@deprecated("usa current")
+@must_use
+pub fn old() -> int { 42 }
+```
+
+`@deprecated` exige un literal de cadena con contenido y emite `W6004` en cada
+llamada directa resuelta estáticamente. `@must_use` no recibe argumentos y emite
+`W6005` si se descarta el resultado, también en colas de bloques o ramas cuyo
+valor se descarta. Asignar, devolver o consumir el valor satisface el atributo.
+Una función síncrona con retorno `unit`, incluida una especialización genérica,
+no admite `@must_use` (`W2001`); una función `async` produce una tarea y sí puede
+usarlo. Los atributos no forman parte del tipo de callbacks: las llamadas
+indirectas no heredan estos diagnósticos. No cambian la ejecución ni el ABI.
+
+Ambos atributos se conservan al formatear y al importar funciones. Los nombres
+desconocidos, argumentos inválidos y destinos distintos de funciones superiores
+se rechazan con `W0006`; repetir un atributo produce `W1002`. Son advertencias
+no bloqueantes, disponibles en CLI JSON y LSP nativo.
 
 ## 6. Control Flow & Pattern Matching
 
@@ -369,11 +397,39 @@ match tok.kind {
     }
 }
 ```
-* If an `enum` case is missing and no `else =>` fallback is provided, compilation fails with an exhaustiveness error.
+* If an `enum` case is missing and no canonical `_ =>` wildcard fallback is provided, compilation fails with an exhaustiveness error (`W2003`). Tuple patterns in `match` must be parenthesized (`(a, b) => ...`).
 * A statement-position `match` evaluates the chosen arm for its effects and discards its value. Its arms may have different result types. A match used as a value still requires compatible types across the arms that produce that value.
 * Imported enum patterns may use the module-qualified owner (`status.State.Ready(value)`)
   or an owner bound with a selective import (`State.Ready(value)`). The owner must resolve
   to the enum of the subject.
+
+
+#### Patrones compuestos y cobertura
+
+`|` agrupa alternativas de un mismo brazo. Todas deben enlazar los mismos nombres
+con los mismos tipos; la guarda se evalúa una sola vez después de seleccionar la
+primera alternativa que coincide. El sujeto de `match` también se evalúa una sola vez.
+Los patrones se pueden anidar dentro de tuplas, variantes y structs.
+
+`inicio..fin` excluye el extremo final; `inicio..=fin` lo incluye. Los dos extremos
+son constantes enteras de 64 bits, con signo opcional. Los rangos vacíos, invertidos
+o aplicados a otro tipo se rechazan. La cobertura puede combinar intervalos hasta
+cubrir todo `int64`; las guardas no aportan cobertura incondicional.
+
+`Point { x: 0 | 1, y }` reconoce campos y enlaza `y`. Un campo omitido requiere `..`,
+por ejemplo `Box[Point] { value: Point { x, .. }, .. }`. La identidad nominal, los
+argumentos genéricos, los campos y sus tipos se verifican antes de generar código.
+No se permiten campos repetidos o desconocidos. Un struct cuyos campos estén
+cubiertos puede tener un `match` exhaustivo sin `_`.
+
+`W6003` advierte cuando patrones anteriores sin guarda cubren un brazo posterior.
+La advertencia no altera la ejecución ni hace que una guarda aporte cobertura.
+
+```wysna
+fn category(value: int) -> str {
+    match value { 0 | 1 => "small", 2..=10 => "medium", _ => "large" }
+}
+```
 
 ---
 
@@ -644,6 +700,9 @@ pub import "std/path"
      - **`W6xxx` — Static Lint & Memory-Hygiene Warnings:**
        - `W6001`: Pure expression statement result is discarded (including newline-before-unary-minus hazards).
        - `W6002`: Strong reference cycle between classes can leak under ARC (`LayoutGraph` SCC analysis).
+       - `W6003`: Rama de `match` cubierta por patrones anteriores sin guarda.
+       - `W6004`: Llamada directa a una función marcada `@deprecated`.
+       - `W6005`: Resultado descartado de una función marcada `@must_use`.
    - `wysna check --json <file.wysna>` outputs deterministic machine-readable JSON:
    ```json
    {

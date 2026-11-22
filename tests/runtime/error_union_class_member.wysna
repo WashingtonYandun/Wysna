@@ -9,7 +9,7 @@ struct DomainError {
 
 fn check_step(mode: int) -> int ! ClassError | DomainError {
     if mode == 0 { return Ok(42) }
-    if mode == 1 { return Err(new ClassError(503)) }
+    if mode == 1 { return Err(ClassError(503)) }
     return Err(DomainError { message: "domain failure" })
 }
 

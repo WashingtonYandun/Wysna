@@ -29,4 +29,4 @@ class Dog extends Animal implements Describable {
     }
 }
 
-let d = new Dog("Rex", "Husky")
+let d = Dog("Rex", "Husky")

@@ -7,7 +7,7 @@ class Factory[T] {
     }
 }
 fn main() -> unit {
-    let factory = new Factory[int](0)
+    let factory = Factory[int](0)
     let number = factory.reject(42) else issue {
         match issue { Failure[int](error) => error.detail, str(_) => -1 }
     }

@@ -1,0 +1,39 @@
+# Standalone dev unit entrypoint for `wysna-project` (project + packages, ~2.8k LOC, <2s rebuild).
+
+fn proj_execute_check(m: ProjectManifest, target_arg: str, dep_aliases: list[str], dep_roots: list[str], json_mode: bool) -> unit {
+    let compiler = lsp_compiler_exe_path()
+    let raw = args()
+    let mut forwarded: list[str] = []
+    let mut idx = 1
+    while idx < len(raw) {
+        forwarded.append(raw[idx])
+        idx = idx + 1
+    }
+    let exe_buf = lsp_buf_from_str(compiler)
+    let args_buf = lsp_pack_argv_buf(forwarded)
+    let rc = wysna_host_process_run(exe_buf, args_buf, 600000)
+    wysna_host_close(exe_buf)
+    wysna_host_close(args_buf)
+    exit(if rc < 0 { 1 } else { rc })
+}
+
+fn run_project_unit() -> unit {
+    let clean = diag_clean_cli_args()
+    if len(clean) == 0 {
+        eprint("[W5002] Usage: wysna-project <project|packages> ...")
+        exit(2)
+    }
+    let json_v1 = diag_cli_json_mode() == "json-v1"
+    if clean[0] == "project" {
+        tool_handle_project(clean, json_v1)
+        return
+    }
+    if clean[0] == "packages" {
+        tool_handle_packages(clean, json_v1)
+        return
+    }
+    eprint("[W5002] wysna-project only handles 'project' and 'packages', got: " + clean[0])
+    exit(2)
+}
+
+run_project_unit()

@@ -1,2 +1,2 @@
-# TOKENS: CLASS INTERFACE EXTENDS IMPLEMENTS NEW THIS SUPER PUBLIC PRIVATE EOF
-class interface extends implements new this super public private
+# TOKENS: CLASS INTERFACE EXTENDS IMPLEMENTS THIS SUPER PUBLIC PRIVATE EOF
+class interface extends implements this super public private

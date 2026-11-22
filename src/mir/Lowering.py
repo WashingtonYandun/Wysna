@@ -714,6 +714,8 @@ class Lowering:
         return result
 
     def pattern_children(self, pattern, value):
+        if isinstance(pattern, H.HirStructPattern):
+            return [('field', name, child) for name, child in pattern.fields]
         if isinstance(pattern, H.HirTuplePattern):
             return [('tuple', index, child) for index, child in enumerate(pattern.elements)]
         if isinstance(pattern, H.HirEnumPattern):
@@ -727,6 +729,10 @@ class Lowering:
         return []
 
     def payload(self, channel, index, child, value, pattern):
+        if channel == 'field':
+            physical, _ = self.field_index(pattern.type_id, index, child)
+            return self.op('load_field', self.slot(child.type_id), [value],
+                           {'index': physical, 'layout': pattern.type_id}, node=child)
         if channel == 'identity':
             return self.op('clone', self.slot(child.type_id), [value])
         if channel in ('tuple', 'enum_tuple'):
@@ -742,6 +748,35 @@ class Lowering:
         return result
 
     def pattern_condition(self, pattern, value):
+        if isinstance(pattern, H.HirOrPattern):
+            result = self.slot(TYPE_BOOL, storage='predicate')
+            self.op('const', result, data={'value': False})
+            done = self.new_block()
+            for alternative in pattern.alternatives:
+                condition = self.pattern_condition(alternative, value)
+                matched, following = self.new_block(), self.new_block()
+                self.branch(condition, matched, following)
+                self.current = matched
+                self.op('const', result, data={'value': True})
+                self.jump(done)
+                self.current = following
+            self.jump(done)
+            self.current = done
+            return result
+        if isinstance(pattern, H.HirRangePattern):
+            lower = self.constant(pattern.start, TYPE_INT, pattern)
+            upper = self.constant(pattern.end, TYPE_INT, pattern)
+            first = self.runtime('wysna_ge', [value, lower], TYPE_BOOL, pattern)
+            second = self.runtime('wysna_le' if pattern.inclusive else 'wysna_lt', [value, upper], TYPE_BOOL, pattern)
+            result = self.slot(TYPE_BOOL)
+            accepted, done = self.new_block(), self.new_block()
+            self.op('const', result, data={'value': False})
+            self.branch(first, accepted, done)
+            self.current = accepted
+            self.store(result, second)
+            self.jump(done)
+            self.current = done
+            return result
         if isinstance(pattern, H.HirWildcardPattern) or isinstance(pattern, H.HirBindingPattern) and pattern.name not in ('None', 'none'):
             result = self.slot(TYPE_BOOL, storage='predicate')
             self.op('const', result, data={'value': True})
@@ -759,7 +794,9 @@ class Lowering:
             return condition
         if isinstance(pattern, H.HirBindingPattern):
             return self.predicate('none', [value], pattern)
-        if isinstance(pattern, H.HirTuplePattern):
+        if isinstance(pattern, H.HirStructPattern):
+            base = self.constant(True, TYPE_BOOL, pattern)
+        elif isinstance(pattern, H.HirTuplePattern):
             base = self.predicate('tuple', [value], pattern, length=len(pattern.elements))
         elif isinstance(pattern, H.HirEnumPattern):
             base = self.predicate('variant', [value], pattern, enum=pattern.enum_name,
@@ -787,6 +824,33 @@ class Lowering:
         return result
 
     def bind_pattern(self, pattern, value):
+        if isinstance(pattern, H.HirOrPattern):
+            def bindings(part):
+                if isinstance(part, H.HirBindingPattern) and part.name != 'None':
+                    return [part]
+                if isinstance(part, H.HirOrPattern):
+                    return bindings(part.alternatives[0])
+                return [binding for _, _, child in self.pattern_children(part, value) for binding in bindings(child)]
+            previous = getattr(self, 'pattern_targets', {})
+            self.pattern_targets = dict(previous)
+            for binding in bindings(pattern.alternatives[0]):
+                key = self.key(binding)
+                if key not in self.pattern_targets:
+                    self.pattern_targets[key] = self.slot(binding.type_id, binding.name)
+                self.bind(binding, self.pattern_targets[key])
+            done = self.new_block()
+            for alternative in pattern.alternatives:
+                condition = self.pattern_condition(alternative, value)
+                matched, following = self.new_block(), self.new_block()
+                self.branch(condition, matched, following)
+                self.current = matched
+                self.bind_pattern(alternative, value)
+                self.jump(done)
+                self.current = following
+            self.terminate('unreachable', node=pattern)
+            self.current = done
+            self.pattern_targets = previous
+            return
         if isinstance(pattern, H.HirErrorTypePattern):
             witness = self.pattern_witness[(id(pattern), value)]
             narrowed = self.op('narrow', self.slot(pattern.error_type_id), [value],
@@ -795,8 +859,12 @@ class Lowering:
             return
         if isinstance(pattern, H.HirBindingPattern):
             if pattern.name not in ('None', 'none'):
-                slot = self.op('clone', self.slot(pattern.type_id, pattern.name), [value], node=pattern)
-                self.bind(pattern, slot)
+                target = getattr(self, 'pattern_targets', {}).get(self.key(pattern))
+                if target is not None:
+                    self.store(target, value)
+                else:
+                    slot = self.op('clone', self.slot(pattern.type_id, pattern.name), [value], node=pattern)
+                    self.bind(pattern, slot)
             return
         children = self.pattern_children(pattern, value)
         for channel, index, child in children:
