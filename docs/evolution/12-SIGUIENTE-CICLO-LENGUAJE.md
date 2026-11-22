@@ -57,7 +57,7 @@ La reparación se integró mediante [PR #173](https://github.com/WashingtonYandu
 
 El criterio de cierre es el resultado real de esos workflows. No se modifica el tag publicado, no se reduce el corpus y no se cambia el protocolo de medición ni sus presupuestos. LLVM conserva su estado experimental congelado.
 
-Validación local del candidato: 34 pruebas de backend/evidencia verificadas (la prueba de breakpoints se repitió fuera del sandbox para permitir LLDB) y 459/459 filas del corpus LLVM normal en 462.83 s, sin casos omitidos y con fuentes intactas durante la medición. En CI aprobaron 459/459 filas por ejecución normal/sanitizada de ambos hosts y por calificación de ambos SDK; seis comparaciones contienen 12 cargas cada una y muestras frías/calientes/runtime 5/5/15 por motor. Es evidencia del candidato `6289b5c`, no del tag anterior. El run del SHA final `c49e3d5` es [44980185856](https://github.com/WashingtonYandun/Wysna/actions/runs/44980185856).
+Validación local del candidato: 34 pruebas de backend/evidencia verificadas (la prueba de breakpoints se repitió fuera del sandbox para permitir LLDB) y 459/459 filas del corpus LLVM normal en 462.83 s, sin casos omitidos y con fuentes intactas durante la medición. En CI aprobaron 459/459 filas por ejecución normal/sanitizada de ambos hosts y por calificación de ambos SDK; seis comparaciones contienen 12 cargas cada una y muestras frías/calientes/runtime 5/5/15 por motor. Es evidencia del candidato `6289b5c`, no del tag anterior. El run del SHA final `c49e3d5` aprobó 13/13; sus seis reportes conservan 146 violaciones de presupuesto y fuentes intactas. Es [44980185856](https://github.com/WashingtonYandun/Wysna/actions/runs/44980185856).
 
 ## Ciclo aprobado: proyectos para agentes de IA
 
@@ -70,3 +70,20 @@ Los agentes son el usuario principal. Las mejoras deben permitir descubrir capac
 5. **OPS-A01 — Integración real.** Usar dependencias y pruebas de proyecto en `wysofia-ops`, con escritura segura y rutas de recuperación verificadas. Cierre: flujo completo desde SDK instalado, lock congelado, datos válidos/inválidos y fallos de escritura simulados; el agente obtiene artefactos y diagnósticos verificables.
 
 TEST-A01, PKG-A01, FUZZ-A01 y OPS-A01 están aprobados para implementación; todavía no se presentan como terminados. Cada bloque requiere su propio código, regresiones y evidencia. Se conserva C99 como backend estable, LLVM congelado y el límite explícito entre Seed y el perfil nativo.
+
+
+## TEST-A01: candidato implementado y validado localmente
+
+Se implementaron planes `wysna.project-test-plan/1`, IDs exactos, descubrimiento
+optativo, precondición de hash, JSON/JUnit, diagnósticos por caso, captura de 1 MiB
+por stream, fixtures y cancelación con reporte parcial en Seed y SDK nativo.
+`std/test` añade igualdad genérica, tolerancia flotante, opcionales y fixtures.
+La guía instalada `skills project-tests` expone el protocolo al agente.
+
+Validación local: 108 pruebas y 18 subpruebas de la suite ampliada; 37 pruebas y
+14 subpruebas del grupo final de contratos. El SDK macOS reconstruido con Zig
+fijado pasó 82 comprobaciones instalado, con PATH aislado y sin Python para sus
+procesos hijos. Es un build del árbol de trabajo, no una reedición de v0.8.0.
+La paridad remota en los tres sistemas sigue pendiente de CI. La [evidencia de
+entradas y comprobaciones](evidence/test-a01-agent-project-tests.json) distingue
+este candidato de la release publicada.

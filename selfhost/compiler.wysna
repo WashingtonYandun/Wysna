@@ -222,7 +222,8 @@ fn diag_clean_cli_args() -> list[str] {
     let mut clean: list[str] = []
     let mut i = 1
     while i < len(raw) {
-        if (raw[i] == "--stdlib-root" or raw[i] == "--diag-out" or raw[i] == "--project-sources-root") and i + 1 < len(raw) {
+        if raw[i] == "--diag-array" { i = i + 1 }
+        elif (raw[i] == "--stdlib-root" or raw[i] == "--diag-out" or raw[i] == "--project-sources-root") and i + 1 < len(raw) {
             i = i + 2
         } elif (raw[i] == "--overlay" or raw[i] == "--project-dep") and i + 2 < len(raw) {
             i = i + 3
@@ -273,6 +274,7 @@ fn diag_read_snippet_source(file: str) -> str {
 }
 
 fn diag_cli_json_mode() -> str {
+    for value in args() { if value == "--diag-array" { return "array" } }
     let clean = diag_clean_cli_args()
     if len(clean) > 0 and clean[0] == "api" { return "json-v1" }
     for i in 0..len(clean) {
@@ -316,6 +318,7 @@ fn diag_emit_and_exit(file: str, code: str, line: int, col: int, msg: str) -> un
     }
     let stage = diag_stage_for_code(code)
     let diag_json = diag_record_json(code, stage, "error", msg, file, line, col, src)
+    if mode == "array" { diag_write_output("[" + diag_json + "]"); exit(1) }
     if mode == "check-json" {
         diag_write_output("{\"schema_version\":\"wysna.cli.result/1\",\"compiler_version\":\"0.8.0\",\"command\":\"check\",\"ok\":false,\"exit_code\":1,\"diagnostics\":[" + diag_json + "],\"data\":null}")
         exit(1)
@@ -11212,11 +11215,12 @@ fn tool_write_atomic_verified(path: str, expected_sha256: str, content: str) -> 
 
 fn tool_skills_topic_content(topic: str) -> str {
     if topic == "overview" {
-        return "# Wysna v0.8.0 — Agent-First Native Language & Toolchain\n- Default workflow uses checked static inspection before execution.\n- Memory model: Single-threaded ARC + Copy-on-Write (`Weak[C]` breaks strong cycles).\n- Error channel: Typed values `T ! E`, unwrap with `?` or `else err { fallback }`.\n- Core agent loop: `wysna skills` -> `wysna graph` -> `wysna inspect` -> `wysna patch` -> `wysna fix` -> `wysna check`.\n- Topics available: overview, agent-loop, syntax, graph, patch, contracts, stdlib."
+        return "# Wysna v0.8.0 — Agent-First Native Language & Toolchain\n- Default workflow uses checked static inspection before execution.\n- Memory model: Single-threaded ARC + Copy-on-Write (`Weak[C]` breaks strong cycles).\n- Error channel: Typed values `T ! E`, unwrap with `?` or `else err { fallback }`.\n- Core agent loop: `wysna skills` -> `wysna graph` -> `wysna inspect` -> `wysna patch` -> `wysna fix` -> `wysna check`.\n- Topics available: overview, agent-loop, syntax, graph, patch, project-tests, contracts, stdlib."
     }
     if topic == "agent-loop" {
         return "# Agent Coding Loop (Token-Efficient, Hash-Guarded)\n1. Discover relationships: `wysna graph <file.wysna> --output-format=json-v1`\n2. Inspect one symbol instead of reading whole files: `wysna inspect <file.wysna> --symbol <name> --with-deps --output-format=json-v1`\n3. Submit checked edits guarded by graph hash: `wysna patch <file.wysna> --symbol <name> --expect-graph-hash <hash> --with <code> --apply`\n4. Auto-repair mechanical diagnostics: `wysna fix --apply --output-format=json-v1 <file.wysna>`\n5. Decode any Wxxxx error: `wysna explain --code W2001 --output-format=json-v1`\n6. Verify & bound runtime: `wysna run --max-steps=100000 --max-heap-mb=64 <file.wysna>`"
     }
+    if topic == "project-tests" { return "# Pruebas de proyecto para agentes\n1. Lista sin ejecutar: `wysna project test --discover --list --frozen --output-format=json-v1`.\n2. Usa los IDs exactos de result.cases: `--case test:example`; --filter conserva selección por subcadena.\n3. Ejecuta con `--expect-plan-hash <result.plan_hash> --output-format=json-v1 --report-json tests.json --report-junit tests.xml`.\n4. Lee result.cases[].failure_kind, diagnostics y los hashes de stdout/stderr; no interpretes texto de terminal.\n5. W5005 indica plan obsoleto: vuelve a listar. Una suite vacía devuelve 2; una cancelación devuelve 130.\n6. std/test ofrece igualdad genérica, tolerancia flotante, opcionales y fixture_directory(); los fixtures se eliminan después del caso.\nEl hash cubre manifiesto, lock, versión y entradas seleccionadas, no todos los imports. El SDK native-core-v1 ejecuta estos comandos sin Python.\n" }
     if topic == "syntax" {
         return "# Wysna Canonical Syntax Quick Reference\n- Bindings: `let x = 1` (immutable), `let mut y = 2` (mutable).\n- Functions: `fn add(a: int, b: int) -> int { return a + b }`\n- Cooperative Async: `async fn fetch_id() -> int { ... }`, `let v = await task`.\n- Optionals & Errors: `T?`, `T ! E`, unwrap `?`, recover `expr else err { fallback }`.\n- OOP & Contracts: `interface Drawable { fn draw() -> str }`, `class Rect implements Drawable { fn draw() -> str { ... } }`.\n- Lambdas: `|n: int| => n * n` (capture outer variables by immutable snapshot).\n- Ranges & Loops: `for i in 0..10 { ... }`, inclusive `0..=10`."
     }
@@ -11238,7 +11242,7 @@ fn tool_skills_topic_content(topic: str) -> str {
 fn tool_skills_payload_json(topic: str) -> str {
     let content = tool_skills_topic_content(topic)
     if content == "" { return "" }
-    let topics_json = "[\"agent-loop\",\"contracts\",\"graph\",\"overview\",\"patch\",\"stdlib\",\"syntax\"]"
+    let topics_json = "[\"agent-loop\",\"contracts\",\"graph\",\"overview\",\"patch\",\"project-tests\",\"stdlib\",\"syntax\"]"
     return "{\"schema_version\":\"wysna.skills/1\",\"compiler_version\":\"0.8.0\",\"topic\":" + diag_json_quote(topic) + ",\"available_topics\":" + topics_json + ",\"content\":" + diag_json_quote(content) + "}"
 }
 
@@ -11282,7 +11286,7 @@ fn tool_handle_skills(args: list[str], json_mode: bool) -> unit {
 
 fn tool_capabilities_payload_json() -> str {
     let cmds = "[\"run\",\"check\",\"fmt\",\"ast\",\"mir\",\"tokens\",\"emit-c\",\"emit-mir\",\"build\",\"test\",\"project.new\",\"project.lock\",\"project.check\",\"project.build\",\"project.run\",\"project.test\",\"api\",\"capabilities\",\"explain\",\"graph\",\"inspect\",\"patch\",\"skills\",\"fix\",\"schema\",\"mcp\",\"lsp\"]"
-    let mcmds = "[\"check\",\"fmt\",\"project.new\",\"project.lock\",\"project.check\",\"api\",\"capabilities\",\"explain\",\"graph\",\"inspect\",\"patch\",\"skills\",\"fix\",\"schema\"]"
+    let mcmds = "[\"check\",\"fmt\",\"project.new\",\"project.lock\",\"project.check\",\"project.test\",\"api\",\"capabilities\",\"explain\",\"graph\",\"inspect\",\"patch\",\"skills\",\"fix\",\"schema\"]"
     let profs = "[\"native-cli\",\"wasi-command\",\"browser-library\",\"c99-source\"]"
     let targs = "[\"native\",\"wasm32-wasip1\",\"wasm32-unknown-emscripten\"]"
     let runtimes = "{\"wasi-command\":\"wasmtime-python==50.0.1\",\"browser-library\":\"browser or Node.js\"}"
@@ -16135,7 +16139,7 @@ fn proj_load_manifest(explicit: str) -> ProjectManifest {
 
 fn proj_emit_error_and_exit(subcmd: str, json_mode: bool, code: str, msg: str) -> unit {
     let cmd_name = if subcmd != "" { "project." + subcmd } else { "project" }
-    let exit_c = if code == "W5004" { 3 } elif code == "W5002" { 2 } else { 1 }
+    let exit_c = if code == "W5004" { 3 } elif code == "W5002" or code == "W5005" { 2 } else { 1 }
     let status = if exit_c == 3 { "toolchain_error" } elif exit_c == 2 { "usage_error" } else { "diagnostic_error" }
     if json_mode {
         let diag = diag_record_json(code, if exit_c == 2 { "usage" } else { "filesystem" }, "error", msg, "<project>", 1, 1, "")
@@ -16371,6 +16375,12 @@ fn tool_handle_project(args: list[str], json_mode_in: bool) -> unit {
     let mut filter_arg = ""
     let mut output_arg = ""
     let mut has_filter = false
+    let mut list_only = false
+    let mut discover = false
+    let mut case_id = ""
+    let mut expected_plan = ""
+    let mut report_json = ""
+    let mut report_junit = ""
     let mut frozen = false
     let mut json_mode = json_mode_in
 
@@ -16386,14 +16396,14 @@ fn tool_handle_project(args: list[str], json_mode_in: bool) -> unit {
             if a == "--frozen" { frozen = true }
             i = i + 1
         } elif a == "--output-format=json-v1" {
-            if subcmd != "lock" and subcmd != "check" and subcmd != "build" {
-                proj_emit_error_and_exit(subcmd, true, "W5002", "--output-format=json-v1 is supported only by project lock, check and build")
+            if subcmd != "lock" and subcmd != "check" and subcmd != "build" and subcmd != "test" {
+                proj_emit_error_and_exit(subcmd, true, "W5002", "--output-format=json-v1 is supported only by project lock, check, build and test")
             }
             json_mode = true
             i = i + 1
         } elif a == "--output-format" and i + 1 < len(cleaned) {
-            if subcmd != "lock" and subcmd != "check" and subcmd != "build" {
-                proj_emit_error_and_exit(subcmd, true, "W5002", "--output-format=json-v1 is supported only by project lock, check and build")
+            if subcmd != "lock" and subcmd != "check" and subcmd != "build" and subcmd != "test" {
+                proj_emit_error_and_exit(subcmd, true, "W5002", "--output-format=json-v1 is supported only by project lock, check, build and test")
             }
             if cleaned[i + 1] != "json-v1" {
                 proj_emit_error_and_exit(subcmd, json_mode, "W5002", "unsupported output format: " + cleaned[i + 1])
@@ -16414,6 +16424,17 @@ fn tool_handle_project(args: list[str], json_mode_in: bool) -> unit {
                 proj_emit_error_and_exit(subcmd, json_mode, "W5002", "--entry is supported only by 'wysna project run'")
             }
             entry_arg = cleaned[i + 1]
+            i = i + 2
+        } elif a == "--list" or a == "--discover" {
+            if subcmd != "test" { proj_emit_error_and_exit(subcmd, json_mode, "W5002", "test selection options are supported only by project test") }
+            if a == "--list" { list_only = true } else { discover = true }
+            i = i + 1
+        } elif (a == "--case" or a == "--expect-plan-hash" or a == "--report-json" or a == "--report-junit") and i + 1 < len(cleaned) {
+            if subcmd != "test" { proj_emit_error_and_exit(subcmd, json_mode, "W5002", "test selection and report options are supported only by project test") }
+            if a == "--case" { case_id = cleaned[i + 1] }
+            elif a == "--expect-plan-hash" { expected_plan = cleaned[i + 1] }
+            elif a == "--report-json" { report_json = cleaned[i + 1] }
+            else { report_junit = cleaned[i + 1] }
             i = i + 2
         } elif a == "--filter" and i + 1 < len(cleaned) {
             if subcmd != "test" {
@@ -16486,17 +16507,35 @@ fn tool_handle_project(args: list[str], json_mode_in: bool) -> unit {
         exit(0)
     }
 
+    let test_plan = if subcmd == "test" { proj_test_plan(m, discover, filter_arg, has_filter, case_id, json_mode) }
+        else { proj_empty_test_plan() }
+    if subcmd == "test" {
+        if expected_plan != "" and expected_plan != test_plan.hash {
+            proj_emit_error_and_exit("test", json_mode, "W5005", "test plan is stale; list tests again before executing")
+        }
+        report_json = proj_test_report_path(m, report_json, json_mode)
+        report_junit = proj_test_report_path(m, report_junit, json_mode)
+        if report_json != "" and report_json == report_junit { proj_emit_error_and_exit("test", json_mode, "W5002", "JSON and JUnit reports require different paths") }
+        if list_only and report_junit != "" { proj_emit_error_and_exit("test", json_mode, "W5002", "--report-junit requires test execution, not --list") }
+        if list_only and plan_out == "" {
+            if report_json != "" { write_file(report_json, test_plan.json + "\n") else err { proj_emit_error_and_exit("test", json_mode, "W5004", err.message) } }
+            let rc = if len(test_plan.cases) == 0 { 2 } else { 0 }
+            if json_mode { diag_write_output(diag_tool_envelope_json("project.test", if rc == 0 { "ok" } else { "usage_error" }, rc, "[]", "result", test_plan.json, "[]")) }
+            else { for tc in test_plan.cases { print("test:" + tc.name, tc.entry) } }
+            exit(rc)
+        }
+    }
     if plan_out == "" {
         proj_emit_error_and_exit(subcmd, json_mode, "W5002", "project " + subcmd + " requires the wysna native SDK driver")
     }
 
     let mut lines: list[str] = []
     lines.append("KIND=" + subcmd)
-    lines.append("NAME=" + m.name)
-    lines.append("ROOT=" + m.root)
-    lines.append("SRC_ROOT=" + m.source_root_abs)
+    lines.append("NAME=" + proj_plan_encode(m.name))
+    lines.append("ROOT=" + proj_plan_encode(m.root))
+    lines.append("SRC_ROOT=" + proj_plan_encode(m.source_root_abs))
     for d in m.deps {
-        lines.append("DEP=" + d.alias + "\t" + d.source_root_abs)
+        lines.append("DEP=" + proj_plan_encode(d.alias) + "\t" + proj_plan_encode(d.source_root_abs))
     }
 
     if subcmd == "build" or subcmd == "run" {
@@ -16518,30 +16557,26 @@ fn tool_handle_project(args: list[str], json_mode_in: bool) -> unit {
             entry_abs = ov[1]
         }
         lines.append("TARGET=" + target.name)
-        lines.append("ENTRY=" + entry_abs)
+        lines.append("ENTRY=" + proj_plan_encode(entry_abs))
         if subcmd == "build" {
             let dest = if output_arg != "" { proj_abs_from_cwd(output_arg) } else { module_normalize(m.root + "/build/" + target.name) }
             if proj_is_protected_build_dest(m, dest) {
                 proj_emit_error_and_exit("build", json_mode, "W5002", "build output must not overwrite a source, manifest, or lockfile")
             }
-            lines.append("OUTPUT=" + dest)
+            lines.append("OUTPUT=" + proj_plan_encode(dest))
         }
     } else {
-        let mut selected: list[ProjectTestCase] = []
-        for tc in m.tests {
-            if not has_filter or proj_str_contains_substr(tc.name, filter_arg) {
-                selected.append(tc)
-            }
-        }
-        if len(selected) == 0 {
-            if has_filter {
-                proj_emit_error_and_exit("test", json_mode, "W5002", "test filter '" + filter_arg + "' matched no cases")
-            }
-            print("[EMPTY] No [[tests]] cases are declared; no project code was checked.")
-            exit(2)
-        }
-        for tc in selected {
-            lines.append("TEST=" + tc.name + "\t" + str(tc.timeout_ms) + "\t" + m.root + "/" + tc.entry)
+        lines.append("MANIFEST=" + proj_plan_encode(m.path))
+        lines.append("MANIFEST_SHA=" + m.manifest_sha256)
+        lines.append("LOCK_SHA=" + test_plan.lock_sha)
+        lines.append("PLAN_HASH=" + test_plan.hash)
+        lines.append("PLAN_JSON=" + proj_plan_encode(test_plan.json))
+        lines.append("LIST_ONLY=" + if list_only { "1" } else { "0" })
+        lines.append("REPORT_JSON=" + proj_plan_encode(report_json))
+        lines.append("REPORT_JUNIT=" + proj_plan_encode(report_junit))
+        for idx in 0..len(test_plan.cases) {
+            let tc = test_plan.cases[idx]
+            lines.append("TEST=" + proj_plan_encode(tc.name) + "\t" + str(tc.timeout_ms) + "\t" + proj_plan_encode(m.root + "/" + tc.entry) + "\t" + test_plan.hashes[idx])
         }
     }
 
@@ -16901,6 +16936,109 @@ fn proj_lock_matches(expected: LspJson, actual: LspJson) -> bool {
         return true
     }
     return false
+}
+# Deterministic agent-facing test selection and execution-plan snapshots.
+
+class ProjectTestPlan {
+    cases: list[ProjectTestCase]
+    hashes: list[str]
+    lock_sha: str
+    hash: str
+    json: str
+    fn init(cases: list[ProjectTestCase], hashes: list[str], lock_sha: str, hash: str, json: str) {
+        this.cases = cases
+        this.hashes = hashes
+        this.lock_sha = lock_sha
+        this.hash = hash
+        this.json = json
+    }
+}
+
+fn proj_empty_test_plan() -> ProjectTestPlan {
+    let cases: list[ProjectTestCase] = []
+    let hashes: list[str] = []
+    return new ProjectTestPlan(cases, hashes, "", "", "")
+}
+
+fn proj_plan_encode(value: str) -> str {
+    let mut parts: list[str] = []
+    for index in 0..len(value) {
+        let ch = value[index]
+        if ch == "%" { parts.append("%25") }
+        elif ch == "\t" { parts.append("%09") }
+        elif ch == "\n" { parts.append("%0A") }
+        elif ch == "\r" { parts.append("%0D") }
+        else { parts.append(ch) }
+    }
+    return join_strings(parts, "")
+}
+
+fn proj_test_exists(state: ProjectLockState, path: str) -> bool {
+    let first = tool_buf_from_str(path)
+    let second = tool_buf_from_str("")
+    let found = wysna_host_fs(first, second, 0)
+    wysna_host_close(first)
+    wysna_host_close(second)
+    if found < 0 { state.fail("W5004", "cannot inspect test input '" + path + "'") }
+    return found == 1
+}
+
+fn proj_test_plan(m: ProjectManifest, discover: bool, filter: str, has_filter: bool, case_id: str, json_mode: bool) -> ProjectTestPlan {
+    let state = new ProjectLockState("test", json_mode, m.root)
+    let mut candidates: list[ProjectTestCase] = []
+    let mut seen: list[str] = []
+    for tc in m.tests { candidates.append(tc); seen.append(tc.entry) }
+    if discover and proj_test_exists(state, m.root + "/tests") {
+        if module_canonical_resolved(m.root + "/tests") != m.root + "/tests" {
+            state.fail("W5002", "test discovery does not follow symlinks")
+        }
+        let paths = tool_sort_strings(proj_lock_paths(state, m.root + "/tests", "", true))
+        proj_lock_verify_collisions(state, paths)
+        for path in paths {
+            let entry = "tests/" + path
+            let filename = tool_basename(path)
+            if not tool_str_contains(seen, entry) and ((len(filename) >= 5 and slice(filename, 0, 5) == "test_") or proj_str_ends_with(path, "_test.wysna")) {
+                let tc = new ProjectTestCase()
+                tc.name = "auto:" + entry
+                tc.entry = entry
+                candidates.append(tc)
+            }
+        }
+    }
+    let mut selected: list[ProjectTestCase] = []
+    for tc in candidates {
+        if (not has_filter or proj_str_contains_substr(tc.name, filter)) and (case_id == "" or case_id == "test:" + tc.name) {
+            selected.append(tc)
+        }
+    }
+    if len(selected) == 0 and case_id != "" { state.fail("W5002", "test case '" + case_id + "' matched no cases") }
+    if len(selected) == 0 and has_filter { state.fail("W5002", "test filter '" + filter + "' matched no cases") }
+    if len(selected) > 4096 { state.fail("W5002", "test selection exceeds 4096 cases") }
+    let lock_path = m.root + "/wysna.lock"
+    let lock_sha = if proj_test_exists(state, lock_path) { proj_lock_host_text(state, lock_path, "hash") } else { "" }
+    let mut rows: list[str] = []
+    let mut hashes: list[str] = []
+    for tc in selected {
+        let sha = proj_lock_host_text(state, m.root + "/" + tc.entry, "hash")
+        hashes.append(sha)
+        rows.append("{\"id\":" + diag_json_quote("test:" + tc.name) + ",\"name\":" + diag_json_quote(tc.name) +
+            ",\"entry\":" + diag_json_quote(tc.entry) + ",\"entry_sha256\":" + diag_json_quote(sha) + ",\"timeout_ms\":" + str(tc.timeout_ms) + "}")
+    }
+    let snapshot = "\"manifest_sha256\":" + diag_json_quote(m.manifest_sha256) + ",\"lock_sha256\":" +
+        (if lock_sha == "" { "null" } else { diag_json_quote(lock_sha) }) + ",\"toolchain\":\"0.8.0\",\"cases\":[" + join_strings(rows, ",") + "]"
+    let hash = diag_sha256_hex("{" + snapshot + "}")
+    let payload = "{\"schema_version\":\"wysna.project-test-plan/1\",\"project\":" + diag_json_quote(m.name) + "," + snapshot +
+        ",\"selected\":" + str(len(selected)) + ",\"plan_hash\":" + diag_json_quote(hash) + "}"
+    return new ProjectTestPlan(selected, hashes, lock_sha, hash, payload)
+}
+
+fn proj_test_report_path(m: ProjectManifest, value: str, json_mode: bool) -> str {
+    if value == "" { return "" }
+    let path = proj_abs_from_cwd(value)
+    if proj_is_protected_build_dest(m, path) {
+        proj_emit_error_and_exit("test", json_mode, "W5002", "test report path must not overwrite a source, manifest, or lockfile")
+    }
+    return path
 }
 # Native standard-library and project API index generator (wysna.api-index/1).
 

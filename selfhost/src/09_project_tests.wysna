@@ -1,0 +1,103 @@
+# Deterministic agent-facing test selection and execution-plan snapshots.
+
+class ProjectTestPlan {
+    cases: list[ProjectTestCase]
+    hashes: list[str]
+    lock_sha: str
+    hash: str
+    json: str
+    fn init(cases: list[ProjectTestCase], hashes: list[str], lock_sha: str, hash: str, json: str) {
+        this.cases = cases
+        this.hashes = hashes
+        this.lock_sha = lock_sha
+        this.hash = hash
+        this.json = json
+    }
+}
+
+fn proj_empty_test_plan() -> ProjectTestPlan {
+    let cases: list[ProjectTestCase] = []
+    let hashes: list[str] = []
+    return new ProjectTestPlan(cases, hashes, "", "", "")
+}
+
+fn proj_plan_encode(value: str) -> str {
+    let mut parts: list[str] = []
+    for index in 0..len(value) {
+        let ch = value[index]
+        if ch == "%" { parts.append("%25") }
+        elif ch == "\t" { parts.append("%09") }
+        elif ch == "\n" { parts.append("%0A") }
+        elif ch == "\r" { parts.append("%0D") }
+        else { parts.append(ch) }
+    }
+    return join_strings(parts, "")
+}
+
+fn proj_test_exists(state: ProjectLockState, path: str) -> bool {
+    let first = tool_buf_from_str(path)
+    let second = tool_buf_from_str("")
+    let found = wysna_host_fs(first, second, 0)
+    wysna_host_close(first)
+    wysna_host_close(second)
+    if found < 0 { state.fail("W5004", "cannot inspect test input '" + path + "'") }
+    return found == 1
+}
+
+fn proj_test_plan(m: ProjectManifest, discover: bool, filter: str, has_filter: bool, case_id: str, json_mode: bool) -> ProjectTestPlan {
+    let state = new ProjectLockState("test", json_mode, m.root)
+    let mut candidates: list[ProjectTestCase] = []
+    let mut seen: list[str] = []
+    for tc in m.tests { candidates.append(tc); seen.append(tc.entry) }
+    if discover and proj_test_exists(state, m.root + "/tests") {
+        if module_canonical_resolved(m.root + "/tests") != m.root + "/tests" {
+            state.fail("W5002", "test discovery does not follow symlinks")
+        }
+        let paths = tool_sort_strings(proj_lock_paths(state, m.root + "/tests", "", true))
+        proj_lock_verify_collisions(state, paths)
+        for path in paths {
+            let entry = "tests/" + path
+            let filename = tool_basename(path)
+            if not tool_str_contains(seen, entry) and ((len(filename) >= 5 and slice(filename, 0, 5) == "test_") or proj_str_ends_with(path, "_test.wysna")) {
+                let tc = new ProjectTestCase()
+                tc.name = "auto:" + entry
+                tc.entry = entry
+                candidates.append(tc)
+            }
+        }
+    }
+    let mut selected: list[ProjectTestCase] = []
+    for tc in candidates {
+        if (not has_filter or proj_str_contains_substr(tc.name, filter)) and (case_id == "" or case_id == "test:" + tc.name) {
+            selected.append(tc)
+        }
+    }
+    if len(selected) == 0 and case_id != "" { state.fail("W5002", "test case '" + case_id + "' matched no cases") }
+    if len(selected) == 0 and has_filter { state.fail("W5002", "test filter '" + filter + "' matched no cases") }
+    if len(selected) > 4096 { state.fail("W5002", "test selection exceeds 4096 cases") }
+    let lock_path = m.root + "/wysna.lock"
+    let lock_sha = if proj_test_exists(state, lock_path) { proj_lock_host_text(state, lock_path, "hash") } else { "" }
+    let mut rows: list[str] = []
+    let mut hashes: list[str] = []
+    for tc in selected {
+        let sha = proj_lock_host_text(state, m.root + "/" + tc.entry, "hash")
+        hashes.append(sha)
+        rows.append("{\"id\":" + diag_json_quote("test:" + tc.name) + ",\"name\":" + diag_json_quote(tc.name) +
+            ",\"entry\":" + diag_json_quote(tc.entry) + ",\"entry_sha256\":" + diag_json_quote(sha) + ",\"timeout_ms\":" + str(tc.timeout_ms) + "}")
+    }
+    let snapshot = "\"manifest_sha256\":" + diag_json_quote(m.manifest_sha256) + ",\"lock_sha256\":" +
+        (if lock_sha == "" { "null" } else { diag_json_quote(lock_sha) }) + ",\"toolchain\":\"0.8.0\",\"cases\":[" + join_strings(rows, ",") + "]"
+    let hash = diag_sha256_hex("{" + snapshot + "}")
+    let payload = "{\"schema_version\":\"wysna.project-test-plan/1\",\"project\":" + diag_json_quote(m.name) + "," + snapshot +
+        ",\"selected\":" + str(len(selected)) + ",\"plan_hash\":" + diag_json_quote(hash) + "}"
+    return new ProjectTestPlan(selected, hashes, lock_sha, hash, payload)
+}
+
+fn proj_test_report_path(m: ProjectManifest, value: str, json_mode: bool) -> str {
+    if value == "" { return "" }
+    let path = proj_abs_from_cwd(value)
+    if proj_is_protected_build_dest(m, path) {
+        proj_emit_error_and_exit("test", json_mode, "W5002", "test report path must not overwrite a source, manifest, or lockfile")
+    }
+    return path
+}

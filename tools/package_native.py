@@ -54,8 +54,14 @@ def assemble(output, cache, *, source_commit=None):
     bootstrap = json.loads((compiler.parent / "bootstrap.json").read_text(encoding="utf-8"))
     if len(set(bootstrap["native_c_sha256"])) != 1:
         raise ValueError("Native SDK requires a verified compiler fixed point")
-    driver_digest = sha256(ROOT / "packaging/native/driver.c")
-    platform_digest = sha256(ROOT / "packaging/native/platform.h")
+    source_inputs = {path.relative_to(ROOT).as_posix(): sha256(path)
+                     for directory, suffixes in (("packaging/native", ('.c', '.h')),
+                                                  ("runtime", ('.h', '.def')),
+                                                  ("stdlib", ('.wysna',)))
+                     for path in sorted((ROOT / directory).iterdir())
+                     if path.is_file() and path.suffix in suffixes}
+    driver_digest = source_inputs['packaging/native/driver.c']
+    platform_digest = source_inputs['packaging/native/platform.h']
     output.parent.mkdir(parents=True, exist_ok=True)
     suffix = ".exe" if os.name == "nt" else ""
     with tempfile.TemporaryDirectory(prefix="wysna-native-package-", dir=output.parent) as temporary:
@@ -106,8 +112,7 @@ def assemble(output, cache, *, source_commit=None):
             "The complete toolchain and license notices are retained in toolchain/zig.\n"
             "No CPython runtime or Wysna Seed implementation is included.\n", encoding="utf-8")
         if (bootstrap_fingerprint(ROOT)[0] != bootstrap["fingerprint"]
-                or sha256(ROOT / "packaging/native/driver.c") != driver_digest
-                or sha256(ROOT / "packaging/native/platform.h") != platform_digest):
+                or any(sha256(ROOT / name) != expected for name, expected in source_inputs.items())):
             raise ValueError("SDK inputs changed during packaging; artifacts were not accepted")
         actual_commit = subprocess.run(["git", "rev-parse", "HEAD"], cwd=ROOT, check=True,
                                        capture_output=True, text=True).stdout.strip()
@@ -128,6 +133,7 @@ def assemble(output, cache, *, source_commit=None):
                     "bootstrap_seed_c_sha256": bootstrap["seed_c_sha256"],
                     "native_c_sha256": bootstrap["native_c_sha256"],
                     "driver_source_sha256": driver_digest, "platform_source_sha256": platform_digest,
+                    "distribution_inputs_sha256": source_inputs,
                     "components": {"zig": component}, "files": files}
         (stage / "native-sdk.json").write_text(json.dumps(manifest, indent=2) + "\n", encoding="utf-8")
         stage.rename(output)

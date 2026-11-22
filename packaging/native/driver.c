@@ -36,10 +36,10 @@ typedef struct {
     const char *command, *source, *output, *profile;
     const char *project_subcmd, *project_src_root;
     int arguments, include_count, link_count, library_count, library_dir_count, dep_count;
-    int profile_set, timeout_set, project_json_v1;
+    int profile_set, timeout_set, project_json_v1, test_diagnostics;
     const char *includes[SDK_LINK_LIMIT], *links[SDK_LINK_LIMIT], *libraries[SDK_LINK_LIMIT], *library_dirs[SDK_LINK_LIMIT];
     const char *dep_aliases[SDK_LINK_LIMIT], *dep_roots[SDK_LINK_LIMIT];
-    int64_t timeout;
+    int64_t timeout, test_deadline;
 } SdkOptions;
 typedef struct {
     char root[SDK_PATH_CAP], engine[SDK_PATH_CAP], zig[SDK_PATH_CAP], stdlib[SDK_PATH_CAP];
@@ -293,6 +293,12 @@ static int sdk_prepare_cache(SdkInvocation* invocation) {
         sdk_environment("ZIG_LOCAL_CACHE_DIR", invocation->scratch) &&
         sdk_environment("ZIG_GLOBAL_CACHE_DIR", invocation->global_cache);
 }
+static int64_t sdk_compile_timeout(const SdkOptions* options) {
+    if (!options->test_deadline) return SDK_COMPILE_TIMEOUT_MS;
+    int64_t remaining = options->test_deadline - wysna_host_monotonic_ms_internal();
+    return remaining > 0 ? remaining : 1;
+}
+
 static int sdk_build(SdkInvocation* invocation, const SdkOptions* options) {
     if (!sdk_is_file(invocation->zig)) return sdk_error("W5001", "Missing bundled C toolchain; reinstall the SDK", invocation->zig);
     if (!sdk_prepare_cache(invocation)) return sdk_error("W5001", "Cannot configure a writable compiler cache", NULL);
@@ -319,69 +325,21 @@ static int sdk_build(SdkInvocation* invocation, const SdkOptions* options) {
     arguments[count++] = WYSNA_NATIVE_STACK_LINK_ARGUMENT;
 #endif
     arguments[count++] = "-lc"; arguments[count++] = "-lm"; arguments[count++] = "-o"; arguments[count++] = invocation->product;
-    int status = sdk_child(invocation->zig, count, arguments, SDK_COMPILE_TIMEOUT_MS);
+    int status = sdk_child(invocation->zig, count, arguments, sdk_compile_timeout(options));
     int restored_local = sdk_environment("ZIG_LOCAL_CACHE_DIR", invocation->previous_local_cache);
     int restored_global = sdk_environment("ZIG_GLOBAL_CACHE_DIR", invocation->previous_global_cache);
     if (!restored_local || !restored_global) return sdk_error("W5001", "Cannot restore the application environment", NULL);
     return status;
 }
+#include "stdio_capture.h"
+
 static int sdk_child_captured(const char* executable, int argc, const char** argv, int64_t timeout,
                               const char* stdout_path, const char* stderr_path) {
-    fflush(stdout);
-    fflush(stderr);
-#ifdef _WIN32
-    int saved_out = _dup(1);
-    int saved_err = _dup(2);
-    HANDLE orig_std_out = GetStdHandle(STD_OUTPUT_HANDLE);
-    HANDLE orig_std_err = GetStdHandle(STD_ERROR_HANDLE);
-    wchar_t* wide_out = wysna_host_process_wide(stdout_path);
-    wchar_t* wide_err = wysna_host_process_wide(stderr_path);
-    int out_fd = wide_out ? _wopen(wide_out, _O_WRONLY | _O_CREAT | _O_TRUNC, 0600) : -1;
-    int err_fd = wide_err ? _wopen(wide_err, _O_WRONLY | _O_CREAT | _O_TRUNC, 0600) : -1;
-    free(wide_out);
-    free(wide_err);
-    if (out_fd < 0 || err_fd < 0 || saved_out < 0 || saved_err < 0) {
-        if (out_fd >= 0) _close(out_fd);
-        if (err_fd >= 0) _close(err_fd);
-        if (saved_out >= 0) _close(saved_out);
-        if (saved_err >= 0) _close(saved_err);
-        return -1;
-    }
-    _dup2(out_fd, 1);
-    _dup2(err_fd, 2);
-    SetStdHandle(STD_OUTPUT_HANDLE, (HANDLE)_get_osfhandle(1));
-    SetStdHandle(STD_ERROR_HANDLE, (HANDLE)_get_osfhandle(2));
-    _close(out_fd);
-    _close(err_fd);
+    SdkStdioCapture capture;
+    if (!sdk_stdio_capture(&capture, stdout_path, stderr_path)) return -1;
     int result = sdk_child(executable, argc, argv, timeout);
-    fflush(stdout); fflush(stderr);
-    _dup2(saved_out, 1); _dup2(saved_err, 2);
-    SetStdHandle(STD_OUTPUT_HANDLE, orig_std_out);
-    SetStdHandle(STD_ERROR_HANDLE, orig_std_err);
-    _close(saved_out); _close(saved_err);
+    sdk_stdio_restore(&capture);
     return result;
-#else
-    int saved_out = dup(STDOUT_FILENO);
-    int saved_err = dup(STDERR_FILENO);
-    int out_fd = open(stdout_path, O_WRONLY | O_CREAT | O_TRUNC, 0600);
-    int err_fd = open(stderr_path, O_WRONLY | O_CREAT | O_TRUNC, 0600);
-    if (out_fd < 0 || err_fd < 0 || saved_out < 0 || saved_err < 0) {
-        if (out_fd >= 0) close(out_fd);
-        if (err_fd >= 0) close(err_fd);
-        if (saved_out >= 0) close(saved_out);
-        if (saved_err >= 0) close(saved_err);
-        return -1;
-    }
-    dup2(out_fd, STDOUT_FILENO);
-    dup2(err_fd, STDERR_FILENO);
-    close(out_fd);
-    close(err_fd);
-    int result = sdk_child(executable, argc, argv, timeout);
-    fflush(stdout); fflush(stderr);
-    dup2(saved_out, STDOUT_FILENO); dup2(saved_err, STDERR_FILENO);
-    close(saved_out); close(saved_err);
-    return result;
-#endif
 }
 
 static size_t sdk_normalize_newlines(char* text, size_t len) {
@@ -426,10 +384,16 @@ static int sdk_compile_source(SdkInvocation* invocation, const SdkOptions* optio
         engine_arguments[engine_count++] = options->dep_aliases[d];
         engine_arguments[engine_count++] = options->dep_roots[d];
     }
+    if (options->test_diagnostics) {
+        if (!sdk_join(invocation->scratch, invocation->workspace, "diagnostics.json")) return 1;
+        engine_arguments[engine_count++] = "--diag-array";
+        engine_arguments[engine_count++] = "--diag-out";
+        engine_arguments[engine_count++] = invocation->scratch;
+    }
     engine_arguments[engine_count++] = command_mode;
     engine_arguments[engine_count++] = source_path;
     if (need_product_dir || options->output) engine_arguments[engine_count++] = invocation->generated;
-    return sdk_child(invocation->engine, engine_count, engine_arguments, SDK_COMPILE_TIMEOUT_MS);
+    return sdk_child(invocation->engine, engine_count, engine_arguments, sdk_compile_timeout(options));
 }
 
 static int sdk_run_test_case(SdkInvocation* invocation, const SdkOptions* options, const char* source_path, const char* display_name, int argc, char** argv) {
@@ -515,16 +479,10 @@ cleanup:
     return status;
 }
 
+#include "project_tests.h"
+
 static void sdk_print_json_quoted(const char* text) {
-    putchar('"');
-    for (const unsigned char* p = (const unsigned char*)text; *p; p++) {
-        if (*p == '"' || *p == '\\') printf("\\%c", *p);
-        else if (*p == '\n') fputs("\\n", stdout);
-        else if (*p == '\r') fputs("\\r", stdout);
-        else if (*p == '\t') fputs("\\t", stdout);
-        else putchar(*p);
-    }
-    putchar('"');
+    sdk_test_string(stdout, text);
 }
 
 static int sdk_execute_project(SdkInvocation* invocation, const SdkOptions* options, int argc, char** argv) {
@@ -573,9 +531,11 @@ static int sdk_execute_project(SdkInvocation* invocation, const SdkOptions* opti
     if (!read_ok) { free(plan_buf); return sdk_error("W5001", "Failed reading resolved project plan", NULL); }
 
     const char *pkg_name = "", *target_entry = NULL, *target_output = NULL;
-    const char *test_names[SDK_ARGUMENT_LIMIT], *test_entries[SDK_ARGUMENT_LIMIT];
-    int64_t test_timeouts[SDK_ARGUMENT_LIMIT];
-    int test_count = 0;
+    SdkProjectTestPlan test_plan = {0};
+    test_plan.root = test_plan.manifest = test_plan.manifest_sha = test_plan.lock_sha = test_plan.hash = "";
+    test_plan.report_json = test_plan.report_junit = test_plan.json = "";
+    test_plan.cases = calloc(SDK_TEST_CASE_LIMIT, sizeof(SdkProjectTest));
+    if (!test_plan.cases) { free(plan_buf); return sdk_error("W5001", "Cannot allocate project test plan", NULL); }
     SdkOptions run_opts = *options;
     run_opts.output = NULL;
 
@@ -588,7 +548,20 @@ static int sdk_execute_project(SdkInvocation* invocation, const SdkOptions* opti
         size_t llen = strlen(line);
         if (llen > 0 && line[llen - 1] == '\r') line[--llen] = 0;
         if (llen == 0) continue;
+        char* value = strchr(line, '=');
+        if (value && strncmp(line, "DEP=", 4) != 0 && strncmp(line, "TEST=", 5) != 0 && !sdk_plan_decode(value + 1)) {
+            free(test_plan.cases); free(plan_buf); return sdk_error("W5002", "Invalid project plan encoding", NULL);
+        }
         if (strncmp(line, "NAME=", 5) == 0) pkg_name = line + 5;
+        else if (strncmp(line, "ROOT=", 5) == 0) test_plan.root = line + 5;
+        else if (strncmp(line, "MANIFEST=", 9) == 0) test_plan.manifest = line + 9;
+        else if (strncmp(line, "MANIFEST_SHA=", 13) == 0) test_plan.manifest_sha = line + 13;
+        else if (strncmp(line, "LOCK_SHA=", 9) == 0) test_plan.lock_sha = line + 9;
+        else if (strncmp(line, "PLAN_HASH=", 10) == 0) test_plan.hash = line + 10;
+        else if (strncmp(line, "PLAN_JSON=", 10) == 0) test_plan.json = line + 10;
+        else if (strncmp(line, "LIST_ONLY=", 10) == 0) test_plan.list_only = strcmp(line + 10, "1") == 0;
+        else if (strncmp(line, "REPORT_JSON=", 12) == 0) test_plan.report_json = line + 12;
+        else if (strncmp(line, "REPORT_JUNIT=", 13) == 0) test_plan.report_junit = line + 13;
         else if (strncmp(line, "SRC_ROOT=", 9) == 0) run_opts.project_src_root = line + 9;
         else if (strncmp(line, "ENTRY=", 6) == 0) target_entry = line + 6;
         else if (strncmp(line, "OUTPUT=", 7) == 0) target_output = line + 7;
@@ -596,40 +569,33 @@ static int sdk_execute_project(SdkInvocation* invocation, const SdkOptions* opti
             char* tab = strchr(line + 4, '\t');
             if (tab) {
                 *tab = 0;
+                if (!sdk_plan_decode(line + 4) || !sdk_plan_decode(tab + 1)) { free(test_plan.cases); free(plan_buf); return 1; }
                 run_opts.dep_aliases[run_opts.dep_count] = line + 4;
                 run_opts.dep_roots[run_opts.dep_count] = tab + 1;
                 run_opts.dep_count++;
             }
-        } else if (strncmp(line, "TEST=", 5) == 0 && test_count < SDK_ARGUMENT_LIMIT) {
-            char* t1 = strchr(line + 5, '\t');
-            char* t2 = t1 ? strchr(t1 + 1, '\t') : NULL;
-            if (t1 && t2) {
-                *t1 = 0; *t2 = 0;
-                int64_t t_ms = 10000;
-                sdk_parse_timeout_ms(t1 + 1, &t_ms);
-                test_names[test_count] = line + 5;
-                test_timeouts[test_count] = t_ms;
-                test_entries[test_count] = t2 + 1;
-                test_count++;
+        } else if (strncmp(line, "TEST=", 5) == 0) {
+            char* first = strchr(line + 5, '\t');
+            char* second = first ? strchr(first + 1, '\t') : NULL;
+            char* third = second ? strchr(second + 1, '\t') : NULL;
+            if (!first || !second || !third || test_plan.count == SDK_TEST_CASE_LIMIT) {
+                free(test_plan.cases); free(plan_buf); return sdk_error("W5002", "Invalid or excessive test selection", NULL);
             }
+            *first = *second = *third = 0;
+            if (!sdk_plan_decode(line + 5) || !sdk_plan_decode(second + 1)) { free(test_plan.cases); free(plan_buf); return 1; }
+            SdkProjectTest* record = &test_plan.cases[test_plan.count++];
+            record->name = line + 5; record->entry = second + 1; record->sha = third + 1;
+            if (!sdk_parse_timeout_ms(first + 1, &record->timeout)) { free(test_plan.cases); free(plan_buf); return 1; }
         }
     }
 
     int status = 0;
     if (strcmp(options->project_subcmd, "test") == 0) {
-        int passed = 0, failed = 0;
-        for (int idx = 0; idx < test_count; idx++) {
-            SdkOptions case_opts = run_opts;
-            if (!options->timeout_set) case_opts.timeout = test_timeouts[idx];
-            int rc = sdk_run_test_case(invocation, &case_opts, test_entries[idx], test_names[idx], argc, argv);
-            if (rc == 0) passed++;
-            else failed++;
-        }
-        printf("Ran %d test(s): %d passed, %d failed.\n", test_count, passed, failed);
-        status = failed == 0 ? 0 : 1;
-        free(plan_buf);
-        return status;
+        test_plan.name = pkg_name;
+        status = sdk_run_project_tests(invocation, &run_opts, &test_plan);
+        free(test_plan.cases); free(plan_buf); return status;
     }
+    free(test_plan.cases);
 
     if (!target_entry || !sdk_absolute(invocation->source, target_entry, 1) || !sdk_is_file(invocation->source)) {
         free(plan_buf);

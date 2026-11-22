@@ -18,3 +18,40 @@ pub fn expect_equal_text(actual: str, expected: str, message: str) -> unit {
         exit(1)
     }
 }
+
+pub fn expect_equal[T](actual: T, expected: T, message: str) -> unit {
+    expect(actual == expected, message)
+}
+
+pub fn expect_not_equal[T](actual: T, expected: T, message: str) -> unit {
+    expect(actual != expected, message)
+}
+
+pub fn expect_close(actual: float, expected: float, tolerance: float, message: str) -> unit {
+    let delta = actual - expected
+    let distance = if delta < 0.0 { -delta } else { delta }
+    expect(tolerance >= 0.0 and (actual == expected or distance <= tolerance), message)
+}
+
+pub fn expect_some[T](value: T?, message: str) -> unit {
+    match value {
+        Some(item) => {},
+        None => { expect(false, message) },
+    }
+}
+
+pub fn expect_none[T](value: T?, message: str) -> unit {
+    match value {
+        Some(item) => { expect(false, message) },
+        None => {},
+    }
+}
+
+pub struct FixtureError { message: str }
+
+pub fn fixture_directory() -> str ! FixtureError {
+    let directory = env("WYSNA_TEST_TMPDIR") else {
+        return Err(FixtureError { message: "fixture directory requires project test" })
+    }
+    return directory
+}

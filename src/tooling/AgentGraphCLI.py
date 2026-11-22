@@ -429,6 +429,7 @@ def run_patch_command(argv) -> int:
 
 
 _SKILLS_TOPICS = {
+    'project-tests': '# Pruebas de proyecto para agentes\n1. Lista sin ejecutar: `wysna project test --discover --list --frozen --output-format=json-v1`.\n2. Usa los IDs exactos de result.cases: `--case test:example`; --filter conserva selección por subcadena.\n3. Ejecuta con `--expect-plan-hash <result.plan_hash> --output-format=json-v1 --report-json tests.json --report-junit tests.xml`.\n4. Lee result.cases[].failure_kind, diagnostics y los hashes de stdout/stderr; no interpretes texto de terminal.\n5. W5005 indica plan obsoleto: vuelve a listar. Una suite vacía devuelve 2; una cancelación devuelve 130.\n6. std/test ofrece igualdad genérica, tolerancia flotante, opcionales y fixture_directory(); los fixtures se eliminan después del caso.\nEl hash cubre manifiesto, lock, versión y entradas seleccionadas, no todos los imports. El SDK native-core-v1 ejecuta estos comandos sin Python.\n',
     'overview': (
         f'# Wysna v{WYSNA_VERSION} — Agent-First Native Language & Toolchain\n'
         '- Default workflow uses checked static inspection before execution.\n'
@@ -436,7 +437,7 @@ _SKILLS_TOPICS = {
         '- Error channel: Typed values `T ! E`, unwrap with `?` or `else err { fallback }`.\n'
         '- Core agent loop: `wysna skills` -> `wysna graph` -> `wysna inspect` -> '
         '`wysna patch` -> `wysna fix` -> `wysna check`.\n'
-        '- Topics available: overview, agent-loop, syntax, graph, patch, contracts, stdlib.'
+        '- Topics available: overview, agent-loop, syntax, graph, patch, project-tests, contracts, stdlib.'
     ),
     'agent-loop': (
         '# Agent Coding Loop (Token-Efficient, Hash-Guarded)\n'

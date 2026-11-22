@@ -44,7 +44,8 @@ class NativeSdkContractTests(unittest.TestCase):
                 root = Path(temporary)
                 (root / 'selfhost').mkdir()
                 (root / 'selfhost/compiler.wysna').write_text('print(1)')
-                with patch('compiler.Bootstrap.bootstrap_fingerprint', return_value=(fingerprint, {})), \
+                with patch.dict(os.environ, {'WYSNA_CACHE_HOME': str(root / '.wysna_cache')}), \
+                     patch('compiler.Bootstrap.bootstrap_fingerprint', return_value=(fingerprint, {})), \
                      patch('compiler.Bootstrap.bootstrap_compiler', side_effect=build) as builder:
                     first = Path(ensure_selfhost_compiler_binary(str(root)))
                     self.assertEqual(ensure_selfhost_compiler_binary(str(root)), str(first))
@@ -91,7 +92,9 @@ class NativeSdkContractTests(unittest.TestCase):
         root = Path(__file__).resolve().parents[2]
         driver = (root / 'packaging/native/driver.c').read_text(encoding='utf-8')
         self.assertIn('#define SDK_COMPILE_TIMEOUT_MS 600000', driver)
-        self.assertEqual(driver.count('SDK_COMPILE_TIMEOUT_MS'), 4)
+        self.assertIn('return SDK_COMPILE_TIMEOUT_MS;', driver)
+        self.assertIn('engine_arguments, sdk_compile_timeout(options)', driver)
+        self.assertIn('arguments, sdk_compile_timeout(options)', driver)
         self.assertNotIn('engine_arguments, 120000', driver)
 
     def test_existing_installation_is_preserved_before_any_download(self):

@@ -90,7 +90,7 @@ TOOLS = [
     {"name": "wysna_skills",
      "description": "Version-matched concise coding and workflow guides embedded in Wysna.",
      "inputSchema": {"type": "object", "properties": {
-         "topic": {"type": "string", "description": "overview, agent-loop, syntax, graph, patch, contracts, stdlib."}}}},
+         "topic": {"type": "string", "description": "overview, agent-loop, syntax, graph, patch, project-tests, contracts, stdlib."}}}},
 ]
 
 

@@ -989,7 +989,7 @@ fn proj_load_manifest(explicit: str) -> ProjectManifest {
 
 fn proj_emit_error_and_exit(subcmd: str, json_mode: bool, code: str, msg: str) -> unit {
     let cmd_name = if subcmd != "" { "project." + subcmd } else { "project" }
-    let exit_c = if code == "W5004" { 3 } elif code == "W5002" { 2 } else { 1 }
+    let exit_c = if code == "W5004" { 3 } elif code == "W5002" or code == "W5005" { 2 } else { 1 }
     let status = if exit_c == 3 { "toolchain_error" } elif exit_c == 2 { "usage_error" } else { "diagnostic_error" }
     if json_mode {
         let diag = diag_record_json(code, if exit_c == 2 { "usage" } else { "filesystem" }, "error", msg, "<project>", 1, 1, "")
@@ -1225,6 +1225,12 @@ fn tool_handle_project(args: list[str], json_mode_in: bool) -> unit {
     let mut filter_arg = ""
     let mut output_arg = ""
     let mut has_filter = false
+    let mut list_only = false
+    let mut discover = false
+    let mut case_id = ""
+    let mut expected_plan = ""
+    let mut report_json = ""
+    let mut report_junit = ""
     let mut frozen = false
     let mut json_mode = json_mode_in
 
@@ -1240,14 +1246,14 @@ fn tool_handle_project(args: list[str], json_mode_in: bool) -> unit {
             if a == "--frozen" { frozen = true }
             i = i + 1
         } elif a == "--output-format=json-v1" {
-            if subcmd != "lock" and subcmd != "check" and subcmd != "build" {
-                proj_emit_error_and_exit(subcmd, true, "W5002", "--output-format=json-v1 is supported only by project lock, check and build")
+            if subcmd != "lock" and subcmd != "check" and subcmd != "build" and subcmd != "test" {
+                proj_emit_error_and_exit(subcmd, true, "W5002", "--output-format=json-v1 is supported only by project lock, check, build and test")
             }
             json_mode = true
             i = i + 1
         } elif a == "--output-format" and i + 1 < len(cleaned) {
-            if subcmd != "lock" and subcmd != "check" and subcmd != "build" {
-                proj_emit_error_and_exit(subcmd, true, "W5002", "--output-format=json-v1 is supported only by project lock, check and build")
+            if subcmd != "lock" and subcmd != "check" and subcmd != "build" and subcmd != "test" {
+                proj_emit_error_and_exit(subcmd, true, "W5002", "--output-format=json-v1 is supported only by project lock, check, build and test")
             }
             if cleaned[i + 1] != "json-v1" {
                 proj_emit_error_and_exit(subcmd, json_mode, "W5002", "unsupported output format: " + cleaned[i + 1])
@@ -1268,6 +1274,17 @@ fn tool_handle_project(args: list[str], json_mode_in: bool) -> unit {
                 proj_emit_error_and_exit(subcmd, json_mode, "W5002", "--entry is supported only by 'wysna project run'")
             }
             entry_arg = cleaned[i + 1]
+            i = i + 2
+        } elif a == "--list" or a == "--discover" {
+            if subcmd != "test" { proj_emit_error_and_exit(subcmd, json_mode, "W5002", "test selection options are supported only by project test") }
+            if a == "--list" { list_only = true } else { discover = true }
+            i = i + 1
+        } elif (a == "--case" or a == "--expect-plan-hash" or a == "--report-json" or a == "--report-junit") and i + 1 < len(cleaned) {
+            if subcmd != "test" { proj_emit_error_and_exit(subcmd, json_mode, "W5002", "test selection and report options are supported only by project test") }
+            if a == "--case" { case_id = cleaned[i + 1] }
+            elif a == "--expect-plan-hash" { expected_plan = cleaned[i + 1] }
+            elif a == "--report-json" { report_json = cleaned[i + 1] }
+            else { report_junit = cleaned[i + 1] }
             i = i + 2
         } elif a == "--filter" and i + 1 < len(cleaned) {
             if subcmd != "test" {
@@ -1340,17 +1357,35 @@ fn tool_handle_project(args: list[str], json_mode_in: bool) -> unit {
         exit(0)
     }
 
+    let test_plan = if subcmd == "test" { proj_test_plan(m, discover, filter_arg, has_filter, case_id, json_mode) }
+        else { proj_empty_test_plan() }
+    if subcmd == "test" {
+        if expected_plan != "" and expected_plan != test_plan.hash {
+            proj_emit_error_and_exit("test", json_mode, "W5005", "test plan is stale; list tests again before executing")
+        }
+        report_json = proj_test_report_path(m, report_json, json_mode)
+        report_junit = proj_test_report_path(m, report_junit, json_mode)
+        if report_json != "" and report_json == report_junit { proj_emit_error_and_exit("test", json_mode, "W5002", "JSON and JUnit reports require different paths") }
+        if list_only and report_junit != "" { proj_emit_error_and_exit("test", json_mode, "W5002", "--report-junit requires test execution, not --list") }
+        if list_only and plan_out == "" {
+            if report_json != "" { write_file(report_json, test_plan.json + "\n") else err { proj_emit_error_and_exit("test", json_mode, "W5004", err.message) } }
+            let rc = if len(test_plan.cases) == 0 { 2 } else { 0 }
+            if json_mode { diag_write_output(diag_tool_envelope_json("project.test", if rc == 0 { "ok" } else { "usage_error" }, rc, "[]", "result", test_plan.json, "[]")) }
+            else { for tc in test_plan.cases { print("test:" + tc.name, tc.entry) } }
+            exit(rc)
+        }
+    }
     if plan_out == "" {
         proj_emit_error_and_exit(subcmd, json_mode, "W5002", "project " + subcmd + " requires the wysna native SDK driver")
     }
 
     let mut lines: list[str] = []
     lines.append("KIND=" + subcmd)
-    lines.append("NAME=" + m.name)
-    lines.append("ROOT=" + m.root)
-    lines.append("SRC_ROOT=" + m.source_root_abs)
+    lines.append("NAME=" + proj_plan_encode(m.name))
+    lines.append("ROOT=" + proj_plan_encode(m.root))
+    lines.append("SRC_ROOT=" + proj_plan_encode(m.source_root_abs))
     for d in m.deps {
-        lines.append("DEP=" + d.alias + "\t" + d.source_root_abs)
+        lines.append("DEP=" + proj_plan_encode(d.alias) + "\t" + proj_plan_encode(d.source_root_abs))
     }
 
     if subcmd == "build" or subcmd == "run" {
@@ -1372,30 +1407,26 @@ fn tool_handle_project(args: list[str], json_mode_in: bool) -> unit {
             entry_abs = ov[1]
         }
         lines.append("TARGET=" + target.name)
-        lines.append("ENTRY=" + entry_abs)
+        lines.append("ENTRY=" + proj_plan_encode(entry_abs))
         if subcmd == "build" {
             let dest = if output_arg != "" { proj_abs_from_cwd(output_arg) } else { module_normalize(m.root + "/build/" + target.name) }
             if proj_is_protected_build_dest(m, dest) {
                 proj_emit_error_and_exit("build", json_mode, "W5002", "build output must not overwrite a source, manifest, or lockfile")
             }
-            lines.append("OUTPUT=" + dest)
+            lines.append("OUTPUT=" + proj_plan_encode(dest))
         }
     } else {
-        let mut selected: list[ProjectTestCase] = []
-        for tc in m.tests {
-            if not has_filter or proj_str_contains_substr(tc.name, filter_arg) {
-                selected.append(tc)
-            }
-        }
-        if len(selected) == 0 {
-            if has_filter {
-                proj_emit_error_and_exit("test", json_mode, "W5002", "test filter '" + filter_arg + "' matched no cases")
-            }
-            print("[EMPTY] No [[tests]] cases are declared; no project code was checked.")
-            exit(2)
-        }
-        for tc in selected {
-            lines.append("TEST=" + tc.name + "\t" + str(tc.timeout_ms) + "\t" + m.root + "/" + tc.entry)
+        lines.append("MANIFEST=" + proj_plan_encode(m.path))
+        lines.append("MANIFEST_SHA=" + m.manifest_sha256)
+        lines.append("LOCK_SHA=" + test_plan.lock_sha)
+        lines.append("PLAN_HASH=" + test_plan.hash)
+        lines.append("PLAN_JSON=" + proj_plan_encode(test_plan.json))
+        lines.append("LIST_ONLY=" + if list_only { "1" } else { "0" })
+        lines.append("REPORT_JSON=" + proj_plan_encode(report_json))
+        lines.append("REPORT_JUNIT=" + proj_plan_encode(report_junit))
+        for idx in 0..len(test_plan.cases) {
+            let tc = test_plan.cases[idx]
+            lines.append("TEST=" + proj_plan_encode(tc.name) + "\t" + str(tc.timeout_ms) + "\t" + proj_plan_encode(m.root + "/" + tc.entry) + "\t" + test_plan.hashes[idx])
         }
     }
 

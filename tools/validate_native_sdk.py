@@ -390,6 +390,42 @@ def validate(sdk, report, strict_source=False, compiler_source=None, application
         require(pout.is_file(), 'Missing project build binary')
         run('project-run', ['project', 'run', '--manifest', proj_dir / 'wysna.toml'], stdout=b'hi native\n')
         run('project-test', ['project', 'test', '--manifest', proj_dir / 'wysna.toml'])
+        fixture_entry = proj_dir / 'tests/test_fixture.wysna'
+        fixture_entry.write_text('import "std/test" as test\n'
+                                 'test.expect_equal([1, 2], [1, 2], "generic equality")\n'
+                                 'test.expect_close(0.1 + 0.2, 0.3, 0.000001, "tolerance")\n'
+                                 'let present_value: int? = Some(42)\nlet absent_value: int? = None\n'
+                                 'test.expect_some(present_value, "present")\n'
+                                 'test.expect_none(absent_value, "absent")\n'
+                                 'let directory = test.fixture_directory() else error { exit(9) }\n'
+                                 'write_file(directory + "/fixture.txt", "fixture") else error { exit(8) }\n'
+                                 'print(directory)\n', encoding='utf-8')
+        test_options = ['--manifest', proj_dir / 'wysna.toml', '--discover', '--output-format=json-v1']
+        listed = run('project-test-plan', ['project', 'test', *test_options, '--list'])
+        plan = json.loads(listed.stdout)['result']
+        require(plan['schema_version'] == 'wysna.project-test-plan/1' and plan['selected'] == 2, plan)
+        test_json, test_xml = project / 'tests.json', project / 'tests.xml'
+        tested = run('project-test-machine', ['project', 'test', *test_options,
+                     '--expect-plan-hash', plan['plan_hash'], '--report-json', test_json, '--report-junit', test_xml])
+        test_result = json.loads(tested.stdout)
+        require(tested.stderr == b'' and test_result['result']['passed'] == 2, test_result)
+        require(json.loads(test_json.read_text(encoding='utf-8')) == test_result['result'], test_result)
+        require(len(test_result['artifacts']) == 2, test_result)
+        for artifact in test_result['artifacts']:
+            require(digest(Path(artifact['path'])) == artifact['sha256'], artifact)
+        import xml.etree.ElementTree as ET
+        require(ET.parse(test_xml).getroot().attrib['tests'] == '2', test_xml)
+        fixture_path = Path(test_result['result']['cases'][1]['stdout'].strip())
+        require(not fixture_path.exists(), 'Test fixture was not removed: ' + str(fixture_path))
+        stale = run('project-test-stale-plan', ['project', 'test', *test_options,
+                    '--expect-plan-hash', '0' * 64], expected=2)
+        require(json.loads(stale.stdout)['diagnostics'][0]['code'] == 'W5005', stale.stdout)
+        fixture_entry.write_text('let invalid: int = "bad"\n', encoding='utf-8')
+        invalid = run('project-test-compile-diagnostic', ['project', 'test', *test_options,
+                      '--case', 'test:auto:tests/test_fixture.wysna'], expected=1)
+        invalid_case = json.loads(invalid.stdout)['result']['cases'][0]
+        require(invalid.stderr == b'' and invalid_case['failure_kind'] == 'compile_error'
+                and invalid_case['diagnostics'][0]['code'] == 'W2001', invalid_case)
         if application is not None:
             scaffold = run('project-new', ['project', 'new', 'first-project', '--output-format=json-v1'])
             scaffold_result = json.loads(scaffold.stdout)
