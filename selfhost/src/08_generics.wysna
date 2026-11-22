@@ -32,7 +32,7 @@ fn sem_nominal_specialization_name(name: str, arguments: list[int]) -> str {
     return result
 }
 fn sem_specialize(context: SemanticContext, template_id: int, selected: int, actual: list[int], source: Token) -> int {
-    let unification = new SemUnification()
+    let unification = SemUnification()
     let template = context.functions[template_id]
     let declared = context.types[template.type_id].args
     let chosen = context.types[selected].args

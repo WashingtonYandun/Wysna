@@ -499,7 +499,7 @@ print(a, f, i)
         source = '''fn add(first: int?, second: int?) -> int {
     (first ?? 0) + (second ?? 0)
 }
-print(add(20, 22), add(none, 42), add(42, none))
+print(add(20, 22), add(None, 42), add(42, None))
 '''
         service, checked = self.checked(source)
         expected = self.c99(service, checked)

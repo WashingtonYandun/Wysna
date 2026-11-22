@@ -724,7 +724,7 @@ fn pkg_cmd_pack(args: list[str], json_mode: bool) -> unit {
     if output_arg == "" { pkg_fail("pack", json_mode, "W5002", "packages pack requires -o OUTPUT") }
     let m = proj_load_manifest(manifest_arg)
     if not m.ok { pkg_fail("pack", json_mode, m.err_code, m.err_msg) }
-    let state = new ProjectLockState("pack", json_mode, m.root)
+    let state = ProjectLockState("pack", json_mode, m.root)
     let paths = tool_sort_strings(proj_lock_paths(state, m.root, "", false))
     pkg_validate_inventory(paths, "pack", json_mode)
     let out_buf = wysna_host_buffer_new()
@@ -911,7 +911,7 @@ fn pkg_cmd_restore(args: list[str], json_mode: bool) -> unit {
     let mut restored_json: list[str] = []
     for al in aliases_arr.items {
         let pid = lsp_json_str(al, "package_id", "")
-        let mut found_dep = new LspJson("null")
+        let mut found_dep = LspJson("null")
         for d in deps_arr.items {
             if lsp_json_str(d, "package_id", "") == pid { found_dep = d break }
         }

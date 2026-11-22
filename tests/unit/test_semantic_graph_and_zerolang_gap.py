@@ -47,8 +47,8 @@ class Service {
 }
 
 pub async fn run_pipeline(name: str) -> str {
-    let console = new ConsoleLogger("SYS")
-    let svc = new Service(console)
+    let console = ConsoleLogger("SYS")
+    let svc = Service(console)
     return svc.execute(name)
 }
 
@@ -146,7 +146,7 @@ def test_cross_module_semantic_graph_and_lsp_implementation(tmp_path):
         "fn persist(store: Store, k: str) -> int {\n"
         "    return store.save(k)\n"
         "}\n"
-        'print(persist(new DiskStore(), "abc"))\n'
+        'print(persist(DiskStore(), "abc"))\n'
     )
     app_file.write_text(app_source, encoding="utf-8")
 

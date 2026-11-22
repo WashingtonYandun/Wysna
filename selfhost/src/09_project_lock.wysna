@@ -145,7 +145,7 @@ fn proj_lock_visit(state: ProjectLockState, directory: str) -> str {
 }
 
 fn proj_lock_json(m: ProjectManifest, command: str, json_mode: bool) -> str {
-    let state = new ProjectLockState(command, json_mode, m.root)
+    let state = ProjectLockState(command, json_mode, m.root)
     proj_lock_verify_collisions(state, proj_lock_paths(state, m.source_root_abs, "", true))
     let aliases = proj_lock_aliases(state, m)
     let mut dependencies: list[str] = []

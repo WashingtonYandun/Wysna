@@ -8,12 +8,12 @@ fn nested() -> (int ! str) ! bool {
 }
 print(nested())
 fn optional_success() -> (int?) ! str {
-    return Ok(none)
+    return Ok(None)
 }
 print(optional_success())
-let nested_option: (int?)? = Some(none)
-print(nested_option == none)
-print(nested_option ?? none)
+let nested_option: (int?)? = Some(None)
+print(nested_option == None)
+print(nested_option ?? None)
 fn qualified_nested() -> (int ! str) ! bool {
     return Result.Ok(Result.Err("qualified"))
 }
@@ -46,7 +46,7 @@ print(optional_sugar)
 print(optional_alias)
 print(optional_sugar == optional_alias)
 print(optional_alias == optional_sugar)
-let nullable_values: dict[str, int?] = {"present": none}
-print(nullable_values.get("present") == none)
-print(nullable_values.get("missing") == none)
-print(nullable_values.get("present") ?? none)
+let nullable_values: dict[str, int?] = {"present": None}
+print(nullable_values.get("present") == None)
+print(nullable_values.get("missing") == None)
+print(nullable_values.get("present") ?? None)

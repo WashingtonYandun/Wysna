@@ -960,9 +960,13 @@ class TypeChecker:
                 code="W2001"
             )
 
-        if isinstance(stmt.initializer, NoneLiteral) and stmt.type_ann is None:
+        if stmt.type_ann is None and (
+            isinstance(stmt.initializer, NoneLiteral)
+            or (isinstance(stmt.initializer, IdentExpr) and stmt.initializer.name == "None"
+                and self.current_scope.lookup_symbol("None") is None)
+        ):
             raise TypeError(
-                message="Cannot infer type of 'none'; explicit optional type annotation required",
+                message="Cannot infer type of 'None'; explicit optional type annotation required",
                 line=stmt.line,
                 col=stmt.col,
                 file=self.file,
@@ -999,7 +1003,7 @@ class TypeChecker:
                     file=self.file,
                     code="W2001",
                     help=("If this value can be absent, consider an optional type."
-                          if isinstance(stmt.initializer, NoneLiteral) else None),
+                          if init_type == NoneType or isinstance(stmt.initializer, NoneLiteral) else None),
                 )
             var_type = expected_type
         else:

@@ -21,7 +21,7 @@ pub struct Line { text: str, eof: bool }
 
 # Reads one line without its terminator; `eof` is true when stdin is exhausted.
 pub fn read_line() -> Line ! IoError {
-    let data = new buffer.Bytes()
+    let data = buffer.Bytes()
     let status = wysna_host_stdin_read_line(data.borrow())
     if status < 0 {
         data.close()
@@ -37,7 +37,7 @@ pub fn read_line() -> Line ! IoError {
 
 # Reads the remainder of stdin.
 pub fn read_all() -> str ! IoError {
-    let data = new buffer.Bytes()
+    let data = buffer.Bytes()
     if wysna_host_stdin_read_all(data.borrow()) < 0 {
         data.close()
         return Err(IoError { message: "stdin read failed" })

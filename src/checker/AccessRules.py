@@ -326,7 +326,7 @@ def check_member_expr(checker: "TypeChecker", expr: MemberExpr, is_statement_con
         return enum_t
     if isinstance(enum_t, GenericEnumTemplate):
         template = enum_t
-        if template.name == "Option" and expr.property in ("None", "none"):
+        if template.name == "Option" and expr.property == "None":
             return NoneType
         variant = next((variant for variant in template.ast_decl.variants if variant.name == expr.property), None)
         if variant is None:

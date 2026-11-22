@@ -25,5 +25,5 @@ let n: int? = None
 let s: int? = 5
 print("coalesce:", n ?? 99, s ?? 99)
 
-print("eq none:", None == none)
+print("eq none:", None == None)
 print("eq some:", Some(10) == Some(10))

@@ -176,6 +176,17 @@ fn diag_char_span_width(src: str, start_char: int) -> int {
                 break
             }
         }
+    } elif c == 34 {
+        while end_c < n {
+            let ch = ord(src[end_c])
+            if ch == 10 or ch == 13 { break }
+            if ch == 92 and end_c + 1 < n {
+                end_c = end_c + 2
+                continue
+            }
+            end_c = end_c + 1
+            if ch == 34 { break }
+        }
     }
     return end_c
 }
@@ -307,15 +318,58 @@ fn diag_cli_command() -> str {
     return "check"
 }
 
+fn diag_render_source_excerpt(src: str, target_line: int, target_col: int) -> str {
+    if src == "" or target_line < 1 or target_col < 1 { return "" }
+    let n = len(src)
+    let mut cur = 1
+    let mut i = 0
+    while cur < target_line and i < n {
+        let code = ord(src[i])
+        if code == 13 {
+            if i + 1 < n and ord(src[i + 1]) == 10 { i = i + 2 } else { i = i + 1 }
+            cur = cur + 1
+        } elif code == 10 {
+            i = i + 1
+            cur = cur + 1
+        } else {
+            i = i + 1
+        }
+    }
+    if cur != target_line { return "" }
+    let mut end_i = i
+    while end_i < n {
+        let c = ord(src[end_i])
+        if c == 10 or c == 13 { break }
+        end_i = end_i + 1
+    }
+    let text = slice(src, i, end_i)
+    let line_label = str(target_line)
+    let mut pad_parts: list[str] = []
+    for _k in 0..len(line_label) { pad_parts.append(" ") }
+    let mut caret_parts: list[str] = []
+    let mut spaces = target_col - 1
+    if spaces < 0 { spaces = 0 }
+    if spaces > len(text) { spaces = len(text) }
+    for _s in 0..spaces { caret_parts.append(" ") }
+    let start_char = i + spaces
+    let end_char = diag_char_span_width(src, start_char)
+    let mut width = end_char - start_char
+    if width < 1 { width = 1 }
+    for _c in 0..width { caret_parts.append("^") }
+    return line_label + " | " + text + "\n" + join_strings(pad_parts, "") + " | " + join_strings(caret_parts, "")
+}
+
 fn diag_emit_and_exit(file: str, code: str, line: int, col: int, msg: str) -> unit {
     let mode = diag_cli_json_mode()
-    if mode == "" {
-        eprint("[" + code + "] " + file + ":" + str(line) + ":" + str(col) + " - " + msg)
-        exit(1)
-    }
     let mut src = ""
     if file != "" and file != "<stdin>" and file != "<unknown>" and file != "<cli>" {
         src = diag_read_snippet_source(file)
+    }
+    if mode == "" {
+        eprint("[" + code + "] " + file + ":" + str(line) + ":" + str(col) + " - " + msg)
+        let excerpt = diag_render_source_excerpt(src, line, col)
+        if excerpt != "" { eprint(excerpt) }
+        exit(1)
     }
     let stage = diag_stage_for_code(code)
     let diag_json = diag_record_json(code, stage, "error", msg, file, line, col, src)
@@ -690,7 +744,7 @@ class LspJson {
 }
 
 fn lsp_json_null() -> LspJson {
-    return new LspJson("null")
+    return LspJson("null")
 }
 
 fn lsp_json_has(obj: LspJson, key: str) -> bool {
@@ -818,13 +872,13 @@ fn lsp_jc_parse_val(c: LspJsonCursor) -> LspJson {
     if c.pos >= n { return lsp_json_null() }
     let ch = c.src[c.pos]
     if ch == "\"" {
-        let out = new LspJson("str")
+        let out = LspJson("str")
         out.str_val = lsp_jc_parse_str(c)
         return out
     }
     if ch == "{" {
         c.pos = c.pos + 1
-        let obj = new LspJson("object")
+        let obj = LspJson("object")
         lsp_jc_skip_ws(c)
         if c.pos < n and c.src[c.pos] == "}" {
             c.pos = c.pos + 1
@@ -850,7 +904,7 @@ fn lsp_jc_parse_val(c: LspJsonCursor) -> LspJson {
     }
     if ch == "[" {
         c.pos = c.pos + 1
-        let arr = new LspJson("array")
+        let arr = LspJson("array")
         lsp_jc_skip_ws(c)
         if c.pos < n and c.src[c.pos] == "]" {
             c.pos = c.pos + 1
@@ -871,13 +925,13 @@ fn lsp_jc_parse_val(c: LspJsonCursor) -> LspJson {
     }
     if ch == "t" and c.pos + 4 <= n and slice(c.src, c.pos, c.pos + 4) == "true" {
         c.pos = c.pos + 4
-        let out = new LspJson("bool")
+        let out = LspJson("bool")
         out.bool_val = true
         return out
     }
     if ch == "f" and c.pos + 5 <= n and slice(c.src, c.pos, c.pos + 5) == "false" {
         c.pos = c.pos + 5
-        let out = new LspJson("bool")
+        let out = LspJson("bool")
         out.bool_val = false
         return out
     }
@@ -897,13 +951,13 @@ fn lsp_jc_parse_val(c: LspJsonCursor) -> LspJson {
             break
         }
     }
-    let num = new LspJson("int")
+    let num = LspJson("int")
     num.int_val = lsp_parse_int(int_part, 0)
     return num
 }
 
 fn lsp_parse_json(src: str) -> LspJson {
-    let cursor = new LspJsonCursor(src)
+    let cursor = LspJsonCursor(src)
     return lsp_jc_parse_val(cursor)
 }
 
@@ -941,7 +995,7 @@ fn mcp_is_within_root(cand: str, root: str) -> bool {
 }
 
 fn mcp_json_error() -> LspJson {
-    return new LspJson("error")
+    return LspJson("error")
 }
 
 fn mcp_hex_digit(code: int) -> int {
@@ -1015,13 +1069,13 @@ fn mcp_strict_parse_val(c: LspJsonCursor) -> LspJson {
     if ch == "\"" {
         let sres = mcp_strict_parse_str_wrap(c)
         if sres[0] != "1" { return mcp_json_error() }
-        let out = new LspJson("str")
+        let out = LspJson("str")
         out.str_val = sres[1]
         return out
     }
     if ch == "{" {
         c.pos = c.pos + 1
-        let obj = new LspJson("object")
+        let obj = LspJson("object")
         lsp_jc_skip_ws(c)
         if c.pos < n and c.src[c.pos] == "}" {
             c.pos = c.pos + 1
@@ -1055,7 +1109,7 @@ fn mcp_strict_parse_val(c: LspJsonCursor) -> LspJson {
     }
     if ch == "[" {
         c.pos = c.pos + 1
-        let arr = new LspJson("array")
+        let arr = LspJson("array")
         lsp_jc_skip_ws(c)
         if c.pos < n and c.src[c.pos] == "]" {
             c.pos = c.pos + 1
@@ -1081,13 +1135,13 @@ fn mcp_strict_parse_val(c: LspJsonCursor) -> LspJson {
     }
     if ch == "t" and c.pos + 4 <= n and slice(c.src, c.pos, c.pos + 4) == "true" {
         c.pos = c.pos + 4
-        let out = new LspJson("bool")
+        let out = LspJson("bool")
         out.bool_val = true
         return out
     }
     if ch == "f" and c.pos + 5 <= n and slice(c.src, c.pos, c.pos + 5) == "false" {
         c.pos = c.pos + 5
-        let out = new LspJson("bool")
+        let out = LspJson("bool")
         out.bool_val = false
         return out
     }
@@ -1113,14 +1167,14 @@ fn mcp_strict_parse_val(c: LspJsonCursor) -> LspJson {
         while c.pos < n and is_digit(ord(c.src[c.pos])) { c.pos = c.pos + 1 }
     }
     if int_start == c.pos { return mcp_json_error() }
-    let num = new LspJson("int")
+    let num = LspJson("int")
     num.int_val = lsp_parse_int(int_str, 0)
     num.str_val = slice(c.src, int_start, c.pos)
     return num
 }
 
 fn mcp_parse_json_strict(src: str) -> LspJson {
-    let cursor = new LspJsonCursor(src)
+    let cursor = LspJsonCursor(src)
     let val = mcp_strict_parse_val(cursor)
     if val.kind == "error" { return val }
     lsp_jc_skip_ws(cursor)
@@ -1247,7 +1301,7 @@ fn tool_capabilities_payload_json() -> str {
     return "{\"schema_version\":\"wysna.capabilities/1\",\"compiler_version\":\"0.8.0\",\"commands\":" + cmds + ",\"machine_output\":{\"format\":\"json-v1\",\"commands\":" + mcmds + "},\"profiles\":" + profs + ",\"targets\":" + targs + ",\"runtimes\":" + runtimes + ",\"capabilities\":" + caps + ",\"target_profiles\":" + tprofiles + ",\"requirements\":" + reqs + ",\"limitations\":" + limits + "}"
 }
 fn line_terminates_statement(kind: str) -> bool {
-    return kind == "INT" or kind == "FLOAT" or kind == "STR" or kind == "TRUE" or kind == "FALSE" or kind == "NONE" or kind == "IDENT" or kind == "THIS" or kind == "SUPER" or kind == "RPAREN" or kind == "RBRACKET" or kind == "RBRACE" or kind == "QUESTION" or kind == "BREAK" or kind == "CONTINUE"
+    return kind == "INT" or kind == "FLOAT" or kind == "STR" or kind == "TRUE" or kind == "FALSE" or kind == "IDENT" or kind == "THIS" or kind == "SUPER" or kind == "RPAREN" or kind == "RBRACKET" or kind == "RBRACE" or kind == "QUESTION" or kind == "BREAK" or kind == "CONTINUE"
 }
 
 fn keyword_kind(word: str) -> str {
@@ -1280,9 +1334,6 @@ fn keyword_kind(word: str) -> str {
     }
     if word == "implements" {
         return "IMPLEMENTS"
-    }
-    if word == "new" {
-        return "NEW"
     }
     if word == "this" {
         return "THIS"
@@ -1334,9 +1385,6 @@ fn keyword_kind(word: str) -> str {
     }
     if word == "false" {
         return "FALSE"
-    }
-    if word == "none" {
-        return "NONE"
     }
     if word == "and" {
         return "AND"
@@ -2005,7 +2053,7 @@ fn tokenize_at(src: str, file: str, init_line: int, init_col: int) -> list[Token
 }
 # Pure source syntax policy shared by module binding and semantic parsing.
 fn expression_starter(kind: str) -> bool {
-    return kind == "INT" or kind == "FLOAT" or kind == "STR" or kind == "TRUE" or kind == "FALSE" or kind == "NONE" or kind == "IDENT" or kind == "THIS" or kind == "SUPER" or kind == "NEW" or kind == "MINUS" or kind == "NOT" or kind == "LPAREN" or kind == "LBRACKET" or kind == "LBRACE" or kind == "PIPE" or kind == "IF" or kind == "MATCH"
+    return kind == "INT" or kind == "FLOAT" or kind == "STR" or kind == "TRUE" or kind == "FALSE" or kind == "IDENT" or kind == "THIS" or kind == "SUPER" or kind == "MINUS" or kind == "NOT" or kind == "LPAREN" or kind == "LBRACKET" or kind == "LBRACE" or kind == "PIPE" or kind == "IF" or kind == "MATCH"
 }
 
 fn op_precedence(k: str) -> int {
@@ -2654,7 +2702,7 @@ fn module_trace_name(context: ModuleLoader, source: Token, anchor: Token, target
     context.name_sites.append(ModuleNameSite { source: source, expanded: expanded, import_site: import_site, rewrite: rewrite })
 }
 fn module_tokens_with_overlays(src: str, path: str, ov_paths: list[str], ov_texts: list[str]) -> list[Token] {
-    let context = new ModuleLoader()
+    let context = ModuleLoader()
     context.ov_paths = ov_paths
     context.ov_texts = ov_texts
     module_expand(context, src, path, true)
@@ -2663,7 +2711,7 @@ fn module_tokens_with_overlays(src: str, path: str, ov_paths: list[str], ov_text
 }
 
 fn module_tokens_with_project(src: str, path: str, proj_src_root: str, dep_aliases: list[str], dep_roots: list[str]) -> list[Token] {
-    let context = new ModuleLoader()
+    let context = ModuleLoader()
     context.project_sources_root = proj_src_root
     context.dep_aliases = dep_aliases
     context.dep_roots = dep_roots
@@ -4140,7 +4188,7 @@ fn sem_call_builtin(context: SemanticContext, name: str, args: list[int], source
     return context.unit_type
 }
 fn sem_check_call(context: SemanticContext, signature: int, args: list[int], sources: list[Token], discard: bool) -> int {
-    let unification = new SemUnification()
+    let unification = SemUnification()
     let type_ = context.types[signature]
     if type_.kind == "builtin" { return sem_call_builtin(context, type_.name, args, sources, discard) }
     if type_.kind == "enum_ctor" {
@@ -4482,7 +4530,6 @@ fn sem_prefix(context: SemanticContext, allow_struct: bool, statement: bool) -> 
     if sem_match(context, "FLOAT") { return sem_expr(context, "float", sem_value(context.float_type), source, source.val, [], -1, -1) }
     if sem_match(context, "STR") { return sem_expr(context, "string", sem_value(context.string_type), source, source.val, [], -1, -1) }
     if sem_match(context, "TRUE") or sem_match(context, "FALSE") { return sem_expr(context, "boolean", sem_value(context.boolean_type), source, source.kind, [], -1, -1) }
-    if sem_match(context, "NONE") { return sem_expr(context, "none", sem_value(context.none_type), source, "", [], -1, -1) }
     if sem_match(context, "MINUS") {
         let value_source = sem_at(context)
         let value = sem_expression(context, 9, allow_struct)
@@ -4650,9 +4697,11 @@ fn sem_prefix(context: SemanticContext, allow_struct: bool, statement: bool) -> 
         }
         return sem_expr(context, if is_super { "super" } else { "binding" }, SemValue { type_id: target_type, root: "this", writable: -1, terminates: false, node: -1 }, source, "self", [], context.variables[symbol].binding, -1)
     }
-    sem_match(context, "NEW")
     let name_token = sem_expect(context, "IDENT")
     let name = name_token.val
+    if name == "new" and sem_is(context, "IDENT") {
+        report_error_at("W0006", name_token, "the 'new' keyword has been removed; construct classes directly with 'ClassName(...)'")
+    }
     let variable = sem_lookup(context, name)
     if variable >= 0 {
         let value = context.variables[variable]
@@ -4739,6 +4788,7 @@ fn sem_prefix(context: SemanticContext, allow_struct: bool, statement: bool) -> 
             if context.capture_nodes { context.nodes[value.node].labels = [context.types[variant].name, name] }
             return value
         }
+        if name == "none" { report_error_at("W1001", name_token, "unknown identifier: none (lowercase 'none' has been removed; use canonical 'None')") }
         report_error_at("W1001", name_token, "unknown identifier: " + name)
     }
     if sem_kind(context, named_type) == "class" { return sem_expr(context, "new_callee", sem_value(sem_wrap(context, "constructor", named_type)), source, name, [], -1, -1) }
@@ -4749,7 +4799,7 @@ fn sem_prefix(context: SemanticContext, allow_struct: bool, statement: bool) -> 
             return sem_expr(context, "constructor", sem_value(sem_intern(context, "struct_ctor", name, target_types)), source, name, [], -1, -1)
         }
         if allow_struct and sem_match(context, "LBRACE") {
-            let unification = new SemUnification()
+            let unification = SemUnification()
             let empty_names: list[str] = []
             let empty_types: list[int] = []
             unification.names = empty_names
@@ -4964,7 +5014,7 @@ fn sem_expression(context: SemanticContext, minimum: int, allow_struct: bool) ->
                     if len(active_method_explicit) > 0 {
                         for a_id in active_method_explicit { full_args.append(a_id) }
                     } else {
-                        let m_unification = new SemUnification()
+                        let m_unification = SemUnification()
                         let u_names: list[str] = []
                         let u_types: list[int] = []
                         m_unification.names = u_names
@@ -5486,8 +5536,8 @@ fn sem_binding_pattern(context: SemanticContext, name: str, subject: int) -> str
     return pattern
 }
 fn sem_pattern_syntax(context: SemanticContext, subject: int, source: Token) -> str {
-    if sem_match(context, "ELSE") or sem_match(context, "STAR") { return sem_leaf_pattern(context, "*") }
-    if sem_match(context, "NONE") { return sem_leaf_pattern(context, "None") }
+    if sem_match(context, "STAR") { report_error_at("W0001", source, "wildcard '* =>' has been removed in match; use canonical '_ =>'") }
+    if sem_match(context, "ELSE") { report_error_at("W0001", source, "wildcard 'else =>' has been removed in match; use canonical '_ =>'") }
     if sem_match(context, "MINUS") {
         let literal = sem_take(context)
         if literal.kind != "INT" { report_error_at("W0002", literal, "expected integer pattern after '-'") }
@@ -5524,6 +5574,7 @@ fn sem_pattern_syntax(context: SemanticContext, subject: int, source: Token) -> 
     let mut owner = ""
     let mut name = sem_expect(context, "IDENT").val
     if name == "_" { return sem_leaf_pattern(context, "*") }
+    if name == "none" { report_error_at("W0001", source, "lowercase 'none' pattern has been removed; use canonical 'None'") }
     if sem_match(context, "DOT") { owner = name name = sem_expect(context, "IDENT").val }
     let kind = sem_kind(context, subject)
     if kind == "error_union" and (sem_is(context, "LBRACKET") or sem_is(context, "LPAREN")) {
@@ -5609,7 +5660,7 @@ fn sem_match_expression(context: SemanticContext, statement_context: bool) -> Se
     if pattern_start + 2 < len(context.tokens) and context.tokens[context.pos + 1].kind == "LBRACE" {
         if context.tokens[pattern_start].kind == "MINUS" { pattern_start = pattern_start + 1 }
         let pattern_kind = context.tokens[pattern_start].kind
-        let bare_pattern = pattern_kind == "IDENT" or pattern_kind == "INT" or pattern_kind == "STR" or pattern_kind == "TRUE" or pattern_kind == "FALSE" or pattern_kind == "NONE"
+        let bare_pattern = pattern_kind == "IDENT" or pattern_kind == "INT" or pattern_kind == "STR" or pattern_kind == "TRUE" or pattern_kind == "FALSE"
         let following = context.tokens[pattern_start + 1]
         if bare_pattern and following.kind == "LBRACE" {
             report_error_at("W0001", following, "expected '=>' after match pattern")
@@ -5639,6 +5690,9 @@ fn sem_match_expression(context: SemanticContext, statement_context: bool) -> Se
         context.expected_type = -1
         sem_pattern(context, subject)
         let pattern = context.last_pattern
+        if sem_is(context, "COMMA") {
+            report_error_at("W0001", sem_at(context), "unparenthesized tuple patterns are not allowed in match; use '(a, b) =>'")
+        }
         let mut guarded = false
         let mut guard = -1
         if sem_match(context, "IF") { guarded = true let guard_source = sem_at(context) let value = sem_expression(context, 0, false) sem_require_at(context, value.type_id, context.boolean_type, "W2001", guard_source) guard = value.node }
@@ -6086,7 +6140,7 @@ fn sem_check_function(context: SemanticContext, function: SemFunction) {
     context.checking_definition = previous_definition
 }
 fn sem_check_generic_constraints(context: SemanticContext, function_index: int, args: list[int], file: str, line: int, col: int) {
-    let unification = new SemUnification()
+    let unification = SemUnification()
     let function = context.functions[function_index]
     let signature = context.types[function.type_id]
     let empty_names: list[str] = []
@@ -6579,7 +6633,7 @@ fn sem_nominal_specialization_name(name: str, arguments: list[int]) -> str {
     return result
 }
 fn sem_specialize(context: SemanticContext, template_id: int, selected: int, actual: list[int], source: Token) -> int {
-    let unification = new SemUnification()
+    let unification = SemUnification()
     let template = context.functions[template_id]
     let declared = context.types[template.type_id].args
     let chosen = context.types[selected].args
@@ -6741,7 +6795,7 @@ fn check_delimiters(tokens: list[Token]) -> unit {
 
 fn check_program(tokens: list[Token], file: str, capture: bool) -> CheckedProgram {
     check_delimiters(tokens)
-    let context = new SemanticContext(capture)
+    let context = SemanticContext(capture)
     sem_validate(context, tokens)
     sem_complete_specializations(context)
     return checked_finish(context, tokens, file)
@@ -8852,7 +8906,7 @@ fn mir_optimize_parameter_reads(module: MirModule) -> MirModule {
 
 fn mir_build(program: CheckedProgram) -> MirModule {
     checked_verify(program)
-    let context = new MirBuilder(program)
+    let context = MirBuilder(program)
     # Export every declared enum so the arena carries its dictionary-key
     # capability even when the program never uses that enum value.
     for record in program.records {
@@ -10958,7 +11012,7 @@ fn tool_scan_decl_nodes(graph: ToolGraph, program: CheckedProgram, src: str, fil
                 let span = tool_token_span(src, file, tok.line, tok.col, true, tokens)
                 let vis = if is_public { "public" } else { "private" }
                 let nid = decl_kind + ":" + qname
-                let node = new ToolGraphNode(nid, name, qname, decl_kind, mod_label, file, span.start_line, tok.col, span.end_line, span.start_byte, span.end_byte, span.start_char, span.end_char, vis, false, "", "")
+                let node = ToolGraphNode(nid, name, qname, decl_kind, mod_label, file, span.start_line, tok.col, span.end_line, span.start_byte, span.end_byte, span.start_char, span.end_char, vis, false, "", "")
                 current_owner_idx = len(graph.nodes)
                 current_owner_name = name
                 current_owner_kind = decl_kind
@@ -10990,7 +11044,7 @@ fn tool_scan_decl_nodes(graph: ToolGraph, program: CheckedProgram, src: str, fil
                         break
                     }
                 }
-                let node = new ToolGraphNode(nid, name, qname, decl_kind, mod_label, file, span.start_line, tok.col, span.end_line, span.start_byte, span.end_byte, span.start_char, span.end_char, vis, is_async, sig_str, "")
+                let node = ToolGraphNode(nid, name, qname, decl_kind, mod_label, file, span.start_line, tok.col, span.end_line, span.start_byte, span.end_byte, span.start_char, span.end_char, vis, is_async, sig_str, "")
                 if is_extern {
                     node.effects.append("ffi.native")
                     node.capabilities.append("native-ffi")
@@ -11018,7 +11072,7 @@ fn tool_scan_decl_nodes(graph: ToolGraph, program: CheckedProgram, src: str, fil
                     break
                 }
             }
-            let mnode = new ToolGraphNode(nid, mname, qname, mkind, mod_label, file, span.start_line, tok.col, span.end_line, span.start_byte, span.end_byte, span.start_char, span.end_char, vis, is_async, sig_str, graph.nodes[current_owner_idx].id)
+            let mnode = ToolGraphNode(nid, mname, qname, mkind, mod_label, file, span.start_line, tok.col, span.end_line, span.start_byte, span.end_byte, span.start_char, span.end_char, vis, is_async, sig_str, graph.nodes[current_owner_idx].id)
             graph.nodes.append(mnode)
             is_public = false
             is_async = false
@@ -11107,7 +11161,7 @@ fn tool_build_graph_with_overlays(src: str, file: str, ov_paths: list[str], ov_t
 }
 
 fn tool_build_checked_graph(src: str, canonical: str, expanded: list[Token], program: CheckedProgram, ov_paths: list[str], ov_texts: list[str], include_entry: bool) -> ToolGraph {
-    let graph = new ToolGraph(canonical, src)
+    let graph = ToolGraph(canonical, src)
     graph.mod_names.append(canonical)
     let mut mod_hashes: list[str] = [canonical + "=" + diag_sha256_hex(src)]
     tool_scan_decl_nodes(graph, program, src, canonical)
@@ -11187,7 +11241,7 @@ fn tool_build_checked_graph(src: str, canonical: str, expanded: list[Token], pro
 
     if include_entry and len(program.entry) > 0 {
         let idx = len(graph.nodes)
-        let node = new ToolGraphNode("fn:__entry__", "__entry__", "__entry__", "entrypoint", "entry", canonical, 1, 1, 1, 0, 0, 0, 0, "private", false, "", "")
+        let node = ToolGraphNode("fn:__entry__", "__entry__", "__entry__", "entrypoint", "entry", canonical, 1, 1, 1, 0, 0, 0, 0, "private", false, "", "")
         graph.nodes.append(node)
         for entry_node in program.entry {
             tool_walk_subtree(program, graph, idx, entry_node)
@@ -12730,7 +12784,7 @@ class LspDocument {
         this.tmp_path = tmp_path
         this.has_graph = false
         this.clean_ok = false
-        this.graph = new ToolGraph(path, text)
+        this.graph = ToolGraph(path, text)
         let diagnostics: list[LspJson] = []
         this.diagnostics = diagnostics
         let sites: list[LspRenameSite] = []
@@ -13057,7 +13111,7 @@ fn lsp_handle_references(state: LspServerState, doc: LspDocument, pos_obj: LspJs
     let skip_file = if not include_decl and len(idxs) > 0 { doc.graph.nodes[idxs[0]].file } else { "" }
     let skip_line = if not include_decl and len(idxs) > 0 { doc.graph.nodes[idxs[0]].line } else { -1 }
 
-    let acc = new LspRefCollector()
+    let acc = LspRefCollector()
     let mut scanned_files: list[str] = []
     for d in state.docs {
         scanned_files.append(d.path)
@@ -13142,7 +13196,7 @@ fn lsp_semantic_tok_type(tok: Token) -> int {
     let k = tok.kind
     if k == "STR" or k == "FSTR" { return 11 }
     if k == "INT" or k == "FLOAT" { return 12 }
-    if k == "FN" or k == "LET" or k == "MUT" or k == "STRUCT" or k == "CLASS" or k == "INTERFACE" or k == "ENUM" or k == "IF" or k == "ELIF" or k == "ELSE" or k == "FOR" or k == "IN" or k == "WHILE" or k == "RETURN" or k == "MATCH" or k == "IMPORT" or k == "FROM" or k == "AS" or k == "PUB" or k == "TRUE" or k == "FALSE" or k == "NONE" or k == "THIS" or k == "SUPER" or k == "NEW" or k == "EXTERN" or k == "AND" or k == "OR" or k == "NOT" or k == "REQUIRES" or k == "ENSURES" {
+    if k == "FN" or k == "LET" or k == "MUT" or k == "STRUCT" or k == "CLASS" or k == "INTERFACE" or k == "ENUM" or k == "IF" or k == "ELIF" or k == "ELSE" or k == "FOR" or k == "IN" or k == "WHILE" or k == "RETURN" or k == "MATCH" or k == "IMPORT" or k == "FROM" or k == "AS" or k == "PUB" or k == "TRUE" or k == "FALSE" or k == "THIS" or k == "SUPER" or k == "EXTERN" or k == "AND" or k == "OR" or k == "NOT" or k == "REQUIRES" or k == "ENSURES" {
         return 0
     }
     if k == "IDENT" {
@@ -13382,7 +13436,7 @@ fn lsp_token_key(token: Token) -> str {
 }
 
 fn lsp_load_source(src: str, file: str, paths: list[str], texts: list[str]) -> ModuleLoader {
-    let loader = new ModuleLoader()
+    let loader = ModuleLoader()
     loader.ov_paths = paths
     loader.ov_texts = texts
     loader.trace_names = true
@@ -13532,7 +13586,7 @@ fn lsp_workspace_rename_edits(state: LspServerState, workspace: LspRenameWorkspa
             if start in seen { continue }
             seen.append(start)
             edits.append(lsp_edit_json(text, start, end, new_name))
-            patches.append(new FixEdit("", "", "", diag_utf8_byte_at(text, start), diag_utf8_byte_at(text, end), new_name))
+            patches.append(FixEdit("", "", "", diag_utf8_byte_at(text, start), diag_utf8_byte_at(text, end), new_name))
         }
         if len(edits) == 0 { continue }
         for token in tokenize(text, file) {
@@ -13573,7 +13627,7 @@ fn lsp_handle_rename(state: LspServerState, doc: LspDocument, pos: LspJson, new_
         if root == "" { return "null" }
         let files = lsp_workspace_files(root) else error { return "null" }
         if not tool_str_contains(files, declaration.file) { return "null" }
-        let workspace = new LspRenameWorkspace()
+        let workspace = LspRenameWorkspace()
         let staged = lsp_stage_rename_workspace(state, workspace, files, root, declaration.val)
         let result = if staged { lsp_workspace_rename_edits(state, workspace, declaration, new_name) } else { "null" }
         for snapshot in workspace.snapshots { lsp_remove_file(snapshot) }
@@ -13630,7 +13684,7 @@ fn lsp_dispatch_message(state: LspServerState, msg: LspJson) -> bool {
             lsp_check_and_publish(state, existing)
         } else {
             let tmp_p = lsp_next_tmp_path(state, "wysna_lsp_doc", ".wysna")
-            let doc = new LspDocument(uri, path, version, text, tmp_p)
+            let doc = LspDocument(uri, path, version, text, tmp_p)
             state.docs.append(doc)
             lsp_check_and_publish(state, len(state.docs) - 1)
         }
@@ -13709,7 +13763,7 @@ fn lsp_dispatch_message(state: LspServerState, msg: LspJson) -> bool {
 }
 
 fn lsp_serve() -> unit {
-    let state = new LspServerState()
+    let state = LspServerState()
     while not state.eof_reached {
         let payload = lsp_read_frame_clean(state)
         if state.eof_reached { break }
@@ -13829,7 +13883,7 @@ class SchemaParam {
     fn init(name: str, t: SchemaType) {
         this.name = name
         this.t = t
-        this.bound = new SchemaBound()
+        this.bound = SchemaBound()
     }
 }
 
@@ -13855,7 +13909,7 @@ class SchemaFn {
         let ps: list[SchemaParam] = []
         this.params = ps
         this.has_ret = false
-        this.ret = new SchemaType("named", "unit")
+        this.ret = SchemaType("named", "unit")
         let rs: list[str] = []
         this.req_strs = rs
         let es: list[str] = []
@@ -13933,9 +13987,9 @@ fn schema_parse_primary_type(c: SchemaTokCursor) -> SchemaType {
     schema_skip_newlines(c)
     let k = schema_cur_kind(c)
     let v = schema_cur_val(c)
-    if k == "NONE" {
+    if k == "IDENT" and (v == "none" or v == "None") {
         c.pos = c.pos + 1
-        return new SchemaType("named", "none")
+        return SchemaType("named", "none")
     }
     if k == "LPAREN" {
         c.pos = c.pos + 1
@@ -13949,13 +14003,13 @@ fn schema_parse_primary_type(c: SchemaTokCursor) -> SchemaType {
         }
         if schema_cur_kind(c) == "RPAREN" { c.pos = c.pos + 1 }
         if len(items) == 1 { return items[0] }
-        let tup = new SchemaType("tuple", "tuple")
+        let tup = SchemaType("tuple", "tuple")
         tup.args = items
         return tup
     }
     if k == "IDENT" and v == "fn" or k == "FN" {
         c.pos = c.pos + 1
-        let fn_t = new SchemaType("function", "fn")
+        let fn_t = SchemaType("function", "fn")
         if schema_cur_kind(c) == "LPAREN" {
             c.pos = c.pos + 1
             while schema_cur_kind(c) != "RPAREN" and schema_cur_kind(c) != "EOF" {
@@ -13968,7 +14022,7 @@ fn schema_parse_primary_type(c: SchemaTokCursor) -> SchemaType {
             c.pos = c.pos + 1
             fn_t.args.append(schema_parse_type(c))
         } else {
-            fn_t.args.append(new SchemaType("named", "unit"))
+            fn_t.args.append(SchemaType("named", "unit"))
         }
         return fn_t
     }
@@ -13989,35 +14043,35 @@ fn schema_parse_primary_type(c: SchemaTokCursor) -> SchemaType {
             }
             if schema_cur_kind(c) == "RBRACKET" { c.pos = c.pos + 1 }
             if name == "list" and len(args) == 1 {
-                let lt = new SchemaType("list", "list")
+                let lt = SchemaType("list", "list")
                 lt.args = args
                 return lt
             }
             if name == "dict" and len(args) == 2 {
-                let dt = new SchemaType("dict", "dict")
+                let dt = SchemaType("dict", "dict")
                 dt.args = args
                 return dt
             }
             if name == "tuple" {
-                let tt = new SchemaType("tuple", "tuple")
+                let tt = SchemaType("tuple", "tuple")
                 tt.args = args
                 return tt
             }
-            let gt = new SchemaType("generic", name)
+            let gt = SchemaType("generic", name)
             gt.args = args
             return gt
         }
-        return new SchemaType("named", name)
+        return SchemaType("named", name)
     }
     c.pos = c.pos + 1
-    return new SchemaType("named", "unknown")
+    return SchemaType("named", "unknown")
 }
 
 fn schema_parse_postfix_type(c: SchemaTokCursor) -> SchemaType {
     let mut base = schema_parse_primary_type(c)
     while schema_cur_kind(c) == "QUESTION" {
         c.pos = c.pos + 1
-        let opt = new SchemaType("optional", "optional")
+        let opt = SchemaType("optional", "optional")
         opt.args.append(base)
         base = opt
     }
@@ -14027,7 +14081,7 @@ fn schema_parse_postfix_type(c: SchemaTokCursor) -> SchemaType {
 fn schema_parse_error_union_or_single(c: SchemaTokCursor) -> SchemaType {
     let first = schema_parse_postfix_type(c)
     if schema_cur_kind(c) != "PIPE" { return first }
-    let eu = new SchemaType("error_union", "error_union")
+    let eu = SchemaType("error_union", "error_union")
     eu.args.append(first)
     while schema_cur_kind(c) == "PIPE" {
         c.pos = c.pos + 1
@@ -14041,7 +14095,7 @@ fn schema_parse_type(c: SchemaTokCursor) -> SchemaType {
     if schema_cur_kind(c) == "BANG" {
         c.pos = c.pos + 1
         let err_t = schema_parse_error_union_or_single(c)
-        let res_t = new SchemaType("result", "result")
+        let res_t = SchemaType("result", "result")
         res_t.args.append(ok_t)
         res_t.args.append(err_t)
         return res_t
@@ -14413,7 +14467,7 @@ fn schema_skip_brace_block(c: SchemaTokCursor) -> unit {
 }
 
 fn schema_collect_decls(tokens: list[Token], out: SchemaDeclSet) -> unit {
-    let c = new SchemaTokCursor(tokens)
+    let c = SchemaTokCursor(tokens)
     let mut depth = 0
     let mut is_pub = false
     let mut is_extern = false
@@ -14447,7 +14501,7 @@ fn schema_collect_decls(tokens: list[Token], out: SchemaDeclSet) -> unit {
             let name = schema_cur_val(c)
             c.pos = c.pos + 1
             let tps = schema_skip_brackets(c)
-            let st = new SchemaStruct(name, line_1, len(tps) > 0)
+            let st = SchemaStruct(name, line_1, len(tps) > 0)
             schema_skip_newlines(c)
             if schema_cur_kind(c) == "LBRACE" {
                 c.pos = c.pos + 1
@@ -14460,7 +14514,7 @@ fn schema_collect_decls(tokens: list[Token], out: SchemaDeclSet) -> unit {
                         if schema_cur_kind(c) == "COLON" {
                             c.pos = c.pos + 1
                             let ftype = schema_parse_type(c)
-                            let fbound = new SchemaBound()
+                            let fbound = SchemaBound()
                             while schema_cur_kind(c) == "IDENT" and schema_cur_val(c) == "requires" {
                                 c.pos = c.pos + 1
                                 let mut rtoks: list[Token] = []
@@ -14484,7 +14538,7 @@ fn schema_collect_decls(tokens: list[Token], out: SchemaDeclSet) -> unit {
                                     schema_apply_tokens_to_targets(rtoks, 0, len(rtoks), tnames, tbounds)
                                 }
                             }
-                            st.fields.append(new SchemaField(fname, ftype, fbound))
+                            st.fields.append(SchemaField(fname, ftype, fbound))
                             continue
                         }
                     }
@@ -14503,7 +14557,7 @@ fn schema_collect_decls(tokens: list[Token], out: SchemaDeclSet) -> unit {
             let name = schema_cur_val(c)
             c.pos = c.pos + 1
             let tps = schema_skip_brackets(c)
-            let en = new SchemaEnum(name, line_1, len(tps) > 0)
+            let en = SchemaEnum(name, line_1, len(tps) > 0)
             schema_skip_newlines(c)
             if schema_cur_kind(c) == "LBRACE" {
                 c.pos = c.pos + 1
@@ -14513,7 +14567,7 @@ fn schema_collect_decls(tokens: list[Token], out: SchemaDeclSet) -> unit {
                     if schema_cur_kind(c) == "IDENT" {
                         let vname = schema_cur_val(c)
                         c.pos = c.pos + 1
-                        let vari = new SchemaVariant(vname)
+                        let vari = SchemaVariant(vname)
                         if schema_cur_kind(c) == "LPAREN" {
                             c.pos = c.pos + 1
                             while schema_cur_kind(c) != "RPAREN" and schema_cur_kind(c) != "EOF" {
@@ -14546,7 +14600,7 @@ fn schema_collect_decls(tokens: list[Token], out: SchemaDeclSet) -> unit {
             c.pos = c.pos + 1
             let name = schema_cur_val(c)
             c.pos = c.pos + 1
-            let f = new SchemaFn(name, line_1, is_pub)
+            let f = SchemaFn(name, line_1, is_pub)
             f.type_params = schema_skip_brackets(c)
             if schema_cur_kind(c) == "LPAREN" {
                 c.pos = c.pos + 1
@@ -14557,7 +14611,7 @@ fn schema_collect_decls(tokens: list[Token], out: SchemaDeclSet) -> unit {
                         if schema_cur_kind(c) == "COLON" {
                             c.pos = c.pos + 1
                             let ptype = schema_parse_type(c)
-                            f.params.append(new SchemaParam(pname, ptype))
+                            f.params.append(SchemaParam(pname, ptype))
                         }
                     }
                     if schema_cur_kind(c) == "COMMA" { c.pos = c.pos + 1 } else { break }
@@ -14727,7 +14781,7 @@ fn schema_tool_json(f: SchemaFn, lines: list[str], known_defs: list[str], graph:
     let in_schema = "{\"type\":\"object\",\"properties\":" + join_strings(props, "") + ",\"required\":" + join_strings(reqs, "") + ",\"additionalProperties\":false}"
 
     let mut fallible = false
-    let mut out_base_t = new SchemaType("named", "unit")
+    let mut out_base_t = SchemaType("named", "unit")
     let mut err_json = "null"
     if f.has_ret {
         if f.ret.kind == "result" and len(f.ret.args) == 2 {
@@ -14738,7 +14792,7 @@ fn schema_tool_json(f: SchemaFn, lines: list[str], known_defs: list[str], graph:
             out_base_t = f.ret
         }
     }
-    let out_bound = new SchemaBound()
+    let out_bound = SchemaBound()
     let res_names: list[str] = ["result"]
     let res_bounds: list[SchemaBound] = [out_bound]
     for ens_toks in f.ens_clauses {
@@ -15066,7 +15120,7 @@ fn tool_handle_schema(args: list[str], json_mode_in: bool) -> unit {
 
     let tokens = tokenize(src, file)
     let lines = schema_split_lines(src)
-    let decls = new SchemaDeclSet()
+    let decls = SchemaDeclSet()
     schema_collect_decls(tokens, decls)
     let structs = decls.structs
     let enums = decls.enums
@@ -15430,7 +15484,7 @@ fn fix_plan_w2001(src: str, tokens: list[Token], start_byte: int, msg: str) -> l
         let orig = slice(src, span[0], span[1])
         let b0 = diag_utf8_byte_at(src, span[0])
         let b1 = diag_utf8_byte_at(src, span[1])
-        out.append(new FixEdit("W2001", "wrap '" + orig + "' in str(...)", "machine", b0, b1, "str(" + orig + ")"))
+        out.append(FixEdit("W2001", "wrap '" + orig + "' in str(...)", "machine", b0, b1, "str(" + orig + ")"))
         return out
     }
     let ef = fix_extract_expected_found(msg)
@@ -15449,7 +15503,7 @@ fn fix_plan_w2001(src: str, tokens: list[Token], start_byte: int, msg: str) -> l
     let orig = slice(src, c0, c1)
     let b0 = diag_utf8_byte_at(src, c0)
     let b1 = diag_utf8_byte_at(src, c1)
-    out.append(new FixEdit("W2001", "append '?' to '" + orig + "' to propagate failure by returning early", "maybe", b0, b1, orig + "?"))
+    out.append(FixEdit("W2001", "append '?' to '" + orig + "' to propagate failure by returning early", "maybe", b0, b1, orig + "?"))
     return out
 }
 
@@ -15488,7 +15542,7 @@ fn fix_plan_w3001(src: str, tokens: list[Token], start_byte: int, msg: str) -> l
     if slice(src, lc_off, lc_off + 3) != "let" { return out }
     let b0 = diag_utf8_byte_at(src, lc_off)
     let b1 = diag_utf8_byte_at(src, lc_off + 3)
-    out.append(new FixEdit("W3001", "mark binding '" + var_name + "' as mutable (`let mut`)", "machine", b0, b1, "let mut"))
+    out.append(FixEdit("W3001", "mark binding '" + var_name + "' as mutable (`let mut`)", "machine", b0, b1, "let mut"))
     return out
 }
 
@@ -15639,7 +15693,7 @@ fn fix_plan_w1001(src: str, tokens: list[Token], start_byte: int, end_byte: int,
     }
     if tie or best_name == "" or best_sim < 600 { return out }
     let app = if best_sim >= 800 { "machine" } else { "maybe" }
-    out.append(new FixEdit("W1001", "replace unknown identifier '" + bad + "' with '" + best_name + "'", app, start_byte, end_byte, best_name))
+    out.append(FixEdit("W1001", "replace unknown identifier '" + bad + "' with '" + best_name + "'", app, start_byte, end_byte, best_name))
     return out
 }
 
@@ -15653,7 +15707,7 @@ fn fix_plan_w3004(src: str, tokens: list[Token], start_byte: int, end_byte: int,
     let tok_idx = fix_tok_index_at(tokens, lc[0], lc[1])
     if tok_idx < 0 or tok_idx >= len(tokens) or tokens[tok_idx].kind != "IDENT" { return out }
     let orig = slice(src, start_char, end_char)
-    out.append(new FixEdit("W3004", "rename constructor 'fn " + orig + "' to 'fn init'", "machine", start_byte, end_byte, "init"))
+    out.append(FixEdit("W3004", "rename constructor 'fn " + orig + "' to 'fn init'", "machine", start_byte, end_byte, "init"))
     return out
 }
 
@@ -15803,7 +15857,7 @@ fn tool_handle_fix(args: list[str], json_mode_in: bool) -> unit {
                 }
             }
             if overlaps {
-                skipped_all.append(new FixSkipped(c.code, c.description, "overlaps another edit"))
+                skipped_all.append(FixSkipped(c.code, c.description, "overlaps another edit"))
             } else {
                 taken_start.append(c.start_byte)
                 taken_end.append(c.end_byte)
@@ -16497,7 +16551,7 @@ fn proj_parse_inline_preopens(raw_val: str, root_canon: str, target_label: str) 
 fn proj_parse_manifest_at(abs_manifest_path: str, visit_stack: list[str]) -> ProjectManifest {
     let norm_m = module_normalize(abs_manifest_path)
     let raw = read_file(norm_m) else err {
-        let fail_m = new ProjectManifest(norm_m, module_directory(norm_m))
+        let fail_m = ProjectManifest(norm_m, module_directory(norm_m))
         return proj_fail(fail_m, "W5004", "cannot read manifest '" + norm_m + "': " + err.message)
     }
     let canon_m = module_canonical_resolved(norm_m)
@@ -16511,12 +16565,12 @@ fn proj_parse_manifest_at(abs_manifest_path: str, visit_stack: list[str]) -> Pro
 
     for active in visit_stack {
         if active == root {
-            let fail_m = new ProjectManifest(resolved_m, root)
+            let fail_m = ProjectManifest(resolved_m, root)
             return proj_fail(fail_m, "W5002", "dependency cycle detected at: " + root)
         }
     }
 
-    let m = new ProjectManifest(resolved_m, root)
+    let m = ProjectManifest(resolved_m, root)
     m.manifest_sha256 = diag_sha256_hex(raw)
     let raw_lines = schema_split_lines(raw)
     let mut logical_lines: list[str] = []
@@ -16551,7 +16605,7 @@ fn proj_parse_manifest_at(abs_manifest_path: str, visit_stack: list[str]) -> Pro
                 cur_sub = ""
                 cur_target_idx = -1
                 cur_test_idx = len(m.tests)
-                m.tests.append(new ProjectTestCase())
+                m.tests.append(ProjectTestCase())
                 let fresh: list[str] = []
                 m.active_test_keys = fresh
                 continue
@@ -16589,7 +16643,7 @@ fn proj_parse_manifest_at(abs_manifest_path: str, visit_stack: list[str]) -> Pro
                 cur_sec = "targets"
                 cur_sub = tname
                 cur_target_idx = len(m.targets)
-                m.targets.append(new ProjectTarget(tname))
+                m.targets.append(ProjectTarget(tname))
                 let tks: list[str] = []
                 m.seen_target_keys.append(tks)
                 continue
@@ -16691,7 +16745,7 @@ fn proj_parse_manifest_at(abs_manifest_path: str, visit_stack: list[str]) -> Pro
                 t.has_preopens = true
                 let mut k = 1
                 while k + 1 < len(pr) {
-                    t.preopens.append(new ProjectPreopen(pr[k], pr[k + 1]))
+                    t.preopens.append(ProjectPreopen(pr[k], pr[k + 1]))
                     k = k + 2
                 }
             } elif key == "fuel" {
@@ -16734,7 +16788,7 @@ fn proj_parse_manifest_at(abs_manifest_path: str, visit_stack: list[str]) -> Pro
             let dep_manifest = proj_parse_manifest_at(cont[1] + "/wysna.toml", next_stack)
             if not dep_manifest.ok { return proj_fail(m, dep_manifest.err_code, dep_manifest.err_msg) }
             let pkg_id = dep_manifest.name + "@" + dep_manifest.version
-            m.deps.append(new ProjectDep(cur_sub, rel[1], cont[1], dep_manifest.source_root_abs, pkg_id))
+            m.deps.append(ProjectDep(cur_sub, rel[1], cont[1], dep_manifest.source_root_abs, pkg_id))
             continue
         }
         if cur_sec == "tests" {
@@ -16869,7 +16923,7 @@ fn proj_find_manifest_path(explicit: str) -> list[str] {
 fn proj_load_manifest(explicit: str) -> ProjectManifest {
     let found = proj_find_manifest_path(explicit)
     if found[0] != "1" {
-        let fail_m = new ProjectManifest("", "")
+        let fail_m = ProjectManifest("", "")
         return proj_fail(fail_m, "W5002", found[1])
     }
     return proj_parse_manifest_at(found[1], [])
@@ -17313,7 +17367,7 @@ fn proj_execute_check(m: ProjectManifest, target_arg: str, dep_aliases: list[str
         proj_emit_error_and_exit("check", json_mode, "W5004", "cannot read project entry '" + entry_path + "': " + err.message)
         ""
     }
-    let loader = new ModuleLoader()
+    let loader = ModuleLoader()
     loader.project_sources_root = m.source_root_abs
     loader.dep_aliases = dep_aliases
     loader.dep_roots = dep_roots
@@ -17480,7 +17534,7 @@ fn proj_lock_visit(state: ProjectLockState, directory: str) -> str {
 }
 
 fn proj_lock_json(m: ProjectManifest, command: str, json_mode: bool) -> str {
-    let state = new ProjectLockState(command, json_mode, m.root)
+    let state = ProjectLockState(command, json_mode, m.root)
     proj_lock_verify_collisions(state, proj_lock_paths(state, m.source_root_abs, "", true))
     let aliases = proj_lock_aliases(state, m)
     let mut dependencies: list[str] = []
@@ -17543,7 +17597,7 @@ class ProjectTestPlan {
 fn proj_empty_test_plan() -> ProjectTestPlan {
     let cases: list[ProjectTestCase] = []
     let hashes: list[str] = []
-    return new ProjectTestPlan(cases, hashes, "", "", "")
+    return ProjectTestPlan(cases, hashes, "", "", "")
 }
 
 fn proj_plan_encode(value: str) -> str {
@@ -17570,7 +17624,7 @@ fn proj_test_exists(state: ProjectLockState, path: str) -> bool {
 }
 
 fn proj_test_plan(m: ProjectManifest, discover: bool, filter: str, has_filter: bool, case_id: str, json_mode: bool) -> ProjectTestPlan {
-    let state = new ProjectLockState("test", json_mode, m.root)
+    let state = ProjectLockState("test", json_mode, m.root)
     let mut candidates: list[ProjectTestCase] = []
     let mut seen: list[str] = []
     for tc in m.tests { candidates.append(tc); seen.append(tc.entry) }
@@ -17584,7 +17638,7 @@ fn proj_test_plan(m: ProjectManifest, discover: bool, filter: str, has_filter: b
             let entry = "tests/" + path
             let filename = tool_basename(path)
             if not tool_str_contains(seen, entry) and ((len(filename) >= 5 and slice(filename, 0, 5) == "test_") or proj_str_ends_with(path, "_test.wysna")) {
-                let tc = new ProjectTestCase()
+                let tc = ProjectTestCase()
                 tc.name = "auto:" + entry
                 tc.entry = entry
                 candidates.append(tc)
@@ -17615,7 +17669,7 @@ fn proj_test_plan(m: ProjectManifest, discover: bool, filter: str, has_filter: b
     let hash = diag_sha256_hex("{" + snapshot + "}")
     let payload = "{\"schema_version\":\"wysna.project-test-plan/1\",\"project\":" + diag_json_quote(m.name) + "," + snapshot +
         ",\"selected\":" + str(len(selected)) + ",\"plan_hash\":" + diag_json_quote(hash) + "}"
-    return new ProjectTestPlan(selected, hashes, lock_sha, hash, payload)
+    return ProjectTestPlan(selected, hashes, lock_sha, hash, payload)
 }
 
 fn proj_test_report_path(m: ProjectManifest, value: str, json_mode: bool) -> str {
@@ -18514,7 +18568,7 @@ fn pkg_cmd_pack(args: list[str], json_mode: bool) -> unit {
     if output_arg == "" { pkg_fail("pack", json_mode, "W5002", "packages pack requires -o OUTPUT") }
     let m = proj_load_manifest(manifest_arg)
     if not m.ok { pkg_fail("pack", json_mode, m.err_code, m.err_msg) }
-    let state = new ProjectLockState("pack", json_mode, m.root)
+    let state = ProjectLockState("pack", json_mode, m.root)
     let paths = tool_sort_strings(proj_lock_paths(state, m.root, "", false))
     pkg_validate_inventory(paths, "pack", json_mode)
     let out_buf = wysna_host_buffer_new()
@@ -18701,7 +18755,7 @@ fn pkg_cmd_restore(args: list[str], json_mode: bool) -> unit {
     let mut restored_json: list[str] = []
     for al in aliases_arr.items {
         let pid = lsp_json_str(al, "package_id", "")
-        let mut found_dep = new LspJson("null")
+        let mut found_dep = LspJson("null")
         for d in deps_arr.items {
             if lsp_json_str(d, "package_id", "") == pid { found_dep = d break }
         }
@@ -18996,7 +19050,7 @@ fn api_parse_fn_symbol(c: SchemaTokCursor, lines: list[str], owner_prefix: str, 
                     c.pos = c.pos + 1
                     ptype_text = schema_type_text(schema_parse_type(c))
                 }
-                params.append(new ApiParam(pname, ptype_text))
+                params.append(ApiParam(pname, ptype_text))
                 schema_skip_newlines(c)
                 if schema_cur_kind(c) == "COMMA" { c.pos = c.pos + 1 } else { break }
             } else {
@@ -19031,7 +19085,7 @@ fn api_parse_fn_symbol(c: SchemaTokCursor, lines: list[str], owner_prefix: str, 
     for p in params { sig_params.append(p.name + ": " + p.type_text) }
     let signature = "fn " + name + gen_str + "(" + join_strings(sig_params, ", ") + ") -> " + ret_text
     let identity = owner_prefix + "#" + kind + "/" + name
-    let sym = new ApiSymbol(identity, name, kind, signature, module_id, package_id)
+    let sym = ApiSymbol(identity, name, kind, signature, module_id, package_id)
     sym.type_parameters = tps
     sym.parameters = params
     sym.return_type = ret_text
@@ -19042,10 +19096,10 @@ fn api_parse_fn_symbol(c: SchemaTokCursor, lines: list[str], owner_prefix: str, 
 }
 
 fn api_extract_module(src: str, file_path: str, module_id: str, package_id: str) -> ApiModuleRecord {
-    let rec = new ApiModuleRecord(module_id)
+    let rec = ApiModuleRecord(module_id)
     let tokens = tokenize(src, file_path)
     let lines = schema_split_lines(src)
-    let c = new SchemaTokCursor(tokens)
+    let c = SchemaTokCursor(tokens)
     let mut depth = 0
     let mut is_pub = false
     let mut is_extern = false
@@ -19107,7 +19161,7 @@ fn api_extract_module(src: str, file_path: str, module_id: str, package_id: str)
             c.pos = c.pos + 1
             let _tps = api_skip_generics_names(c)
             schema_skip_newlines(c)
-            let sym = new ApiSymbol(module_id + "#struct/" + name, name, "struct", "struct " + name, module_id, package_id)
+            let sym = ApiSymbol(module_id + "#struct/" + name, name, "struct", "struct " + name, module_id, package_id)
             api_set_doc(sym, lines, line_1)
             if schema_cur_kind(c) == "LBRACE" {
                 c.pos = c.pos + 1
@@ -19120,7 +19174,7 @@ fn api_extract_module(src: str, file_path: str, module_id: str, package_id: str)
                         if schema_cur_kind(c) == "COLON" {
                             c.pos = c.pos + 1
                             let ftype = schema_type_text(schema_parse_type(c))
-                            sym.fields.append(new ApiField(fname, ftype))
+                            sym.fields.append(ApiField(fname, ftype))
                             while schema_cur_kind(c) != "NEWLINE" and schema_cur_kind(c) != "COMMA" and schema_cur_kind(c) != "RBRACE" and schema_cur_kind(c) != "EOF" {
                                 c.pos = c.pos + 1
                             }
@@ -19143,7 +19197,7 @@ fn api_extract_module(src: str, file_path: str, module_id: str, package_id: str)
             c.pos = c.pos + 1
             let _tps = api_skip_generics_names(c)
             schema_skip_newlines(c)
-            let sym = new ApiSymbol(module_id + "#enum/" + name, name, "enum", "enum " + name, module_id, package_id)
+            let sym = ApiSymbol(module_id + "#enum/" + name, name, "enum", "enum " + name, module_id, package_id)
             api_set_doc(sym, lines, line_1)
             if schema_cur_kind(c) == "LBRACE" {
                 c.pos = c.pos + 1
@@ -19153,7 +19207,7 @@ fn api_extract_module(src: str, file_path: str, module_id: str, package_id: str)
                     if schema_cur_kind(c) == "IDENT" {
                         let vname = schema_cur_val(c)
                         c.pos = c.pos + 1
-                        let vari = new ApiVariant(vname)
+                        let vari = ApiVariant(vname)
                         if schema_cur_kind(c) == "LPAREN" {
                             c.pos = c.pos + 1
                             while schema_cur_kind(c) != "RPAREN" and schema_cur_kind(c) != "EOF" {
@@ -19182,7 +19236,7 @@ fn api_extract_module(src: str, file_path: str, module_id: str, package_id: str)
             let _tps = api_skip_generics_names(c)
             while schema_cur_kind(c) != "LBRACE" and schema_cur_kind(c) != "EOF" { c.pos = c.pos + 1 }
             let owner = module_id + "#interface/" + name
-            let sym = new ApiSymbol(owner, name, "interface", "interface " + name, module_id, package_id)
+            let sym = ApiSymbol(owner, name, "interface", "interface " + name, module_id, package_id)
             api_set_doc(sym, lines, line_1)
             if schema_cur_kind(c) == "LBRACE" {
                 c.pos = c.pos + 1
@@ -19211,7 +19265,7 @@ fn api_extract_module(src: str, file_path: str, module_id: str, package_id: str)
             let _tps = api_skip_generics_names(c)
             while schema_cur_kind(c) != "LBRACE" and schema_cur_kind(c) != "EOF" { c.pos = c.pos + 1 }
             let owner = module_id + "#class/" + name
-            let sym = new ApiSymbol(owner, name, "class", "class " + name, module_id, package_id)
+            let sym = ApiSymbol(owner, name, "class", "class " + name, module_id, package_id)
             api_set_doc(sym, lines, line_1)
             if schema_cur_kind(c) == "LBRACE" {
                 c.pos = c.pos + 1
@@ -19481,7 +19535,7 @@ fn tool_handle_api(args: list[str], _json_mode: bool) -> unit {
             dep_aliases.append(d.alias)
             dep_roots.append(d.source_root_abs)
         }
-        let loader = new ModuleLoader()
+        let loader = ModuleLoader()
         loader.project_sources_root = m.source_root_abs
         loader.dep_aliases = dep_aliases
         loader.dep_roots = dep_roots
@@ -19526,7 +19580,7 @@ fn tool_handle_api(args: list[str], _json_mode: bool) -> unit {
         exit(0)
     }
 
-    let acc = new ApiIndexCollector(stdlib_root)
+    let acc = ApiIndexCollector(stdlib_root)
     if has_mod {
         let resolved = api_resolve_stdlib_module(stdlib_root, mod_arg)
         if resolved[0] != "1" {
@@ -19943,7 +19997,7 @@ fn mcp_handle_tool_call(state: McpServerState, id_raw: str, params: LspJson) -> 
     if not known {
         return mcp_rpc_error(id_raw, -32602, "unknown tool: " + name)
     }
-    let mut arguments = new LspJson("object")
+    let mut arguments = LspJson("object")
     if lsp_json_has(params, "arguments") {
         let raw_args = lsp_json_get(params, "arguments")
         if raw_args.kind != "null" {
@@ -20026,7 +20080,7 @@ fn mcp_serve(args: list[str]) -> unit {
         eprint("wysna mcp: invalid root directory: " + raw_root)
         exit(2)
     }
-    let state = new McpServerState(root, lsp_compiler_exe_path(), lsp_stdlib_root_arg(), lsp_tmp_dir())
+    let state = McpServerState(root, lsp_compiler_exe_path(), lsp_stdlib_root_arg(), lsp_tmp_dir())
     while true {
         let buf = wysna_host_buffer_new()
         let st = wysna_host_stdin_read_line(buf)

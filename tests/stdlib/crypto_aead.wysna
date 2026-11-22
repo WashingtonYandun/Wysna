@@ -2,7 +2,7 @@ import "std/buffer" as buffer
 import "std/crypto" as crypto
 
 fn from_values(values: list[int]) -> buffer.Bytes {
-    let data = new buffer.Bytes()
+    let data = buffer.Bytes()
     for value in values {
         data.append(value) else err { exit(1) }
     }
@@ -54,7 +54,7 @@ fn roundtrip() -> unit {
     }
     let first = tampered.get(0) else err { 0 }
     let reference = buffer.from_text("")
-    let corrupted = new buffer.Bytes()
+    let corrupted = buffer.Bytes()
     for index in 0..sealed.size() {
         let value = sealed.get(index) else err { 0 }
         if index == 3 {

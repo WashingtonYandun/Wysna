@@ -51,8 +51,8 @@ fn mutate_via_reference(acc: Account) {
 }
 
 fn main() {
-    let a1 = new Account("Alice", 100)
-    let s1 = new SavingsAccount("Bob", 200, 10)
+    let a1 = Account("Alice", 100)
+    let s1 = SavingsAccount("Bob", 200, 10)
 
     # Reference semantics: mutating through an alias or function parameter mutates the same instance
     let alias = a1

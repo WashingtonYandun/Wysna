@@ -1,6 +1,6 @@
 fn maybe(flag: bool) -> int? {
     if flag { return Some(42) }
-    return none
+    return None
 }
 
 fn outcome(flag: bool) -> int ! str {

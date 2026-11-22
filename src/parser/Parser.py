@@ -339,7 +339,13 @@ class Parser:
         token = self.at()
 
         if self.match(TokenType.STAR):
-            return WildcardPattern(line=token.line, col=token.col)
+            raise ParserError(
+                message="Wildcard '* =>' has been removed in match; use canonical '_ =>'",
+                line=token.line,
+                col=token.col,
+                file=self.file,
+                code="W0001",
+            )
 
         if self.match(TokenType.LPAREN):
             elements: List[Pattern] = []
@@ -409,7 +415,15 @@ class Parser:
                 self.expect(TokenType.RPAREN, code="W0006", msg="Expected ')' after pattern arguments")
                 return EnumPattern(enum_name=None, variant=first_name, args=payload_args, line=token.line, col=token.col, type_args=pat_type_args)
 
-            if first_name in ("None", "none"):
+            if first_name == "none":
+                raise ParserError(
+                    message="Lowercase 'none' pattern has been removed; use canonical 'None'",
+                    line=token.line,
+                    col=token.col,
+                    file=self.file,
+                    code="W0001",
+                )
+            if first_name == "None":
                 return EnumPattern(enum_name=None, variant="None", args=[], line=token.line, col=token.col)
 
             # Check for TuplePattern: a, b
@@ -1457,37 +1471,24 @@ class Parser:
         if self.match(TokenType.FALSE):
             return BoolLiteral(value=False, line=token.line, col=token.col)
 
-        if self.match(TokenType.NONE):
-            return NoneLiteral(line=token.line, col=token.col)
-
         if self.match(TokenType.THIS):
             return ThisExpr(line=token.line, col=token.col)
 
         if self.match(TokenType.SUPER):
             return SuperExpr(line=token.line, col=token.col)
 
-        if self.match(TokenType.NEW):
-            cls_tok = self.expect(TokenType.IDENTIFIER, code="W0006", msg="Expected class name after 'new'")
-            class_name = cls_tok.value
-            while self.match(TokenType.DOT):
-                class_name += "." + self.expect(TokenType.IDENTIFIER).value
-            type_args = self._try_parse_generic_type_args(False) if self.check(TokenType.LBRACKET) else None
-            self.expect(TokenType.LPAREN, code="W0006", msg="Expected '(' after class name in 'new' expression")
-            args: List[Expr] = []
-            if not self.check(TokenType.RPAREN):
-                args.append(self.parse_expr())
-                while self.match(TokenType.COMMA):
-                    if self.check(TokenType.RPAREN):
-                        break
-                    args.append(self.parse_expr())
-            self.expect(TokenType.RPAREN, code="W0006", msg="Expected ')' after 'new' arguments")
-            expression = NewExpr(class_name=class_name, args=args, line=token.line, col=token.col)
-            expression.type_args = type_args
-            return expression
-
         # Identifiers & Named Struct Initializations
         if self.match(TokenType.IDENTIFIER) or (self.check(TokenType.ASYNC) and self.peek(1).type != TokenType.FN and self.advance()):
             ident_name = token.value
+
+            if ident_name == "new" and self.check(TokenType.IDENTIFIER):
+                raise ParserError(
+                    message="The 'new' keyword has been removed; construct classes directly with 'ClassName(...)'",
+                    line=token.line,
+                    col=token.col,
+                    file=self.file,
+                    code="W0006",
+                )
 
             type_args: Optional[List[TypeNode]] = None
             bracket_start = self.pos
@@ -1658,9 +1659,24 @@ class Parser:
             arm_tok = self.at()
             pattern: Pattern
             if self.match(TokenType.ELSE):
-                pattern = WildcardPattern(line=arm_tok.line, col=arm_tok.col)
+                raise ParserError(
+                    message="Wildcard 'else =>' has been removed in match; use canonical '_ =>'",
+                    line=arm_tok.line,
+                    col=arm_tok.col,
+                    file=self.file,
+                    code="W0001",
+                )
             else:
-                pattern = self.parse_pattern()
+                pattern = self.parse_pattern(allow_tuple=False)
+                if self.check(TokenType.COMMA):
+                    comma_tok = self.at()
+                    raise ParserError(
+                        message="Unparenthesized tuple patterns are not allowed in match; use '(a, b) =>'",
+                        line=comma_tok.line,
+                        col=comma_tok.col,
+                        file=self.file,
+                        code="W0001",
+                    )
 
             guard: Optional[Expr] = None
             if self.match(TokenType.IF):

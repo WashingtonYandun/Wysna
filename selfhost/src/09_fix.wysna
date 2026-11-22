@@ -285,7 +285,7 @@ fn fix_plan_w2001(src: str, tokens: list[Token], start_byte: int, msg: str) -> l
         let orig = slice(src, span[0], span[1])
         let b0 = diag_utf8_byte_at(src, span[0])
         let b1 = diag_utf8_byte_at(src, span[1])
-        out.append(new FixEdit("W2001", "wrap '" + orig + "' in str(...)", "machine", b0, b1, "str(" + orig + ")"))
+        out.append(FixEdit("W2001", "wrap '" + orig + "' in str(...)", "machine", b0, b1, "str(" + orig + ")"))
         return out
     }
     let ef = fix_extract_expected_found(msg)
@@ -304,7 +304,7 @@ fn fix_plan_w2001(src: str, tokens: list[Token], start_byte: int, msg: str) -> l
     let orig = slice(src, c0, c1)
     let b0 = diag_utf8_byte_at(src, c0)
     let b1 = diag_utf8_byte_at(src, c1)
-    out.append(new FixEdit("W2001", "append '?' to '" + orig + "' to propagate failure by returning early", "maybe", b0, b1, orig + "?"))
+    out.append(FixEdit("W2001", "append '?' to '" + orig + "' to propagate failure by returning early", "maybe", b0, b1, orig + "?"))
     return out
 }
 
@@ -343,7 +343,7 @@ fn fix_plan_w3001(src: str, tokens: list[Token], start_byte: int, msg: str) -> l
     if slice(src, lc_off, lc_off + 3) != "let" { return out }
     let b0 = diag_utf8_byte_at(src, lc_off)
     let b1 = diag_utf8_byte_at(src, lc_off + 3)
-    out.append(new FixEdit("W3001", "mark binding '" + var_name + "' as mutable (`let mut`)", "machine", b0, b1, "let mut"))
+    out.append(FixEdit("W3001", "mark binding '" + var_name + "' as mutable (`let mut`)", "machine", b0, b1, "let mut"))
     return out
 }
 
@@ -494,7 +494,7 @@ fn fix_plan_w1001(src: str, tokens: list[Token], start_byte: int, end_byte: int,
     }
     if tie or best_name == "" or best_sim < 600 { return out }
     let app = if best_sim >= 800 { "machine" } else { "maybe" }
-    out.append(new FixEdit("W1001", "replace unknown identifier '" + bad + "' with '" + best_name + "'", app, start_byte, end_byte, best_name))
+    out.append(FixEdit("W1001", "replace unknown identifier '" + bad + "' with '" + best_name + "'", app, start_byte, end_byte, best_name))
     return out
 }
 
@@ -508,7 +508,7 @@ fn fix_plan_w3004(src: str, tokens: list[Token], start_byte: int, end_byte: int,
     let tok_idx = fix_tok_index_at(tokens, lc[0], lc[1])
     if tok_idx < 0 or tok_idx >= len(tokens) or tokens[tok_idx].kind != "IDENT" { return out }
     let orig = slice(src, start_char, end_char)
-    out.append(new FixEdit("W3004", "rename constructor 'fn " + orig + "' to 'fn init'", "machine", start_byte, end_byte, "init"))
+    out.append(FixEdit("W3004", "rename constructor 'fn " + orig + "' to 'fn init'", "machine", start_byte, end_byte, "init"))
     return out
 }
 
@@ -658,7 +658,7 @@ fn tool_handle_fix(args: list[str], json_mode_in: bool) -> unit {
                 }
             }
             if overlaps {
-                skipped_all.append(new FixSkipped(c.code, c.description, "overlaps another edit"))
+                skipped_all.append(FixSkipped(c.code, c.description, "overlaps another edit"))
             } else {
                 taken_start.append(c.start_byte)
                 taken_end.append(c.end_byte)

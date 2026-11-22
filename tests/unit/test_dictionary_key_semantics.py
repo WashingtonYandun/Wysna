@@ -17,7 +17,7 @@ def test_invalid_dictionary_key_is_rejected_after_nominal_resolution():
         'struct Holder { value: dict[Key, int] }\nenum Key { Item(list[int]) }',
         'enum Key { Item(list[int]) }\nstruct Holder { value: dict[Key, int] }',
         'enum Outer { Item(Inner) }\nstruct Holder { value: dict[Outer, int] }\nenum Inner { Item(float) }',
-        'enum Key { Item(Option[int]) }\nlet x: Option[int] = none\nlet values = {Key.Item(x): 1}',
+        'enum Key { Item(Option[int]) }\nlet x: Option[int] = None\nlet values = {Key.Item(x): 1}',
         'let values: dict[Option[int], int] = {}',
         'let values: dict[int?, int] = {}',
         'enum Key[T] { Item(T) }\nstruct Holder { value: dict[Key[list[int]], int] }',

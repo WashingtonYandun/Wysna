@@ -258,7 +258,7 @@ class LspJson {
 }
 
 fn lsp_json_null() -> LspJson {
-    return new LspJson("null")
+    return LspJson("null")
 }
 
 fn lsp_json_has(obj: LspJson, key: str) -> bool {
@@ -386,13 +386,13 @@ fn lsp_jc_parse_val(c: LspJsonCursor) -> LspJson {
     if c.pos >= n { return lsp_json_null() }
     let ch = c.src[c.pos]
     if ch == "\"" {
-        let out = new LspJson("str")
+        let out = LspJson("str")
         out.str_val = lsp_jc_parse_str(c)
         return out
     }
     if ch == "{" {
         c.pos = c.pos + 1
-        let obj = new LspJson("object")
+        let obj = LspJson("object")
         lsp_jc_skip_ws(c)
         if c.pos < n and c.src[c.pos] == "}" {
             c.pos = c.pos + 1
@@ -418,7 +418,7 @@ fn lsp_jc_parse_val(c: LspJsonCursor) -> LspJson {
     }
     if ch == "[" {
         c.pos = c.pos + 1
-        let arr = new LspJson("array")
+        let arr = LspJson("array")
         lsp_jc_skip_ws(c)
         if c.pos < n and c.src[c.pos] == "]" {
             c.pos = c.pos + 1
@@ -439,13 +439,13 @@ fn lsp_jc_parse_val(c: LspJsonCursor) -> LspJson {
     }
     if ch == "t" and c.pos + 4 <= n and slice(c.src, c.pos, c.pos + 4) == "true" {
         c.pos = c.pos + 4
-        let out = new LspJson("bool")
+        let out = LspJson("bool")
         out.bool_val = true
         return out
     }
     if ch == "f" and c.pos + 5 <= n and slice(c.src, c.pos, c.pos + 5) == "false" {
         c.pos = c.pos + 5
-        let out = new LspJson("bool")
+        let out = LspJson("bool")
         out.bool_val = false
         return out
     }
@@ -465,13 +465,13 @@ fn lsp_jc_parse_val(c: LspJsonCursor) -> LspJson {
             break
         }
     }
-    let num = new LspJson("int")
+    let num = LspJson("int")
     num.int_val = lsp_parse_int(int_part, 0)
     return num
 }
 
 fn lsp_parse_json(src: str) -> LspJson {
-    let cursor = new LspJsonCursor(src)
+    let cursor = LspJsonCursor(src)
     return lsp_jc_parse_val(cursor)
 }
 
@@ -509,7 +509,7 @@ fn mcp_is_within_root(cand: str, root: str) -> bool {
 }
 
 fn mcp_json_error() -> LspJson {
-    return new LspJson("error")
+    return LspJson("error")
 }
 
 fn mcp_hex_digit(code: int) -> int {
@@ -583,13 +583,13 @@ fn mcp_strict_parse_val(c: LspJsonCursor) -> LspJson {
     if ch == "\"" {
         let sres = mcp_strict_parse_str_wrap(c)
         if sres[0] != "1" { return mcp_json_error() }
-        let out = new LspJson("str")
+        let out = LspJson("str")
         out.str_val = sres[1]
         return out
     }
     if ch == "{" {
         c.pos = c.pos + 1
-        let obj = new LspJson("object")
+        let obj = LspJson("object")
         lsp_jc_skip_ws(c)
         if c.pos < n and c.src[c.pos] == "}" {
             c.pos = c.pos + 1
@@ -623,7 +623,7 @@ fn mcp_strict_parse_val(c: LspJsonCursor) -> LspJson {
     }
     if ch == "[" {
         c.pos = c.pos + 1
-        let arr = new LspJson("array")
+        let arr = LspJson("array")
         lsp_jc_skip_ws(c)
         if c.pos < n and c.src[c.pos] == "]" {
             c.pos = c.pos + 1
@@ -649,13 +649,13 @@ fn mcp_strict_parse_val(c: LspJsonCursor) -> LspJson {
     }
     if ch == "t" and c.pos + 4 <= n and slice(c.src, c.pos, c.pos + 4) == "true" {
         c.pos = c.pos + 4
-        let out = new LspJson("bool")
+        let out = LspJson("bool")
         out.bool_val = true
         return out
     }
     if ch == "f" and c.pos + 5 <= n and slice(c.src, c.pos, c.pos + 5) == "false" {
         c.pos = c.pos + 5
-        let out = new LspJson("bool")
+        let out = LspJson("bool")
         out.bool_val = false
         return out
     }
@@ -681,14 +681,14 @@ fn mcp_strict_parse_val(c: LspJsonCursor) -> LspJson {
         while c.pos < n and is_digit(ord(c.src[c.pos])) { c.pos = c.pos + 1 }
     }
     if int_start == c.pos { return mcp_json_error() }
-    let num = new LspJson("int")
+    let num = LspJson("int")
     num.int_val = lsp_parse_int(int_str, 0)
     num.str_val = slice(c.src, int_start, c.pos)
     return num
 }
 
 fn mcp_parse_json_strict(src: str) -> LspJson {
-    let cursor = new LspJsonCursor(src)
+    let cursor = LspJsonCursor(src)
     let val = mcp_strict_parse_val(cursor)
     if val.kind == "error" { return val }
     lsp_jc_skip_ws(cursor)

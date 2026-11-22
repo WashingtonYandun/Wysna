@@ -98,7 +98,7 @@ pub fn find_first[T](values: list[T], predicate: fn(T) -> bool) -> T? {
             return value
         }
     }
-    return none
+    return None
 }
 
 pub fn contains[T](values: list[T], target: T) -> bool {

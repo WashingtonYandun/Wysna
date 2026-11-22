@@ -20,7 +20,7 @@ if mode == "isolated" {
     let second = check_source("fn add(a: int, b: int) -> int { a + b }\nprint(add(1, 2))", "second.wysna")
     let second_module = mir_build(second)
     let second_before = mir_module_json(second_module)
-    let normal = check_source("class Box { value: int\nfn init(value: int) { this.value = value } }\nlet box = new Box(7)\nprint(box.value)", "normal.wysna")
+    let normal = check_source("class Box { value: int\nfn init(value: int) { this.value = value } }\nlet box = Box(7)\nprint(box.value)", "normal.wysna")
     let c_before = compile_source(normal)
     let other = check_source("fn message() -> str { \"hello\" }\nprint(message())", "other.wysna")
     let ignored = compile_source(other)
@@ -39,8 +39,8 @@ if mode == "copy" {
     if mir_module_json(mir_build(first)) != expected { report_error_at("W9999", first.source, "checked consumer mutated another consumer") }
 }
 if mode == "builders" {
-    let a = new MirBuilder(first)
-    let b = new MirBuilder(first)
+    let a = MirBuilder(first)
+    let b = MirBuilder(first)
     mir_begin(a, first.source, 5)
     let value = mir_constant(a, mir_literal_str("kept"), 5, first.source)
     mir_begin(b, first.source, 3)
@@ -133,7 +133,7 @@ if mode == "unknown_mir_opcode" {
     let ignored = mir_emit_c(module)
 }
 if mode == "missing_method_target" {
-    let mut checked = check_source("class Base { fn value() -> int { 1 } }\nclass Derived extends Base { fn value() -> int { super.value() } }\nprint(new Derived().value())", "missing-method.wysna")
+    let mut checked = check_source("class Base { fn value() -> int { 1 } }\nclass Derived extends Base { fn value() -> int { super.value() } }\nprint(Derived().value())", "missing-method.wysna")
     for i in 0..len(checked.records) {
         if checked.types[checked.records[i].type_id].name == "Derived" { checked.records[i].methods[0].target = 99999 }
     }

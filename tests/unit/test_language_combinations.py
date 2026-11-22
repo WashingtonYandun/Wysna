@@ -70,7 +70,7 @@ class Factory[T] {
     public fn reject[E](payload: E) -> T ! Failure[E] | str { Err(Failure[E] { detail: payload }) }
 }
 fn wrong() -> int ! Failure[str] | str {
-    let factory = new Factory[int](0)
+    let factory = Factory[int](0)
     factory.reject(10)?
 }
 ''', 'W2006'),

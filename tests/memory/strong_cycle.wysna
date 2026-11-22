@@ -1,7 +1,7 @@
 class Node {
     public next: Node?
     public fn init() -> unit {
-        this.next = none
+        this.next = None
     }
 }
 

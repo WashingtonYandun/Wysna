@@ -212,7 +212,7 @@ class LspDocument {
         this.tmp_path = tmp_path
         this.has_graph = false
         this.clean_ok = false
-        this.graph = new ToolGraph(path, text)
+        this.graph = ToolGraph(path, text)
         let diagnostics: list[LspJson] = []
         this.diagnostics = diagnostics
         let sites: list[LspRenameSite] = []
@@ -539,7 +539,7 @@ fn lsp_handle_references(state: LspServerState, doc: LspDocument, pos_obj: LspJs
     let skip_file = if not include_decl and len(idxs) > 0 { doc.graph.nodes[idxs[0]].file } else { "" }
     let skip_line = if not include_decl and len(idxs) > 0 { doc.graph.nodes[idxs[0]].line } else { -1 }
 
-    let acc = new LspRefCollector()
+    let acc = LspRefCollector()
     let mut scanned_files: list[str] = []
     for d in state.docs {
         scanned_files.append(d.path)
@@ -624,7 +624,7 @@ fn lsp_semantic_tok_type(tok: Token) -> int {
     let k = tok.kind
     if k == "STR" or k == "FSTR" { return 11 }
     if k == "INT" or k == "FLOAT" { return 12 }
-    if k == "FN" or k == "LET" or k == "MUT" or k == "STRUCT" or k == "CLASS" or k == "INTERFACE" or k == "ENUM" or k == "IF" or k == "ELIF" or k == "ELSE" or k == "FOR" or k == "IN" or k == "WHILE" or k == "RETURN" or k == "MATCH" or k == "IMPORT" or k == "FROM" or k == "AS" or k == "PUB" or k == "TRUE" or k == "FALSE" or k == "NONE" or k == "THIS" or k == "SUPER" or k == "NEW" or k == "EXTERN" or k == "AND" or k == "OR" or k == "NOT" or k == "REQUIRES" or k == "ENSURES" {
+    if k == "FN" or k == "LET" or k == "MUT" or k == "STRUCT" or k == "CLASS" or k == "INTERFACE" or k == "ENUM" or k == "IF" or k == "ELIF" or k == "ELSE" or k == "FOR" or k == "IN" or k == "WHILE" or k == "RETURN" or k == "MATCH" or k == "IMPORT" or k == "FROM" or k == "AS" or k == "PUB" or k == "TRUE" or k == "FALSE" or k == "THIS" or k == "SUPER" or k == "EXTERN" or k == "AND" or k == "OR" or k == "NOT" or k == "REQUIRES" or k == "ENSURES" {
         return 0
     }
     if k == "IDENT" {
@@ -864,7 +864,7 @@ fn lsp_token_key(token: Token) -> str {
 }
 
 fn lsp_load_source(src: str, file: str, paths: list[str], texts: list[str]) -> ModuleLoader {
-    let loader = new ModuleLoader()
+    let loader = ModuleLoader()
     loader.ov_paths = paths
     loader.ov_texts = texts
     loader.trace_names = true
@@ -1014,7 +1014,7 @@ fn lsp_workspace_rename_edits(state: LspServerState, workspace: LspRenameWorkspa
             if start in seen { continue }
             seen.append(start)
             edits.append(lsp_edit_json(text, start, end, new_name))
-            patches.append(new FixEdit("", "", "", diag_utf8_byte_at(text, start), diag_utf8_byte_at(text, end), new_name))
+            patches.append(FixEdit("", "", "", diag_utf8_byte_at(text, start), diag_utf8_byte_at(text, end), new_name))
         }
         if len(edits) == 0 { continue }
         for token in tokenize(text, file) {
@@ -1055,7 +1055,7 @@ fn lsp_handle_rename(state: LspServerState, doc: LspDocument, pos: LspJson, new_
         if root == "" { return "null" }
         let files = lsp_workspace_files(root) else error { return "null" }
         if not tool_str_contains(files, declaration.file) { return "null" }
-        let workspace = new LspRenameWorkspace()
+        let workspace = LspRenameWorkspace()
         let staged = lsp_stage_rename_workspace(state, workspace, files, root, declaration.val)
         let result = if staged { lsp_workspace_rename_edits(state, workspace, declaration, new_name) } else { "null" }
         for snapshot in workspace.snapshots { lsp_remove_file(snapshot) }
@@ -1112,7 +1112,7 @@ fn lsp_dispatch_message(state: LspServerState, msg: LspJson) -> bool {
             lsp_check_and_publish(state, existing)
         } else {
             let tmp_p = lsp_next_tmp_path(state, "wysna_lsp_doc", ".wysna")
-            let doc = new LspDocument(uri, path, version, text, tmp_p)
+            let doc = LspDocument(uri, path, version, text, tmp_p)
             state.docs.append(doc)
             lsp_check_and_publish(state, len(state.docs) - 1)
         }
@@ -1191,7 +1191,7 @@ fn lsp_dispatch_message(state: LspServerState, msg: LspJson) -> bool {
 }
 
 fn lsp_serve() -> unit {
-    let state = new LspServerState()
+    let state = LspServerState()
     while not state.eof_reached {
         let payload = lsp_read_frame_clean(state)
         if state.eof_reached { break }

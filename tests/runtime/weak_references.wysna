@@ -4,8 +4,8 @@ class Node {
     public child: Node?
     public fn init(id: int) -> unit {
         this.id = id
-        this.parent = none
-        this.child = none
+        this.parent = None
+        this.child = None
     }
 }
 
@@ -40,15 +40,15 @@ fn weak_back_reference() -> Weak[Node] {
 
 fn exercise() -> unit {
     let temporary = weak(Node(99))
-    print(temporary, upgrade(temporary) == none)
+    print(temporary, upgrade(temporary) == None)
     let mut replaceable = Node(98)
     let observer = weak(replaceable)
     replaceable = Node(97)
-    print(observer, upgrade(observer) == none)
+    print(observer, upgrade(observer) == None)
 
     let empty = DefaultHandle()
     let other_empty = DefaultHandle()
-    print(empty.value, upgrade(empty.value) == none, empty.value == other_empty.value)
+    print(empty.value, upgrade(empty.value) == None, empty.value == other_empty.value)
 
     let node = Node(1)
     let handle: Weak[Node] = weak(node)
@@ -63,12 +63,12 @@ fn exercise() -> unit {
     let dead = expired(2)
     let dead_copy = dead
     let other_dead = expired(3)
-    print(dead, upgrade(dead) == none)
+    print(dead, upgrade(dead) == None)
     print(dead == dead_copy, dead == other_dead)
     let live = promoted() ?? Node(-1)
     print(live.id)
     let back = weak_back_reference()
-    print(back, upgrade(back) == none)
+    print(back, upgrade(back) == None)
 }
 
 exercise()

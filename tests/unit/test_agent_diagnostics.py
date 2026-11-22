@@ -548,7 +548,7 @@ def test_algorithms_parallel_map_filter_map_partition_and_flat_map(tmp_path):
         "let sq = alg.parallel_map[int, int](xs, |x: int| => x * x)\n"
         "let evens_doubled = alg.filter_map[int, int](xs, |x: int| -> int? {\n"
         "    if x % 2 == 0 { return Some(x * 10) }\n"
-        "    return none\n"
+        "    return None\n"
         "})\n"
         "let parts = alg.partition[int](xs, |x: int| => x <= 2)\n"
         "let expanded = alg.flat_map[int, int]([1, 2], |x: int| => [x, x * 10])\n"

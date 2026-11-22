@@ -26,7 +26,7 @@ fn fail(mode: int) -> int ! BoxErr[int] | BoxErr[str] | BoxErr[list[str]] | GenE
         let issue: GenErr[int] = GenErr.Empty
         return Err(issue)
     }
-    let issue: RefErr[str] = new RefErr[str]("ref")
+    let issue: RefErr[str] = RefErr[str]("ref")
     return Err(issue)
 }
 

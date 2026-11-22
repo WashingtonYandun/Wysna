@@ -1,6 +1,6 @@
 class Node {
     public next: Node?
-    fn init() { this.next = none }
+    fn init() { this.next = None }
 }
 fn exercise() -> unit {
     let node = Node()
@@ -8,13 +8,13 @@ fn exercise() -> unit {
     print(node)
     print(str(node))
     print([node], (node, node))
-    node.next = none
+    node.next = None
     print([node, node])
     let other = Node()
     node.next = other
     other.next = node
     print(node)
-    node.next = none
-    other.next = none
+    node.next = None
+    other.next = None
 }
 exercise()

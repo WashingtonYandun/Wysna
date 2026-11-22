@@ -481,7 +481,7 @@ fn tool_scan_decl_nodes(graph: ToolGraph, program: CheckedProgram, src: str, fil
                 let span = tool_token_span(src, file, tok.line, tok.col, true, tokens)
                 let vis = if is_public { "public" } else { "private" }
                 let nid = decl_kind + ":" + qname
-                let node = new ToolGraphNode(nid, name, qname, decl_kind, mod_label, file, span.start_line, tok.col, span.end_line, span.start_byte, span.end_byte, span.start_char, span.end_char, vis, false, "", "")
+                let node = ToolGraphNode(nid, name, qname, decl_kind, mod_label, file, span.start_line, tok.col, span.end_line, span.start_byte, span.end_byte, span.start_char, span.end_char, vis, false, "", "")
                 current_owner_idx = len(graph.nodes)
                 current_owner_name = name
                 current_owner_kind = decl_kind
@@ -513,7 +513,7 @@ fn tool_scan_decl_nodes(graph: ToolGraph, program: CheckedProgram, src: str, fil
                         break
                     }
                 }
-                let node = new ToolGraphNode(nid, name, qname, decl_kind, mod_label, file, span.start_line, tok.col, span.end_line, span.start_byte, span.end_byte, span.start_char, span.end_char, vis, is_async, sig_str, "")
+                let node = ToolGraphNode(nid, name, qname, decl_kind, mod_label, file, span.start_line, tok.col, span.end_line, span.start_byte, span.end_byte, span.start_char, span.end_char, vis, is_async, sig_str, "")
                 if is_extern {
                     node.effects.append("ffi.native")
                     node.capabilities.append("native-ffi")
@@ -541,7 +541,7 @@ fn tool_scan_decl_nodes(graph: ToolGraph, program: CheckedProgram, src: str, fil
                     break
                 }
             }
-            let mnode = new ToolGraphNode(nid, mname, qname, mkind, mod_label, file, span.start_line, tok.col, span.end_line, span.start_byte, span.end_byte, span.start_char, span.end_char, vis, is_async, sig_str, graph.nodes[current_owner_idx].id)
+            let mnode = ToolGraphNode(nid, mname, qname, mkind, mod_label, file, span.start_line, tok.col, span.end_line, span.start_byte, span.end_byte, span.start_char, span.end_char, vis, is_async, sig_str, graph.nodes[current_owner_idx].id)
             graph.nodes.append(mnode)
             is_public = false
             is_async = false
@@ -630,7 +630,7 @@ fn tool_build_graph_with_overlays(src: str, file: str, ov_paths: list[str], ov_t
 }
 
 fn tool_build_checked_graph(src: str, canonical: str, expanded: list[Token], program: CheckedProgram, ov_paths: list[str], ov_texts: list[str], include_entry: bool) -> ToolGraph {
-    let graph = new ToolGraph(canonical, src)
+    let graph = ToolGraph(canonical, src)
     graph.mod_names.append(canonical)
     let mut mod_hashes: list[str] = [canonical + "=" + diag_sha256_hex(src)]
     tool_scan_decl_nodes(graph, program, src, canonical)
@@ -710,7 +710,7 @@ fn tool_build_checked_graph(src: str, canonical: str, expanded: list[Token], pro
 
     if include_entry and len(program.entry) > 0 {
         let idx = len(graph.nodes)
-        let node = new ToolGraphNode("fn:__entry__", "__entry__", "__entry__", "entrypoint", "entry", canonical, 1, 1, 1, 0, 0, 0, 0, "private", false, "", "")
+        let node = ToolGraphNode("fn:__entry__", "__entry__", "__entry__", "entrypoint", "entry", canonical, 1, 1, 1, 0, 0, 0, 0, "private", false, "", "")
         graph.nodes.append(node)
         for entry_node in program.entry {
             tool_walk_subtree(program, graph, idx, entry_node)

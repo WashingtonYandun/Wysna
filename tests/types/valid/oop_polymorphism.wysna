@@ -42,9 +42,9 @@ fn announce(s: Speakable) -> str {
 }
 
 fn main() {
-    let d: Animal = new Dog("Rex", "Husky")
-    let c: Speakable = new Cat("Luna")
-    let pets: list[Animal] = [new Dog("Max", "Pug"), new Cat("Milo")]
+    let d: Animal = Dog("Rex", "Husky")
+    let c: Speakable = Cat("Luna")
+    let pets: list[Animal] = [Dog("Max", "Pug"), Cat("Milo")]
     for p in pets {
         print(announce(p))
     }

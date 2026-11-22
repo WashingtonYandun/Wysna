@@ -26,12 +26,12 @@ pub fn ready[T](val: T) -> Task[T] {
         is_ready: true,
         is_failed: false,
         value: Some(val),
-        error: none,
+        error: None,
     }
 }
 
 pub fn failed[T](err_msg: str) -> Task[T] {
-    let empty_val: T? = none
+    let empty_val: T? = None
     return Task[T] {
         id: 0,
         handle: 0,
@@ -51,7 +51,7 @@ pub fn sleep_ms(duration_ms: int) -> Task[int] {
         is_ready: clamped == 0 or h < 0,
         is_failed: false,
         value: Some(clamped),
-        error: none,
+        error: None,
     }
 }
 
@@ -66,14 +66,14 @@ pub fn _take_task_value[T](handle: int, fallback: T?) -> T? {
 pub fn spawn[T](work: fn() -> T) -> Task[T] {
     let h = _spawn_handle[T](work)
     if h > 0 {
-        let empty_val: T? = none
+        let empty_val: T? = None
         return Task[T] {
             id: h,
             handle: h,
             is_ready: false,
             is_failed: false,
             value: empty_val,
-            error: none,
+            error: None,
         }
     }
     return ready[T](work())

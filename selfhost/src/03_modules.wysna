@@ -603,7 +603,7 @@ fn module_trace_name(context: ModuleLoader, source: Token, anchor: Token, target
     context.name_sites.append(ModuleNameSite { source: source, expanded: expanded, import_site: import_site, rewrite: rewrite })
 }
 fn module_tokens_with_overlays(src: str, path: str, ov_paths: list[str], ov_texts: list[str]) -> list[Token] {
-    let context = new ModuleLoader()
+    let context = ModuleLoader()
     context.ov_paths = ov_paths
     context.ov_texts = ov_texts
     module_expand(context, src, path, true)
@@ -612,7 +612,7 @@ fn module_tokens_with_overlays(src: str, path: str, ov_paths: list[str], ov_text
 }
 
 fn module_tokens_with_project(src: str, path: str, proj_src_root: str, dep_aliases: list[str], dep_roots: list[str]) -> list[Token] {
-    let context = new ModuleLoader()
+    let context = ModuleLoader()
     context.project_sources_root = proj_src_root
     context.dep_aliases = dep_aliases
     context.dep_roots = dep_roots

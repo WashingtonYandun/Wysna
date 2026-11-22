@@ -87,7 +87,7 @@ def generate_typed_program(seed: int) -> str:
         "",
         "fn safe_div(n: int, d: int) -> int? {",
         "    if d == 0 {",
-        "        return none",
+        "        return None",
         "    }",
         "    return n / d",
         "}",
@@ -129,8 +129,8 @@ def generate_typed_program(seed: int) -> str:
         '    print("cow_matrix:", len(matrix[0]), len(matrix_mut[0]))',
         "",
         "    # 3. OOP Inheritance & Dispatch",
-        "    let a1 = new Animal(50)",
-        "    let b1 = new Bird(100, 20)",
+        "    let a1 = Animal(50)",
+        "    let b1 = Bird(100, 20)",
         "    let r1 = a1.act(b)",
         "    let r2 = b1.act(b)",
         '    print("oop:", r1, r2, b1.altitude, a1.get_secret())',
@@ -203,7 +203,7 @@ def generate_mutated_negative(seed: int) -> Tuple[str, str]:
             "    }\n"
             "}\n"
             "fn main() {\n"
-            "    let d = new Device(123)\n"
+            "    let d = Device(123)\n"
             "}\n"
         )
         return code, "W3004"
@@ -220,7 +220,7 @@ def generate_mutated_negative(seed: int) -> Tuple[str, str]:
             "        this.extra = y\n"
             "    }\n"
             "}\n"
-            "fn main() { let d = new Derived(1, 2) }\n"
+            "fn main() { let d = Derived(1, 2) }\n"
         )
         return code, "W3004"
 
@@ -237,7 +237,7 @@ def generate_mutated_negative(seed: int) -> Tuple[str, str]:
             "        super.init(x)\n"
             "    }\n"
             "}\n"
-            "fn main() { let d = new Derived(1, 2) }\n"
+            "fn main() { let d = Derived(1, 2) }\n"
         )
         return code, "W3004"
 
@@ -248,7 +248,7 @@ def generate_mutated_negative(seed: int) -> Tuple[str, str]:
             "    fn init(p: int) { this.pin = p }\n"
             "}\n"
             "fn main() {\n"
-            "    let a = new Account(1234)\n"
+            "    let a = Account(1234)\n"
             "    print(a.pin)\n"
             "}\n"
         )
@@ -264,7 +264,7 @@ def generate_mutated_negative(seed: int) -> Tuple[str, str]:
             "    fn init() { super.init() }\n"
             "    public fn secret() -> int { return 99 }\n"
             "}\n"
-            "fn main() { let c = new Child() }\n"
+            "fn main() { let c = Child() }\n"
         )
         return code, "W3002"
 

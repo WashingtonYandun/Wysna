@@ -110,7 +110,7 @@ def test_selfhost_formatter_matches_seed_on_inline_spacing_new_and_multiline_str
         "    let x=1+2\n"
         "    let neg = -5\n"
         "    let rng=0..10\n"
-        "    let c = new Counter(1)\n"
+        "    let c = Counter(1)\n"
         "    let mut total = x + neg + c.value + a + b\n"
         "    for i in rng {\n"
         "        total = total + i\n"

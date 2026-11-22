@@ -1,4 +1,4 @@
 let a: str? = "hello"
-let b: str? = none
+let b: str? = None
 let c: int? = 42
-let d: int? = none
+let d: int? = None

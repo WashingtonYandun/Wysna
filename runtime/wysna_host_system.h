@@ -59,6 +59,9 @@ static inline int64_t wysna_host_stdin_read_line(void* output_handle) {
     wysna_sandbox_deny("stdio");
     return -1;
 #endif
+#ifdef _WIN32
+    _setmode(_fileno(stdin), _O_BINARY);
+#endif
     WysnaHostEntry* output = wysna_host_find(output_handle, 1);
     if (!output) return -1;
     output->length = 0;
@@ -137,6 +140,9 @@ static inline int64_t wysna_host_stdin_read_exact(void* output_handle, int64_t c
     return -1;
 #endif
     if (count < 0 || count > 16777216LL) return -1;
+#ifdef _WIN32
+    _setmode(_fileno(stdin), _O_BINARY);
+#endif
     WysnaHostEntry* output = wysna_host_find(output_handle, 1);
     if (!output) return -1;
     output->length = 0;
@@ -167,6 +173,10 @@ static inline int64_t wysna_host_stdout_write_raw(void* input_handle) {
 #endif
     WysnaHostEntry* input = wysna_host_find(input_handle, 1);
     if (!input) return -1;
+#ifdef _WIN32
+    fflush(stdout);
+    _setmode(_fileno(stdout), _O_BINARY);
+#endif
     if (input->length > 0) {
         if (fwrite(input->data, 1, input->length, stdout) != input->length) return -1;
     }

@@ -24,8 +24,8 @@ fn main() -> unit {
     let l3 = [1, 2, 4]
     print("list eq:", l1 == l2, l1 != l3)
 
-    let c1 = new BoxedId(42)
-    let c2 = new BoxedId(42)
+    let c1 = BoxedId(42)
+    let c2 = BoxedId(42)
     let c1_alias = c1
     print("class eq:", c1 == c2, c1 == c1_alias, c1 != c2)
 }

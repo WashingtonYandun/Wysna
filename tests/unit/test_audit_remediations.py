@@ -53,14 +53,14 @@ main()
     deadlock_source = '''from "std/async" use { Task }
 
 fn main() -> unit {
-    let empty_val: int? = none
+    let empty_val: int? = None
     let pending = Task[int] {
         id: 1,
         handle: 0,
         is_ready: false,
         is_failed: false,
         value: empty_val,
-        error: none,
+        error: None,
     }
     let v = await pending
     print(v)
@@ -257,7 +257,7 @@ def test_aud07_qualified_implements_extends_and_no_redundant_index_backtrack(tmp
         "fn persist(store: contracts.Store, k: str) -> int {\n"
         "    return store.save(k)\n"
         "}\n"
-        'print(persist(new DiskStore("db:"), "abc"))\n'
+        'print(persist(DiskStore("db:"), "abc"))\n'
     )
     app_file.write_text(app_src, encoding="utf-8")
 

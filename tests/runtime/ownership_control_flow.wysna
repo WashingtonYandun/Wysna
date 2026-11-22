@@ -43,7 +43,7 @@ value },
     }
 }
 fn absent() -> str? { let held = "held" + " optional"
-return none }
+return None }
 fn optional_exit() -> str? {
     let held = ["before" + " propagation"]
     let value = absent()?

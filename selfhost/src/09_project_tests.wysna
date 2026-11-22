@@ -18,7 +18,7 @@ class ProjectTestPlan {
 fn proj_empty_test_plan() -> ProjectTestPlan {
     let cases: list[ProjectTestCase] = []
     let hashes: list[str] = []
-    return new ProjectTestPlan(cases, hashes, "", "", "")
+    return ProjectTestPlan(cases, hashes, "", "", "")
 }
 
 fn proj_plan_encode(value: str) -> str {
@@ -45,7 +45,7 @@ fn proj_test_exists(state: ProjectLockState, path: str) -> bool {
 }
 
 fn proj_test_plan(m: ProjectManifest, discover: bool, filter: str, has_filter: bool, case_id: str, json_mode: bool) -> ProjectTestPlan {
-    let state = new ProjectLockState("test", json_mode, m.root)
+    let state = ProjectLockState("test", json_mode, m.root)
     let mut candidates: list[ProjectTestCase] = []
     let mut seen: list[str] = []
     for tc in m.tests { candidates.append(tc); seen.append(tc.entry) }
@@ -59,7 +59,7 @@ fn proj_test_plan(m: ProjectManifest, discover: bool, filter: str, has_filter: b
             let entry = "tests/" + path
             let filename = tool_basename(path)
             if not tool_str_contains(seen, entry) and ((len(filename) >= 5 and slice(filename, 0, 5) == "test_") or proj_str_ends_with(path, "_test.wysna")) {
-                let tc = new ProjectTestCase()
+                let tc = ProjectTestCase()
                 tc.name = "auto:" + entry
                 tc.entry = entry
                 candidates.append(tc)
@@ -90,7 +90,7 @@ fn proj_test_plan(m: ProjectManifest, discover: bool, filter: str, has_filter: b
     let hash = diag_sha256_hex("{" + snapshot + "}")
     let payload = "{\"schema_version\":\"wysna.project-test-plan/1\",\"project\":" + diag_json_quote(m.name) + "," + snapshot +
         ",\"selected\":" + str(len(selected)) + ",\"plan_hash\":" + diag_json_quote(hash) + "}"
-    return new ProjectTestPlan(selected, hashes, lock_sha, hash, payload)
+    return ProjectTestPlan(selected, hashes, lock_sha, hash, payload)
 }
 
 fn proj_test_report_path(m: ProjectManifest, value: str, json_mode: bool) -> str {

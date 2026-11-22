@@ -59,7 +59,7 @@ fn check_delimiters(tokens: list[Token]) -> unit {
 
 fn check_program(tokens: list[Token], file: str, capture: bool) -> CheckedProgram {
     check_delimiters(tokens)
-    let context = new SemanticContext(capture)
+    let context = SemanticContext(capture)
     sem_validate(context, tokens)
     sem_complete_specializations(context)
     return checked_finish(context, tokens, file)

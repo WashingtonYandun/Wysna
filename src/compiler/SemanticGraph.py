@@ -676,11 +676,27 @@ def build_semantic_graph(checked, *, effects_report=None) -> dict:
                     if isinstance(callee, A.IdentExpr):
                         sym = getattr(callee, 'resolved_symbol', None)
                         callee_raw = sym.name if sym is not None else callee.name
-                        record_call(node_id, resolve_node_id(callee_raw, ('fn', 'extern')), stmt_file, expr_line)
+                        ctor_target = resolve_node_id(callee_raw, ('class', 'struct'))
+                        if ctor_target is not None:
+                            record_instantiation(node_id, callee_raw, stmt_file, expr_line)
+                            if ctor_target.startswith('class:'):
+                                init_target = resolve_node_id(f'{callee_raw}.init', ('method',))
+                                if init_target:
+                                    record_call(node_id, init_target, stmt_file, expr_line)
+                        else:
+                            record_call(node_id, resolve_node_id(callee_raw, ('fn', 'extern')), stmt_file, expr_line)
                     elif isinstance(callee, A.MemberExpr):
                         mod_member = getattr(callee, 'resolved_module_member', None)
                         if mod_member:
-                            record_call(node_id, resolve_node_id(mod_member, ('fn', 'extern')), stmt_file, expr_line)
+                            ctor_target = resolve_node_id(mod_member, ('class', 'struct'))
+                            if ctor_target is not None:
+                                record_instantiation(node_id, mod_member, stmt_file, expr_line)
+                                if ctor_target.startswith('class:'):
+                                    init_target = resolve_node_id(f'{mod_member}.init', ('method',))
+                                    if init_target:
+                                        record_call(node_id, init_target, stmt_file, expr_line)
+                            else:
+                                record_call(node_id, resolve_node_id(mod_member, ('fn', 'extern')), stmt_file, expr_line)
                         else:
                             recv_type = getattr(callee.object, 'inferred_type', None)
                             if recv_type is None and isinstance(callee.object, A.ThisExpr) and owner_cls_id:
@@ -735,11 +751,24 @@ def build_semantic_graph(checked, *, effects_report=None) -> dict:
                 callee = expr.callee
                 if isinstance(callee, A.IdentExpr):
                     sym = getattr(callee, 'resolved_symbol', None)
-                    top_calls.append((sym.name if sym is not None else callee.name, ('fn', 'extern'), expr_line))
+                    callee_raw = sym.name if sym is not None else callee.name
+                    ctor_target = resolve_node_id(callee_raw, ('class', 'struct'))
+                    if ctor_target is not None:
+                        top_instantiations.append((callee_raw, expr_line))
+                        if ctor_target.startswith('class:'):
+                            top_calls.append((f'{callee_raw}.init', ('method',), expr_line))
+                    else:
+                        top_calls.append((callee_raw, ('fn', 'extern'), expr_line))
                 elif isinstance(callee, A.MemberExpr):
                     mod_member = getattr(callee, 'resolved_module_member', None)
                     if mod_member:
-                        top_calls.append((mod_member, ('fn', 'extern'), expr_line))
+                        ctor_target = resolve_node_id(mod_member, ('class', 'struct'))
+                        if ctor_target is not None:
+                            top_instantiations.append((mod_member, expr_line))
+                            if ctor_target.startswith('class:'):
+                                top_calls.append((f'{mod_member}.init', ('method',), expr_line))
+                        else:
+                            top_calls.append((mod_member, ('fn', 'extern'), expr_line))
                     else:
                         recv_type = getattr(callee.object, 'inferred_type', None)
                         recv_display = getattr(recv_type, 'display', '') if recv_type is not None else ''

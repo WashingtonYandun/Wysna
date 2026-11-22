@@ -5,7 +5,7 @@ let res = match tok.kind {
     TokenKind.String => {
         2
     }
-    else => {
+    _ => {
         0
     }
 }

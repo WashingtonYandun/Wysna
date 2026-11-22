@@ -127,7 +127,7 @@ literal: {{ok}}
 | **POO** | `class`, `interface`, `extends`, `implements`, `new`, `this`, `super`, `public`, `private` |
 | **Control de Flujo** | `if`, `elif`, `else`, `for`, `while`, `in`, `match`, `return`, `break`, `continue` |
 | **Asincronía (contextual)** | `async`, `await` |
-| **Literales Booleanos** | `true`, `false`, `none` |
+| **Literales Booleanos** | `true`, `false` (`None` para opcional vacío) |
 | **Operadores Lógicos** | `and`, `or`, `not` |
 | **Aritmética** | `+`, `-`, `*`, `/`, `%` |
 | **Comparación** | `==`, `!=`, `<`, `<=`, `>`, `>=` |
@@ -173,20 +173,20 @@ graph TD
 * **`bool`:** Valor lógico booleano (`true` o `false`).
 * **`str`:** Cadena UTF-8 inmutable con búfer gestionado por ARC.
 * **`unit`:** Tipo unitario vacío (equivalente a `void` funcional). Toda función sin tipo de retorno explícito retorna `unit`.
-* **`none`:** Representa la ausencia de valor (utilizado con tipos opcionales `T?`).
+* **`None`:** Representa la ausencia de valor canónica (utilizado con tipos opcionales `T?`).
 
 ### 3.2 Colecciones Copy-on-Write y Tuplas
 * **`list[T]`:** Lista dinámica redimensionable con semántica Copy-on-Write (`WListBuf`).
   * **Representación en memoria:** Los elementos se almacenan en un arreglo contiguo de palabras NaN-boxed `WVal` de 8 bytes (donde `int`, `float` y `bool` se empaquetan en 8 bytes sin asignaciones individuales en heap para escalares estándar) con desprendimiento CoW vía `memcpy` cuando el refcount > 1; en MIR, las variables locales escalares (`int64_t`, `double`, `bool`) operan desenpaquetadas en registros nativos.
 * **`dict[K, V]`:** Tabla hash asociativa. Las claves (`K`) deben ser tipos comparables (`int`, `str`, `bool`, `enum` o tuplas hashables).
-* **`tuple[T1, T2, ...]` (atajo `(T1, T2, ...)`):** Producto heterogéneo inmutable de tamaño fijo (su tipo se anota como `tuple[int, str]` o `(int, str)`, sus elementos se leen posicionalmente con `pair.0`, `nested.0.1`, y se desestructura directamente en `let (a, b) = pair`, `match` o `for a, b in ...`).
+* **`tuple[T1, T2, ...]` (atajo `(T1, T2, ...)`):** Producto heterogéneo inmutable de tamaño fijo (su tipo se anota como `tuple[int, str]` o `(int, str)`, sus elementos se leen posicionalmente con `pair.0`, `nested.0.1`, y se desestructura directamente en `let (a, b) = pair`, `match` con `(a, b) => ...` o `for a, b in ...`).
 
 ### 3.3 Tipos Opcionales (`T?`)
-Cualquier tipo puede marcarse como opcional agregando el sufijo `?`. Su valor puede ser una instancia de `T` o `none`:
+Cualquier tipo puede marcarse como opcional agregando el sufijo `?`. Su valor puede ser una instancia de `T` o `None`:
 
 ```wysna
 let possible_name: str? = "Washo"
-let missing_name: str? = none
+let missing_name: str? = None
 
 # Operador de coalescencia nula (??)
 let display_name: str = possible_name ?? "Anónimo"
@@ -347,7 +347,7 @@ Permite capturar el error en el sitio de la llamada (`else err { ... }`) o recup
 let port = parse_port("") else err { 3000 }
 
 # Recuperación de opcional sin binding de error
-fn find_user(id: int) -> str? { return none }
+fn find_user(id: int) -> str? { return None }
 let user = find_user(1) else { "invitado" }
 
 # Desempaquetado con retorno temprano
@@ -398,7 +398,7 @@ los brazos que producen el valor deben tener tipos compatibles.
 Un enum importado admite tanto `module.State.Ready(value)` como
 `State.Ready(value)` cuando `State` se importó por separado. La misma
 calificación sirve para construir y para reconocer una variante.
-La sentencia `match` evalúa exhaustivamente todas las variantes de un enum, uniones de errores (`ParseErr(e) => ...`), tuplas o valores primitivos. Si una variante no está contemplada y no se define el comodín canónico `_ =>`, el compilador genera un error estático `W2003` (el formateador normaliza `else =>` a `_ =>`):
+La sentencia `match` evalúa exhaustivamente todas las variantes de un enum, uniones de errores (`ParseErr(e) => ...`), tuplas parentizadas (`(a, b) => ...`) o valores primitivos. Si una variante no está contemplada y no se define el comodín canónico `_ =>`, el compilador genera un error estático `W2003` (`else =>` y `* =>` ya no son válidos):
 
 ```wysna
 fn execute(cmd: Command) -> str {

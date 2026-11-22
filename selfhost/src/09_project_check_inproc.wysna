@@ -12,7 +12,7 @@ fn proj_execute_check(m: ProjectManifest, target_arg: str, dep_aliases: list[str
         proj_emit_error_and_exit("check", json_mode, "W5004", "cannot read project entry '" + entry_path + "': " + err.message)
         ""
     }
-    let loader = new ModuleLoader()
+    let loader = ModuleLoader()
     loader.project_sources_root = m.source_root_abs
     loader.dep_aliases = dep_aliases
     loader.dep_roots = dep_roots

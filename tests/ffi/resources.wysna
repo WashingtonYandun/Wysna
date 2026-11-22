@@ -5,7 +5,7 @@ extern "C" fn audit_fail_close() -> unit
 extern "C" fn audit_live() -> int32
 
 fn exercise(fail: bool, close_failure: bool) -> unit {
-    let resource = new resources.Resource(audit_open(), |handle: opaque| -> int { audit_dispose(handle) })
+    let resource = resources.Resource(audit_open(), |handle: opaque| -> int { audit_dispose(handle) })
     let body: fn(resources.Resource) -> int ! resources.ResourceError = |owner: resources.Resource| -> int ! resources.ResourceError {
         let borrowed = owner.borrow()?
         if fail { return Err(resources.error("body failed")) }

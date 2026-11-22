@@ -1,5 +1,5 @@
 fn line_terminates_statement(kind: str) -> bool {
-    return kind == "INT" or kind == "FLOAT" or kind == "STR" or kind == "TRUE" or kind == "FALSE" or kind == "NONE" or kind == "IDENT" or kind == "THIS" or kind == "SUPER" or kind == "RPAREN" or kind == "RBRACKET" or kind == "RBRACE" or kind == "QUESTION" or kind == "BREAK" or kind == "CONTINUE"
+    return kind == "INT" or kind == "FLOAT" or kind == "STR" or kind == "TRUE" or kind == "FALSE" or kind == "IDENT" or kind == "THIS" or kind == "SUPER" or kind == "RPAREN" or kind == "RBRACKET" or kind == "RBRACE" or kind == "QUESTION" or kind == "BREAK" or kind == "CONTINUE"
 }
 
 fn keyword_kind(word: str) -> str {
@@ -32,9 +32,6 @@ fn keyword_kind(word: str) -> str {
     }
     if word == "implements" {
         return "IMPLEMENTS"
-    }
-    if word == "new" {
-        return "NEW"
     }
     if word == "this" {
         return "THIS"
@@ -86,9 +83,6 @@ fn keyword_kind(word: str) -> str {
     }
     if word == "false" {
         return "FALSE"
-    }
-    if word == "none" {
-        return "NONE"
     }
     if word == "and" {
         return "AND"

@@ -385,7 +385,7 @@ fn mcp_handle_tool_call(state: McpServerState, id_raw: str, params: LspJson) -> 
     if not known {
         return mcp_rpc_error(id_raw, -32602, "unknown tool: " + name)
     }
-    let mut arguments = new LspJson("object")
+    let mut arguments = LspJson("object")
     if lsp_json_has(params, "arguments") {
         let raw_args = lsp_json_get(params, "arguments")
         if raw_args.kind != "null" {
@@ -468,7 +468,7 @@ fn mcp_serve(args: list[str]) -> unit {
         eprint("wysna mcp: invalid root directory: " + raw_root)
         exit(2)
     }
-    let state = new McpServerState(root, lsp_compiler_exe_path(), lsp_stdlib_root_arg(), lsp_tmp_dir())
+    let state = McpServerState(root, lsp_compiler_exe_path(), lsp_stdlib_root_arg(), lsp_tmp_dir())
     while true {
         let buf = wysna_host_buffer_new()
         let st = wysna_host_stdin_read_line(buf)

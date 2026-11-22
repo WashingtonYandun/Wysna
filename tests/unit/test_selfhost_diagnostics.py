@@ -12,7 +12,7 @@ def test_native_compiler_reports_expected_and_found_types(tmp_path):
     compiler = ensure_selfhost_compiler_binary(str(ROOT))
     cases = [
         ('let value: int = "wrong"\n', "expected 'int', found 'str'", ":1:18 -"),
-        ('let name: str = none\n', "expected 'str', found 'none'", ":1:17 -"),
+        ('let name: str = None\n', "expected 'str', found 'none'", ":1:17 -"),
         ('fn use(value: list[int]) -> unit {}\nlet input: list[str] = ["x"]\nuse(input)\n',
          "expected 'list[int]', found 'list[str]'", ":3:5 -"),
         ('fn use(value: int?) -> unit {}\nuse("wrong")\n', "expected 'int?', found 'str'", ":2:5 -"),
@@ -45,7 +45,7 @@ def test_native_compiler_points_at_offending_expression(tmp_path):
          "W2001", "expected 'int', found 'str'", ":2:38 -"),
         ('struct Point { x: int, y: int }\nfn main() {\n  let p = Point { x: 1, y: "z" }\n}\n',
          "W2001", "expected 'int', found 'str'", ":3:28 -"),
-        ('fn main() {\n  match 1 {\n    1 if "x" => print("ok")\n    * => print("no")\n  }\n}\n',
+        ('fn main() {\n  match 1 {\n    1 if "x" => print("ok")\n    _ => print("no")\n  }\n}\n',
          "W2001", "expected 'bool', found 'str'", ":3:10 -"),
         ('fn f() -> int { return "x" }\n',
          "W2004", "expected 'int', found 'str'", ":1:24 -"),

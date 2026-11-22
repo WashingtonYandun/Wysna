@@ -12,7 +12,7 @@ fn find_positive(xs: list[int]) -> int? {
             return x
         }
     }
-    return none
+    return None
 }
 
 fn double_first_positive(xs: list[int]) -> int? {

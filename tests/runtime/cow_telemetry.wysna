@@ -57,7 +57,7 @@ fn test_dict_of_lists() -> unit {
 }
 
 fn test_class_in_cow_container() -> unit {
-    let mut trackers = [new Tracker(1), new Tracker(2)]
+    let mut trackers = [Tracker(1), Tracker(2)]
     let trackers_snap = trackers
     eprint("__COW_CHECKPOINT__:class_in_list_aliased")
     trackers[0].count = 42
@@ -73,7 +73,7 @@ fn test_class_in_cow_container() -> unit {
 fn test_list_of_structs() -> unit {
     let mut configs = [Config { name: "a", values: [1, 2] }, Config { name: "b", values: [3, 4] }]
     let snapshot = configs
-    let counter = new Tracker(0)
+    let counter = Tracker(0)
     eprint("__COW_CHECKPOINT__:list_struct_aliased")
     configs[counter.index()].values[0] = 9
     eprint("__COW_CHECKPOINT__:list_struct_write")

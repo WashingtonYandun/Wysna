@@ -25,20 +25,20 @@ The language defines the following reserved keywords:
 DECLARATIONS (10):
 fn        let       mut       struct    enum      import    from      use       pub       extern
 
-OBJECT-ORIENTED (9):
-class     interface extends   implements new       this      super     public    private
+OBJECT-ORIENTED (8):
+class     interface extends   implements this      super     public    private
 
 CONTROL FLOW (10):
 if        elif      else      for       while     in        match     return    break     continue
 
-PRIMITIVE LITERALS (3):
-true      false     none
+PRIMITIVE LITERALS (2):
+true      false
 
 LOGICAL OPERATORS (3):
 and       or        not
 ```
 
-*Note on built-in types:* Primitive types (`int`, `float`, `bool`, `str`, `unit`) and standard library symbols (`len`, `enumerate`, `bytes`) are prelude identifiers in the global namespace, **not** language keywords.
+*Note on built-in types & canonical values:* Primitive types (`int`, `float`, `bool`, `str`, `unit`), canonical optional constructors (`Some`, `None`), and standard library symbols (`len`, `enumerate`, `bytes`) are prelude identifiers in the global namespace, **not** language keywords. Legacy `new Class(...)`, lowercase `none`, and `* =>` / `else =>` match wildcards are removed in favor of `Class(...)`, `None`, and `_ =>`.
 
 ---
 
@@ -56,7 +56,7 @@ Identifiers must start with an ASCII letter (`a-z`, `A-Z`) or underscore `_`, fo
   - **Infinities (`+Inf` / `-Inf`):** Overflowing floating-point operations or conversions (`float("inf")`, `float("-inf")`) obey IEEE-754 ordering (`-Inf < finite < +Inf`, `+Inf == +Inf` is `true`, `-Inf == -Inf` is `true`). Doing arithmetic such as `Inf - Inf` yields `NaN`.
   - **Float Division by Zero:** Explicit division by zero (`x / 0.0` or `x / -0.0`) triggers a deterministic runtime panic (`RuntimeError: Division by zero`) rather than silently producing `NaN` or `±Inf`.
 * **Booleans (`bool`):** `true` and `false`.
-* **None (`none`):** The singular value of an empty optional.
+* **None (`None`):** The canonical singular value of an empty optional (`Option.None`).
 
 ### 3.3 Strings (`str`) & Unicode Scalar Semantics
 * **UTF-8 Storage:** Strings are immutable and stored as UTF-8 in memory.
@@ -110,10 +110,10 @@ process(item)
 > the invariance of `list[T]` and `Weak[C]`.
 
 ### 4.2 Explicit Nullability (`T?`)
-* Types are **non-nullable by default**. Assigning `none` to a non-optional type is a compile-time error:
+* Types are **non-nullable by default**. Assigning `None` to a non-optional type is a compile-time error:
   ```wysna
-  let name: str = none     # COMPILE ERROR
-  let name: str? = none    # VALID: explicit optional
+  let name: str = None     # COMPILE ERROR
+  let name: str? = None    # VALID: explicit optional
   ```
 * Functions returning no value return `unit`:
   ```wysna
@@ -228,7 +228,7 @@ class Dog extends Animal implements Describable {
 let d: Describable = Dog("Rex", "Husky")
 print(d.describe())
 ```
-* **Reference Semantics vs Value Semantics:** `struct` values use Copy-on-Write (`W_STRUCT`), whereas `class` instances allocated via `ClassName(...)` (or `new ClassName(...)`) have reference identity (`W_OBJECT`) managed via deterministic reference counting.
+* **Reference Semantics vs Value Semantics:** `struct` values use Copy-on-Write (`W_STRUCT`), whereas `class` instances allocated via `ClassName(...)` have reference identity (`W_OBJECT`) managed via deterministic reference counting.
 * **Constructor Syntax:** Classes are constructed with `ClassName(...)`.
 * **Functional Programming Synergy:** Interfaces with a single method (`interface`) and `fn(...) -> R` signatures are designed to interoperate seamlessly with functional programming constructs.
 
@@ -371,7 +371,7 @@ match tok.kind {
     }
 }
 ```
-* If an `enum` case is missing and no `else =>` fallback is provided, compilation fails with an exhaustiveness error.
+* If an `enum` case is missing and no canonical `_ =>` wildcard fallback is provided, compilation fails with an exhaustiveness error (`W2003`). Tuple patterns in `match` must be parenthesized (`(a, b) => ...`).
 * A statement-position `match` evaluates the chosen arm for its effects and discards its value. Its arms may have different result types. A match used as a value still requires compatible types across the arms that produce that value.
 * Imported enum patterns may use the module-qualified owner (`status.State.Ready(value)`)
   or an owner bound with a selective import (`State.Ready(value)`). The owner must resolve

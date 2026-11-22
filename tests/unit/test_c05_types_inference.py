@@ -92,7 +92,7 @@ def test_declaration_order_invariance():
     struct Config {
         port: int
     }
-    let s = new Service(Config { port: 8080 })
+    let s = Service(Config { port: 8080 })
     """
     ast3 = Parser(file="order3.wysna").parse(src3)
     tc3 = TypeChecker(file="order3.wysna")
@@ -169,7 +169,7 @@ def test_container_and_compound_invariance():
             self.breed = breed
         }
     }
-    let dogs: list[Dog] = [new Dog("Rex", "Collie")]
+    let dogs: list[Dog] = [Dog("Rex", "Collie")]
     let animals: list[Animal] = dogs
     """
     try:
@@ -218,7 +218,7 @@ def test_contextless_inference_protection():
 
     # 4. Context propagation through ??
     src_coalesce = """
-    let opt: list[int]? = none
+    let opt: list[int]? = None
     let xs = opt ?? []
     """
     ast_c = Parser(file="coalesce.wysna").parse(src_coalesce)

@@ -336,7 +336,7 @@ class Formatter:
             return "true" if expr.value else "false"
 
         if isinstance(expr, NoneLiteral):
-            return "none"
+            return "None"
 
         if isinstance(expr, IdentExpr):
             return expr.name

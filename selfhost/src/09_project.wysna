@@ -609,7 +609,7 @@ fn proj_parse_inline_preopens(raw_val: str, root_canon: str, target_label: str) 
 fn proj_parse_manifest_at(abs_manifest_path: str, visit_stack: list[str]) -> ProjectManifest {
     let norm_m = module_normalize(abs_manifest_path)
     let raw = read_file(norm_m) else err {
-        let fail_m = new ProjectManifest(norm_m, module_directory(norm_m))
+        let fail_m = ProjectManifest(norm_m, module_directory(norm_m))
         return proj_fail(fail_m, "W5004", "cannot read manifest '" + norm_m + "': " + err.message)
     }
     let canon_m = module_canonical_resolved(norm_m)
@@ -623,12 +623,12 @@ fn proj_parse_manifest_at(abs_manifest_path: str, visit_stack: list[str]) -> Pro
 
     for active in visit_stack {
         if active == root {
-            let fail_m = new ProjectManifest(resolved_m, root)
+            let fail_m = ProjectManifest(resolved_m, root)
             return proj_fail(fail_m, "W5002", "dependency cycle detected at: " + root)
         }
     }
 
-    let m = new ProjectManifest(resolved_m, root)
+    let m = ProjectManifest(resolved_m, root)
     m.manifest_sha256 = diag_sha256_hex(raw)
     let raw_lines = schema_split_lines(raw)
     let mut logical_lines: list[str] = []
@@ -663,7 +663,7 @@ fn proj_parse_manifest_at(abs_manifest_path: str, visit_stack: list[str]) -> Pro
                 cur_sub = ""
                 cur_target_idx = -1
                 cur_test_idx = len(m.tests)
-                m.tests.append(new ProjectTestCase())
+                m.tests.append(ProjectTestCase())
                 let fresh: list[str] = []
                 m.active_test_keys = fresh
                 continue
@@ -701,7 +701,7 @@ fn proj_parse_manifest_at(abs_manifest_path: str, visit_stack: list[str]) -> Pro
                 cur_sec = "targets"
                 cur_sub = tname
                 cur_target_idx = len(m.targets)
-                m.targets.append(new ProjectTarget(tname))
+                m.targets.append(ProjectTarget(tname))
                 let tks: list[str] = []
                 m.seen_target_keys.append(tks)
                 continue
@@ -803,7 +803,7 @@ fn proj_parse_manifest_at(abs_manifest_path: str, visit_stack: list[str]) -> Pro
                 t.has_preopens = true
                 let mut k = 1
                 while k + 1 < len(pr) {
-                    t.preopens.append(new ProjectPreopen(pr[k], pr[k + 1]))
+                    t.preopens.append(ProjectPreopen(pr[k], pr[k + 1]))
                     k = k + 2
                 }
             } elif key == "fuel" {
@@ -846,7 +846,7 @@ fn proj_parse_manifest_at(abs_manifest_path: str, visit_stack: list[str]) -> Pro
             let dep_manifest = proj_parse_manifest_at(cont[1] + "/wysna.toml", next_stack)
             if not dep_manifest.ok { return proj_fail(m, dep_manifest.err_code, dep_manifest.err_msg) }
             let pkg_id = dep_manifest.name + "@" + dep_manifest.version
-            m.deps.append(new ProjectDep(cur_sub, rel[1], cont[1], dep_manifest.source_root_abs, pkg_id))
+            m.deps.append(ProjectDep(cur_sub, rel[1], cont[1], dep_manifest.source_root_abs, pkg_id))
             continue
         }
         if cur_sec == "tests" {
@@ -981,7 +981,7 @@ fn proj_find_manifest_path(explicit: str) -> list[str] {
 fn proj_load_manifest(explicit: str) -> ProjectManifest {
     let found = proj_find_manifest_path(explicit)
     if found[0] != "1" {
-        let fail_m = new ProjectManifest("", "")
+        let fail_m = ProjectManifest("", "")
         return proj_fail(fail_m, "W5002", found[1])
     }
     return proj_parse_manifest_at(found[1], [])

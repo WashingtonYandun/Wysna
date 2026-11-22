@@ -27,7 +27,7 @@ pub fn get_or(name: str, fallback: str) -> str {
 }
 
 pub fn current_directory() -> str ! EnvironmentError {
-    let data = new buffer.Bytes()
+    let data = buffer.Bytes()
     if wysna_host_getcwd(data.borrow()) < 0 {
         data.close()
         return Err(EnvironmentError { message: "working directory unavailable" })

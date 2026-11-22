@@ -6,4 +6,4 @@ class C {
     }
 }
 
-let value = C(none)
+let value = C(None)

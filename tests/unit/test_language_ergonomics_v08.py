@@ -88,7 +88,7 @@ class LanguageErgonomicsV08Tests(unittest.TestCase):
             ("negative", "fn main() -> int { -1 }", 1, "", "W4003"),
             ("exiting", """
 fn main() -> int {
-    let absent: int? = none
+    let absent: int? = None
     let value = absent else { exit(42) }
     return value
 }
@@ -239,7 +239,7 @@ fn maybe_nums(ok: bool) -> list[int]? {
     if ok {
         return Some([7])
     }
-    return none
+    return None
 }
 
 fn pick_branch(mode: int) -> list[int] {
@@ -269,7 +269,7 @@ fn match_list(code: int) -> list[int] {
 }
 
 fn main() -> unit {
-    let r = new Repo()
+    let r = Repo()
     r.ids["k"] = 5
     r.set_empty()
 
@@ -340,7 +340,7 @@ fn main() -> unit {
     st.score += 7
     st.score -= 2
 
-    let m = new Meter(20)
+    let m = Meter(20)
     m.bump(6)
 
     print(n, s, xs[1], xs[2], d["hits"], st.score, m.value)
@@ -371,11 +371,11 @@ main()
             self.assertEqual(sh_file.read_text(encoding="utf-8"), "let mut x = 1\nx += 2\nprint(x)\n")
 
     def test_b3_canonical_wildcard_formatting_and_w2001_str_autofix(self):
-        unformatted_else = "fn f(x: int) -> int {\n    return match x {\n        1 => 10,\n        else => 0,\n    }\n}\n"
-        formatted_else = format_source(unformatted_else, "match_else.wysna")
-        self.assertIn("_ => 0", formatted_else)
-        self.assertNotIn("else =>", formatted_else)
-        self.assertEqual(format_source(formatted_else, "match_else.wysna"), formatted_else)
+        removed_else = "fn f(x: int) -> int {\n    return match x {\n        1 => 10,\n        else => 0,\n    }\n}\n"
+        with self.assertRaises(Exception) as ctx:
+            format_source(removed_else, "match_else.wysna")
+        self.assertIn("else =>", str(ctx.exception))
+        self.assertIn("_ =>", str(ctx.exception))
 
         canonical_under = "fn g(x: int) -> int {\n    return match x {\n        1 => 10,\n        _ => 0,\n    }\n}\n"
         self.assertEqual(format_source(canonical_under, "match_under.wysna"), canonical_under)
@@ -675,17 +675,17 @@ main()
         self._assert_all_engines(source, "2 10 20 99 10 55 30\n", "w2_spread_single_eval")
 
     def test_w2_phase3_star_wildcard_match_parity(self):
-        star_fmt = "fn classify(n: int) -> str {\n    return match n {\n        1 => \"one\",\n        * => \"other\",\n    }\n}\n"
-        formatted = format_source(star_fmt, "star_wild.wysna")
-        self.assertIn("_ => \"other\"", formatted)
-        self.assertNotIn("* =>", formatted)
-        self.assertEqual(format_source(formatted, "star_wild.wysna"), formatted)
+        removed_star = "fn classify(n: int) -> str {\n    return match n {\n        1 => \"one\",\n        * => \"other\",\n    }\n}\n"
+        with self.assertRaises(Exception) as ctx:
+            format_source(removed_star, "star_wild.wysna")
+        self.assertIn("* =>", str(ctx.exception))
+        self.assertIn("_ =>", str(ctx.exception))
 
         source = '''
 fn classify(n: int) -> str {
     return match n {
         1 => "one",
-        * => "other",
+        _ => "other",
     }
 }
 fn main() -> unit {

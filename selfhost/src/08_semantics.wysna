@@ -872,7 +872,7 @@ fn sem_call_builtin(context: SemanticContext, name: str, args: list[int], source
     return context.unit_type
 }
 fn sem_check_call(context: SemanticContext, signature: int, args: list[int], sources: list[Token], discard: bool) -> int {
-    let unification = new SemUnification()
+    let unification = SemUnification()
     let type_ = context.types[signature]
     if type_.kind == "builtin" { return sem_call_builtin(context, type_.name, args, sources, discard) }
     if type_.kind == "enum_ctor" {
@@ -1214,7 +1214,6 @@ fn sem_prefix(context: SemanticContext, allow_struct: bool, statement: bool) -> 
     if sem_match(context, "FLOAT") { return sem_expr(context, "float", sem_value(context.float_type), source, source.val, [], -1, -1) }
     if sem_match(context, "STR") { return sem_expr(context, "string", sem_value(context.string_type), source, source.val, [], -1, -1) }
     if sem_match(context, "TRUE") or sem_match(context, "FALSE") { return sem_expr(context, "boolean", sem_value(context.boolean_type), source, source.kind, [], -1, -1) }
-    if sem_match(context, "NONE") { return sem_expr(context, "none", sem_value(context.none_type), source, "", [], -1, -1) }
     if sem_match(context, "MINUS") {
         let value_source = sem_at(context)
         let value = sem_expression(context, 9, allow_struct)
@@ -1382,9 +1381,11 @@ fn sem_prefix(context: SemanticContext, allow_struct: bool, statement: bool) -> 
         }
         return sem_expr(context, if is_super { "super" } else { "binding" }, SemValue { type_id: target_type, root: "this", writable: -1, terminates: false, node: -1 }, source, "self", [], context.variables[symbol].binding, -1)
     }
-    sem_match(context, "NEW")
     let name_token = sem_expect(context, "IDENT")
     let name = name_token.val
+    if name == "new" and sem_is(context, "IDENT") {
+        report_error_at("W0006", name_token, "the 'new' keyword has been removed; construct classes directly with 'ClassName(...)'")
+    }
     let variable = sem_lookup(context, name)
     if variable >= 0 {
         let value = context.variables[variable]
@@ -1471,6 +1472,7 @@ fn sem_prefix(context: SemanticContext, allow_struct: bool, statement: bool) -> 
             if context.capture_nodes { context.nodes[value.node].labels = [context.types[variant].name, name] }
             return value
         }
+        if name == "none" { report_error_at("W1001", name_token, "unknown identifier: none (lowercase 'none' has been removed; use canonical 'None')") }
         report_error_at("W1001", name_token, "unknown identifier: " + name)
     }
     if sem_kind(context, named_type) == "class" { return sem_expr(context, "new_callee", sem_value(sem_wrap(context, "constructor", named_type)), source, name, [], -1, -1) }
@@ -1481,7 +1483,7 @@ fn sem_prefix(context: SemanticContext, allow_struct: bool, statement: bool) -> 
             return sem_expr(context, "constructor", sem_value(sem_intern(context, "struct_ctor", name, target_types)), source, name, [], -1, -1)
         }
         if allow_struct and sem_match(context, "LBRACE") {
-            let unification = new SemUnification()
+            let unification = SemUnification()
             let empty_names: list[str] = []
             let empty_types: list[int] = []
             unification.names = empty_names
@@ -1696,7 +1698,7 @@ fn sem_expression(context: SemanticContext, minimum: int, allow_struct: bool) ->
                     if len(active_method_explicit) > 0 {
                         for a_id in active_method_explicit { full_args.append(a_id) }
                     } else {
-                        let m_unification = new SemUnification()
+                        let m_unification = SemUnification()
                         let u_names: list[str] = []
                         let u_types: list[int] = []
                         m_unification.names = u_names
@@ -2218,8 +2220,8 @@ fn sem_binding_pattern(context: SemanticContext, name: str, subject: int) -> str
     return pattern
 }
 fn sem_pattern_syntax(context: SemanticContext, subject: int, source: Token) -> str {
-    if sem_match(context, "ELSE") or sem_match(context, "STAR") { return sem_leaf_pattern(context, "*") }
-    if sem_match(context, "NONE") { return sem_leaf_pattern(context, "None") }
+    if sem_match(context, "STAR") { report_error_at("W0001", source, "wildcard '* =>' has been removed in match; use canonical '_ =>'") }
+    if sem_match(context, "ELSE") { report_error_at("W0001", source, "wildcard 'else =>' has been removed in match; use canonical '_ =>'") }
     if sem_match(context, "MINUS") {
         let literal = sem_take(context)
         if literal.kind != "INT" { report_error_at("W0002", literal, "expected integer pattern after '-'") }
@@ -2256,6 +2258,7 @@ fn sem_pattern_syntax(context: SemanticContext, subject: int, source: Token) -> 
     let mut owner = ""
     let mut name = sem_expect(context, "IDENT").val
     if name == "_" { return sem_leaf_pattern(context, "*") }
+    if name == "none" { report_error_at("W0001", source, "lowercase 'none' pattern has been removed; use canonical 'None'") }
     if sem_match(context, "DOT") { owner = name name = sem_expect(context, "IDENT").val }
     let kind = sem_kind(context, subject)
     if kind == "error_union" and (sem_is(context, "LBRACKET") or sem_is(context, "LPAREN")) {
@@ -2341,7 +2344,7 @@ fn sem_match_expression(context: SemanticContext, statement_context: bool) -> Se
     if pattern_start + 2 < len(context.tokens) and context.tokens[context.pos + 1].kind == "LBRACE" {
         if context.tokens[pattern_start].kind == "MINUS" { pattern_start = pattern_start + 1 }
         let pattern_kind = context.tokens[pattern_start].kind
-        let bare_pattern = pattern_kind == "IDENT" or pattern_kind == "INT" or pattern_kind == "STR" or pattern_kind == "TRUE" or pattern_kind == "FALSE" or pattern_kind == "NONE"
+        let bare_pattern = pattern_kind == "IDENT" or pattern_kind == "INT" or pattern_kind == "STR" or pattern_kind == "TRUE" or pattern_kind == "FALSE"
         let following = context.tokens[pattern_start + 1]
         if bare_pattern and following.kind == "LBRACE" {
             report_error_at("W0001", following, "expected '=>' after match pattern")
@@ -2371,6 +2374,9 @@ fn sem_match_expression(context: SemanticContext, statement_context: bool) -> Se
         context.expected_type = -1
         sem_pattern(context, subject)
         let pattern = context.last_pattern
+        if sem_is(context, "COMMA") {
+            report_error_at("W0001", sem_at(context), "unparenthesized tuple patterns are not allowed in match; use '(a, b) =>'")
+        }
         let mut guarded = false
         let mut guard = -1
         if sem_match(context, "IF") { guarded = true let guard_source = sem_at(context) let value = sem_expression(context, 0, false) sem_require_at(context, value.type_id, context.boolean_type, "W2001", guard_source) guard = value.node }
@@ -2818,7 +2824,7 @@ fn sem_check_function(context: SemanticContext, function: SemFunction) {
     context.checking_definition = previous_definition
 }
 fn sem_check_generic_constraints(context: SemanticContext, function_index: int, args: list[int], file: str, line: int, col: int) {
-    let unification = new SemUnification()
+    let unification = SemUnification()
     let function = context.functions[function_index]
     let signature = context.types[function.type_id]
     let empty_names: list[str] = []

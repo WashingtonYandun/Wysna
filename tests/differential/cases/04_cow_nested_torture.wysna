@@ -54,7 +54,7 @@ fn main() -> unit {
     print("case5:", orig_grid[0], mod_grid[0])
 
     # 6. Class (reference semantics) holding value types (struct & list)
-    let t1 = new TeamHolder(p1, [100, 200])
+    let t1 = TeamHolder(p1, [100, 200])
     let t2 = t1
     let lead_snapshot = t1.lead
     let scores_snapshot = t1.scores
