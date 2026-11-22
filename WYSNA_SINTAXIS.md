@@ -376,8 +376,8 @@ fn setup_server(port_str: str) -> unit ! str {
 @must_use
 pub fn old() -> int { 42 }
 
-let value = old() # W6004; el resultado se conserva
-old()            # W6004 y W6005
+let value = old() # W6004; result retained
+old()            # W6004 and W6005
 ```
 
 Solo se aceptan `@deprecated("mensaje no vacío")` y `@must_use`, antes de funciones

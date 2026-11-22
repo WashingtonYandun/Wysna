@@ -1,7 +1,7 @@
 # ADR-05 · Arquitectura Híbrida (Compilador Dual como Oráculo; Tooling en Selfhost)
 
 - **Fecha:** 2026-11-22
-- **Estado:** Aprobado (en implementación — Bloque 1)
+- **Estado:** Implementado en PR #176; integración pendiente
 - **Alcance:** `SIMP-R01`, frontera del Native SDK y secuencia pre-medición
 
 ## Regla en una línea
@@ -25,6 +25,15 @@
    2. **Bloque 2 (`FUZZ-A01`, time-box):** Fuzzing diferencial multiarchivo (genéricos, errores, closures, async) + corrección de divergencias.
    3. **Bloque 3 (Cierre Native SDK):** `--sandbox` + `W6001`/`W6002` en Selfhost + `PKG-A01` (solo Selfhost, conservando los 19 tests de seguridad USTAR v1) + `OPS-A01`.
    4. **Bloque 4 (Pulido del lenguaje pre-`v1.0`):** limpieza sintáctica (`1A`), cierre formal de closures por snapshot inmutable (`2A` + hint `W3001`), mejoras de `match` (`|`, `..`/`..=`, struct patterns, ramas inalcanzables) y `@atributos` estáticos cerrados.
+
+## Contrato cerrado de atributos (Bloque 4D)
+
+Se implementan `@deprecated("mensaje")` y `@must_use` en funciones de nivel superior,
+incluidas funciones públicas, genéricas y async. Producen `W6004` y `W6005` en CLI
+JSON y LSP; no ejecutan código, no admiten extensiones y no cambian el ABI. Las
+llamadas indirectas mediante callbacks no heredan atributos. Los destinos inválidos,
+atributos desconocidos o argumentos ejecutables se rechazan. El contrato completo
+está en `SPEC.md` y `WYSNA_SINTAXIS.md`.
 
 ## Consecuencias
 

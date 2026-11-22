@@ -13,7 +13,7 @@ Wysna Compiler's `native-core-v1` profile uses verified MIR for its normal C99 r
 The table comes from an actual `tools/ci_conformance.py --profile=release` run. Its
 `summary.json` records the Git revision and hashes of the source, fixture and harness
 inputs; the measured input digest is
-`f7988f671f86b8be2209c5ea9132f44d33b836602bb39724eb3308d06480b996`. La revisión medida es `0d5d424`.
+`2e8064730c0828e5294d9176e4059aa43ff931f2c3f227fd841848a230e79c41`. La revisión medida es `ed05906`.
 Release CI uploads that evidence with the run. The matrix covers the public runtime
 examples and negative fixtures, with no unsupported exclusions. The separate sanitizer
 gate checks memory safety; neither gate establishes universal language parity or measures
@@ -43,6 +43,7 @@ than inventing success from `tests/engine_profiles.json`.
 The core category includes primitive operations, control flow, tuples, classes,
 copy-on-write, ownership, diagnostics, nested patterns, Result closures and cyclic
 formatting. Panic fixtures require a nonzero exit and their declared diagnostic code.
+Compound match patterns have three dedicated fixtures covering or patterns, Int64 ranges and nested struct payloads.
 Generics include functions, structs, recursive ADTs, concrete parameterized classes
 with methods, and rejected invalid layouts. `generic_class_methods` is a separately
 measured category so its support cannot be inferred from generic functions or structs.

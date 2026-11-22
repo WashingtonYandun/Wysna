@@ -2,6 +2,8 @@
 
 > Auditoría histórica de la línea base `a2549fa`. Los problemas y mediciones describen ese snapshot; los estados de implementación y el ciclo vigente se consultan en [00-INDEX.md](00-INDEX.md) y [12-SIGUIENTE-CICLO-LENGUAJE.md](12-SIGUIENTE-CICLO-LENGUAJE.md).
 
+> La compatibilidad de `new` descrita en ADR-03 es histórica: la limpieza 1A del candidato [ADR-05](ADR-05-arquitectura-hibrida-tooling-selfhost.md) retira ese alias y conserva `Class(...)`.
+
 Este documento recoge las **5 decisiones arquitectónicas y de evolución (`ADR-00` a `ADR-04`)** que requieren aprobación explícita del mantenedor antes de ejecutarse: la elección del foco estratégico único y el congelamiento de subsistemas secundarios (`01-FOCO.md` / `SIMP-04`), más los **4 ítems del backlog marcados con `Requiere aprobación: sí`** ([`LANG-04`](03-LENGUAJE.md), [`GAP-03`](06-BRECHAS.md), [`LANG-05`](03-LENGUAJE.md) y [`GAP-06`](06-BRECHAS.md)).
 
 | ADR | Ítem / Alcance | Decisión propuesta | Impacto principal | Estado |
