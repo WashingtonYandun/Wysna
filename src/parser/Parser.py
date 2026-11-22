@@ -1758,6 +1758,9 @@ class Parser:
         if self.check(TokenType.MATCH):
             return self.parse_match_expr()
 
+        if token.type == TokenType.AT:
+            raise ParserError('Static attributes require a top-level function declaration',
+                              file=self.file, line=token.line, col=token.col, code='W0006')
         raise ParserError(
             message=f"Unexpected token '{token.type.name}' in expression",
             line=token.line,

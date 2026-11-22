@@ -38,6 +38,9 @@ class StaticAttributeTests(unittest.TestCase):
     def test_invalid_annotations_are_rejected_by_every_engine(self):
         cases = [
             ('@unknown\nfn f() {}', 'W0006'),
+            ('let value = @', 'W0006'),
+            ('let value = @must_use', 'W0006'),
+            ('print(@must_use)', 'W0006'),
             ('pub @must_use\nfn f() -> int { 1 }', 'W0006'),
             ('@deprecated(" ")\nfn f() {}', 'W0006'),
             ('@deprecated(print("must not execute"))\nfn f() {}', 'W0006'),

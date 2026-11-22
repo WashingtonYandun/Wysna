@@ -81,8 +81,8 @@ def validate(sdk, report, strict_source=False, compiler_source=None, application
         (project / 'runtime').mkdir()
         (project / 'runtime/wysna_runtime.h').write_text('#error Wrong runtime selected\n', encoding='utf-8')
 
-        def run(name, arguments, expected=0, stdout=None, error=None, custom=None, timeout=180, stdin=None):
-            result = subprocess.run([str(cli)] + [str(value) for value in arguments], cwd=project,
+        def run(name, arguments, expected=0, stdout=None, error=None, custom=None, timeout=180, stdin=None, directory=None):
+            result = subprocess.run([str(cli)] + [str(value) for value in arguments], cwd=directory or project,
                                     env=custom or environment, capture_output=True, timeout=timeout, input=stdin)
             require(result.returncode == expected, (name, result.returncode,
                     result.stdout.decode('utf-8', 'replace')[-4000:], result.stderr.decode('utf-8', 'replace')[-4000:]))
@@ -384,7 +384,7 @@ def validate(sdk, report, strict_source=False, compiler_source=None, application
         require(any(m.get('identity') == 'std/json' for m in api_env.get('result', {}).get('modules', [])), api_env)
 
         dependency = work / 'dependency'
-        run('package-create-dependency', ['project', 'new', dependency])
+        run('package-create-dependency', ['project', 'new', dependency.name], directory=work)
         (dependency / 'src/values.wysna').write_text('pub fn answer() -> int { 42 }\n', encoding='utf-8')
         package_archive = work / 'dependency.tar'
         packed = run('package-pack-ustar', ['packages', 'pack', '--manifest', dependency / 'wysna.toml',
@@ -392,7 +392,7 @@ def validate(sdk, report, strict_source=False, compiler_source=None, application
         pin = json.loads(packed.stdout)['result']['archive_sha256']
         require(pin == digest(package_archive), 'Package pin differs from archive bytes')
         consumer = work / 'consumer'
-        run('package-create-consumer', ['project', 'new', consumer])
+        run('package-create-consumer', ['project', 'new', consumer.name], directory=work)
         consumer_manifest = consumer / 'wysna.toml'
         (consumer / 'src/main.wysna').write_text('import "pkg/values/values" as values\nprint(values.answer())\n', encoding='utf-8')
         package_cache = work / 'package cache'
