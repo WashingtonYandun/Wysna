@@ -370,11 +370,12 @@ def test_bootstrap_fingerprint_tracks_runtime_headers(tmp_path):
         destination.parent.mkdir(parents=True, exist_ok=True)
         destination.write_bytes(b'initial')
     before, provenance = bootstrap_fingerprint(tmp_path)
-    assert 'runtime/wysna_host_process.h' in provenance['inputs']
+    key = str(Path('runtime/wysna_host_process.h'))
+    assert key in provenance['inputs']
     (tmp_path / 'runtime/wysna_host_process.h').write_bytes(b'updated capture contract')
     after, changed = bootstrap_fingerprint(tmp_path)
     assert after != before
-    assert changed['inputs']['runtime/wysna_host_process.h'] != provenance['inputs']['runtime/wysna_host_process.h']
+    assert changed['inputs'][key] != provenance['inputs'][key]
 
 
 def test_native_report_utf8_replacement_matches_seed(tmp_path):
@@ -394,7 +395,11 @@ def test_native_report_utf8_replacement_matches_seed(tmp_path):
     path.write_text(source)
     binary = tmp_path / executable_name('report-text')
     command = compiler_command()
-    flags = native_stack_link_args(command) if os.name == 'nt' else ['-lm']
+    if os.name == 'nt':
+        stack_flags = native_stack_link_args(command)
+        flags = ['-D_CRT_SECURE_NO_WARNINGS', f'-DWYSNA_NATIVE_STACK_LINK_ARGUMENT="{stack_flags[0]}"', *stack_flags]
+    else:
+        flags = ['-lm']
     built = subprocess.run([*command, '-std=c99', '-Wno-unused-function',
                             '-DWYSNA_NATIVE_VERSION="0.8.0"', '-DWYSNA_NATIVE_TARGET="native-host"',
                             '-I' + str(root), str(path), *flags, '-o', str(binary)],

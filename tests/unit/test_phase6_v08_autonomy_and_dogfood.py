@@ -23,6 +23,7 @@ from tests.unit.test_phase5_native_agent_autonomy import McpLineClient
 
 
 _ZIG_SHIM_C = r'''
+#define _POSIX_C_SOURCE 200809L
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -31,6 +32,10 @@ _ZIG_SHIM_C = r'''
 int main(int argc, char** argv) {
     char** forwarded = (char**)calloc((size_t)argc + 2, sizeof(char*));
     if (!forwarded) return 1;
+    const char* current_path = getenv("PATH");
+    if (!current_path || current_path[0] == '\0') {
+        setenv("PATH", "/usr/bin:/bin", 1);
+    }
     int out = 0;
     forwarded[out++] = (char*)HOST_CC_PATH;
     for (int i = 1; i < argc; i++) {
@@ -97,7 +102,12 @@ class Phase6V08AutonomyAndDogfoodTests(unittest.TestCase):
             str(ROOT / "packaging/native/driver.c"),
         ]
         if os.name == "nt":
-            driver_cmd += native_stack_link_args(cc_cmd)
+            stack_flags = native_stack_link_args(cc_cmd)
+            driver_cmd += [
+                "-D_CRT_SECURE_NO_WARNINGS",
+                f'-DWYSNA_NATIVE_STACK_LINK_ARGUMENT="{stack_flags[0]}"',
+                *stack_flags,
+            ]
         else:
             driver_cmd += ["-lm"]
         driver_cmd += ["-o", str(cls.driver_bin)]

@@ -183,7 +183,7 @@ def junit_report(report):
 def write_junit(report, destination):
     path = Path(destination).expanduser().resolve()
     path.parent.mkdir(parents=True, exist_ok=True)
-    with tempfile.NamedTemporaryFile(mode='w', encoding='utf-8', dir=path.parent,
+    with tempfile.NamedTemporaryFile(mode='w', encoding='utf-8', newline='\n', dir=path.parent,
                                      prefix='.' + path.name, delete=False) as output:
         temporary = Path(output.name)
         try:
