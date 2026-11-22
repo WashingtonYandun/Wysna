@@ -231,10 +231,12 @@ class CompilerService:
         return lint_discarded_expressions(checked._unit.program, file_name or checked.source.file)
 
     def lint_syntax_warnings(self, checked, file_name=None):
-        from checker.Lints import lint_unreachable_match_arms
+        from checker.Lints import lint_unreachable_match_arms, lint_static_attributes
         self._validate(checked)
         path = file_name or checked.source.file
-        return self.lint_discarded_expressions(checked, path) + lint_unreachable_match_arms(checked._unit.program, path)
+        return (self.lint_discarded_expressions(checked, path)
+                + lint_unreachable_match_arms(checked._unit.program, path)
+                + lint_static_attributes(checked._unit.program, path))
 
     def lint_warnings(self, checked, file_name=None):
         """Return all non-blocking W6001/W6002 WysnaError warnings without redundant AST clones."""

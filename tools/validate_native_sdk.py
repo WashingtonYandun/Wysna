@@ -209,6 +209,18 @@ def validate(sdk, report, strict_source=False, compiler_source=None, application
                                    'print(a.get(), b.get())\n'
                                    'a.set(7)\nb.set("world")\nprint(a.get(), b.get())\n', encoding='utf-8')
         run('generic-class-methods', ['run', generic_methods], stdout=b'42 hello\n7 world\n')
+        annotations = project / 'static-attributes.wysna'
+        annotations.write_text('struct Box { value: int, label: str }\n'
+                               '@deprecated("use current")\n@must_use\n'
+                               'fn old(box: Box) -> int { match box {\n'
+                               'Box { value: 0 | 1, .. } => 7,\n'
+                               'Box { value: 2..=9, .. } => 42, _ => 0 } }\n'
+                               'let box = Box { value: 3, label: "SDK" }\n'
+                               'print(old(box))\nold(box)\n', encoding='utf-8')
+        run('compound-patterns-with-static-attributes', ['run', annotations], stdout=b'42\n')
+        annotated = run('static-attribute-json-warnings', ['check', annotations, '--output-format=json-v1'])
+        codes = [item['code'] for item in json.loads(annotated.stdout)['diagnostics']]
+        require(codes.count('W6004') == 2 and codes.count('W6005') == 1, ('attribute diagnostics', codes))
         if language_fixtures:
             programs = project / 'language combinations'
             shutil.copytree(language_fixtures, programs)

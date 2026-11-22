@@ -10,7 +10,8 @@ struct Token {
 struct SemType { kind: str, name: str, args: list[int] }
 struct SemGenericType { name: str, kind: str, params: list[str], constraints: list[str] }
 struct SemVar { name: str, type_id: int, mutable: bool, depth: int, binding: int }
-struct SemFunction { abi_params: list[str], abi_return: str, name: str, params: list[str], type_params: list[str], constraints: list[str], type_id: int, body: int, end: int, owner: str, visible: bool, contract_start: int, is_async: bool }
+struct StaticAttribute { name: str, message: str, source: Token }
+struct SemFunction { attributes: list[StaticAttribute], abi_params: list[str], abi_return: str, name: str, params: list[str], type_params: list[str], constraints: list[str], type_id: int, body: int, end: int, owner: str, visible: bool, contract_start: int, is_async: bool }
 struct SemField { owner: str, name: str, type_id: int, visible: bool }
 struct SemInterfaceRef { name: str, args: list[int] }
 struct SemClass { name: str, parent: str, parent_args: list[int], interfaces: list[SemInterfaceRef] }
@@ -1994,6 +1995,8 @@ fn tokenize_at(src: str, file: str, init_line: int, init_col: int) -> list[Token
             } else {
                 let mut kind = "OP"
                 if ch == "|" { kind = "PIPE"
+                } elif ch == "@" {
+                    kind = "AT"
                 } elif ch == "(" {
                     kind = "LPAREN"
                 } elif ch == ")" {
@@ -2634,7 +2637,7 @@ fn module_expand(context: ModuleLoader, src: str, path: str, entry: bool) -> int
         let token = body[position]
 
         let mut consumed = false
-        if token.kind == "IDENT" {
+        if token.kind == "IDENT" and not (position > 0 and body[position - 1].kind == "AT") {
             for i in 0..len(aliases) {
                 if token.val == aliases[i] and position + 2 < len(body) and body[position + 1].kind == "DOT" {
                     let member = body[position + 2]
@@ -2755,7 +2758,7 @@ struct CheckedArm { pattern: int, guard: int, body: int, source: Token }
 struct CheckedNode { pattern: int, arms: list[int], total: bool, labels: list[str], kind: str, type_id: int, source: Token, text: str, children: list[int], binding: int, target: int, discard: bool }
 struct CheckedBinding { name: str, type_id: int, mutable: bool, global: bool, source: Token }
 struct CheckedFunction { captures: list[int], closure: bool, name: str, type_id: int, params: list[int], body: int, source: Token, is_async: bool, async_return_type: int }
-struct CheckedSignature { abi_params: list[str], abi_return: str, native: str, name: str, params: list[str], type_params: list[str], type_id: int, foreign: bool, abstract: bool }
+struct CheckedSignature { attributes: list[StaticAttribute], abi_params: list[str], abi_return: str, native: str, name: str, params: list[str], type_params: list[str], type_id: int, foreign: bool, abstract: bool }
 struct CheckedProgram {
     templates: list[SemGenericType], obligations: list[SemObligation], has_nodes: bool, file: str, source: Token, records: list[CheckedRecord], types: list[SemType], signatures: list[CheckedSignature],
     patterns: list[SemPattern], arms: list[CheckedArm], nodes: list[CheckedNode], bindings: list[CheckedBinding], functions: list[CheckedFunction], entry: list[int], unit_type: int,
@@ -2962,7 +2965,7 @@ fn checked_finish(context: SemanticContext, tokens: list[Token], file: str) -> C
             params = ["self"]
             for name in function.params { params.append(name) }
         }
-        signatures.append(CheckedSignature { abi_params: function.abi_params, abi_return: function.abi_return, native: foreign_native_name(function.name), name: function.name, params: params, type_params: function.type_params, type_id: type_id, foreign: function.body < 0 and function.owner == "", abstract: function.body < 0 and function.owner != "" })
+        signatures.append(CheckedSignature { attributes: function.attributes, abi_params: function.abi_params, abi_return: function.abi_return, native: foreign_native_name(function.name), name: function.name, params: params, type_params: function.type_params, type_id: type_id, foreign: function.body < 0 and function.owner == "", abstract: function.body < 0 and function.owner != "" })
     }
     let mut records: list[CheckedRecord] = []
     if context.capture_nodes { records = checked_records(context) }
@@ -3979,7 +3982,7 @@ fn sem_collect_function(context: SemanticContext, owner: str, visible: bool, is_
     let mut end = context.pos
     if sem_is(context, "LBRACE") { body = context.pos end = sem_skip_block(context) }
     context.type_params = previous_type_params
-    context.functions.append(SemFunction { abi_params: abi_params, abi_return: abi_return, name: name, params: params, type_params: type_params, constraints: constraints, type_id: signature, body: body, end: end, owner: owner, visible: visible, contract_start: contract_start, is_async: is_async })
+    context.functions.append(SemFunction { attributes: [], abi_params: abi_params, abi_return: abi_return, name: name, params: params, type_params: type_params, constraints: constraints, type_id: signature, body: body, end: end, owner: owner, visible: visible, contract_start: contract_start, is_async: is_async })
 }
 fn sem_collect_record(context: SemanticContext, kind: str) {
     sem_take(context)
@@ -4057,6 +4060,7 @@ fn sem_collect_record(context: SemanticContext, kind: str) {
         sem_skip_separators(context)
         if sem_is(context, "RBRACE") { break }
         let mut visible = true
+        if sem_is(context, "AT") { sem_error(context, "W0006", "static attributes require a top-level function declaration") }
         if sem_match(context, "PRIVATE") { visible = false } else { sem_match(context, "PUBLIC") }
         let mut method_is_async = false
         if sem_is(context, "IDENT") and sem_at(context).val == "async" and context.tokens[context.pos + 1].kind == "FN" { sem_take(context) method_is_async = true }
@@ -5906,6 +5910,7 @@ fn sem_block(context: SemanticContext, statement: bool) -> SemFlow {
         sem_skip_separators(context)
         if sem_is(context, "RBRACE") or sem_is(context, "EOF") { break }
         let statement_source = sem_at(context)
+        if sem_is(context, "AT") { sem_error(context, "W0006", "static attributes require a top-level function declaration") }
         if sem_is(context, "LET") {
             context.expected_type = -1
             for ln in sem_let_nodes(context) { statements.append(ln) }
@@ -6304,10 +6309,13 @@ fn sem_validate(context: SemanticContext, tokens: list[Token]) {
     while true {
         sem_skip_separators(context)
         if sem_is(context, "EOF") { break }
+        let attributes = sem_static_attributes(context)
         sem_match(context, "PUB")
+        if sem_is(context, "AT") { sem_error(context, "W0006", "static attributes must precede pub") }
         let mut decl_is_async = false
         if sem_is(context, "IDENT") and sem_at(context).val == "async" and context.tokens[context.pos + 1].kind == "FN" { sem_take(context) decl_is_async = true }
         let declaration_source = sem_at(context)
+        if len(attributes) > 0 and not sem_is(context, "FN") { report_error_at("W0006", declaration_source, "static attributes require a top-level function declaration") }
         if sem_match(context, "EXTERN") {
             if decl_is_async { report_error_at("W2001", declaration_source, "C FFI extern functions cannot be async") }
             if sem_expect(context, "STR").val != "C" { report_error_at("W2013", declaration_source, "only C ABI is supported") }
@@ -6318,7 +6326,7 @@ fn sem_validate(context: SemanticContext, tokens: list[Token]) {
                 if kind != "int" and kind != "float" and kind != "bool" and kind != "opaque" and not (i == len(signature) - 1 and kind == "unit") { report_error_at("W2001", declaration_source, "FFI accepts only scalars and opaque handles") }
             }
         }
-        elif sem_is(context, "FN") and context.tokens[context.pos + 1].kind == "IDENT" { sem_collect_function(context, "", true, decl_is_async) }
+        elif sem_is(context, "FN") and context.tokens[context.pos + 1].kind == "IDENT" { sem_collect_function(context, "", true, decl_is_async) sem_attach_attributes(context, attributes) }
         elif sem_is(context, "STRUCT") { sem_collect_record(context, "struct") }
         elif sem_is(context, "CLASS") { sem_collect_record(context, "class") }
         elif sem_is(context, "INTERFACE") { sem_collect_record(context, "interface") }
@@ -6337,7 +6345,9 @@ fn sem_validate(context: SemanticContext, tokens: list[Token]) {
     while true {
         sem_skip_separators(context)
         if sem_is(context, "RBRACE") or sem_is(context, "EOF") { break }
+        sem_static_attributes(context)
         sem_match(context, "PUB")
+        if sem_is(context, "AT") { sem_error(context, "W0006", "static attributes must precede pub") }
         if sem_is(context, "IDENT") and sem_at(context).val == "async" and context.tokens[context.pos + 1].kind == "FN" { sem_take(context) }
         let mut declaration = false
         for function in context.functions {
@@ -6810,6 +6820,48 @@ fn sem_integer_pattern_matrix(context: SemanticContext, tail: list[int], rows: l
     }
     return false
 }
+# Closed annotation grammar: no expressions, evaluation, macros, or plugins.
+fn sem_static_attributes(context: SemanticContext) -> list[StaticAttribute] {
+    let mut attributes: list[StaticAttribute] = []
+    while sem_match(context, "AT") {
+        let source = sem_expect(context, "IDENT")
+        if source.val != "deprecated" and source.val != "must_use" {
+            report_error_at("W0006", source, "unknown static attribute; supported attributes are @deprecated and @must_use")
+        }
+        for previous in attributes {
+            if previous.name == source.val { report_error_at("W1002", source, "duplicate static attribute") }
+        }
+        let mut message = ""
+        if source.val == "deprecated" {
+            sem_expect(context, "LPAREN")
+            message = sem_expect(context, "STR").val
+            let mut meaningful = false
+            for i in 0..len(message) {
+                let ch = message[i]
+                if ch != " " and ch != "\t" and ch != "\n" and ch != "\r" { meaningful = true }
+            }
+            if not meaningful { report_error_at("W0006", source, "@deprecated requires a non-empty string literal") }
+            sem_expect(context, "RPAREN")
+        } elif sem_is(context, "LPAREN") {
+            report_error_at("W0006", source, "@must_use does not accept arguments")
+        }
+        attributes.append(StaticAttribute { name: source.val, message: message, source: source })
+        sem_skip_separators(context)
+    }
+    return attributes
+}
+
+fn sem_attach_attributes(context: SemanticContext, attributes: list[StaticAttribute]) {
+    let index = len(context.functions) - 1
+    let function = context.functions[index]
+    let signature = context.types[function.type_id].args
+    for attribute in attributes {
+        if attribute.name == "must_use" and not function.is_async and signature[len(signature) - 1] == context.unit_type {
+            report_error_at("W2001", attribute.source, "@must_use requires a non-unit result")
+        }
+    }
+    context.functions[index].attributes = attributes
+}
 # Symbolic definition obligations are discharged by checking each concrete body.
 fn sem_symbolic(context: SemanticContext, type_id: int) -> bool {
     let type_ = context.types[type_id]
@@ -6889,6 +6941,11 @@ fn sem_specialize_arguments(context: SemanticContext, template_id: int, argument
     if len(context.specializations) >= 1024 or len(context.specialization_ancestry) >= 64 { report_error_at("W2011", source, "generic specialization budget exceeded") }
     let mut parts: list[int] = []
     for part in declared { parts.append(sem_substitute_type(context, part, template.type_params, arguments)) }
+    for attribute in template.attributes {
+        if attribute.name == "must_use" and not template.is_async and parts[len(parts) - 1] == context.unit_type {
+            report_error_at("W2001", source, "@must_use requires a non-unit result")
+        }
+    }
     let empty: list[str] = []
     let id = len(context.functions)
     let mut name = "__wysna_specialization_" + str(len(context.specializations))
@@ -6897,7 +6954,7 @@ fn sem_specialize_arguments(context: SemanticContext, template_id: int, argument
         name = sem_nominal_specialization_name(owner, arguments) + "." + slice(template.name, len(template.owner), len(template.name))
     }
     if sem_function(context, name) >= 0 { report_error_at("W1002", source, "reserved specialization identity collision") }
-    context.functions.append(SemFunction { abi_params: template.abi_params, abi_return: template.abi_return, name: name, params: template.params, type_params: empty, constraints: empty, type_id: sem_intern(context, "function", "", parts), body: template.body, end: template.end, owner: template.owner, visible: false, contract_start: template.contract_start, is_async: template.is_async })
+    context.functions.append(SemFunction { attributes: template.attributes, abi_params: template.abi_params, abi_return: template.abi_return, name: name, params: template.params, type_params: empty, constraints: empty, type_id: sem_intern(context, "function", "", parts), body: template.body, end: template.end, owner: template.owner, visible: false, contract_start: template.contract_start, is_async: template.is_async })
     let mut ancestry = context.specialization_ancestry
     ancestry.append(len(context.specializations))
     context.specializations.append(SemSpecialization { template: template_id, arguments: arguments, function: id, ancestry: ancestry })
@@ -10377,6 +10434,22 @@ fn lint_walk_node(program: CheckedProgram, node_id: int, discard_tail: bool, tar
     let mut warnings = out
     if node_id < 0 or node_id >= len(program.nodes) { return warnings }
     let node = program.nodes[node_id]
+    if node.kind == "call" and node.target >= 0 and node.target < len(program.signatures) {
+        if node.source.file == target_file or module_canonical(node.source.file) == target_file {
+            for attribute in program.signatures[node.target].attributes {
+                let code = if attribute.name == "deprecated" { "W6004" } else { "W6005" }
+                let mut duplicate = false
+                for warning in warnings {
+                    if warning.code == code and warning.file == node.source.file and warning.line == node.source.line and warning.col == node.source.col { duplicate = true }
+                }
+                if not duplicate and (code == "W6004" or discard_tail) {
+                    let message = if code == "W6004" { "Call to deprecated function: " + attribute.message } else { "Result of @must_use function is discarded" }
+                    let help_text = if code == "W6004" { attribute.message } else { "Bind, return, or consume this result." }
+                    warnings.append(LintWarning { code: code, message: message, file: node.source.file, line: node.source.line, col: node.source.col, data_json: "{\"help\":" + diag_json_quote(help_text) + "}" })
+                }
+            }
+        }
+    }
     if node.kind == "block" {
         let n = len(node.children)
         for i in 0..n {
@@ -11803,6 +11876,8 @@ fn tool_explain_code_info(code: str) -> list[str] {
     if code == "W5006" { return ["W5006", "capability", "Capability policy rejected execution", "Program exceeds declared capability gate or sandbox deny list", "wysna run --deny=network.http client.wysna", "grant explicit required capabilities or remove blocked calls"] }
     if code == "W6001" { return ["W6001", "lint", "Pure expression statement result is discarded", "Pure expression value computed as a statement and discarded", "fn f(x: int) -> int { x + 1\n return x }", "fn f(x: int) -> int { return x + 1 }"] }
     if code == "W6003" { return ["W6003", "lint", "Unreachable match arm", "Earlier unguarded patterns cover this arm", "match x { _ => 0, 1 => 1 }", "put specific patterns before covering arms"] }
+    if code == "W6004" { return ["W6004", "lint", "Call to deprecated function", "Function marked @deprecated", "old()", "Follow the deprecation message to migrate the call"] }
+    if code == "W6005" { return ["W6005", "lint", "Required result is discarded", "Function marked @must_use", "answer()", "let value = answer()"] }
     if code == "W6002" { return ["W6002", "lint", "Strong reference cycle between classes can leak under ARC", "Strong cycle between classes detected", "class A { b: B? }\nclass B { a: A? }", "class A { b: B? }\nclass B { a: Weak[A] }"] }
     if code == "W9998" { return ["W9998", "compiler", "Frontend accepted a program backend cannot lower", "Unsupported target construct", "unsupported target construct", "check docs/KNOWN_LIMITS.md"] }
     if code == "W9999" { return ["W9999", "compiler", "Internal compiler invariant violation", "Internal compiler invariant violation", "internal compiler assertion", "report minimal reproduction"] }
@@ -12404,6 +12479,7 @@ fn selfhost_fmt_tokenize(line: str) -> list[FmtInlineTok] {
 }
 
 fn selfhost_fmt_need_space(p: FmtInlineTok, c: FmtInlineTok, p_role: str, c_role: str) -> bool {
+    if p.text == "@" { return false }
     if c.kind == "COMMENT" {
         return p.text != "(" and p.text != "[" and p.text != "{"
     }

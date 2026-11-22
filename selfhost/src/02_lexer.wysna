@@ -692,6 +692,8 @@ fn tokenize_at(src: str, file: str, init_line: int, init_col: int) -> list[Token
             } else {
                 let mut kind = "OP"
                 if ch == "|" { kind = "PIPE"
+                } elif ch == "@" {
+                    kind = "AT"
                 } elif ch == "(" {
                     kind = "LPAREN"
                 } elif ch == ")" {

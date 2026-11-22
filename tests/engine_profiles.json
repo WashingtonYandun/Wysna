@@ -4,12 +4,16 @@
     "generics": {},
     "generic_class_methods": {},
     "checked_modules": {},
+    "compound_match_patterns": {},
     "error_unions": {},
     "functions": {},
     "stdlib": {},
     "regressions": {}
   },
   "fixtures": {
+    "tests/runtime/match_or_struct.wysna": "compound_match_patterns",
+    "tests/runtime/match_int64_ranges.wysna": "compound_match_patterns",
+    "tests/runtime/match_or_payloads.wysna": "compound_match_patterns",
     "tests/runtime/generic_class_methods.wysna": "generic_class_methods",
     "tests/runtime/generic_domain_err.wysna": "generics",
     "tests/runtime/generic_enum_option.wysna": "generics",

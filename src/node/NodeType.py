@@ -367,6 +367,16 @@ class Param(Node):
             "col": self.col,
         }
 
+class StaticAttribute(Node):
+    def __init__(self, name: str, message: str = "", line: int = 1, col: int = 1):
+        super().__init__(line, col)
+        self.name, self.message = name, message
+
+    def to_dict(self):
+        return {"kind": "StaticAttribute", "name": self.name, "message": self.message,
+                "line": self.line, "col": self.col}
+
+
 class FnDecl(Stmt):
     def __init__(
         self,
@@ -390,6 +400,7 @@ class FnDecl(Stmt):
         self.requires = list(requires) if requires else []
         self.ensures = list(ensures) if ensures else []
         self.is_async = is_async
+        self.attributes: List[StaticAttribute] = []
 
     def to_dict(self) -> dict:
         d = {
@@ -408,6 +419,8 @@ class FnDecl(Stmt):
             d["requires"] = [r.to_dict() for r in self.requires]
         if self.ensures:
             d["ensures"] = [e.to_dict() for e in self.ensures]
+        if self.attributes:
+            d["attributes"] = [attribute.to_dict() for attribute in self.attributes]
         return d
 
 class StructField(Node):

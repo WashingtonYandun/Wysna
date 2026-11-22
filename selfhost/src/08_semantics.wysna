@@ -649,7 +649,7 @@ fn sem_collect_function(context: SemanticContext, owner: str, visible: bool, is_
     let mut end = context.pos
     if sem_is(context, "LBRACE") { body = context.pos end = sem_skip_block(context) }
     context.type_params = previous_type_params
-    context.functions.append(SemFunction { abi_params: abi_params, abi_return: abi_return, name: name, params: params, type_params: type_params, constraints: constraints, type_id: signature, body: body, end: end, owner: owner, visible: visible, contract_start: contract_start, is_async: is_async })
+    context.functions.append(SemFunction { attributes: [], abi_params: abi_params, abi_return: abi_return, name: name, params: params, type_params: type_params, constraints: constraints, type_id: signature, body: body, end: end, owner: owner, visible: visible, contract_start: contract_start, is_async: is_async })
 }
 fn sem_collect_record(context: SemanticContext, kind: str) {
     sem_take(context)
@@ -727,6 +727,7 @@ fn sem_collect_record(context: SemanticContext, kind: str) {
         sem_skip_separators(context)
         if sem_is(context, "RBRACE") { break }
         let mut visible = true
+        if sem_is(context, "AT") { sem_error(context, "W0006", "static attributes require a top-level function declaration") }
         if sem_match(context, "PRIVATE") { visible = false } else { sem_match(context, "PUBLIC") }
         let mut method_is_async = false
         if sem_is(context, "IDENT") and sem_at(context).val == "async" and context.tokens[context.pos + 1].kind == "FN" { sem_take(context) method_is_async = true }
@@ -2576,6 +2577,7 @@ fn sem_block(context: SemanticContext, statement: bool) -> SemFlow {
         sem_skip_separators(context)
         if sem_is(context, "RBRACE") or sem_is(context, "EOF") { break }
         let statement_source = sem_at(context)
+        if sem_is(context, "AT") { sem_error(context, "W0006", "static attributes require a top-level function declaration") }
         if sem_is(context, "LET") {
             context.expected_type = -1
             for ln in sem_let_nodes(context) { statements.append(ln) }
@@ -2974,10 +2976,13 @@ fn sem_validate(context: SemanticContext, tokens: list[Token]) {
     while true {
         sem_skip_separators(context)
         if sem_is(context, "EOF") { break }
+        let attributes = sem_static_attributes(context)
         sem_match(context, "PUB")
+        if sem_is(context, "AT") { sem_error(context, "W0006", "static attributes must precede pub") }
         let mut decl_is_async = false
         if sem_is(context, "IDENT") and sem_at(context).val == "async" and context.tokens[context.pos + 1].kind == "FN" { sem_take(context) decl_is_async = true }
         let declaration_source = sem_at(context)
+        if len(attributes) > 0 and not sem_is(context, "FN") { report_error_at("W0006", declaration_source, "static attributes require a top-level function declaration") }
         if sem_match(context, "EXTERN") {
             if decl_is_async { report_error_at("W2001", declaration_source, "C FFI extern functions cannot be async") }
             if sem_expect(context, "STR").val != "C" { report_error_at("W2013", declaration_source, "only C ABI is supported") }
@@ -2988,7 +2993,7 @@ fn sem_validate(context: SemanticContext, tokens: list[Token]) {
                 if kind != "int" and kind != "float" and kind != "bool" and kind != "opaque" and not (i == len(signature) - 1 and kind == "unit") { report_error_at("W2001", declaration_source, "FFI accepts only scalars and opaque handles") }
             }
         }
-        elif sem_is(context, "FN") and context.tokens[context.pos + 1].kind == "IDENT" { sem_collect_function(context, "", true, decl_is_async) }
+        elif sem_is(context, "FN") and context.tokens[context.pos + 1].kind == "IDENT" { sem_collect_function(context, "", true, decl_is_async) sem_attach_attributes(context, attributes) }
         elif sem_is(context, "STRUCT") { sem_collect_record(context, "struct") }
         elif sem_is(context, "CLASS") { sem_collect_record(context, "class") }
         elif sem_is(context, "INTERFACE") { sem_collect_record(context, "interface") }
@@ -3007,7 +3012,9 @@ fn sem_validate(context: SemanticContext, tokens: list[Token]) {
     while true {
         sem_skip_separators(context)
         if sem_is(context, "RBRACE") or sem_is(context, "EOF") { break }
+        sem_static_attributes(context)
         sem_match(context, "PUB")
+        if sem_is(context, "AT") { sem_error(context, "W0006", "static attributes must precede pub") }
         if sem_is(context, "IDENT") and sem_at(context).val == "async" and context.tokens[context.pos + 1].kind == "FN" { sem_take(context) }
         let mut declaration = false
         for function in context.functions {

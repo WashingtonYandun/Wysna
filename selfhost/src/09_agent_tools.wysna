@@ -942,6 +942,8 @@ fn tool_explain_code_info(code: str) -> list[str] {
     if code == "W5006" { return ["W5006", "capability", "Capability policy rejected execution", "Program exceeds declared capability gate or sandbox deny list", "wysna run --deny=network.http client.wysna", "grant explicit required capabilities or remove blocked calls"] }
     if code == "W6001" { return ["W6001", "lint", "Pure expression statement result is discarded", "Pure expression value computed as a statement and discarded", "fn f(x: int) -> int { x + 1\n return x }", "fn f(x: int) -> int { return x + 1 }"] }
     if code == "W6003" { return ["W6003", "lint", "Unreachable match arm", "Earlier unguarded patterns cover this arm", "match x { _ => 0, 1 => 1 }", "put specific patterns before covering arms"] }
+    if code == "W6004" { return ["W6004", "lint", "Call to deprecated function", "Function marked @deprecated", "old()", "Follow the deprecation message to migrate the call"] }
+    if code == "W6005" { return ["W6005", "lint", "Required result is discarded", "Function marked @must_use", "answer()", "let value = answer()"] }
     if code == "W6002" { return ["W6002", "lint", "Strong reference cycle between classes can leak under ARC", "Strong cycle between classes detected", "class A { b: B? }\nclass B { a: A? }", "class A { b: B? }\nclass B { a: Weak[A] }"] }
     if code == "W9998" { return ["W9998", "compiler", "Frontend accepted a program backend cannot lower", "Unsupported target construct", "unsupported target construct", "check docs/KNOWN_LIMITS.md"] }
     if code == "W9999" { return ["W9999", "compiler", "Internal compiler invariant violation", "Internal compiler invariant violation", "internal compiler assertion", "report minimal reproduction"] }
@@ -1543,6 +1545,7 @@ fn selfhost_fmt_tokenize(line: str) -> list[FmtInlineTok] {
 }
 
 fn selfhost_fmt_need_space(p: FmtInlineTok, c: FmtInlineTok, p_role: str, c_role: str) -> bool {
+    if p.text == "@" { return false }
     if c.kind == "COMMENT" {
         return p.text != "(" and p.text != "[" and p.text != "{"
     }

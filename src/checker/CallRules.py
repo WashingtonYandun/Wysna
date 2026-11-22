@@ -112,6 +112,15 @@ def resolve_async_call_return(
 
 def check_call_expr(checker: "TypeChecker", expr: CallExpr, is_statement_context: bool = False) -> WysnaType:
     expr.callee.is_callee = True
+    attribute_symbol = None
+    if isinstance(expr.callee, IdentExpr):
+        attribute_symbol = checker.current_scope.lookup_symbol(expr.callee.name)
+    elif isinstance(expr.callee, MemberExpr):
+        module = checker._module_receiver(expr.callee.object)
+        if module is not None:
+            attribute_symbol = module.scope.lookup_symbol(expr.callee.property)
+    expr.static_attributes = (list(getattr(attribute_symbol.type, 'static_attributes', []))
+                              if attribute_symbol is not None and attribute_symbol.kind == 'fn' else [])
     if (isinstance(expr.callee, IdentExpr) and expr.type_args
             and checker.current_scope.lookup_symbol(expr.callee.name) is None):
         template = checker.current_scope.lookup_type(expr.callee.name)

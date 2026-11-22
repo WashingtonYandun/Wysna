@@ -369,6 +369,26 @@ fn setup_server(port_str: str) -> unit ! str {
 
 ---
 
+### Atributos estáticos cerrados
+
+```wysna
+@deprecated("usa current")
+@must_use
+pub fn old() -> int { 42 }
+
+let value = old() # W6004; el resultado se conserva
+old()            # W6004 y W6005
+```
+
+Solo se aceptan `@deprecated("mensaje no vacío")` y `@must_use`, antes de funciones
+de nivel superior (`pub`, genéricas o `async` incluidas). No son decoradores
+ejecutables ni macros. `@must_use` exige un resultado distinto de `unit` en
+funciones síncronas, también al especializar genéricos; en `async` protege la
+tarea. Las llamadas indirectas mediante callbacks no heredan los atributos.
+Los imports y el formatter conservan las anotaciones. Los argumentos o destinos
+inválidos producen `W0006`; los duplicados, `W1002`. CLI y LSP exponen `W6004`
+y `W6005` como advertencias; no alteran el comportamiento del programa.
+
 ## 7. Tipos de Datos Algebraicos y Pattern Matching
 
 ### 7.1 Declaración de Enums

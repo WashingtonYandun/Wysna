@@ -1,0 +1,42 @@
+# Closed annotation grammar: no expressions, evaluation, macros, or plugins.
+fn sem_static_attributes(context: SemanticContext) -> list[StaticAttribute] {
+    let mut attributes: list[StaticAttribute] = []
+    while sem_match(context, "AT") {
+        let source = sem_expect(context, "IDENT")
+        if source.val != "deprecated" and source.val != "must_use" {
+            report_error_at("W0006", source, "unknown static attribute; supported attributes are @deprecated and @must_use")
+        }
+        for previous in attributes {
+            if previous.name == source.val { report_error_at("W1002", source, "duplicate static attribute") }
+        }
+        let mut message = ""
+        if source.val == "deprecated" {
+            sem_expect(context, "LPAREN")
+            message = sem_expect(context, "STR").val
+            let mut meaningful = false
+            for i in 0..len(message) {
+                let ch = message[i]
+                if ch != " " and ch != "\t" and ch != "\n" and ch != "\r" { meaningful = true }
+            }
+            if not meaningful { report_error_at("W0006", source, "@deprecated requires a non-empty string literal") }
+            sem_expect(context, "RPAREN")
+        } elif sem_is(context, "LPAREN") {
+            report_error_at("W0006", source, "@must_use does not accept arguments")
+        }
+        attributes.append(StaticAttribute { name: source.val, message: message, source: source })
+        sem_skip_separators(context)
+    }
+    return attributes
+}
+
+fn sem_attach_attributes(context: SemanticContext, attributes: list[StaticAttribute]) {
+    let index = len(context.functions) - 1
+    let function = context.functions[index]
+    let signature = context.types[function.type_id].args
+    for attribute in attributes {
+        if attribute.name == "must_use" and not function.is_async and signature[len(signature) - 1] == context.unit_type {
+            report_error_at("W2001", attribute.source, "@must_use requires a non-unit result")
+        }
+    }
+    context.functions[index].attributes = attributes
+}

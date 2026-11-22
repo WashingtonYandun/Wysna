@@ -66,6 +66,22 @@ fn lint_walk_node(program: CheckedProgram, node_id: int, discard_tail: bool, tar
     let mut warnings = out
     if node_id < 0 or node_id >= len(program.nodes) { return warnings }
     let node = program.nodes[node_id]
+    if node.kind == "call" and node.target >= 0 and node.target < len(program.signatures) {
+        if node.source.file == target_file or module_canonical(node.source.file) == target_file {
+            for attribute in program.signatures[node.target].attributes {
+                let code = if attribute.name == "deprecated" { "W6004" } else { "W6005" }
+                let mut duplicate = false
+                for warning in warnings {
+                    if warning.code == code and warning.file == node.source.file and warning.line == node.source.line and warning.col == node.source.col { duplicate = true }
+                }
+                if not duplicate and (code == "W6004" or discard_tail) {
+                    let message = if code == "W6004" { "Call to deprecated function: " + attribute.message } else { "Result of @must_use function is discarded" }
+                    let help_text = if code == "W6004" { attribute.message } else { "Bind, return, or consume this result." }
+                    warnings.append(LintWarning { code: code, message: message, file: node.source.file, line: node.source.line, col: node.source.col, data_json: "{\"help\":" + diag_json_quote(help_text) + "}" })
+                }
+            }
+        }
+    }
     if node.kind == "block" {
         let n = len(node.children)
         for i in 0..n {

@@ -8,7 +8,7 @@ from node.NodeType import (
     clone_ast, ExternFnDecl, LambdaExpr, FunctionType as AstFunctionType, Node, Program, Stmt, Expr, TypeNode, Pattern, Block,
     NamedType, GenericType, TypeParam, OptionalType, ListType, DictType, TupleType, ResultType, ErrorUnionType,
     IdentifierPattern, TuplePattern, EnumPattern, LiteralPattern, WildcardPattern,
-    OrPattern, RangePattern, StructPatternField, StructPattern,
+    OrPattern, RangePattern, StructPatternField, StructPattern, StaticAttribute,
     FnDecl, Param, StructDecl, StructField, EnumDecl, VariantDecl,
     InterfaceDecl, InterfaceMethod, ClassDecl, ClassField, MethodDecl,
     ImportDecl, UseDecl, UseSymbol, LetDecl,
@@ -591,8 +591,50 @@ class Parser:
     # Statement & Declaration Parsing
     # ==========================================
 
+    def parse_attributed_function(self, allow_top_level):
+        start = self.at()
+        if not allow_top_level:
+            raise ParserError('Static attributes require a top-level function declaration',
+                              file=self.file, line=start.line, col=start.col, code='W0006')
+        attributes, names = [], set()
+        while self.match(TokenType.AT):
+            token = self.expect(TokenType.IDENTIFIER, code='W0006', msg='Expected static attribute name')
+            if token.value not in ('deprecated', 'must_use'):
+                raise ParserError('Unknown static attribute; supported attributes are @deprecated and @must_use',
+                                  file=self.file, line=token.line, col=token.col, code='W0006')
+            if token.value in names:
+                raise ParserError('Duplicate static attribute: ' + token.value, file=self.file,
+                                  line=token.line, col=token.col, code='W1002')
+            names.add(token.value)
+            message = ''
+            if token.value == 'deprecated':
+                self.expect(TokenType.LPAREN, code='W0006', msg='@deprecated requires one non-empty string literal')
+                literal = self.expect(TokenType.STR, code='W0006', msg='@deprecated requires one non-empty string literal')
+                if not literal.value.strip(' \t\r\n'):
+                    raise ParserError('@deprecated requires a non-empty message', file=self.file,
+                                      line=literal.line, col=literal.col, code='W0006')
+                message = literal.value
+                self.expect(TokenType.RPAREN, code='W0006', msg='@deprecated requires exactly one string literal')
+            elif self.check(TokenType.LPAREN):
+                raise ParserError('@must_use does not accept arguments', file=self.file,
+                                  line=token.line, col=token.col, code='W0006')
+            attributes.append(StaticAttribute(token.value, message, start.line, start.col))
+            self._skip_statement_separators()
+            start = self.at()
+        declaration = self.parse_stmt(allow_top_level=True)
+        if not isinstance(declaration, FnDecl) or isinstance(declaration, ExternFnDecl):
+            raise ParserError('Static attributes require a top-level function declaration', file=self.file,
+                              line=declaration.line, col=declaration.col, code='W0006')
+        declaration.attributes = attributes
+        return declaration
+
     def parse_stmt(self, allow_top_level: bool = False) -> Stmt:
+        if self.check(TokenType.AT):
+            return self.parse_attributed_function(allow_top_level)
         if self.match(TokenType.PUB):
+            if self.check(TokenType.AT):
+                raise ParserError('Place static attributes before pub', file=self.file,
+                                  line=self.at().line, col=self.at().col, code='W0006')
             if not allow_top_level:
                 raise ParserError("pub requires a top-level declaration", file=self.file, code="W0006")
             statement = self.parse_stmt(allow_top_level=True)

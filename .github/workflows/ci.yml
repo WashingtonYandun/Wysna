@@ -85,6 +85,7 @@ jobs:
           tests/unit/test_block1_dev_split_and_delegation.py
           tests/unit/test_native_sandbox_and_lints.py
           tests/unit/test_match_extensions.py
+          tests/unit/test_static_attributes.py
           tests/unit/test_native_delegation_profiles.py
           tests/unit/test_project_packages.py
           tests/unit/test_ops_a01_workflow.py

@@ -297,6 +297,32 @@ Equality is partitioned cleanly along the value vs reference boundary:
 
 ---
 
+### Atributos estáticos de funciones
+
+El conjunto cerrado admite `@deprecated("mensaje")` y `@must_use` antes de una
+función de nivel superior, incluyendo `pub`, genéricos y `async`. No admite
+macros, expresiones como argumentos ni ejecución durante la compilación.
+
+```wysna
+@deprecated("usa current")
+@must_use
+pub fn old() -> int { 42 }
+```
+
+`@deprecated` exige un literal de cadena con contenido y emite `W6004` en cada
+llamada directa resuelta estáticamente. `@must_use` no recibe argumentos y emite
+`W6005` si se descarta el resultado, también en colas de bloques o ramas cuyo
+valor se descarta. Asignar, devolver o consumir el valor satisface el atributo.
+Una función síncrona con retorno `unit`, incluida una especialización genérica,
+no admite `@must_use` (`W2001`); una función `async` produce una tarea y sí puede
+usarlo. Los atributos no forman parte del tipo de callbacks: las llamadas
+indirectas no heredan estos diagnósticos. No cambian la ejecución ni el ABI.
+
+Ambos atributos se conservan al formatear y al importar funciones. Los nombres
+desconocidos, argumentos inválidos y destinos distintos de funciones superiores
+se rechazan con `W0006`; repetir un atributo produce `W1002`. Son advertencias
+no bloqueantes, disponibles en CLI JSON y LSP nativo.
+
 ## 6. Control Flow & Pattern Matching
 
 ### 6.1 Variables: Immutability, Compound Assignment & Inference
@@ -674,6 +700,9 @@ pub import "std/path"
      - **`W6xxx` — Static Lint & Memory-Hygiene Warnings:**
        - `W6001`: Pure expression statement result is discarded (including newline-before-unary-minus hazards).
        - `W6002`: Strong reference cycle between classes can leak under ARC (`LayoutGraph` SCC analysis).
+       - `W6003`: Rama de `match` cubierta por patrones anteriores sin guarda.
+       - `W6004`: Llamada directa a una función marcada `@deprecated`.
+       - `W6005`: Resultado descartado de una función marcada `@must_use`.
    - `wysna check --json <file.wysna>` outputs deterministic machine-readable JSON:
    ```json
    {

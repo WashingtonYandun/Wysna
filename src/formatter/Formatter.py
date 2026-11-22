@@ -133,6 +133,12 @@ class Formatter:
         if getattr(stmt, "is_exported", False):
             indent = self._indent(level)
             rendered = indent + "pub " + rendered[len(indent):]
+        attributes = getattr(stmt, 'attributes', [])
+        if attributes:
+            lines = [self._indent(level) + '@' + attribute.name +
+                     ('(' + self._escape_str(attribute.message) + ')' if attribute.name == 'deprecated' else '')
+                     for attribute in attributes]
+            rendered = '\n'.join(lines) + '\n' + rendered
         return rendered
 
     def _format_stmt(self, stmt: Stmt, level: int) -> str:
