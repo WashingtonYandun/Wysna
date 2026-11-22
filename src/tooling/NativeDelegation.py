@@ -69,21 +69,26 @@ def _project_uses_wasm_profile(subargs: list[str]) -> bool:
             idx += 1
         else:
             idx += 1
-    manifest_path = Path(manifest_arg).expanduser().resolve() if manifest_arg else (Path.cwd() / "wysna.toml")
+    if manifest_arg:
+        manifest_path = Path(manifest_arg).expanduser().resolve()
+        if manifest_path.is_dir():
+            manifest_path = manifest_path / "wysna.toml"
+    else:
+        cwd = Path.cwd().resolve()
+        manifest_path = next((directory / "wysna.toml" for directory in (cwd, *cwd.parents)
+                              if (directory / "wysna.toml").is_file()), cwd / "wysna.toml")
     if not manifest_path.is_file():
         return False
     try:
-        from project.Manifest import load_manifest
-        manifest = load_manifest(manifest_path)
-    except Exception:
+        from project.Manifest import ProjectManifest
+        manifest = ProjectManifest.load(manifest_path)
+    except (OSError, ValueError):
         return False
-    if target_arg:
-        target = manifest.targets.get(target_arg)
-        return target is not None and target.profile in _WASM_PROFILES
-    if len(manifest.targets) == 1:
-        only = next(iter(manifest.targets.values()))
-        return only.profile in _WASM_PROFILES
-    return False
+    selected = target_arg or ("app" if "app" in manifest.targets else
+                              next(iter(manifest.targets)) if len(manifest.targets) == 1 else None)
+    target = manifest.targets.get(selected)
+    return target is not None and target.profile in _WASM_PROFILES
+
 
 
 def _packages_missing_driver_error(args: list[str]) -> int:
