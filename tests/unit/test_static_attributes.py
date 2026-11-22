@@ -75,6 +75,9 @@ class C { fn ignored() { old() } }
 let callback: fn() -> unit = || -> unit { old() }
 fn current() -> int { 42 }
 current()
+fn fallible_unit() -> unit ! str { old() }
+fn recovered() { let value: int ! str = Ok(1); value else err { old() } }
+fn consumed_recovery() -> int { let value: int ! str = Ok(1); value else err { old() } }
 '''
         with tempfile.TemporaryDirectory() as directory:
             path = Path(directory) / 'lint.wysna'
@@ -86,8 +89,8 @@ current()
                 payload = json.loads(result.stdout)
                 deprecated = [item for item in payload['diagnostics'] if item['code'] == 'W6004']
                 required = [item for item in payload['diagnostics'] if item['code'] == 'W6005']
-                self.assertEqual(len(deprecated), 13, payload)
-                self.assertEqual(len(required), 8, payload)
+                self.assertEqual(len(deprecated), 16, payload)
+                self.assertEqual(len(required), 10, payload)
                 self.assertTrue(all(item['severity'] == 'warning' for item in deprecated + required))
 
     def test_imported_generic_metadata_survives_namespace_rewriting(self):

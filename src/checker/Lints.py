@@ -98,16 +98,26 @@ def lint_unreachable_match_arms(program, file):
 
 def lint_static_attributes(program, file):
     """Diagnose statically resolved calls without evaluating annotation arguments."""
-    from node.NodeType import CallExpr, FnDecl, MethodDecl, ForStmt, IfExpr, MatchExpr, WhileStmt
+    from node.NodeType import (
+        CallExpr, ElseErrExpr, FnDecl, MethodDecl, ForStmt, IfExpr, MatchExpr,
+        ResultType as AstResultType, WhileStmt,
+    )
+    from checker.WysnaType import ResultType, UnitType
 
     warnings, seen = [], set()
+
+    def unit_like(type_):
+        if isinstance(type_, AstResultType):
+            return getattr(type_.ok_type, 'name', '') == 'unit'
+        if isinstance(type_, ResultType):
+            return type_.ok == UnitType
+        return getattr(type_, 'name', '') == 'unit'
 
     def visit(node, discarded=False):
         if node is None:
             return
         if isinstance(node, (FnDecl, MethodDecl)):
-            return_type = getattr(node.return_type, 'name', '')
-            visit(node.body, return_type == 'unit')
+            visit(node.body, unit_like(node.return_type))
         elif isinstance(node, Block):
             for statement in node.statements:
                 visit(statement)
@@ -118,7 +128,8 @@ def lint_static_attributes(program, file):
             visit(getattr(node, 'condition', getattr(node, 'iterable', None)))
             visit(node.body, True)
         elif isinstance(node, IfExpr):
-            branch_discard = discarded or getattr(node, 'discard_result', False)
+            branch_discard = (discarded or getattr(node, 'discard_result', False)
+                              or unit_like(getattr(node, 'inferred_type', None)))
             visit(node.condition)
             visit(node.then_branch, branch_discard)
             for branch in node.elif_branches:
@@ -127,9 +138,14 @@ def lint_static_attributes(program, file):
             visit(node.else_branch, branch_discard)
         elif isinstance(node, MatchExpr):
             visit(node.subject)
+            arm_discard = (discarded or getattr(node, 'discard_result', False)
+                           or unit_like(getattr(node, 'inferred_type', None)))
             for arm in node.arms:
                 visit(arm.guard)
-                visit(arm.body, discarded or getattr(node, 'discard_result', False))
+                visit(arm.body, arm_discard)
+        elif isinstance(node, ElseErrExpr):
+            visit(node.operand)
+            visit(node.handler, discarded or unit_like(getattr(node, 'inferred_type', None)))
         else:
             if isinstance(node, CallExpr):
                 for attribute in getattr(node, 'static_attributes', []):
