@@ -29,7 +29,8 @@ wysna project new hello-agent --output-format=json-v1
 wysna project check --manifest hello-agent/wysna.toml --output-format=json-v1
 wysna project build --manifest hello-agent/wysna.toml --output-format=json-v1
 wysna project run --manifest hello-agent/wysna.toml
-wysna project test --manifest hello-agent/wysna.toml --report-json hello-agent/test-report.json
+wysna project test --manifest hello-agent/wysna.toml --list --output-format=json-v1
+wysna project test --manifest hello-agent/wysna.toml --case test:example --output-format=json-v1 --report-json hello-agent/test-report.json --report-junit hello-agent/test-report.xml
 ```
 
 Use `wysna api --manifest path/to/wysna.toml --output-format=json-v1` to inspect
@@ -169,3 +170,12 @@ booleano para clientes existentes.
 
 En una biblioteca web, el análisis parte de sus funciones públicas. Para distinguir
 símbolos homónimos, usa su ID cualificado.
+
+## Planificar pruebas antes de ejecutar
+
+Consulta `wysna skills project-tests --output-format=json-v1`. Lista primero con
+la selección definitiva y exige su `result.plan_hash` mediante
+`--expect-plan-hash`. Lee `result.cases[].failure_kind` y `diagnostics`; conserva
+los reportes y verifica los SHA-256 de los artefactos. Usa `--discover` de forma
+explícita y `--case` con el ID exacto. La [guía de proyectos](PROJECTS.md#pruebas-para-agentes-de-ia)
+define límites, cancelación, fixtures y alcance del hash.

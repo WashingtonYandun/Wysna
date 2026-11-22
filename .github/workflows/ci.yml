@@ -74,13 +74,14 @@ jobs:
           python-version: "3.11"
       - name: Install test runner
         run: python -m pip install pytest==8.4.2
-      - name: Verify native compiler diagnostics
+      - name: Verify native diagnostics and agent project tests
         run: >-
           python -m pytest -q
           tests/unit/test_selfhost_diagnostics.py
           tests/unit/test_native_generic_error_unions.py
           tests/unit/test_host_contracts.py
           tests/unit/test_language_combinations.py
+          tests/unit/test_agent_project_tests.py
 
   llvm-smoke:
     name: LLVM backend smoke (${{ matrix.os }})

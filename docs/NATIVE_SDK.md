@@ -27,7 +27,8 @@ wysna api std/json --output-format=json-v1
 wysna project check
 wysna project build --profile release
 wysna project run -- --demo
-wysna project test
+wysna project test --list --output-format=json-v1
+wysna project test --output-format=json-v1 --report-json tests.json --report-junit tests.xml
 wysna emit-mir program.wysna -o program.mir.json
 wysna emit-c program.wysna -o program.c
 wysna build program.wysna -o program --profile release
@@ -104,3 +105,11 @@ de empaquetado oficial todavía usa el arranque y los validadores de Seed.
 Tanto en proyectos sin dependencias como en proyectos con dependencias de
 paquetes locales, `project lock` genera el mismo lockfile que Seed y `--frozen`
 comprueba el manifiesto, las versiones y las huellas SHA-256 de sus entradas.
+
+## Pruebas de proyecto por agentes
+
+El SDK implementa el [protocolo de pruebas de proyecto](PROJECTS.md#pruebas-para-agentes-de-ia)
+con planes, selección exacta, descubrimiento explícito, precondición SHA-256,
+JSON/JUnit, fixtures y captura limitada. El timeout de cada caso incluye sus
+fases de compilación y ejecución. `wysna test PATH` conserva su contrato separado
+de fixtures del compilador y archivos `.expected`.

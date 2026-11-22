@@ -22,7 +22,7 @@ SELFHOST_BOOTSTRAP_INPUTS = ("selfhost/compiler.wysna", "tools/bundle_selfhost.p
                     "error", "hir", "mir", "tokens", "runtime", "selfhost/src")
     for base in ((ROOT / "src" / package) if (ROOT / "src" / package).exists() else (ROOT / package),)
     for path in base.rglob("*")
-    if path.is_file() and (path.suffix == ".py" or package == "runtime" and path.suffix in (".h", ".c")
+    if path.is_file() and (path.suffix == ".py" or package == "runtime" and path.suffix in (".h", ".c", ".def")
                            or package == "selfhost/src" and path.suffix == ".wysna")
 ))
 

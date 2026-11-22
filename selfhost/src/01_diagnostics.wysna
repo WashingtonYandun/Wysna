@@ -194,7 +194,8 @@ fn diag_clean_cli_args() -> list[str] {
     let mut clean: list[str] = []
     let mut i = 1
     while i < len(raw) {
-        if (raw[i] == "--stdlib-root" or raw[i] == "--diag-out" or raw[i] == "--project-sources-root") and i + 1 < len(raw) {
+        if raw[i] == "--diag-array" { i = i + 1 }
+        elif (raw[i] == "--stdlib-root" or raw[i] == "--diag-out" or raw[i] == "--project-sources-root") and i + 1 < len(raw) {
             i = i + 2
         } elif (raw[i] == "--overlay" or raw[i] == "--project-dep") and i + 2 < len(raw) {
             i = i + 3
@@ -245,6 +246,7 @@ fn diag_read_snippet_source(file: str) -> str {
 }
 
 fn diag_cli_json_mode() -> str {
+    for value in args() { if value == "--diag-array" { return "array" } }
     let clean = diag_clean_cli_args()
     if len(clean) > 0 and clean[0] == "api" { return "json-v1" }
     for i in 0..len(clean) {
@@ -288,6 +290,7 @@ fn diag_emit_and_exit(file: str, code: str, line: int, col: int, msg: str) -> un
     }
     let stage = diag_stage_for_code(code)
     let diag_json = diag_record_json(code, stage, "error", msg, file, line, col, src)
+    if mode == "array" { diag_write_output("[" + diag_json + "]"); exit(1) }
     if mode == "check-json" {
         diag_write_output("{\"schema_version\":\"wysna.cli.result/1\",\"compiler_version\":\"0.8.0\",\"command\":\"check\",\"ok\":false,\"exit_code\":1,\"diagnostics\":[" + diag_json + "],\"data\":null}")
         exit(1)

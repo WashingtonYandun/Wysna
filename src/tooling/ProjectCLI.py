@@ -4,10 +4,8 @@ import hashlib
 import json
 import os
 from pathlib import Path
-import subprocess
 import sys
 import tempfile
-import threading
 import time
 
 from common.Paths import get_repo_root
@@ -22,10 +20,11 @@ from compiler.CompilerService import CompilerService
 from compiler.NativeToolchain import NativeCompilationError, NativeToolchain
 from compiler.WasiToolchain import WasiCompilationError, WasiToolchain
 from error.Error import ToolchainError, WysnaError
-from project.Manifest import ManifestError, ManifestIOError
+from project.Manifest import ManifestError, ManifestIOError, Target
 from project.Resolver import ProjectResolver
 from project.Scaffold import ScaffoldError, create_project
 from project.Targets import target_spec
+from project.Testing import build_test_plan, capture_test, test_failure_kind, TestPlanMismatch, write_junit
 from runtime.ExecutionContext import ExecutionContext
 from runtime.WasiRunner import WasiRunner, WasiRuntimeError
 from tooling.TargetValidation import validate_checked_target
@@ -89,6 +88,12 @@ def _parse_arguments(argv):
     parser.add_argument("--entry")
     parser.add_argument("--filter")
     parser.add_argument("--report-json")
+    parser.add_argument("--report-junit")
+    parser.add_argument("--list", action="store_true")
+    parser.add_argument("--discover", action="store_true")
+    parser.add_argument("--case")
+    parser.add_argument("--expect-plan-hash")
+    parser.add_argument("--test-entry", action="store_true", help=argparse.SUPPRESS)
     parser.add_argument("-o", "--output")
     separator = argv.index("--") if "--" in argv else len(argv)
     option_args = argv[1:separator]
@@ -106,8 +111,14 @@ def _parse_arguments(argv):
         raise ManifestError("--report-json is supported only by project run and test")
     if options.output and command != "build":
         raise ManifestError("-o is supported only by 'wysna project build'")
-    if options.output_format and command not in ("check", "build"):
-        raise ManifestError("--output-format=json-v1 is supported only by project check and build")
+    if options.output_format and command not in ("check", "build", "test", "lock"):
+        raise ManifestError("--output-format=json-v1 is supported only by project lock, check, build and test")
+    if command != "test" and (options.report_junit or options.list or options.discover or options.case or options.expect_plan_hash):
+        raise ManifestError("test selection and JUnit options are supported only by project test")
+    if options.list and options.report_junit:
+        raise ManifestError("--report-junit requires test execution, not --list")
+    if options.test_entry and (command != 'run' or not options.entry or options.target):
+        raise ManifestError('the test worker requires a native entry without a target override')
     if options.target and command not in ("check", "build", "run"):
         raise ManifestError("--target is supported only by project check, build, and run")
     return command, options, program_args
@@ -435,9 +446,9 @@ def _run_wasi_program(resolver, target, entry, program_args, report_path=None):
     return result.exit_code
 
 
-def _run_program(resolver, target_name, entry_override, program_args, report_path=None):
+def _run_program(resolver, target_name, entry_override, program_args, report_path=None, native_test=False):
     manifest = resolver.manifest
-    target = manifest.targets.get(target_name)
+    target = Target('test', entry_override, 'native-cli') if native_test else manifest.targets.get(target_name)
     if target is None:
         raise ManifestError(f"unknown target '{target_name}'")
     if target.profile == "browser-library":
@@ -498,37 +509,56 @@ def _run_program(resolver, target_name, entry_override, program_args, report_pat
     return report_state["process_exit_code"]
 
 
-def _run_tests(resolver, filter_text, report_path, frozen=False):
-    manifest = resolver.manifest
-    tests = [case for case in manifest.tests if filter_text is None or filter_text in case.name]
-    if report_path:
-        report = Path(report_path).expanduser().resolve()
-        if report in _protected_project_paths(resolver):
-            raise ManifestError("test report path must not overwrite a source, manifest, or lockfile")
-    if not tests:
-        if filter_text is not None:
-            raise ManifestError(f"test filter '{filter_text}' matched no cases")
-        print("[EMPTY] No [[tests]] cases are declared; no project code was checked.")
+def _finish_test_report(report, code, report_path, junit_path, json_mode):
+    artifacts = []
+    diagnostics = []
+    try:
         if report_path:
-            lock_path = resolver.lock_path()
-            write_tool_result_atomic({
-                "schema_version": "wysna.project-test-report/1",
-                "project": manifest.name,
-                "manifest": str(manifest.path),
-                "manifest_sha256": manifest.raw_sha256,
-                "toolchain": WYSNA_VERSION,
-                "lock_sha256": (
-                    hashlib.sha256(lock_path.read_bytes()).hexdigest()
-                    if lock_path.is_file() else None
-                ),
-                "status": "empty",
-                "duration_ms": 0.0,
-                "selected": 0,
-                "passed": 0,
-                "failed": 0,
-                "cases": [],
-            }, report_path)
-        return 2
+            write_tool_result_atomic(report, report_path)
+            artifacts.append(artifact_file('test-report', 'application/json', Path(report_path).resolve()))
+        if junit_path:
+            write_junit(report, junit_path)
+            artifacts.append(artifact_file('test-report', 'application/xml', Path(junit_path).resolve()))
+    except OSError as error:
+        code = 3
+        diagnostics.append(diagnostic_record('W5004', 'filesystem', str(error)))
+        if not json_mode:
+            print(f'wysna: cannot publish test report: {error}', file=sys.stderr)
+    if json_mode:
+        status = {0: 'ok', 2: 'usage_error', 3: 'toolchain_error', 130: 'cancelled'}.get(code, 'runtime_error')
+        payload = tool_result('project.test', status, code, artifacts=artifacts, diagnostics=diagnostics)
+        payload['result'] = report
+        write_tool_result(payload, sys.stdout)
+    return code
+
+
+def _run_tests(resolver, filter_text, report_path, frozen=False, *, json_mode=False,
+               list_only=False, discover=False, case_id=None, expected_hash=None, junit_path=None):
+    manifest = resolver.manifest
+    tests, plan = build_test_plan(resolver, filter_text, discover, case_id)
+    if expected_hash is not None and expected_hash != plan['plan_hash']:
+        raise TestPlanMismatch('test plan is stale; list tests again before executing')
+    destinations = [Path(value).expanduser().resolve() for value in (report_path, junit_path) if value]
+    if len(set(destinations)) != len(destinations):
+        raise ManifestError('JSON and JUnit reports require different paths')
+    for destination in destinations:
+        if destination in _protected_project_paths(resolver):
+            raise ManifestError('test report path must not overwrite a source, manifest, or lockfile')
+    if list_only:
+        code = _finish_test_report(plan, 0 if tests else 2, report_path, None, json_mode)
+        if not json_mode:
+            for case in plan['cases']:
+                print(case['id'] + ' ' + case['entry'])
+        return code
+    if not tests:
+        if not json_mode:
+            print('[EMPTY] No tests selected; no project code was checked.')
+        report = {'schema_version': 'wysna.project-test-report/1', 'project': manifest.name,
+                  'manifest': str(manifest.path), 'manifest_sha256': manifest.raw_sha256,
+                  'toolchain': WYSNA_VERSION, 'lock_sha256': plan['lock_sha256'],
+                  'plan_hash': plan['plan_hash'], 'status': 'empty', 'duration_ms': 0.0,
+                  'selected': 0, 'executed': 0, 'passed': 0, 'failed': 0, 'cases': []}
+        return _finish_test_report(report, 2, report_path, junit_path, json_mode)
 
     script = Path(get_repo_root()) / "main.py"
     installed_entry = script.parent / "wysna_entry.py"
@@ -544,76 +574,29 @@ def _run_tests(resolver, filter_text, report_path, frozen=False):
         entry_bytes = (manifest.root / case.entry).read_bytes()
         entry_hash = hashlib.sha256(entry_bytes).hexdigest()
         started = time.perf_counter()
-        deadline = started + case.timeout_ms / 1000
-        command = runner + ["project", "run", "--manifest", str(manifest.path), "--entry", case.entry]
+        command = runner + ["project", "run", "--manifest", str(manifest.path), "--entry", case.entry, '--test-entry']
         if frozen:
             command.append("--frozen")
-        process = subprocess.Popen(
-            command, cwd=manifest.root, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
-            start_new_session=(os.name != "nt"),
-            creationflags=(subprocess.CREATE_NEW_PROCESS_GROUP if os.name == "nt" else 0),
-        )
-        from runtime.HostAbi import attach_process_tree, release_process_tree
-        attach_process_tree(process)
-        captured = {"stdout": bytearray(), "stderr": bytearray()}
-        output_limit_event = threading.Event()
-
-        def drain(stream, name):
-            while True:
-                chunk = stream.read(8192)
-                if not chunk:
-                    return
-                remaining = _MAX_CAPTURE_BYTES - len(captured[name])
-                if remaining > 0:
-                    captured[name].extend(chunk[:remaining])
-                if len(chunk) > remaining:
-                    output_limit_event.set()
-                    try:
-                        from runtime.HostAbi import terminate_process_tree
-                        terminate_process_tree(process)
-                    except (ImportError, OSError):
-                        pass
-
-        readers = [threading.Thread(target=drain, args=(process.stdout, "stdout"), daemon=True),
-                   threading.Thread(target=drain, args=(process.stderr, "stderr"), daemon=True)]
-        for reader in readers:
-            reader.start()
-        timed_out = False
-        try:
-            process.wait(timeout=max(0.0, deadline - time.perf_counter()))
-        except subprocess.TimeoutExpired:
-            timed_out = True
-            from runtime.HostAbi import terminate_process_tree
-            terminate_process_tree(process, force_group=True)
-            process.wait()
-        from runtime.HostAbi import terminate_process_tree
-        terminate_process_tree(process, force_group=True)
-        release_process_tree(process)
-        for reader in readers:
-            reader.join()
+        status, exit_code, stdout_bytes, stderr_bytes, child_report = capture_test(
+            command, manifest.root, case.timeout_ms)
         duration_ms = round((time.perf_counter() - started) * 1000, 3)
-        stdout_bytes = bytes(captured["stdout"])
-        stderr_bytes = bytes(captured["stderr"])
-        output_limited = output_limit_event.is_set()
-        if timed_out:
-            status = "timed_out"
-            exit_code = None
-        elif output_limited:
-            status = "output_limited"
-            exit_code = process.returncode
-        else:
-            status = "passed" if process.returncode == 0 else "failed"
-            exit_code = process.returncode
+        output_limited = status == 'output_limited'
         stdout_text = stdout_bytes.decode("utf-8", errors="replace")
         stderr_text = stderr_bytes.decode("utf-8", errors="replace")
-        if stdout_text:
+        if stdout_text and not json_mode:
             print(f"--- {case.name} stdout ---")
             print(stdout_text, end="" if stdout_text.endswith("\n") else "\n")
-        if stderr_text:
+        if stderr_text and not json_mode:
             print(f"--- {case.name} stderr ---", file=sys.stderr)
             print(stderr_text, end="" if stderr_text.endswith("\n") else "\n", file=sys.stderr)
-        print(f"[{status.upper()}] {case.name} ({duration_ms:.1f} ms)")
+        if not json_mode:
+            print(f"[{status.upper()}] {case.name} ({duration_ms:.1f} ms)")
         records.append({
+            'id': 'test:' + case.name,
+            'stdout': stdout_text,
+            'stderr': stderr_text,
+            'failure_kind': test_failure_kind(status, child_report),
+            'diagnostics': child_report.get('diagnostics', []),
             "name": case.name,
             "entry": case.entry,
             "entry_sha256": entry_hash,
@@ -626,7 +609,11 @@ def _run_tests(resolver, filter_text, report_path, frozen=False):
             "stdout_sha256": hashlib.sha256(stdout_bytes).hexdigest(),
             "stderr_sha256": hashlib.sha256(stderr_bytes).hexdigest(),
         })
-    failed = sum(case["status"] != "passed" for case in records)
+        if status == 'cancelled':
+            break
+    cancelled = any(case['status'] == 'cancelled' for case in records)
+    failed_cases = [case for case in records if case['status'] != 'passed']
+    failed = len(failed_cases)
     report = {
         "schema_version": "wysna.project-test-report/1",
         "project": manifest.name,
@@ -634,16 +621,16 @@ def _run_tests(resolver, filter_text, report_path, frozen=False):
         "manifest_sha256": manifest.raw_sha256,
         "toolchain": WYSNA_VERSION,
         "lock_sha256": lock_hash,
-        "status": "passed" if failed == 0 else "failed",
+        "plan_hash": plan['plan_hash'],
+        "status": "cancelled" if cancelled else "passed" if failed == 0 else "failed",
         "duration_ms": round((time.perf_counter() - overall_start) * 1000, 3),
-        "selected": len(records),
+        "selected": len(tests),
+        "executed": len(records),
         "passed": len(records) - failed,
         "failed": failed,
         "cases": records,
     }
-    if report_path:
-        write_tool_result_atomic(report, report_path)
-    return 1 if failed else 0
+    return _finish_test_report(report, 130 if cancelled else 1 if failed else 0, report_path, junit_path, json_mode)
 
 
 def run_project_command(argv):
@@ -675,18 +662,25 @@ def run_project_command(argv):
         resolver = ProjectResolver.load(manifest_path)
         if command == "lock":
             resolver.write_lock()
+            if json_mode:
+                return _emit('project.lock', 'ok', 0, json_mode=True,
+                             artifacts=[artifact_file('project-lock', 'application/json', resolver.lock_path())])
             print(f"[OK] Wrote {resolver.lock_path()}")
             return 0
         _check_frozen(resolver, options.frozen)
-        resolved_target = _resolve_target_name(resolver.manifest, options.target)
+        resolved_target = (_resolve_target_name(resolver.manifest, options.target)
+                           if command in ('check', 'build', 'run') and not options.test_entry else None)
         if command == "check":
             return _run_check(resolver, resolved_target, json_mode)
         if command == "build":
             return _run_build(resolver, resolved_target, options.output, json_mode)
         if command == "run":
             return _run_program(resolver, resolved_target, options.entry, program_args,
-                                report_path=options.report_json)
-        return _run_tests(resolver, options.filter, options.report_json, options.frozen)
+                                report_path=options.report_json, native_test=options.test_entry)
+        return _run_tests(resolver, options.filter, options.report_json, options.frozen,
+                          json_mode=json_mode, list_only=options.list, discover=options.discover,
+                          case_id=options.case, expected_hash=options.expect_plan_hash,
+                          junit_path=options.report_junit)
     except ScaffoldError as error:
         if json_mode:
             diagnostic = diagnostic_record("W5004", "filesystem", str(error))
@@ -704,7 +698,7 @@ def run_project_command(argv):
             print(render_diagnostic(diagnostic, {}), file=sys.stderr)
             return 3
         if json_mode:
-            diagnostic = diagnostic_record("W5002", result_command, message)
+            diagnostic = diagnostic_record('W5005' if isinstance(error, TestPlanMismatch) else 'W5002', result_command, message)
             return _emit(result_command, "usage_error", 2, diagnostics=[diagnostic], json_mode=True)
         print(f"wysna project: {message}", file=sys.stderr)
         return 2

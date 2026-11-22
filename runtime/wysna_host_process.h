@@ -273,9 +273,9 @@ static int64_t wysna_host_process_run_cancellable(void* executable_handle, void*
     return (int64_t)exit_code;
 }
 
-static int64_t wysna_host_process_capture(void* executable_handle, void* arguments_handle,
+static int64_t wysna_host_process_capture_cancellable(void* executable_handle, void* arguments_handle,
                                           int64_t timeout_ms, int64_t max_output_bytes,
-                                          void* stdout_handle, void* stderr_handle) {
+                                          void* stdout_handle, void* stderr_handle, WysnaProcessCancellation* cancellation) {
 #ifdef WYSNA_DENY_CAP_PROCESSES
     (void)executable_handle; (void)arguments_handle; (void)timeout_ms;
     (void)max_output_bytes; (void)stdout_handle; (void)stderr_handle;
@@ -382,8 +382,9 @@ static int64_t wysna_host_process_capture(void* executable_handle, void* argumen
         }
     }
     ULONGLONG wait_begin = GetTickCount64();
-    int overflow = 0, timed_out = 0;
+    int overflow = 0, timed_out = 0, cancelled = 0;
     for (;;) {
+        if (wysna_host_process_cancelled(cancellation)) { cancelled = 1; break; }
         char buf[4096];
         int progressed = 0;
         for (int s = 0; s < 2; s++) {
@@ -395,7 +396,11 @@ static int64_t wysna_host_process_capture(void* executable_handle, void* argumen
                 DWORD got = 0;
                 if (!ReadFile(h, buf, want, &got, NULL) || got == 0) break;
                 progressed = 1;
-                if ((int64_t)dst->length + (int64_t)got > max_output_bytes) { overflow = 1; break; }
+                if ((int64_t)dst->length + (int64_t)got > max_output_bytes) {
+                    size_t remaining = (size_t)max_output_bytes - dst->length;
+                    if (remaining) (void)wysna_host_buffer_append_bytes(dst, buf, remaining);
+                    overflow = 1; break;
+                }
                 if (wysna_host_buffer_append_bytes(dst, buf, (size_t)got) != (size_t)got) {
                     overflow = 1; break;
                 }
@@ -413,8 +418,8 @@ static int64_t wysna_host_process_capture(void* executable_handle, void* argumen
         if (GetTickCount64() - wait_begin >= (ULONGLONG)timeout_ms) { timed_out = 1; break; }
         if (!progressed) Sleep(10);
     }
-    if (overflow || timed_out) {
-        DWORD err_code = overflow ? ERROR_BUFFER_OVERFLOW : ERROR_TIMEOUT;
+    if (overflow || timed_out || cancelled) {
+        DWORD err_code = cancelled ? ERROR_OPERATION_ABORTED : overflow ? ERROR_BUFFER_OVERFLOW : ERROR_TIMEOUT;
         if (job) TerminateJobObject(job, err_code); else TerminateProcess(process.hProcess, err_code);
         WaitForSingleObject(process.hProcess, INFINITE);
         CloseHandle(out_read); CloseHandle(err_read);
@@ -526,9 +531,9 @@ static int64_t wysna_host_process_run_cancellable(void* executable_handle, void*
     return wysna_host_process_error(EIO);
 }
 
-static int64_t wysna_host_process_capture(void* executable_handle, void* arguments_handle,
+static int64_t wysna_host_process_capture_cancellable(void* executable_handle, void* arguments_handle,
                                           int64_t timeout_ms, int64_t max_output_bytes,
-                                          void* stdout_handle, void* stderr_handle) {
+                                          void* stdout_handle, void* stderr_handle, WysnaProcessCancellation* cancellation) {
 #ifdef WYSNA_DENY_CAP_PROCESSES
     (void)executable_handle; (void)arguments_handle; (void)timeout_ms;
     (void)max_output_bytes; (void)stdout_handle; (void)stderr_handle;
@@ -620,6 +625,7 @@ static int64_t wysna_host_process_capture(void* executable_handle, void* argumen
     if (err_flags >= 0) (void)fcntl(stderr_pipe[0], F_SETFL, err_flags | O_NONBLOCK);
     int out_open = 1, err_open = 1, reaped = 0, status = 0, fail_err = 0;
     for (;;) {
+        if (wysna_host_process_cancelled(cancellation)) { fail_err = EINTR; break; }
         int fds[2] = { stdout_pipe[0], stderr_pipe[0] };
         int* opens[2] = { &out_open, &err_open };
         WysnaHostEntry* entries[2] = { stdout_entry, stderr_entry };
@@ -630,6 +636,8 @@ static int64_t wysna_host_process_capture(void* executable_handle, void* argumen
                 ssize_t n = read(fds[s], buf, sizeof(buf));
                 if (n > 0) {
                     if ((int64_t)entries[s]->length + (int64_t)n > max_output_bytes) {
+                        size_t remaining = (size_t)max_output_bytes - entries[s]->length;
+                        if (remaining) (void)wysna_host_buffer_append_bytes(entries[s], buf, remaining);
                         fail_err = E2BIG; break;
                     }
                     if (wysna_host_buffer_append_bytes(entries[s], buf, (size_t)n) != (size_t)n) {
@@ -669,8 +677,8 @@ static int64_t wysna_host_process_capture(void* executable_handle, void* argumen
     if (out_open) close(stdout_pipe[0]);
     if (err_open) close(stderr_pipe[0]);
     if (fail_err) {
+        wysna_process_terminate_tree(child);
         if (!reaped) {
-            wysna_process_terminate_tree(child);
             while (waitpid(child, &status, 0) < 0 && errno == EINTR) { }
         }
         for (int index = 1; index < argc; index++) free(argv[index]);
@@ -684,6 +692,12 @@ static int64_t wysna_host_process_capture(void* executable_handle, void* argumen
     return wysna_host_process_error(EIO);
 }
 #endif
+static int64_t wysna_host_process_capture(void* executable, void* arguments,
+                                          int64_t timeout_ms, int64_t max_output_bytes,
+                                          void* stdout_handle, void* stderr_handle) {
+    return wysna_host_process_capture_cancellable(executable, arguments, timeout_ms, max_output_bytes,
+                                                 stdout_handle, stderr_handle, NULL);
+}
 static int64_t wysna_host_process_run(void* executable, void* arguments, int64_t timeout_ms) {
     return wysna_host_process_run_cancellable(executable, arguments, timeout_ms, NULL);
 }

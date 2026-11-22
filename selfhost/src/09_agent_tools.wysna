@@ -2040,11 +2040,12 @@ fn tool_write_atomic_verified(path: str, expected_sha256: str, content: str) -> 
 
 fn tool_skills_topic_content(topic: str) -> str {
     if topic == "overview" {
-        return "# Wysna v0.8.0 — Agent-First Native Language & Toolchain\n- Default workflow uses checked static inspection before execution.\n- Memory model: Single-threaded ARC + Copy-on-Write (`Weak[C]` breaks strong cycles).\n- Error channel: Typed values `T ! E`, unwrap with `?` or `else err { fallback }`.\n- Core agent loop: `wysna skills` -> `wysna graph` -> `wysna inspect` -> `wysna patch` -> `wysna fix` -> `wysna check`.\n- Topics available: overview, agent-loop, syntax, graph, patch, contracts, stdlib."
+        return "# Wysna v0.8.0 — Agent-First Native Language & Toolchain\n- Default workflow uses checked static inspection before execution.\n- Memory model: Single-threaded ARC + Copy-on-Write (`Weak[C]` breaks strong cycles).\n- Error channel: Typed values `T ! E`, unwrap with `?` or `else err { fallback }`.\n- Core agent loop: `wysna skills` -> `wysna graph` -> `wysna inspect` -> `wysna patch` -> `wysna fix` -> `wysna check`.\n- Topics available: overview, agent-loop, syntax, graph, patch, project-tests, contracts, stdlib."
     }
     if topic == "agent-loop" {
         return "# Agent Coding Loop (Token-Efficient, Hash-Guarded)\n1. Discover relationships: `wysna graph <file.wysna> --output-format=json-v1`\n2. Inspect one symbol instead of reading whole files: `wysna inspect <file.wysna> --symbol <name> --with-deps --output-format=json-v1`\n3. Submit checked edits guarded by graph hash: `wysna patch <file.wysna> --symbol <name> --expect-graph-hash <hash> --with <code> --apply`\n4. Auto-repair mechanical diagnostics: `wysna fix --apply --output-format=json-v1 <file.wysna>`\n5. Decode any Wxxxx error: `wysna explain --code W2001 --output-format=json-v1`\n6. Verify & bound runtime: `wysna run --max-steps=100000 --max-heap-mb=64 <file.wysna>`"
     }
+    if topic == "project-tests" { return "# Pruebas de proyecto para agentes\n1. Lista sin ejecutar: `wysna project test --discover --list --frozen --output-format=json-v1`.\n2. Usa los IDs exactos de result.cases: `--case test:example`; --filter conserva selección por subcadena.\n3. Ejecuta con `--expect-plan-hash <result.plan_hash> --output-format=json-v1 --report-json tests.json --report-junit tests.xml`.\n4. Lee result.cases[].failure_kind, diagnostics y los hashes de stdout/stderr; no interpretes texto de terminal.\n5. W5005 indica plan obsoleto: vuelve a listar. Una suite vacía devuelve 2; una cancelación devuelve 130.\n6. std/test ofrece igualdad genérica, tolerancia flotante, opcionales y fixture_directory(); los fixtures se eliminan después del caso.\nEl hash cubre manifiesto, lock, versión y entradas seleccionadas, no todos los imports. El SDK native-core-v1 ejecuta estos comandos sin Python.\n" }
     if topic == "syntax" {
         return "# Wysna Canonical Syntax Quick Reference\n- Bindings: `let x = 1` (immutable), `let mut y = 2` (mutable).\n- Functions: `fn add(a: int, b: int) -> int { return a + b }`\n- Cooperative Async: `async fn fetch_id() -> int { ... }`, `let v = await task`.\n- Optionals & Errors: `T?`, `T ! E`, unwrap `?`, recover `expr else err { fallback }`.\n- OOP & Contracts: `interface Drawable { fn draw() -> str }`, `class Rect implements Drawable { fn draw() -> str { ... } }`.\n- Lambdas: `|n: int| => n * n` (capture outer variables by immutable snapshot).\n- Ranges & Loops: `for i in 0..10 { ... }`, inclusive `0..=10`."
     }
@@ -2066,7 +2067,7 @@ fn tool_skills_topic_content(topic: str) -> str {
 fn tool_skills_payload_json(topic: str) -> str {
     let content = tool_skills_topic_content(topic)
     if content == "" { return "" }
-    let topics_json = "[\"agent-loop\",\"contracts\",\"graph\",\"overview\",\"patch\",\"stdlib\",\"syntax\"]"
+    let topics_json = "[\"agent-loop\",\"contracts\",\"graph\",\"overview\",\"patch\",\"project-tests\",\"stdlib\",\"syntax\"]"
     return "{\"schema_version\":\"wysna.skills/1\",\"compiler_version\":\"0.8.0\",\"topic\":" + diag_json_quote(topic) + ",\"available_topics\":" + topics_json + ",\"content\":" + diag_json_quote(content) + "}"
 }
 
@@ -2110,7 +2111,7 @@ fn tool_handle_skills(args: list[str], json_mode: bool) -> unit {
 
 fn tool_capabilities_payload_json() -> str {
     let cmds = "[\"run\",\"check\",\"fmt\",\"ast\",\"mir\",\"tokens\",\"emit-c\",\"emit-mir\",\"build\",\"test\",\"project.new\",\"project.lock\",\"project.check\",\"project.build\",\"project.run\",\"project.test\",\"api\",\"capabilities\",\"explain\",\"graph\",\"inspect\",\"patch\",\"skills\",\"fix\",\"schema\",\"mcp\",\"lsp\"]"
-    let mcmds = "[\"check\",\"fmt\",\"project.new\",\"project.lock\",\"project.check\",\"api\",\"capabilities\",\"explain\",\"graph\",\"inspect\",\"patch\",\"skills\",\"fix\",\"schema\"]"
+    let mcmds = "[\"check\",\"fmt\",\"project.new\",\"project.lock\",\"project.check\",\"project.test\",\"api\",\"capabilities\",\"explain\",\"graph\",\"inspect\",\"patch\",\"skills\",\"fix\",\"schema\"]"
     let profs = "[\"native-cli\",\"wasi-command\",\"browser-library\",\"c99-source\"]"
     let targs = "[\"native\",\"wasm32-wasip1\",\"wasm32-unknown-emscripten\"]"
     let runtimes = "{\"wasi-command\":\"wasmtime-python==50.0.1\",\"browser-library\":\"browser or Node.js\"}"

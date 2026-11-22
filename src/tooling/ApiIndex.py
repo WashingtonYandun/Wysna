@@ -372,7 +372,7 @@ def run_capabilities_command(argv):
                          "api", "capabilities", "explain", "graph", "inspect", "patch", "skills",
                          "fix", "schema", "mcp", "lsp", "repl"],
             "machine_output": {"format": "json-v1", "commands": ["check", "fmt", "emit-c", "build",
-                                                                          "project.new", "project.check", "project.build",
+                                                                          "project.new", "project.lock", "project.check", "project.build", "project.test",
                                                                           "api", "capabilities", "explain",
                                                                           "graph", "inspect", "patch", "skills",
                                                                           "fix", "schema"]},

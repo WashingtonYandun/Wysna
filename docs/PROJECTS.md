@@ -230,3 +230,54 @@ select a profile only when its engine matches the compiler they are invoking.
 `wysna explain path/to/source.wysna --manifest path/to/wysna.toml` produces a
 separate read-only [effect report](EFFECTS.md); project target checks do not
 consume that report.
+
+## Pruebas para agentes de IA
+
+El flujo recomendado es listar, seleccionar y ejecutar un plan verificable:
+
+```sh
+wysna project test --discover --list --frozen --output-format=json-v1
+wysna project test --discover --case test:example --list --output-format=json-v1
+wysna project test --discover --case test:example --expect-plan-hash HASH --output-format=json-v1 --report-json tests.json --report-junit tests.xml
+```
+
+El hash debe corresponder a la misma selección y al mismo estado del lock. Si se
+usa `--frozen` al listar, también debe usarse al ejecutar. `--list` no compila ni
+ejecuta las entradas. Devuelve `wysna.project-test-plan/1` en `result`, con IDs,
+rutas relativas, SHA-256 de cada entrada y su timeout. El hash cubre los bytes del
+manifiesto y del lock, la versión del compilador y los casos seleccionados. No
+representa todos los imports ni inmoviliza el árbol durante una ejecución. Un
+hash obsoleto devuelve `W5005` y código 2 antes de iniciar los casos.
+
+Los casos declarados conservan el orden del manifiesto. `--discover` añade, en
+orden de ruta, archivos `tests/**/test_*.wysna` y `tests/**/*_test.wysna`; no añade
+una entrada ya declarada ni sigue symlinks. Sus IDs son `test:auto:RUTA`.
+`--case` exige un ID exacto; `--filter` conserva la selección por subcadena del
+nombre. Una selección admite hasta 4096 casos. Una suite vacía devuelve código 2.
+
+Cada caso se ejecuta en un proceso separado como programa `native-cli`,
+independientemente del target de la aplicación. El timeout incluye comprobación,
+compilación y ejecución. Cada stream conserva como máximo 1 MiB; excederlo detiene
+el caso y registra `output_limited`. Los casos siguientes continúan tras un fallo
+normal. Una cancelación detiene la suite, devuelve 130 y registra cuántos casos se
+seleccionaron (`selected`) y ejecutaron (`executed`). Se limpia el árbol de
+procesos y el directorio temporal del caso antes de publicar el resultado.
+
+Con `--output-format=json-v1`, stdout contiene un único `wysna.tool-result/1`.
+`result` conserva el reporte `wysna.project-test-report/1`; cada caso incorpora
+`id`, `failure_kind`, `diagnostics`, stdout/stderr decodificados como UTF-8 con
+sustitución de bytes inválidos y los SHA-256 de sus bytes capturados. Los NUL se
+conservan en JSON. JUnit sustituye caracteres no válidos en XML. Un fallo de
+publicación devuelve `W5004`/3 y conserva el resultado ejecutado en stdout.
+Cada archivo de reporte se publica mediante un reemplazo individual; JSON y
+JUnit no forman una transacción conjunta. Los artefactos publicados incluyen su
+ruta y SHA-256. Los destinos no pueden sobrescribir manifiestos, locks ni fuentes.
+
+`std/test` mantiene `expect`, `expect_equal_int` y `expect_equal_text` y añade
+`expect_equal[T]`, `expect_not_equal[T]`, `expect_close`, `expect_some[T]`,
+`expect_none[T]` y `fixture_directory()`. Esta última devuelve `str ! FixtureError`
+y requiere el entorno del runner. Cada caso recibe un `WYSNA_TEST_TMPDIR` único,
+eliminado después del caso. No es un sandbox: el programa mantiene el acceso al
+host que tenga el proceso. Seed y el SDK nativo admiten este flujo; el SDK no
+requiere Python. `wysna skills project-tests --output-format=json-v1` expone las
+instrucciones al agente desde la herramienta instalada.
