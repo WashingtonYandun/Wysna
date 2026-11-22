@@ -416,7 +416,8 @@ class Formatter:
 
         if isinstance(expr, MemberExpr):
             obj_str = self.format_expr(expr.object, level, parent_prec=15)
-            return f"{obj_str}.{expr.property}"
+            targs = f"[{', '.join([self.format_type(a) for a in expr.enum_type_args])}]" if getattr(expr, "enum_type_args", None) else ""
+            return f"{obj_str}{targs}.{expr.property}"
 
         if isinstance(expr, IndexExpr):
             obj_str = self.format_expr(expr.object, level, parent_prec=15)

@@ -143,8 +143,12 @@ def check_call_expr(checker: "TypeChecker", expr: CallExpr, is_statement_context
         callee_t = resolution.type
 
     if isinstance(expr.callee, MemberExpr):
-        owner = checker._enum_owner(expr.callee.object)
+        owner, explicit_args = checker._enum_owner_with_type_args(expr.callee)
         if isinstance(owner, GenericEnumTemplate):
+            if explicit_args and not expr.type_args:
+                expr.type_args = explicit_args
+            if hasattr(expr.callee, "enum_type_args"):
+                expr.callee.enum_type_args = None
             return check_generic_variant(checker, expr, owner)
         if isinstance(owner, EnumType):
             return check_enum_variant(checker, expr, owner)
@@ -517,7 +521,8 @@ def check_generic_variant(checker: "TypeChecker", expr: CallExpr, template: Gene
             file=checker.file,
             code="W2005"
         )
-    if expr.type_args:
+    had_explicit_type_args = bool(expr.type_args)
+    if had_explicit_type_args:
         concrete_args = [checker._resolve_type_node(a) for a in expr.type_args]
     else:
         type_params_set = {p.name if hasattr(p, "name") else str(p) for p in template.type_params}
@@ -578,6 +583,15 @@ def check_generic_variant(checker: "TypeChecker", expr: CallExpr, template: Gene
         concrete_args = checker._concrete_type_args(template, bindings)
 
     enum_t = checker._monomorphize_enum(template, concrete_args, expr.line, expr.col)
+    if had_explicit_type_args:
+        expected_payloads = enum_t.variant_payloads.get(variant_name, [])
+        for i, (argument, expected) in enumerate(zip(expr.args, expected_payloads)):
+            actual = checker._check_payload(argument, expected)
+            if not checker.type_relations.is_assignable(actual, expected):
+                raise TypeError(
+                    f"Argument {i + 1} type mismatch: expected '{expected}', found '{actual}'",
+                    line=argument.line, col=argument.col, file=checker.file, code="W2001",
+                )
     receiver = expr.callee.object
     expr.callee.object = IdentExpr(enum_t.name, receiver.line, receiver.col)
     expr.type_args = []

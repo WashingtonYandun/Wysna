@@ -339,6 +339,7 @@ jobs:
         run: |
           ./wysna test --differential 20 2>&1 | tee .wysna_cache/ci-artifacts/differential.log
           ./wysna test --fuzz 100 2>&1 | tee .wysna_cache/ci-artifacts/fuzz.log
+          python3 -m pytest -q tests/unit/test_fuzz_a01_combinations.py
       - name: Install SQLite development headers on Linux
         if: runner.os == 'Linux'
         run: sudo apt-get update && sudo apt-get install -y libsqlite3-dev

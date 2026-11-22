@@ -1143,6 +1143,20 @@ class TypeChecker:
                 return module.scope.lookup_type(expression.property)
         return None
 
+    def _enum_owner_with_type_args(self, member_expr):
+        explicit_args = getattr(member_expr, "enum_type_args", None)
+        if explicit_args is not None:
+            owner = self._enum_owner(member_expr.object)
+            if isinstance(owner, GenericEnumTemplate):
+                return owner, explicit_args
+        if isinstance(member_expr.object, IndexExpr) and getattr(member_expr.object, "type_args_alternative", None):
+            owner = self._enum_owner(member_expr.object.object)
+            if isinstance(owner, GenericEnumTemplate):
+                args = member_expr.object.type_args_alternative
+                member_expr.object = member_expr.object.object
+                return owner, args
+        return self._enum_owner(member_expr.object), None
+
     def _check_expr(self, expr: Expr, is_statement_context: bool = False, allow_module: bool = False) -> WysnaType:
         handler = EXPRESSION_RULES.handler_for(expr, self.file)
         inferred_type = handler(self, expr, is_statement_context)

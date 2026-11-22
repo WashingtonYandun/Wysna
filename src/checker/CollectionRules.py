@@ -10,6 +10,7 @@ from checker.WysnaType import (
     DictType,
     TupleType,
     StructType,
+    GenericStructTemplate,
     ClassType,
     AnyType,
 )
@@ -23,6 +24,10 @@ if TYPE_CHECKING:
 def check_struct_init_expr(checker: "TypeChecker", expr: StructInitExpr, is_statement_context: bool = False) -> WysnaType:
     spread_t = checker._check_payload(expr.spread, None) if expr.spread is not None else None
     template = checker.generic_struct_templates.get(expr.struct_name)
+    if template is None and "." in expr.struct_name:
+        resolved_q = checker._lookup_type_name(expr.struct_name)
+        if isinstance(resolved_q, GenericStructTemplate):
+            template = resolved_q
     if template is not None:
         if expr.type_args:
             concrete_args = [checker._resolve_type_node(a) for a in expr.type_args]
@@ -70,7 +75,7 @@ def check_struct_init_expr(checker: "TypeChecker", expr: StructInitExpr, is_stat
                 file=checker.file,
                 code="W1001"
             )
-        struct_t = checker.current_scope.lookup_type(expr.struct_name)
+        struct_t = checker._lookup_type_name(expr.struct_name)
         if struct_t is None or not isinstance(struct_t, StructType):
             raise TypeError(
                 message=f"Unknown struct type '{expr.struct_name}'",
@@ -79,6 +84,10 @@ def check_struct_init_expr(checker: "TypeChecker", expr: StructInitExpr, is_stat
                 file=checker.file,
                 code="W1001"
             )
+        if "." in expr.struct_name:
+            if checker.global_scope.lookup_type(struct_t.name) is None:
+                checker.global_scope.define_type(struct_t.name, struct_t, file=checker.file)
+            expr.struct_name = struct_t.name
 
     seen_fields: Set[str] = set()
     for f in expr.fields:

@@ -59,6 +59,9 @@ UNIT_SOURCES = {
         "selfhost/dev_units/stubs_fix.wysna",
         "selfhost/dev_units/compiler_core_main.wysna",
     ],
+    "compiler": [
+        *[f"selfhost/src/{name}" for name in MODULE_ORDER],
+    ],
 }
 
 _ZIG_SHIM_C = r'''
@@ -308,7 +311,7 @@ def assemble_dev_sdk(units: list[str], rebuild_emitter: bool = False, opt: str =
             _copy_atomic(shim_bin, toolchain_dir / executable_name("zig"))
         results.append(shim_meta)
 
-    for unit in ("project", "mcp", "compiler-core"):
+    for unit in ("project", "mcp", "compiler-core", "compiler"):
         if unit in units:
             unit_bin, meta = build_wysna_unit(unit, emitter, opt=opt)
             _copy_atomic(unit_bin, libexec_dir / executable_name(f"wysna-{unit}"))
@@ -327,7 +330,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument(
         "--unit",
         action="append",
-        choices=["driver", "zig-shim", "project", "mcp", "compiler-core", "all"],
+        choices=["driver", "zig-shim", "project", "mcp", "compiler-core", "compiler", "all"],
         help="Unit(s) to build (default: driver, zig-shim, project, mcp).",
     )
     parser.add_argument("--rebuild-emitter", action="store_true", help="Refresh cached stage2 emitter via Bootstrap.")

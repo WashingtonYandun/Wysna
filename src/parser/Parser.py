@@ -1172,10 +1172,10 @@ class Parser:
                         left = MemberExpr(object=left, property=prop_tok.value, line=dot.line, col=dot.col)
 
                 elif self.check(TokenType.LBRACKET):
-                    if isinstance(left, MemberExpr):
+                    if isinstance(left, (IdentExpr, MemberExpr)):
                         saved = self.pos
-                        type_args = self._try_parse_generic_type_args()
-                        if type_args and self.match(TokenType.LPAREN):
+                        type_args = self._try_parse_generic_type_args(allow_struct_init, allow_dot=True)
+                        if type_args and isinstance(left, MemberExpr) and self.match(TokenType.LPAREN):
                             args = []
                             if not self.check(TokenType.RPAREN):
                                 args.append(self.parse_expr())
@@ -1187,12 +1187,42 @@ class Parser:
                             left = CallExpr(left, args, type_args, line=left.line, col=left.col)
                             left.index_alternative = self._parse_index_alternative(saved, type_args)
                             continue
+                        if allow_struct_init and isinstance(left, MemberExpr) and type_args and self._starts_struct_init_brace():
+                            chain_name = self._member_chain_name(left)
+                            if chain_name is not None:
+                                left = self._parse_struct_init_body(chain_name, type_args, left.line, left.col)
+                                continue
+                        if type_args and self.check(TokenType.DOT) and self.peek(1).type == TokenType.IDENTIFIER:
+                            is_primitive = (
+                                len(type_args) == 1
+                                and isinstance(type_args[0], NamedType)
+                                and type_args[0].name in ("int", "float", "bool", "str", "unit", "none")
+                            )
+                            alt = None if is_primitive else self._parse_index_alternative(saved, type_args=None)
+                            if alt is None:
+                                dot = self.advance()
+                                prop_tok = self.expect(TokenType.IDENTIFIER, code="W0001", msg="Expected property name after '.'")
+                                member = MemberExpr(object=left, property=prop_tok.value, line=dot.line, col=dot.col)
+                                member.enum_type_args = type_args
+                                left = member
+                                continue
+                            bracket_tok = self.tokens[saved]
+                            idx_expr = IndexExpr(object=left, index=alt, line=bracket_tok.line, col=bracket_tok.col)
+                            idx_expr.type_args_alternative = type_args
+                            left = idx_expr
+                            continue
                         self.pos = saved
                     # Indexing
                     bracket = self.advance()
                     index_expr = self.parse_expr()
                     self.expect(TokenType.RBRACKET, code="W0006", msg="Expected ']' after index")
                     left = IndexExpr(object=left, index=index_expr, line=bracket.line, col=bracket.col)
+
+                elif allow_struct_init and isinstance(left, MemberExpr) and self._starts_struct_init_brace():
+                    chain_name = self._member_chain_name(left)
+                    if chain_name is None:
+                        break
+                    left = self._parse_struct_init_body(chain_name, None, left.line, left.col)
 
                 elif min_prec < 10 and self.check(TokenType.QUESTION):
                     # Postfix try / unwrap
@@ -1287,6 +1317,53 @@ class Parser:
         finally:
             self.pos = previous
 
+    def _member_chain_name(self, expr: Expr) -> Optional[str]:
+        parts: List[str] = []
+        current = expr
+        while isinstance(current, MemberExpr):
+            parts.append(current.property)
+            current = current.object
+        if not isinstance(current, IdentExpr):
+            return None
+        parts.append(current.name)
+        parts.reverse()
+        return ".".join(parts)
+
+    def _parse_struct_init_body(
+        self,
+        struct_name: str,
+        type_args: Optional[List[TypeNode]],
+        line: int,
+        col: int,
+    ) -> StructInitExpr:
+        self.advance()  # consume '{'
+        fields: List[FieldInit] = []
+        spread: Optional[Expr] = None
+        while not self.check(TokenType.RBRACE) and not self.is_at_end():
+            self._skip_statement_separators()
+            if self.check(TokenType.RBRACE) or self.is_at_end():
+                break
+            if self.match(TokenType.DOT_DOT):
+                dot_tok = self.tokens[self.pos - 1]
+                if spread is not None:
+                    raise ParserError(
+                        message="Struct initializer accepts at most one '..' base expression",
+                        line=dot_tok.line,
+                        col=dot_tok.col,
+                        file=self.file,
+                        code="W0006",
+                    )
+                spread = self.parse_expr()
+                self.match(TokenType.COMMA)
+                continue
+            f_tok = self.expect(TokenType.IDENTIFIER, code="W0001", msg="Expected struct field name")
+            self.expect(TokenType.COLON, code="W0001", msg="Expected ':' after struct field name")
+            f_val = self.parse_expr()
+            fields.append(FieldInit(name=f_tok.value, value=f_val, line=f_tok.line, col=f_tok.col))
+            self.match(TokenType.COMMA)
+        self.expect(TokenType.RBRACE, code="W0006", msg="Unterminated struct initializer, expected '}'")
+        return StructInitExpr(struct_name=struct_name, fields=fields, type_args=type_args, line=line, col=col, spread=spread)
+
     def _starts_struct_init_brace(self) -> bool:
         return self.check(TokenType.LBRACE) and (
             self.peek(1).type == TokenType.RBRACE
@@ -1294,7 +1371,7 @@ class Parser:
             or (self.peek(1).type == TokenType.IDENTIFIER and self.peek(2).type == TokenType.COLON)
         )
 
-    def _try_parse_generic_type_args(self, allow_struct_init: bool = True) -> Optional[List[TypeNode]]:
+    def _try_parse_generic_type_args(self, allow_struct_init: bool = True, allow_dot: bool = False) -> Optional[List[TypeNode]]:
         if not self.check(TokenType.LBRACKET):
             return None
         saved_pos = self.pos
@@ -1311,8 +1388,12 @@ class Parser:
             if not self.match(TokenType.RBRACKET):
                 self.pos = saved_pos
                 return None
-            # Only treat as generic args if followed by '{' or '('
-            if not (self.check(TokenType.LPAREN) or (allow_struct_init and self._starts_struct_init_brace())):
+            # Only treat as generic args if followed by '(', '{', or (when enabled) '.Variant'
+            if not (
+                self.check(TokenType.LPAREN)
+                or (allow_struct_init and self._starts_struct_init_brace())
+                or (allow_dot and self.check(TokenType.DOT) and self.peek(1).type == TokenType.IDENTIFIER)
+            ):
                 self.pos = saved_pos
                 return None
             return args
@@ -1435,33 +1516,7 @@ class Parser:
 
             # Check if this is a Struct Initialization: Identifier { field: val, ... } or Identifier { ..base, ... }
             if allow_struct_init and self._starts_struct_init_brace():
-                self.advance()  # consume '{'
-                fields: List[FieldInit] = []
-                spread: Optional[Expr] = None
-                while not self.check(TokenType.RBRACE) and not self.is_at_end():
-                    self._skip_statement_separators()
-                    if self.check(TokenType.RBRACE) or self.is_at_end():
-                        break
-                    if self.match(TokenType.DOT_DOT):
-                        dot_tok = self.tokens[self.pos - 1]
-                        if spread is not None:
-                            raise ParserError(
-                                message="Struct initializer accepts at most one '..' base expression",
-                                line=dot_tok.line,
-                                col=dot_tok.col,
-                                file=self.file,
-                                code="W0006",
-                            )
-                        spread = self.parse_expr()
-                        self.match(TokenType.COMMA)
-                        continue
-                    f_tok = self.expect(TokenType.IDENTIFIER, code="W0001", msg="Expected struct field name")
-                    self.expect(TokenType.COLON, code="W0001", msg="Expected ':' after struct field name")
-                    f_val = self.parse_expr()
-                    fields.append(FieldInit(name=f_tok.value, value=f_val, line=f_tok.line, col=f_tok.col))
-                    self.match(TokenType.COMMA)
-                self.expect(TokenType.RBRACE, code="W0006", msg="Unterminated struct initializer, expected '}'")
-                return StructInitExpr(struct_name=ident_name, fields=fields, type_args=type_args, line=token.line, col=token.col, spread=spread)
+                return self._parse_struct_init_body(ident_name, type_args, token.line, token.col)
 
             return IdentExpr(name=ident_name, line=token.line, col=token.col)
 

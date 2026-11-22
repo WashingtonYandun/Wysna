@@ -4027,7 +4027,7 @@ fn sem_collect_record(context: SemanticContext, kind: str) {
                     elif sem_is(context, "RPAREN") { if depth_p > 0 { depth_p = depth_p - 1 } }
                     elif sem_is(context, "LBRACKET") { depth_b = depth_b + 1 }
                     elif sem_is(context, "RBRACKET") { if depth_b > 0 { depth_b = depth_b - 1 } }
-                    elif (sem_is(context, "COMMA") or sem_is(context, "RBRACE")) and depth_p == 0 and depth_b == 0 { break }
+                    elif (sem_is(context, "NEWLINE") or sem_is(context, "COMMA") or sem_is(context, "RBRACE")) and depth_p == 0 and depth_b == 0 { break }
                     sem_take(context)
                 }
             }
