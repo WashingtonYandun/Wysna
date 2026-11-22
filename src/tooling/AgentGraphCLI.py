@@ -429,7 +429,18 @@ def run_patch_command(argv) -> int:
 
 
 _SKILLS_TOPICS = {
-    'project-tests': '# Pruebas de proyecto para agentes\n1. Lista sin ejecutar: `wysna project test --discover --list --frozen --output-format=json-v1`.\n2. Usa los IDs exactos de result.cases: `--case test:example`; --filter conserva selección por subcadena.\n3. Ejecuta con `--expect-plan-hash <result.plan_hash> --output-format=json-v1 --report-json tests.json --report-junit tests.xml`.\n4. Lee result.cases[].failure_kind, diagnostics y los hashes de stdout/stderr; no interpretes texto de terminal.\n5. W5005 indica plan obsoleto: vuelve a listar. Una suite vacía devuelve 2; una cancelación devuelve 130.\n6. std/test ofrece igualdad genérica, tolerancia flotante, opcionales y fixture_directory(); los fixtures se eliminan después del caso.\nEl hash cubre manifiesto, lock, versión y entradas seleccionadas, no todos los imports. El SDK native-core-v1 ejecuta estos comandos sin Python.\n',
+    'project-tests': (
+        '# Pruebas de proyecto para agentes\n'
+        '1. Lista sin ejecutar: `wysna project test --discover --list --frozen --output-format=json-v1`.\n'
+        '2. Usa los IDs exactos de result.cases: `--case test:example`; --filter conserva selección por subcadena.\n'
+        '3. Ejecuta con `--expect-plan-hash <result.plan_hash> --output-format=json-v1 --report-json tests.json --report-junit tests.xml`.\n'
+        '4. Lee result.cases[].failure_kind, diagnostics y los hashes de stdout/stderr; no interpretes texto de terminal.\n'
+        '5. W5005 indica plan obsoleto: vuelve a listar. Una suite vacía devuelve 2; una cancelación devuelve 130.\n'
+        '6. std/test ofrece igualdad genérica, tolerancia flotante, opcionales y fixture_directory(); los fixtures se eliminan después del caso.\n'
+        'El hash cubre manifiesto, lock, versión y entradas seleccionadas, no todos los imports. El SDK native-core-v1 ejecuta estos comandos sin Python.\n'
+        '7. Dependencias: `wysna packages pack --manifest dependency/wysna.toml -o dependency.tar`; adquiere con `packages fetch --manifest wysna.toml --archive dependency.tar --sha256 <pin> --cache <cache>`, agrega con `packages add alias --path vendor/<pin>` y ejecuta `project lock`.\n'
+        '8. Restaura con `packages restore --cache <cache>` y verifica con `project test --frozen`; todas las operaciones admiten `--output-format=json-v1`, sin hooks ni registro remoto.\n'
+    ),
     'overview': (
         f'# Wysna v{WYSNA_VERSION} — Agent-First Native Language & Toolchain\n'
         '- Default workflow uses checked static inspection before execution.\n'
@@ -456,9 +467,11 @@ _SKILLS_TOPICS = {
         '- Functions: `fn add(a: int, b: int) -> int { return a + b }`\n'
         '- Cooperative Async: `async fn fetch_id() -> int { ... }`, `let v = await task`.\n'
         '- Optionals & Errors: `T?`, `T ! E`, unwrap `?`, recover `expr else err { fallback }`.\n'
-        '- OOP & Contracts: `interface Drawable { fn draw() -> str }`, '
-        '`class Rect implements Drawable { fn draw() -> str { ... } }`.\n'
+        '- OOP & Contracts: `interface Drawable { fn draw() -> str }`, `class Rect implements Drawable { fn draw() -> str { ... } }`.\n'
         '- Lambdas: `|n: int| => n * n` (capture outer variables by immutable snapshot by design; use a `class` or return updated values for mutable state).\n'
+        '- Canonical forms: `Class(...)`, `None`, `_ =>`, parenthesized tuple patterns.\n'
+        '- Match patterns: alternatives `1 | 2`, Int64 ranges `0..=10`, nested `Point { x, .. }`; W6003 reports unreachable arms.\n'
+        '- Static attributes on top-level functions: `@deprecated("message")` (W6004), `@must_use` (W6005); no macros or evaluation.\n'
         '- Ranges & Loops: `for i in 0..10 { ... }`, inclusive `0..=10`.'
     ),
     'graph': (

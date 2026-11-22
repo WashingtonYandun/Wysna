@@ -162,12 +162,13 @@ def native_machine(sdk, root, *arguments):
     return result, json.loads(result.stdout)
 
 
-def test_installed_agent_discovery_advertises_test_protocol(native_sdk, tmp_path):
+@pytest.mark.parametrize('topic', ['project-tests', 'syntax'])
+def test_installed_agent_discovery_matches_seed_guidance(native_sdk, tmp_path, topic):
     root = project(tmp_path)
     scratch = root / '_scratch'
     scratch.mkdir()
-    seed = json.loads(run_cli(root, 'skills', 'project-tests', '--output-format=json-v1').stdout)
-    result = native_sdk._run_sdk(['skills', 'project-tests', '--output-format=json-v1'], root, scratch)
+    seed = json.loads(run_cli(root, 'skills', topic, '--output-format=json-v1').stdout)
+    result = native_sdk._run_sdk(['skills', topic, '--output-format=json-v1'], root, scratch)
     assert result.returncode == 0
     assert json.loads(result.stdout)['result'] == seed['result']
     seed_caps = json.loads(run_cli(root, 'capabilities', '--output-format=json-v1').stdout)
