@@ -3,7 +3,9 @@
 extern "C" fn wysna_host_fs(first: opaque, second: opaque, operation: int) -> int
 extern "C" fn wysna_host_getcwd(output: opaque) -> int
 extern "C" fn wysna_host_file_open(path: opaque, mode: int) -> opaque
+extern "C" fn wysna_host_file_read(file: opaque, data: opaque, count: int) -> int
 extern "C" fn wysna_host_file_write(file: opaque, data: opaque) -> int
+extern "C" fn wysna_host_buffer_size(handle: opaque) -> int
 extern "C" fn wysna_host_is_open(file: opaque) -> int
 extern "C" fn wysna_host_stdin_read_line(output: opaque) -> int
 extern "C" fn wysna_host_stdin_read_exact(output: opaque, count: int) -> int

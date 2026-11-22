@@ -1,12 +1,975 @@
-# Native-only `wysna packages` entrypoint (staged for PKG-A01 under Option C).
+# PKG-A01: Native-only pinned offline USTAR v1 package archiving, verified cache, and restoration.
+
+struct PkgEntry {
+    path: str
+    offset: int
+    size: int
+}
+
+fn pkg_fail(subcmd: str, json_mode: bool, code: str, msg: str) -> unit {
+    let cmd_name = if subcmd != "" { "packages." + subcmd } else { "packages" }
+    let exit_c = if code == "W5004" { 3 } elif code == "W5002" or code == "W5005" { 2 } else { 1 }
+    let status = if exit_c == 3 { "toolchain_error" } elif exit_c == 2 { "usage_error" } else { "diagnostic_error" }
+    let stage = if code == "W5004" { "filesystem" } elif code == "W5005" { "package" } else { "usage" }
+    if json_mode {
+        let diag = diag_record_json(code, stage, "error", msg, "<packages>", 1, 1, "")
+        diag_write_output(diag_tool_envelope_json(cmd_name, status, exit_c, "[" + diag + "]", "", "", "[]"))
+    } else {
+        eprint("[" + code + "] wysna packages: " + msg)
+    }
+    exit(exit_c)
+}
+
+fn pkg_is_hex64(s: str) -> bool {
+    if len(s) != 64 { return false }
+    for i in 0..64 {
+        let c = ord(s[i])
+        if not ((c >= 48 and c <= 57) or (c >= 97 and c <= 102)) { return false }
+    }
+    return true
+}
+
+fn pkg_is_valid_alias(s: str) -> bool {
+    let n = len(s)
+    if n == 0 or n > 63 { return false }
+    let c0 = ord(s[0])
+    if c0 < 97 or c0 > 122 { return false }
+    for i in 1..n {
+        let c = ord(s[i])
+        if not ((c >= 97 and c <= 122) or (c >= 48 and c <= 57) or c == 45) { return false }
+    }
+    return true
+}
+
+fn pkg_is_reserved_name(part: str) -> bool {
+    let mut base = part
+    for i in 0..len(part) {
+        if part[i] == "." { base = slice(part, 0, i) break }
+    }
+    let low = lsp_ascii_lower(base)
+    if low == "con" or low == "prn" or low == "aux" or low == "nul" { return true }
+    if len(low) == 4 {
+        let pref = slice(low, 0, 3)
+        let d = ord(low[3])
+        if (pref == "com" or pref == "lpt") and d >= 49 and d <= 57 { return true }
+    }
+    return false
+}
+
+fn pkg_safe_path(value: str, subcmd: str, json_mode: bool) -> str {
+    let raw_bytes = bytes(value)
+    if len(value) == 0 or len(raw_bytes) > 255 {
+        pkg_fail(subcmd, json_mode, "W5002", "invalid package path or path longer than 255 UTF-8 bytes")
+    }
+    for i in 0..len(value) {
+        let ch = value[i]
+        let c = ord(ch)
+        if c < 32 or c == 127 or ch == "<" or ch == ">" or ch == ":" or ch == "\"" or ch == "\\" or ch == "|" or ch == "?" or ch == "*" {
+            pkg_fail(subcmd, json_mode, "W5002", "package paths must use portable characters and / separators")
+        }
+    }
+    let n = len(value)
+    let mut start = 0
+    for i in 0..(n + 1) {
+        if i == n or value[i] == "/" {
+            let part = slice(value, start, i)
+            if part == "" or part == "." or part == ".." {
+                pkg_fail(subcmd, json_mode, "W5002", "package paths must not contain empty, dot, or trailing dot/space components")
+            }
+            let last_ch = part[len(part) - 1]
+            if last_ch == " " or last_ch == "." {
+                pkg_fail(subcmd, json_mode, "W5002", "package paths must not contain empty, dot, or trailing dot/space components")
+            }
+            if len(bytes(part)) > 100 or pkg_is_reserved_name(part) {
+                pkg_fail(subcmd, json_mode, "W5002", "package path component is reserved or exceeds 100 UTF-8 bytes")
+            }
+            start = i + 1
+        }
+    }
+    return value
+}
+
+fn pkg_path_key(path: str, subcmd: str, json_mode: bool) -> str {
+    let inp = tool_buf_from_str(path)
+    let out = wysna_host_buffer_new()
+    let sz = wysna_host_project_path_key(inp, out)
+    wysna_host_close(inp)
+    if sz < 0 {
+        wysna_host_close(out)
+        pkg_fail(subcmd, json_mode, "W5002", "invalid UTF-8 package path: " + path)
+    }
+    let res = lsp_buf_to_str(out, sz)
+    wysna_host_close(out)
+    return res
+}
+
+fn pkg_validate_inventory(paths: list[str], subcmd: str, json_mode: bool) -> unit {
+    if len(paths) == 0 or len(paths) > 4096 or not tool_str_contains(paths, "wysna.toml") {
+        pkg_fail(subcmd, json_mode, "W5002", "a package requires wysna.toml and at most 4096 files")
+    }
+    let mut files_map: dict[str, bool] = {}
+    for p in paths {
+        let seen = files_map.get(p) else { false }
+        if seen { pkg_fail(subcmd, json_mode, "W5002", "duplicate package path") }
+        files_map[p] = true
+    }
+    let mut components: dict[str, str] = {}
+    for p in paths {
+        pkg_safe_path(p, subcmd, json_mode)
+        let n = len(p)
+        for i in 0..(n + 1) {
+            if i == n or p[i] == "/" {
+                let comp = slice(p, 0, i)
+                let key = pkg_path_key(comp, subcmd, json_mode)
+                let existing = components.get(key) else { "" }
+                if existing != "" and existing != comp {
+                    pkg_fail(subcmd, json_mode, "W5002", "package paths collide on portable filesystems")
+                }
+                components[key] = comp
+                if i < n {
+                    let is_file = files_map.get(comp) else { false }
+                    if is_file { pkg_fail(subcmd, json_mode, "W5002", "a package path is both a file and a directory") }
+                }
+            }
+        }
+    }
+}
+
+fn pkg_cache_dir(explicit: str) -> str {
+    if explicit != "" { return proj_abs_from_cwd(explicit) }
+    let conf = env("WYSNA_PACKAGE_CACHE_HOME") ?? ""
+    if conf != "" { return proj_abs_from_cwd(conf) }
+    let xdg = env("XDG_CACHE_HOME") ?? ""
+    if xdg != "" { return module_normalize(xdg + "/wysna/packages-v1") }
+    let home = env("HOME") ?? ""
+    if home != "" { return module_normalize(home + "/.cache/wysna/packages-v1") }
+    let local_app = env("LOCALAPPDATA") ?? ""
+    if local_app != "" { return module_normalize(local_app + "/Wysna/packages-v1") }
+    return proj_abs_from_cwd(".wysna_cache/packages-v1")
+}
+
+fn pkg_dirname(path: str) -> str {
+    let norm = module_normalize(path)
+    let mut last = -1
+    for i in 0..len(norm) { if norm[i] == "/" { last = i } }
+    if last < 0 { return "" }
+    if last == 0 { return "/" }
+    return slice(norm, 0, last)
+}
+
+fn pkg_mkdir_p(dir_path: str) -> bool {
+    let norm = module_normalize(dir_path)
+    if norm == "" or norm == "/" { return true }
+    if len(norm) == 2 and norm[1] == ":" { return true }
+    if proj_is_dir(norm) { return true }
+    let parent = pkg_dirname(norm)
+    if parent != norm and parent != "" {
+        if not pkg_mkdir_p(parent) { return false }
+    }
+    let st = proj_scaffold_fs(norm, 2)
+    return st == 0 or proj_is_dir(norm)
+}
+
+fn pkg_buf_sha256_hex(buf: opaque) -> str {
+    let out = wysna_host_buffer_new()
+    let st = wysna_host_crypto_sha256(buf, out)
+    let mut parts: list[str] = []
+    if st == 0 {
+        for i in 0..32 {
+            let v = wysna_host_buffer_get(out, i)
+            parts.append(diag_hex_digit((v / 16) % 16) + diag_hex_digit(v % 16))
+        }
+    }
+    wysna_host_close(out)
+    return join_strings(parts, "")
+}
+
+fn pkg_buf_slice_sha256_hex(buf: opaque, off: int, size: int) -> str {
+    let sub = wysna_host_buffer_new()
+    for i in 0..size { wysna_host_buffer_append(sub, wysna_host_buffer_get(buf, off + i)) }
+    let hex = pkg_buf_sha256_hex(sub)
+    wysna_host_close(sub)
+    return hex
+}
+
+fn pkg_read_file_buf(path: str, max_bytes: int, subcmd: str, json_mode: bool, too_big_code: str, too_big_msg: str) -> opaque {
+    let p_buf = tool_buf_from_str(path)
+    let fh = wysna_host_file_open(p_buf, 0)
+    wysna_host_close(p_buf)
+    if wysna_host_is_open(fh) != 1 {
+        pkg_fail(subcmd, json_mode, "W5004", "cannot read file: " + path)
+    }
+    let out = wysna_host_buffer_new()
+    let chunk = wysna_host_buffer_new()
+    let mut total = 0
+    while true {
+        let got = wysna_host_file_read(fh, chunk, 1048576)
+        if got < 0 {
+            wysna_host_close(chunk) wysna_host_close(out) wysna_host_close(fh)
+            pkg_fail(subcmd, json_mode, "W5004", "failed reading file: " + path)
+        }
+        if got == 0 { break }
+        total = total + got
+        if total > max_bytes {
+            wysna_host_close(chunk) wysna_host_close(out) wysna_host_close(fh)
+            pkg_fail(subcmd, json_mode, too_big_code, too_big_msg)
+        }
+        for i in 0..got { wysna_host_buffer_append(out, wysna_host_buffer_get(chunk, i)) }
+    }
+    wysna_host_close(chunk)
+    wysna_host_close(fh)
+    return out
+}
+
+fn pkg_write_buf_atomic(dest: str, buf: opaque, subcmd: str, json_mode: bool) -> unit {
+    let parent = pkg_dirname(dest)
+    if parent != "" and not pkg_mkdir_p(parent) {
+        pkg_fail(subcmd, json_mode, "W5004", "cannot create directory: " + parent)
+    }
+    let tmp = parent + "/.wysna-package-" + diag_uuid4() + ".tmp"
+    let p_buf = tool_buf_from_str(tmp)
+    let fh = wysna_host_file_open(p_buf, 3)
+    wysna_host_close(p_buf)
+    if wysna_host_is_open(fh) != 1 {
+        pkg_fail(subcmd, json_mode, "W5004", "cannot create temporary file: " + tmp)
+    }
+    let wrote = wysna_host_file_write(fh, buf)
+    wysna_host_close(fh)
+    if wrote < 0 {
+        lsp_remove_file(tmp)
+        pkg_fail(subcmd, json_mode, "W5004", "cannot write temporary file: " + tmp)
+    }
+    let f1 = tool_buf_from_str(tmp)
+    let f2 = tool_buf_from_str(dest)
+    let st = wysna_host_fs(f1, f2, 4)
+    wysna_host_close(f1)
+    wysna_host_close(f2)
+    if st != 0 {
+        lsp_remove_file(tmp)
+        pkg_fail(subcmd, json_mode, "W5004", "cannot replace target file: " + dest)
+    }
+}
+
+fn pkg_entry_kind(parent: str, child: str) -> str {
+    let p_buf = tool_buf_from_str(parent)
+    let out = wysna_host_buffer_new()
+    let sz = wysna_host_project_entries(p_buf, out)
+    wysna_host_close(p_buf)
+    if sz <= 0 { wysna_host_close(out) return "" }
+    let entries = lsp_buf_to_str(out, sz)
+    wysna_host_close(out)
+    let mut i = 0
+    while i < len(entries) {
+        let kind = entries[i]
+        i = i + 1
+        let start = i
+        while i < len(entries) and ord(entries[i]) != 0 { i = i + 1 }
+        let name = slice(entries, start, i)
+        i = i + 1
+        if name == child { return kind }
+    }
+    return ""
+}
+
+fn pkg_remove_tree(path: str) -> unit {
+    let p_buf = tool_buf_from_str(path)
+    let out = wysna_host_buffer_new()
+    let sz = wysna_host_project_entries(p_buf, out)
+    wysna_host_close(p_buf)
+    if sz > 0 {
+        let entries = lsp_buf_to_str(out, sz)
+        let mut i = 0
+        while i < len(entries) {
+            let kind = entries[i]
+            i = i + 1
+            let start = i
+            while i < len(entries) and ord(entries[i]) != 0 { i = i + 1 }
+            let name = slice(entries, start, i)
+            i = i + 1
+            let full = path + "/" + name
+            if kind == "d" { pkg_remove_tree(full) } else { lsp_remove_file(full) }
+        }
+    }
+    wysna_host_close(out)
+    lsp_remove_file(path)
+}
+
+# ---- Canonical USTAR v1 encoder & strict validator ----
+
+fn pkg_write_octal(hdr: list[int], off: int, digits: int, val: int) -> list[int] {
+    let mut out = hdr
+    let mut v = val
+    let mut pos = off + digits - 1
+    while pos >= off {
+        out[pos] = 48 + (v % 8)
+        v = v / 8
+        pos = pos - 1
+    }
+    return out
+}
+
+fn pkg_make_ustar_header(rel_path: str, size: int) -> list[int] {
+    let mut hdr: list[int] = []
+    for _i in 0..512 { hdr.append(0) }
+    let raw = bytes(rel_path)
+    let mut name_b: list[int] = raw
+    let mut pref_b: list[int] = []
+    if len(raw) > 100 {
+        let mut split = -1
+        for i in 0..len(raw) {
+            if raw[i] == 47 and i <= 155 and (len(raw) - i - 1) <= 100 { split = i }
+        }
+        if split >= 0 {
+            let mut nb: list[int] = []
+            let mut pb: list[int] = []
+            for i in 0..split { pb.append(raw[i]) }
+            for i in (split + 1)..len(raw) { nb.append(raw[i]) }
+            pref_b = pb
+            name_b = nb
+        }
+    }
+    for i in 0..len(name_b) { hdr[i] = name_b[i] }
+    # mode 0000644\0, uid 0000000\0, gid 0000000\0, size 11 octal\0, mtime 00000000000\0
+    hdr = pkg_write_octal(hdr, 100, 7, 420)
+    hdr = pkg_write_octal(hdr, 108, 7, 0)
+    hdr = pkg_write_octal(hdr, 116, 7, 0)
+    hdr = pkg_write_octal(hdr, 124, 11, size)
+    hdr = pkg_write_octal(hdr, 136, 11, 0)
+    for i in 148..156 { hdr[i] = 32 }
+    hdr[156] = 48
+    let magic = bytes("ustar")
+    for i in 0..5 { hdr[257 + i] = magic[i] }
+    hdr[263] = 48
+    hdr[264] = 48
+    for i in 0..len(pref_b) { hdr[345 + i] = pref_b[i] }
+    let mut chksum = 0
+    for b in hdr { chksum = chksum + b }
+    hdr = pkg_write_octal(hdr, 148, 6, chksum)
+    hdr[154] = 0
+    hdr[155] = 32
+    return hdr
+}
+
+fn pkg_parse_octal(buf: opaque, off: int, width: int) -> int {
+    let mut i = off
+    let end = off + width
+    while i < end and (wysna_host_buffer_get(buf, i) == 32 or wysna_host_buffer_get(buf, i) == 0) { i = i + 1 }
+    if i == end { return 0 }
+    let mut val = 0
+    while i < end {
+        let b = wysna_host_buffer_get(buf, i)
+        if b == 0 or b == 32 { break }
+        if b < 48 or b > 55 { return -1 }
+        val = val * 8 + (b - 48)
+        i = i + 1
+    }
+    return val
+}
+
+fn pkg_decode_utf8_field(buf: opaque, off: int, cap: int, subcmd: str, json_mode: bool) -> str {
+    let mut n = 0
+    while n < cap and wysna_host_buffer_get(buf, off + n) != 0 { n = n + 1 }
+    if n == 0 { return "" }
+    let sub = wysna_host_buffer_new()
+    for i in 0..n { wysna_host_buffer_append(sub, wysna_host_buffer_get(buf, off + i)) }
+    let res = lsp_buf_to_str(sub, n)
+    wysna_host_close(sub)
+    if len(bytes(res)) != n {
+        pkg_fail(subcmd, json_mode, "W5002", "invalid UTF-8 in package archive header")
+    }
+    return res
+}
+
+fn pkg_inspect_archive(raw_buf: opaque, subcmd: str, json_mode: bool) -> list[PkgEntry] {
+    let total_len = wysna_host_buffer_size(raw_buf)
+    if total_len <= 0 or total_len > 41943040 or (total_len % 512) != 0 {
+        pkg_fail(subcmd, json_mode, "W5002", "invalid package archive size (maximum 40 MiB)")
+    }
+    let mut entries: list[PkgEntry] = []
+    let mut names: list[str] = []
+    let mut total_payload = 0
+    let mut off = 0
+    while off < total_len {
+        let mut all_zero = true
+        for k in 0..512 {
+            if wysna_host_buffer_get(raw_buf, off + k) != 0 { all_zero = false break }
+        }
+        if all_zero {
+            for rest in off..total_len {
+                if wysna_host_buffer_get(raw_buf, rest) != 0 {
+                    pkg_fail(subcmd, json_mode, "W5002", "package archive is not canonical USTAR v1")
+                }
+            }
+            break
+        }
+        let tf = wysna_host_buffer_get(raw_buf, off + 156)
+        if tf != 48 and tf != 0 {
+            pkg_fail(subcmd, json_mode, "W5002", "packages contain only regular USTAR files")
+        }
+        let stored_sum = pkg_parse_octal(raw_buf, off + 148, 8)
+        let mut calc_sum = 0
+        for k in 0..512 {
+            calc_sum = calc_sum + (if k >= 148 and k < 156 { 32 } else { wysna_host_buffer_get(raw_buf, off + k) })
+        }
+        if stored_sum < 0 or stored_sum != calc_sum {
+            pkg_fail(subcmd, json_mode, "W5002", "invalid package archive checksum")
+        }
+        let size = pkg_parse_octal(raw_buf, off + 124, 12)
+        if size < 0 or size > 8388608 {
+            pkg_fail(subcmd, json_mode, "W5002", "package file exceeds 8 MiB")
+        }
+        total_payload = total_payload + size
+        if total_payload > 33554432 or len(entries) >= 4096 {
+            pkg_fail(subcmd, json_mode, "W5002", "package exceeds 32 MiB or 4096 files")
+        }
+        let name_part = pkg_decode_utf8_field(raw_buf, off, 100, subcmd, json_mode)
+        let pref_part = pkg_decode_utf8_field(raw_buf, off + 345, 155, subcmd, json_mode)
+        let full_name = if pref_part != "" { pref_part + "/" + name_part } else { name_part }
+        pkg_safe_path(full_name, subcmd, json_mode)
+        let data_off = off + 512
+        let padded = if (size % 512) == 0 { size } else { size + (512 - (size % 512)) }
+        if data_off + padded > total_len {
+            pkg_fail(subcmd, json_mode, "W5002", "truncated package content")
+        }
+        # Verify exact canonical USTAR v1 header + zero padding
+        let canon_hdr = pkg_make_ustar_header(full_name, size)
+        for k in 0..512 {
+            if wysna_host_buffer_get(raw_buf, off + k) != canon_hdr[k] {
+                pkg_fail(subcmd, json_mode, "W5002", "package archive is not canonical USTAR v1")
+            }
+        }
+        for k in size..padded {
+            if wysna_host_buffer_get(raw_buf, data_off + k) != 0 {
+                pkg_fail(subcmd, json_mode, "W5002", "package archive is not canonical USTAR v1")
+            }
+        }
+        if len(names) > 0 and tool_str_gt(names[len(names) - 1], full_name) {
+            pkg_fail(subcmd, json_mode, "W5002", "package archive is not canonical USTAR v1")
+        }
+        names.append(full_name)
+        entries.append(PkgEntry { path: full_name, offset: data_off, size: size })
+        off = data_off + padded
+    }
+    pkg_validate_inventory(names, subcmd, json_mode)
+    let eof_end = off + 1024
+    let expected_total = if (eof_end % 10240) == 0 { eof_end } else { eof_end + (10240 - (eof_end % 10240)) }
+    if total_len != expected_total {
+        pkg_fail(subcmd, json_mode, "W5002", "package archive is not canonical USTAR v1")
+    }
+    return entries
+}
+
+fn pkg_walk_dir_files(dir: str, rel: str, subcmd: str, json_mode: bool) -> list[str] {
+    let cur = if rel == "" { dir } else { dir + "/" + rel }
+    let p_buf = tool_buf_from_str(cur)
+    let out = wysna_host_buffer_new()
+    let sz = wysna_host_project_entries(p_buf, out)
+    wysna_host_close(p_buf)
+    if sz < 0 {
+        wysna_host_close(out)
+        pkg_fail(subcmd, json_mode, "W5005", "managed dependency differs from its pin; preserve it outside vendor before retrying")
+    }
+    let entries = if sz > 0 { lsp_buf_to_str(out, sz) } else { "" }
+    wysna_host_close(out)
+    let mut files: list[str] = []
+    let mut i = 0
+    while i < len(entries) {
+        let kind = entries[i]
+        i = i + 1
+        let start = i
+        while i < len(entries) and ord(entries[i]) != 0 { i = i + 1 }
+        let name = slice(entries, start, i)
+        i = i + 1
+        let child_rel = if rel == "" { name } else { rel + "/" + name }
+        if kind == "l" or kind == "o" {
+            pkg_fail(subcmd, json_mode, "W5005", "managed dependency differs from its pin; preserve it outside vendor before retrying")
+        } elif kind == "d" {
+            for nested in pkg_walk_dir_files(dir, child_rel, subcmd, json_mode) { files.append(nested) }
+        } elif kind == "f" {
+            files.append(child_rel)
+        }
+    }
+    return files
+}
+
+fn pkg_materialize(root: str, digest: str, raw_buf: opaque, entries: list[PkgEntry], subcmd: str, json_mode: bool) -> bool {
+    let vendor = root + "/vendor"
+    if pkg_entry_kind(root, "vendor") == "l" {
+        pkg_fail(subcmd, json_mode, "W5002", "package vendor directory must not be a symlink")
+    }
+    if not pkg_mkdir_p(vendor) {
+        pkg_fail(subcmd, json_mode, "W5004", "cannot create package vendor directory")
+    }
+    let dest = vendor + "/" + digest
+    let existing_kind = pkg_entry_kind(vendor, digest)
+    if existing_kind != "" {
+        if existing_kind != "d" {
+            pkg_fail(subcmd, json_mode, "W5005", "managed dependency destination is not a regular directory")
+        }
+        let actual = tool_sort_strings(pkg_walk_dir_files(dest, "", subcmd, json_mode))
+        if len(actual) != len(entries) {
+            pkg_fail(subcmd, json_mode, "W5005", "managed dependency differs from its pin; preserve it outside vendor before retrying")
+        }
+        for idx in 0..len(entries) {
+            if actual[idx] != entries[idx].path {
+                pkg_fail(subcmd, json_mode, "W5005", "managed dependency differs from its pin; preserve it outside vendor before retrying")
+            }
+            let disk_buf = pkg_read_file_buf(dest + "/" + actual[idx], 8388608, subcmd, json_mode, "W5005", "managed dependency differs from its pin; preserve it outside vendor before retrying")
+            let dsz = wysna_host_buffer_size(disk_buf)
+            let mut same = dsz == entries[idx].size
+            if same {
+                for b in 0..dsz {
+                    if wysna_host_buffer_get(disk_buf, b) != wysna_host_buffer_get(raw_buf, entries[idx].offset + b) {
+                        same = false
+                        break
+                    }
+                }
+            }
+            wysna_host_close(disk_buf)
+            if not same {
+                pkg_fail(subcmd, json_mode, "W5005", "managed dependency differs from its pin; preserve it outside vendor before retrying")
+            }
+        }
+        return false
+    }
+    let outer = vendor + "/.wysna-package-" + diag_uuid4()
+    let stage = outer + "/content"
+    if not pkg_mkdir_p(stage) {
+        pkg_fail(subcmd, json_mode, "W5004", "cannot create package staging directory")
+    }
+    for entry in entries {
+        let target = stage + "/" + entry.path
+        let parent = pkg_dirname(target)
+        if not pkg_mkdir_p(parent) {
+            pkg_remove_tree(outer)
+            pkg_fail(subcmd, json_mode, "W5004", "cannot create directory in staging")
+        }
+        let fbuf = wysna_host_buffer_new()
+        for k in 0..entry.size { wysna_host_buffer_append(fbuf, wysna_host_buffer_get(raw_buf, entry.offset + k)) }
+        let p_buf = tool_buf_from_str(target)
+        let fh = wysna_host_file_open(p_buf, 3)
+        wysna_host_close(p_buf)
+        if wysna_host_is_open(fh) != 1 {
+            wysna_host_close(fbuf)
+            pkg_remove_tree(outer)
+            pkg_fail(subcmd, json_mode, "W5004", "cannot write staged package file")
+        }
+        let wrote = wysna_host_file_write(fh, fbuf)
+        wysna_host_close(fh)
+        wysna_host_close(fbuf)
+        if wrote < 0 {
+            pkg_remove_tree(outer)
+            pkg_fail(subcmd, json_mode, "W5004", "failed writing staged package file")
+        }
+    }
+    let staged_m = proj_parse_manifest_at(stage + "/wysna.toml", [])
+    if not staged_m.ok {
+        pkg_remove_tree(outer)
+        pkg_fail(subcmd, json_mode, "W5002", "invalid package manifest: " + staged_m.err_msg)
+    }
+    if pkg_entry_kind(vendor, digest) != "" {
+        pkg_remove_tree(outer)
+        pkg_fail(subcmd, json_mode, "W5005", "managed dependency destination changed during acquisition")
+    }
+    let f1 = tool_buf_from_str(stage)
+    let f2 = tool_buf_from_str(dest)
+    let st = wysna_host_fs(f1, f2, 4)
+    wysna_host_close(f1)
+    wysna_host_close(f2)
+    pkg_remove_tree(outer)
+    if st != 0 {
+        pkg_fail(subcmd, json_mode, "W5004", "cannot publish materialized package directory")
+    }
+    return true
+}
+
+fn pkg_is_file(path: str) -> bool {
+    return proj_scaffold_fs(path, 6) == 1
+}
+
+fn pkg_acquire_archive(digest: str, archive_path: str, cache_arg: str, subcmd: str, json_mode: bool) -> opaque {
+    if not pkg_is_hex64(digest) {
+        pkg_fail(subcmd, json_mode, "W5002", "package --sha256 requires 64 lowercase hexadecimal digits")
+    }
+    let cache_dir = pkg_cache_dir(cache_arg)
+    let cached = cache_dir + "/" + digest + ".tar"
+    let source = if archive_path != "" { proj_abs_from_cwd(archive_path) } else { cached }
+    if not pkg_is_file(source) {
+        pkg_fail(subcmd, json_mode, "W5004", "pinned package is unavailable; supply --archive or populate --cache: " + source)
+    }
+    let raw_buf = pkg_read_file_buf(source, 41943040, subcmd, json_mode, "W5002", "package archive exceeds 40 MiB")
+    let actual_sha = pkg_buf_sha256_hex(raw_buf)
+    if actual_sha != digest {
+        wysna_host_close(raw_buf)
+        pkg_fail(subcmd, json_mode, "W5005", "package SHA-256 does not match the requested pin")
+    }
+    let _entries = pkg_inspect_archive(raw_buf, subcmd, json_mode)
+    if module_normalize(source) != module_normalize(cached) {
+        if proj_path_exists(cached) {
+            if not pkg_is_file(cached) {
+                wysna_host_close(raw_buf)
+                pkg_fail(subcmd, json_mode, "W5005", "package cache entry is corrupt; remove it before retrying")
+            }
+            let c_buf = pkg_read_file_buf(cached, 41943040, subcmd, json_mode, "W5005", "package cache entry is corrupt; remove it before retrying")
+            let c_sha = pkg_buf_sha256_hex(c_buf)
+            wysna_host_close(c_buf)
+            if c_sha != digest {
+                wysna_host_close(raw_buf)
+                pkg_fail(subcmd, json_mode, "W5005", "package cache entry is corrupt; remove it before retrying")
+            }
+        } else {
+            pkg_write_buf_atomic(cached, raw_buf, subcmd, json_mode)
+        }
+    }
+    return raw_buf
+}
+
+fn pkg_update_dependency(manifest_path: str, alias: str, relative: str, is_add: bool, expected_sha: str, subcmd: str, json_mode: bool) -> bool {
+    if not pkg_is_valid_alias(alias) {
+        pkg_fail(subcmd, json_mode, "W5002", "dependency alias requires lowercase letters, digits and hyphens")
+    }
+    let orig_buf = pkg_read_file_buf(manifest_path, 8388608, subcmd, json_mode, "W5002", "manifest exceeds 8 MiB")
+    let orig_sha = pkg_buf_sha256_hex(orig_buf)
+    wysna_host_close(orig_buf)
+    if expected_sha != "" and orig_sha != expected_sha {
+        pkg_fail(subcmd, json_mode, "W5005", "manifest precondition failed; read the current manifest before retrying")
+    }
+    let text = read_file(manifest_path) else err {
+        pkg_fail(subcmd, json_mode, "W5004", "cannot read manifest: " + err.message)
+        ""
+    }
+    let m = proj_parse_manifest_at(manifest_path, [])
+    if not m.ok { pkg_fail(subcmd, json_mode, m.err_code, m.err_msg) }
+    let mut existing_root = ""
+    for dep in m.deps {
+        if dep.alias == alias { existing_root = dep.abs_root }
+    }
+    let section = "[dependencies." + alias + "]"
+    let mut updated = ""
+    if is_add {
+        if existing_root != "" {
+            if module_normalize(existing_root) == module_normalize(m.root + "/" + relative) { return false }
+            pkg_fail(subcmd, json_mode, "W5005", "dependency alias already exists with another path")
+        }
+        let mut trimmed_end = len(text)
+        while trimmed_end > 0 and (text[trimmed_end - 1] == "\n" or text[trimmed_end - 1] == "\r" or text[trimmed_end - 1] == " " or text[trimmed_end - 1] == "\t") {
+            trimmed_end = trimmed_end - 1
+        }
+        updated = slice(text, 0, trimmed_end) + "\n\n" + section + "\npath = " + diag_json_quote(relative) + "\n"
+    } else {
+        if existing_root == "" { pkg_fail(subcmd, json_mode, "W5002", "unknown dependency alias: " + alias) }
+        let lines = schema_split_lines(text)
+        let mut starts: list[int] = []
+        for idx in 0..len(lines) {
+            if lsp_trim(proj_strip_toml_comment(lines[idx])) == section { starts.append(idx) }
+        }
+        if len(starts) != 1 {
+            pkg_fail(subcmd, json_mode, "W5002", "remove requires an explicit [dependencies.ALIAS] table; edit other TOML forms explicitly")
+        }
+        let start = starts[0]
+        let mut end_idx = len(lines)
+        for idx in (start + 1)..len(lines) {
+            let t = lsp_trim(lines[idx])
+            if len(t) > 0 and t[0] == "[" { end_idx = idx break }
+        }
+        let mut kept: list[str] = []
+        for idx in 0..start { kept.append(lines[idx]) }
+        for idx in end_idx..len(lines) { kept.append(lines[idx]) }
+        updated = join_strings(kept, "\n")
+        if len(updated) > 0 and updated[len(updated) - 1] != "\n" { updated = updated + "\n" }
+    }
+    let tmp = m.root + "/.wysna-manifest-" + diag_uuid4() + ".toml"
+    let ubuf = tool_buf_from_str(updated)
+    let tp = tool_buf_from_str(tmp)
+    let fh = wysna_host_file_open(tp, 3)
+    wysna_host_close(tp)
+    if wysna_host_is_open(fh) != 1 {
+        wysna_host_close(ubuf)
+        pkg_fail(subcmd, json_mode, "W5004", "cannot stage updated manifest")
+    }
+    let w_st = wysna_host_file_write(fh, ubuf)
+    wysna_host_close(fh)
+    wysna_host_close(ubuf)
+    if w_st < 0 { lsp_remove_file(tmp) pkg_fail(subcmd, json_mode, "W5004", "cannot write staged manifest") }
+    let check_m = proj_parse_manifest_at(tmp, [])
+    if not check_m.ok { lsp_remove_file(tmp) pkg_fail(subcmd, json_mode, check_m.err_code, check_m.err_msg) }
+    let now_buf = pkg_read_file_buf(manifest_path, 8388608, subcmd, json_mode, "W5004", "cannot re-read manifest")
+    let now_sha = pkg_buf_sha256_hex(now_buf)
+    wysna_host_close(now_buf)
+    if now_sha != orig_sha {
+        lsp_remove_file(tmp)
+        pkg_fail(subcmd, json_mode, "W5005", "manifest changed during dependency update")
+    }
+    let f1 = tool_buf_from_str(tmp)
+    let f2 = tool_buf_from_str(manifest_path)
+    let r_st = wysna_host_fs(f1, f2, 4)
+    wysna_host_close(f1)
+    wysna_host_close(f2)
+    if r_st != 0 { lsp_remove_file(tmp) pkg_fail(subcmd, json_mode, "W5004", "cannot replace manifest") }
+    return true
+}
+
+fn pkg_cmd_pack(args: list[str], json_mode: bool) -> unit {
+    let mut manifest_arg = ""
+    let mut output_arg = ""
+    let mut i = 2
+    while i < len(args) {
+        let a = args[i]
+        if a == "--output-format=json-v1" { i = i + 1 }
+        elif a == "--output-format" and i + 1 < len(args) { i = i + 2 }
+        elif a == "--manifest" and i + 1 < len(args) { manifest_arg = args[i + 1] i = i + 2 }
+        elif (a == "-o" or a == "--output") and i + 1 < len(args) { output_arg = args[i + 1] i = i + 2 }
+        else { pkg_fail("pack", json_mode, "W5002", "unknown option for packages pack: " + a) }
+    }
+    if output_arg == "" { pkg_fail("pack", json_mode, "W5002", "packages pack requires -o OUTPUT") }
+    let m = proj_load_manifest(manifest_arg)
+    if not m.ok { pkg_fail("pack", json_mode, m.err_code, m.err_msg) }
+    let state = new ProjectLockState("pack", json_mode, m.root)
+    let paths = tool_sort_strings(proj_lock_paths(state, m.root, "", false))
+    pkg_validate_inventory(paths, "pack", json_mode)
+    let out_buf = wysna_host_buffer_new()
+    let mut total_payload = 0
+    for rel in paths {
+        let full = m.root + "/" + rel
+        let expected_sha = proj_lock_host_text(state, full, "hash")
+        let fbuf = pkg_read_file_buf(full, 8388608, "pack", json_mode, "W5005", "package input changed or exceeds 8 MiB: " + rel)
+        let fsize = wysna_host_buffer_size(fbuf)
+        if pkg_buf_sha256_hex(fbuf) != expected_sha {
+            wysna_host_close(fbuf) wysna_host_close(out_buf)
+            pkg_fail("pack", json_mode, "W5005", "package input changed or exceeds 8 MiB: " + rel)
+        }
+        total_payload = total_payload + fsize
+        if total_payload > 33554432 {
+            wysna_host_close(fbuf) wysna_host_close(out_buf)
+            pkg_fail("pack", json_mode, "W5002", "package inputs exceed 32 MiB")
+        }
+        let hdr = pkg_make_ustar_header(rel, fsize)
+        for b in hdr { wysna_host_buffer_append(out_buf, b) }
+        for k in 0..fsize { wysna_host_buffer_append(out_buf, wysna_host_buffer_get(fbuf, k)) }
+        wysna_host_close(fbuf)
+        let pad = (512 - (fsize % 512)) % 512
+        for _p in 0..pad { wysna_host_buffer_append(out_buf, 0) }
+    }
+    for _z in 0..1024 { wysna_host_buffer_append(out_buf, 0) }
+    let cur_sz = wysna_host_buffer_size(out_buf)
+    let rem = (10240 - (cur_sz % 10240)) % 10240
+    for _r in 0..rem { wysna_host_buffer_append(out_buf, 0) }
+    let archive_sha = pkg_buf_sha256_hex(out_buf)
+    let archive_sz = wysna_host_buffer_size(out_buf)
+    let dest = proj_abs_from_cwd(output_arg)
+    pkg_write_buf_atomic(dest, out_buf, "pack", json_mode)
+    wysna_host_close(out_buf)
+    if json_mode {
+        let res = "{\"schema_version\":\"wysna.package-pack/1\",\"archive_sha256\":" + diag_json_quote(archive_sha) + ",\"path\":" + diag_json_quote(dest) + ",\"size_bytes\":" + str(archive_sz) + ",\"files\":" + str(len(paths)) + "}"
+        let art = "[{\"kind\":\"package_archive\",\"media_type\":\"application/x-tar\",\"path\":" + diag_json_quote(dest) + ",\"size_bytes\":" + str(archive_sz) + ",\"sha256\":" + diag_json_quote(archive_sha) + "}]"
+        diag_write_output(diag_tool_envelope_json("packages.pack", "ok", 0, "[]", "result", res, art))
+    } else {
+        print("[OK] Packed " + str(len(paths)) + " files -> " + dest + " (" + archive_sha + ")")
+    }
+    exit(0)
+}
+
+fn pkg_cmd_fetch(args: list[str], json_mode: bool) -> unit {
+    let mut digest = ""
+    let mut archive = ""
+    let mut cache_arg = ""
+    let mut manifest_arg = ""
+    let mut root_arg = ""
+    let mut i = 2
+    while i < len(args) {
+        let a = args[i]
+        if a == "--output-format=json-v1" { i = i + 1 }
+        elif a == "--output-format" and i + 1 < len(args) { i = i + 2 }
+        elif a == "--sha256" and i + 1 < len(args) { digest = args[i + 1] i = i + 2 }
+        elif a == "--archive" and i + 1 < len(args) { archive = args[i + 1] i = i + 2 }
+        elif a == "--cache" and i + 1 < len(args) { cache_arg = args[i + 1] i = i + 2 }
+        elif a == "--manifest" and i + 1 < len(args) { manifest_arg = args[i + 1] i = i + 2 }
+        elif a == "--root" and i + 1 < len(args) { root_arg = args[i + 1] i = i + 2 }
+        else { pkg_fail("fetch", json_mode, "W5002", "unknown option for packages fetch: " + a) }
+    }
+    if digest == "" { pkg_fail("fetch", json_mode, "W5002", "packages fetch requires --sha256 DIGEST") }
+    let mut root = ""
+    if root_arg != "" {
+        root = proj_abs_from_cwd(root_arg)
+    } else {
+        let m = proj_load_manifest(manifest_arg)
+        if not m.ok { pkg_fail("fetch", json_mode, m.err_code, m.err_msg) }
+        root = m.root
+    }
+    let raw_buf = pkg_acquire_archive(digest, archive, cache_arg, "fetch", json_mode)
+    let entries = pkg_inspect_archive(raw_buf, "fetch", json_mode)
+    let created = pkg_materialize(root, digest, raw_buf, entries, "fetch", json_mode)
+    wysna_host_close(raw_buf)
+    let cached = pkg_cache_dir(cache_arg) + "/" + digest + ".tar"
+    let dest = root + "/vendor/" + digest
+    if json_mode {
+        let res = "{\"schema_version\":\"wysna.package-fetch/1\",\"archive_sha256\":" + diag_json_quote(digest) + ",\"cache\":" + diag_json_quote(cached) + ",\"path\":" + diag_json_quote(dest) + ",\"created\":" + (if created { "true" } else { "false" }) + ",\"files\":" + str(len(entries)) + "}"
+        diag_write_output(diag_tool_envelope_json("packages.fetch", "ok", 0, "[]", "result", res, "[]"))
+    } else {
+        print("[OK] Fetched " + digest + " -> " + dest)
+    }
+    exit(0)
+}
+
+fn pkg_cmd_add_or_remove(args: list[str], is_add: bool, json_mode: bool) -> unit {
+    let sub = if is_add { "add" } else { "remove" }
+    let mut alias = ""
+    let mut digest = ""
+    let mut archive = ""
+    let mut cache_arg = ""
+    let mut rel_path = ""
+    let mut manifest_arg = ""
+    let mut expect_sha = ""
+    let mut i = 2
+    while i < len(args) {
+        let a = args[i]
+        if a == "--output-format=json-v1" { i = i + 1 }
+        elif a == "--output-format" and i + 1 < len(args) { i = i + 2 }
+        elif a == "--manifest" and i + 1 < len(args) { manifest_arg = args[i + 1] i = i + 2 }
+        elif a == "--expect-manifest-sha256" and i + 1 < len(args) { expect_sha = args[i + 1] i = i + 2 }
+        elif is_add and a == "--sha256" and i + 1 < len(args) { digest = args[i + 1] i = i + 2 }
+        elif is_add and a == "--archive" and i + 1 < len(args) { archive = args[i + 1] i = i + 2 }
+        elif is_add and a == "--cache" and i + 1 < len(args) { cache_arg = args[i + 1] i = i + 2 }
+        elif is_add and a == "--path" and i + 1 < len(args) { rel_path = args[i + 1] i = i + 2 }
+        elif len(a) > 0 and a[0] != "-" and alias == "" { alias = a i = i + 1 }
+        else { pkg_fail(sub, json_mode, "W5002", "unknown option for packages " + sub + ": " + a) }
+    }
+    if alias == "" { pkg_fail(sub, json_mode, "W5002", "packages " + sub + " requires ALIAS") }
+    let found = proj_find_manifest_path(manifest_arg)
+    if found[0] != "1" { pkg_fail(sub, json_mode, "W5002", found[1]) }
+    let manifest_path = found[1]
+    if is_add {
+        if expect_sha != "" {
+            let pre_buf = pkg_read_file_buf(manifest_path, 8388608, sub, json_mode, "W5002", "manifest exceeds 8 MiB")
+            let pre_sha = pkg_buf_sha256_hex(pre_buf)
+            wysna_host_close(pre_buf)
+            if pre_sha != expect_sha {
+                pkg_fail(sub, json_mode, "W5005", "manifest precondition failed; read the current manifest before retrying")
+            }
+        }
+        if digest != "" {
+            let m = proj_parse_manifest_at(manifest_path, [])
+            if not m.ok { pkg_fail(sub, json_mode, m.err_code, m.err_msg) }
+            let raw_buf = pkg_acquire_archive(digest, archive, cache_arg, sub, json_mode)
+            let entries = pkg_inspect_archive(raw_buf, sub, json_mode)
+            let _created = pkg_materialize(m.root, digest, raw_buf, entries, sub, json_mode)
+            wysna_host_close(raw_buf)
+            rel_path = "vendor/" + digest
+        }
+        if rel_path == "" { pkg_fail(sub, json_mode, "W5002", "packages add requires --sha256 DIGEST or --path RELATIVE") }
+    }
+    let changed = pkg_update_dependency(manifest_path, alias, rel_path, is_add, expect_sha, sub, json_mode)
+    if json_mode {
+        let res = "{\"schema_version\":\"wysna.package-" + sub + "/1\",\"alias\":" + diag_json_quote(alias) + ",\"changed\":" + (if changed { "true" } else { "false" }) + (if is_add { ",\"path\":" + diag_json_quote(rel_path) } else { "" }) + "}"
+        diag_write_output(diag_tool_envelope_json("packages." + sub, "ok", 0, "[]", "result", res, "[]"))
+    } else {
+        print("[OK] Updated dependencies in " + manifest_path + " (" + sub + " " + alias + ")")
+    }
+    exit(0)
+}
+
+fn pkg_cmd_restore(args: list[str], json_mode: bool) -> unit {
+    let mut manifest_arg = ""
+    let mut cache_arg = ""
+    let mut i = 2
+    while i < len(args) {
+        let a = args[i]
+        if a == "--output-format=json-v1" { i = i + 1 }
+        elif a == "--output-format" and i + 1 < len(args) { i = i + 2 }
+        elif a == "--manifest" and i + 1 < len(args) { manifest_arg = args[i + 1] i = i + 2 }
+        elif a == "--cache" and i + 1 < len(args) { cache_arg = args[i + 1] i = i + 2 }
+        else { pkg_fail("restore", json_mode, "W5002", "unknown option for packages restore: " + a) }
+    }
+    let found = proj_find_manifest_path(manifest_arg)
+    if found[0] != "1" { pkg_fail("restore", json_mode, "W5002", found[1]) }
+    let manifest_path = found[1]
+    let root = pkg_dirname(manifest_path)
+    let lock_path = root + "/wysna.lock"
+    if not proj_is_readable_file(lock_path) {
+        pkg_fail("restore", json_mode, "W5004", "lockfile not found: " + lock_path)
+    }
+    let lock_text = read_file(lock_path) else err {
+        pkg_fail("restore", json_mode, "W5004", "cannot read lockfile: " + err.message)
+        ""
+    }
+    let lock = lsp_parse_json(lock_text)
+    if lock.kind != "object" or lsp_json_int(lock, "lock_version", 0) != 1 {
+        pkg_fail("restore", json_mode, "W5005", "lock does not match the current manifest; update it explicitly")
+    }
+    let mbuf = pkg_read_file_buf(manifest_path, 8388608, "restore", json_mode, "W5004", "cannot read manifest")
+    let msha = pkg_buf_sha256_hex(mbuf)
+    wysna_host_close(mbuf)
+    let root_obj = lsp_json_get(lock, "root")
+    if lsp_json_str(root_obj, "manifest_sha256", "") != msha {
+        pkg_fail("restore", json_mode, "W5005", "lock does not match the current manifest; update it explicitly")
+    }
+    let deps_arr = lsp_json_get(lock, "dependencies")
+    let aliases_arr = lsp_json_get(lock, "aliases")
+    if deps_arr.kind != "array" or aliases_arr.kind != "array" {
+        pkg_fail("restore", json_mode, "W5002", "invalid lockfile for package restoration")
+    }
+    let mut restored_json: list[str] = []
+    for al in aliases_arr.items {
+        let pid = lsp_json_str(al, "package_id", "")
+        let mut found_dep = new LspJson("null")
+        for d in deps_arr.items {
+            if lsp_json_str(d, "package_id", "") == pid { found_dep = d break }
+        }
+        if found_dep.kind != "object" {
+            pkg_fail("restore", json_mode, "W5002", "invalid lockfile for package restoration")
+        }
+        let dpath = lsp_json_str(found_dep, "path", "")
+        if len(dpath) == 71 and slice(dpath, 0, 7) == "vendor/" and pkg_is_hex64(slice(dpath, 7, 71)) {
+            let digest = slice(dpath, 7, 71)
+            let raw_buf = pkg_acquire_archive(digest, "", cache_arg, "restore", json_mode)
+            let entries = pkg_inspect_archive(raw_buf, "restore", json_mode)
+            let inputs_arr = lsp_json_get(found_dep, "inputs")
+            if inputs_arr.kind != "array" or len(inputs_arr.items) != len(entries) {
+                wysna_host_close(raw_buf)
+                pkg_fail("restore", json_mode, "W5005", "package pin differs from locked input hashes")
+            }
+            for idx in 0..len(entries) {
+                let row = inputs_arr.items[idx]
+                let ep = lsp_json_str(row, "path", "")
+                let es = lsp_json_str(row, "sha256", "")
+                if ep != entries[idx].path or pkg_buf_slice_sha256_hex(raw_buf, entries[idx].offset, entries[idx].size) != es {
+                    wysna_host_close(raw_buf)
+                    pkg_fail("restore", json_mode, "W5005", "package pin differs from locked input hashes")
+                }
+            }
+            let created = pkg_materialize(root, digest, raw_buf, entries, "restore", json_mode)
+            wysna_host_close(raw_buf)
+            let cached = pkg_cache_dir(cache_arg) + "/" + digest + ".tar"
+            let dest = root + "/vendor/" + digest
+            restored_json.append("{\"archive_sha256\":" + diag_json_quote(digest) + ",\"path\":" + diag_json_quote(dest) + ",\"cache\":" + diag_json_quote(cached) + ",\"created\":" + (if created { "true" } else { "false" }) + "}")
+        } else {
+            let safe_rel = pkg_safe_path(dpath, "restore", json_mode)
+            if not proj_is_dir(root + "/" + safe_rel) {
+                pkg_fail("restore", json_mode, "W5002", "local dependency cannot be restored from the package cache: " + dpath)
+            }
+        }
+    }
+    let verified = proj_parse_manifest_at(manifest_path, [])
+    if not verified.ok { pkg_fail("restore", json_mode, verified.err_code, verified.err_msg) }
+    proj_verify_lock(verified, "restore", json_mode)
+    if json_mode {
+        let res = "{\"schema_version\":\"wysna.package-restore/1\",\"packages\":[" + join_strings(restored_json, ",") + "]}"
+        diag_write_output(diag_tool_envelope_json("packages.restore", "ok", 0, "[]", "result", res, "[]"))
+    } else {
+        print("[OK] Restored " + str(len(restored_json)) + " pinned package(s)")
+    }
+    exit(0)
+}
 
 fn tool_handle_packages(args: list[str], json_mode: bool) -> unit {
-    let msg = "wysna packages is owned exclusively by Selfhost and staged for PKG-A01; use wysna project lock for current local path dependencies"
-    if json_mode {
-        let diag = diag_record_json("W2013", "target", "error", msg, "<cli>", 1, 1, "")
-        diag_write_output(diag_tool_envelope_json("packages", "usage_error", 2, "[" + diag + "]", "", "", "[]"))
-    } else {
-        eprint("[W2013] " + msg)
+    if len(args) < 2 {
+        pkg_fail("", json_mode, "W5002", "Usage: wysna packages <pack|fetch|add|remove|restore> [options]")
     }
-    exit(2)
+    let sub = args[1]
+    if sub == "pack" { pkg_cmd_pack(args, json_mode) return }
+    if sub == "fetch" { pkg_cmd_fetch(args, json_mode) return }
+    if sub == "add" { pkg_cmd_add_or_remove(args, true, json_mode) return }
+    if sub == "remove" { pkg_cmd_add_or_remove(args, false, json_mode) return }
+    if sub == "restore" { pkg_cmd_restore(args, json_mode) return }
+    pkg_fail("", json_mode, "W5002", "unknown packages subcommand '" + sub + "'; expected pack, fetch, add, remove, or restore")
 }

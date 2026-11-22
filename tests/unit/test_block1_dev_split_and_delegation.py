@@ -56,8 +56,8 @@ def test_selfhost_bundle_is_in_sync():
 def test_per_unit_emission_is_bounded_and_selectively_cached(dev_sdk):
     emitter, _ = _find_or_build_emitter(rebuild=False)
     unit_limits = {
-        "mcp": (2500, 2048),      # max LOC, max emitted C KiB (vs ~18.8k LOC / ~12 MiB monolith)
-        "project": (3500, 3072),
+        "mcp": (2500, 2048),      # max LOC, max emitted C KiB (vs ~19.8k LOC / ~13 MiB monolith)
+        "project": (4200, 3072),
     }
     for unit, (max_lines, max_c_kb) in unit_limits.items():
         unit_cache = DEV_UNITS_DIR / unit
@@ -125,7 +125,7 @@ def test_packages_command_is_native_only(dev_sdk, tmp_path):
     assert res.returncode == 2, res.stderr + res.stdout
     payload = json.loads(res.stdout)
     assert payload["command"] == "packages"
-    assert payload["diagnostics"][0]["code"] == "W2013"
+    assert payload["diagnostics"][0]["code"] == "W5002"
     if spy:
         assert "packages" in log_path.read_text(encoding="utf-8")
 
