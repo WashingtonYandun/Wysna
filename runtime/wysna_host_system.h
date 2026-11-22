@@ -105,16 +105,27 @@ static inline int64_t wysna_host_getcwd(void* output_handle) {
 #endif
     WysnaHostEntry* output = wysna_host_find(output_handle, 1);
     if (!output) return -1;
-    char path[4096];
-#ifdef _WIN32
-    if (!_getcwd(path, (int)sizeof(path))) return -1;
-#else
-    if (!getcwd(path, sizeof(path))) return -1;
-#endif
-    size_t length = strlen(path);
     output->length = 0;
+#ifdef _WIN32
+    wchar_t wide[32768];
+    DWORD n = GetCurrentDirectoryW((DWORD)(sizeof(wide) / sizeof(wide[0])), wide);
+    if (n == 0 || n >= (DWORD)(sizeof(wide) / sizeof(wide[0]))) return -1;
+    int needed = WideCharToMultiByte(CP_UTF8, 0, wide, (int)n, NULL, 0, NULL, NULL);
+    if (needed <= 0) return -1;
+    char* utf8 = (char*)malloc((size_t)needed);
+    if (!utf8) return -1;
+    int converted = WideCharToMultiByte(CP_UTF8, 0, wide, (int)n, utf8, needed, NULL, NULL);
+    size_t written = (converted == needed) ? wysna_host_buffer_append_bytes(output, utf8, (size_t)needed) : 0;
+    free(utf8);
+    if (converted != needed || written != (size_t)needed) return -1;
+    return (int64_t)needed;
+#else
+    char path[4096];
+    if (!getcwd(path, sizeof(path))) return -1;
+    size_t length = strlen(path);
     if (wysna_host_buffer_append_bytes(output, path, length) != length) return -1;
     return (int64_t)length;
+#endif
 }
 
 /* Reads exact `count` bytes from stdin into `output_handle`.
