@@ -761,10 +761,10 @@ class TypeChecker:
     # The synthetic parameter name introduced by closure conversion. Captured
     # variables are immutable snapshots today, so a mutation attempt is rejected -- but
     # the diagnostic has to name the captured variable, not a compiler internal.
-    CLOSURE_ENVIRONMENT_PARAMETER = '__wysna_internal_environment'
+    CLOSURE_ENVIRONMENT_PARAMETERS = ('__wysna_environment', '__wysna_internal_environment')
 
     def _binding_error_name(self, symbol) -> str:
-        if symbol is not None and getattr(symbol, 'name', None) == self.CLOSURE_ENVIRONMENT_PARAMETER:
+        if symbol is not None and getattr(symbol, 'name', None) in self.CLOSURE_ENVIRONMENT_PARAMETERS:
             return "a captured variable"
         return symbol.name if symbol is not None else "a captured variable"
 
@@ -774,9 +774,9 @@ class TypeChecker:
         A captured variable is a snapshot in the closure environment, so the reason
         differs from a plain `let` binding and the message must say which one applies.
         """
-        if symbol is not None and getattr(symbol, 'name', None) == self.CLOSURE_ENVIRONMENT_PARAMETER:
+        if symbol is not None and getattr(symbol, 'name', None) in self.CLOSURE_ENVIRONMENT_PARAMETERS:
             return (f"Cannot {action} on a captured variable: closures capture values "
-                    f"as immutable snapshots")
+                    f"as immutable snapshots (use a `class` for shared mutable state or return the updated value)")
         return f"Cannot {action} on immutable binding '{self._binding_error_name(symbol)}'"
 
     def _find_value_root_symbol(self, expr: Expr) -> Optional[Symbol]:

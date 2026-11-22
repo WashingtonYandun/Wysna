@@ -132,6 +132,8 @@ In block functions and lambdas declared as `unit`—including named functions wi
 
 A lambda without a return annotation or expected function type infers its result from explicit returns and its reachable tail. These candidates must have compatible types; incompatible returns report `W2004`. Named functions still default to `unit` when their return type is omitted.
 
+**Closure Capture Semantics (v1.0 Final):** Lambdas capture outer lexical bindings strictly as **immutable snapshots** at creation time (copy-on-write value snapshots for value types; strong references for `class` instances). Mutating or calling mutating methods on a captured value binding is rejected at compile time with `[W3001]`. For shared mutable state across closure invocations, use a `class` instance or return the updated value.
+
 A bare `return` is one that is followed by `}`, `)`, `]`, `,`, `else`, `elif` or EOF.
 It is **not** decided by line breaks: `return` followed by an expression on the next
 line returns that expression, and the value may span lines.

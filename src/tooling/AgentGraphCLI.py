@@ -458,7 +458,7 @@ _SKILLS_TOPICS = {
         '- Optionals & Errors: `T?`, `T ! E`, unwrap `?`, recover `expr else err { fallback }`.\n'
         '- OOP & Contracts: `interface Drawable { fn draw() -> str }`, '
         '`class Rect implements Drawable { fn draw() -> str { ... } }`.\n'
-        '- Lambdas: `|n: int| => n * n` (capture outer variables by immutable snapshot).\n'
+        '- Lambdas: `|n: int| => n * n` (capture outer variables by immutable snapshot by design; use a `class` or return updated values for mutable state).\n'
         '- Ranges & Loops: `for i in 0..10 { ... }`, inclusive `0..=10`.'
     ),
     'graph': (

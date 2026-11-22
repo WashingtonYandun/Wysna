@@ -293,7 +293,7 @@ let str_val = identity[str]("WySofia")
 ```
 
 ### 5.4 Funciones Lambda, Closures y Funciones Asíncronas (`async` / `await`)
-Las funciones anónimas se declaran mediante `|params| => expr`, y las corrutinas cooperativas sin pila usan los modificadores contextuales `async fn` y `await`:
+Las funciones anónimas se declaran mediante `|params| => expr`, y las corrutinas cooperativas sin pila usan los modificadores contextuales `async fn` y `await`. Por diseño final (v1.0), los *closures* capturan variables externas como **instantáneas inmutables** (*immutable snapshots*): mutar una variable de valor capturada produce `[W3001]`; para estado mutable compartido entre llamadas, utiliza una `class` (tipo referencia) o retorna el valor actualizado:
 
 ```wysna
 let square = |n: int| => n * n

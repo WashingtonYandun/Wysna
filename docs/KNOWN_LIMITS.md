@@ -52,14 +52,15 @@ fn make_counter() -> fn() -> int {
 }
 ```
 
-**What a fix requires.** Real sharing needs one allocation per captured mutable
-variable that both the enclosing frame and the closure read and write through. That
-means the checker must decide which locals become cells (any local captured by a lambda
-and mutated anywhere), the interpreter, the HIR and Wysna Compiler must all agree on the
-representation, and the ARC/CoW interaction has to be re-verified with the sanitizers.
-This is a language change, not a patch.
+**Design decision (final for v1.0).** Immutable snapshot capture is the intentional,
+permanent semantics of Wysna closures. Keeping closures free of shared mutable cell
+aliasing preserves Wysna's Copy-on-Write value semantics (SPEC §8) and deterministic
+single-threaded ARC without hidden heap indirections. When shared mutable state is
+explicitly needed across calls, declare a `class` (reference type) or return the updated
+value; attempting to mutate a captured value binding produces `[W3001]` with an
+actionable hint.
 
-*Open decision.*
+*Closed design decision (v1.0 — Option 2A).*
 
 ---
 

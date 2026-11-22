@@ -47,6 +47,14 @@ def suggest_mutable(error, sym, file: str):
     if sym is None:
         return error
     sym_name = getattr(sym, "name", "")
+    if sym_name in ("__wysna_environment", "__wysna_internal_environment"):
+        error.with_data(kind="captured_snapshot_mutation")
+        if not error.help:
+            error.help = (
+                "Closures capture values as immutable snapshots by design. "
+                "Use a 'class' (reference type) for shared mutable state, or return the updated value from the closure."
+            )
+        return error
     if not sym_name or sym_name.startswith("__wysna_"):
         return error
     decl_file = getattr(sym, "file", None) or file

@@ -554,7 +554,7 @@ fn sem_mutable_at(context: SemanticContext, root: str, location: Token) {
     if len(root) >= 5 and slice(root, 0, 5) == "this:" { return }
     if root != "" {
         let variable = sem_lookup(context, root)
-        if variable >= 0 and context.capture_depth >= 0 and context.variables[variable].depth < context.capture_depth { report_error_at("W3001", location, "captured snapshots are immutable") }
+        if variable >= 0 and context.capture_depth >= 0 and context.variables[variable].depth < context.capture_depth { report_error_at("W3001", location, "captured snapshots are immutable (use a `class` for shared mutable state or return the updated value)") }
         if variable < 0 or not context.variables[variable].mutable { report_error_at("W3001", location, "mutation of immutable binding") }
     }
 }
