@@ -2039,7 +2039,7 @@ fn tool_handle_capabilities(args: list[str], json_mode: bool) -> unit {
         diag_write_output(diag_tool_envelope_json("capabilities", "ok", 0, "[]", "result", payload, "[]"))
     } else {
         print("Wysna 0.8.0 capabilities: native-cli, wasi-command, browser-library")
-        print("Machine-readable tools: check, fmt, project.new, project.lock, project.check, api, capabilities, explain, graph, inspect, patch, skills, fix, schema, mcp, lsp")
+        print("Machine-readable tools: check, fmt, project.new, project.lock, project.check, project.test, packages.pack, packages.fetch, packages.add, packages.remove, packages.restore, api, capabilities, explain, graph, inspect, patch, skills, fix, schema, mcp, lsp")
     }
     exit(0)
 }

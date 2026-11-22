@@ -374,6 +374,12 @@ def validate(sdk, report, strict_source=False, compiler_source=None, application
         sk_env = json.loads(sk_res.stdout.decode('utf-8'))
         require(sk_env.get('status') == 'ok' and sk_env.get('result', {}).get('schema_version') == 'wysna.skills/1', sk_env)
 
+        discovered = run('agent-package-discovery', ['capabilities', '--output-format=json-v1'])
+        catalog = json.loads(discovered.stdout)['result']
+        package_commands = {'packages.pack', 'packages.fetch', 'packages.add', 'packages.remove', 'packages.restore'}
+        require(package_commands <= set(catalog['commands'])
+                and package_commands <= set(catalog['machine_output']['commands']), catalog)
+
         sch_res = run('agent-schema-json-v1', ['schema', '--output-format=json-v1', source])
         sch_env = json.loads(sch_res.stdout.decode('utf-8'))
         require(sch_env.get('status') == 'ok' and sch_env.get('result', {}).get('schema_version') == 'wysna.schema/1', sch_env)

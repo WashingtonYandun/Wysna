@@ -67,6 +67,22 @@ def _lsp_read_messages(raw: bytes) -> list[dict]:
 # ---- Block 3B: W6001 & W6002 Lints in Native SDK check + LSP ----
 
 
+def test_native_discovery_advertises_packages_and_closed_language_contracts(native_driver, tmp_path):
+    result = _run_native(native_driver, tmp_path, 'capabilities', '--output-format=json-v1')
+    assert result.returncode == 0, result.stderr
+    payload = json.loads(result.stdout)['result']
+    commands = {'packages.pack', 'packages.fetch', 'packages.add', 'packages.remove', 'packages.restore'}
+    assert commands <= set(payload['commands'])
+    assert commands <= set(payload['machine_output']['commands'])
+    syntax = _run_native(native_driver, tmp_path, 'skills', 'syntax', '--output-format=json-v1')
+    assert syntax.returncode == 0, syntax.stderr
+    content = json.loads(syntax.stdout)['result']['content']
+    assert '@must_use' in content and '@deprecated' in content and 'W6003' in content
+    workflow = _run_native(native_driver, tmp_path, 'skills', 'project-tests', '--output-format=json-v1')
+    assert workflow.returncode == 0, workflow.stderr
+    assert 'packages restore' in json.loads(workflow.stdout)['result']['content']
+
+
 def test_native_check_reports_w6001_discarded_expression_json_and_text(native_driver, tmp_path):
     src = tmp_path / "asi.wysna"
     src.write_text(
