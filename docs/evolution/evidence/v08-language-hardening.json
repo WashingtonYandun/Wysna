@@ -1,0 +1,48 @@
+{
+  "schema": "wysna.language-hardening/1",
+  "phase": "local_validation_before_integration",
+  "base_commit": "ab8480a15fbe0b06f25b917eb3165ce32a02cdf0",
+  "host_symbols": 49,
+  "modeled_host_symbols": 49,
+  "missing_host_effects": [],
+  "effect_model_sha256": "7048a66bd8d866dd183c751c65208fc6d765e02f9573f4773b10a8f48e304441",
+  "fixture_sha256": {
+    "tests/fixtures/language_combinations/async_errors.wysna": "fa0fba5798a6f26b9d59e62ff5850bf0a40eea1f2d447e7ff2519f93d75983a4",
+    "tests/fixtures/language_combinations/borrowed_paths.wysna": "8775bc04f3b79e1552389b08de97eda530d85deb71d71ea14c6af4de5cfc01f1",
+    "tests/fixtures/language_combinations/generic_methods.wysna": "99866c664635edc27a3f595a03cd1f0347300ef54038feee3a05f92efa3c1b49",
+    "tests/fixtures/language_combinations/reexports/errors.wysna": "c68c807c1b565b8bce28f81444082d4ccce659e1f5e43110c1391fa1e4d99ec2",
+    "tests/fixtures/language_combinations/reexports/facade.wysna": "1c9bde6304bd9e46702d941f0bbb33b840d20126a85cbd1a2222d7501fde6f0c",
+    "tests/fixtures/language_combinations/reexports/main.wysna": "19fae4b9a2829d03b728378077d520ef488f6dcebc7ae8f72286c231ea6f047e"
+  },
+  "targeted_tests": {
+    "passed": 60,
+    "subtests_passed": 4,
+    "seconds": 24.82
+  },
+  "local_installed_sdk": {
+    "checks_passed": 78,
+    "source_commit": "5919e729d72c30e7c83aa24a190990f36243d5b9",
+    "archive_sha256": "21c94adf23b174e66c57b75de99082e342c7c355e0e7deafa7caa321e62c2d8f",
+    "compiler_source_matches_candidate": true,
+    "provenance_note": "The local SDK is the PR 171 CI artifact; final publication requires new main artifacts.",
+    "language_checks": [
+      {
+        "name": "reexported-generic-errors",
+        "status": 0
+      },
+      {
+        "name": "generic-method-errors",
+        "status": 0
+      },
+      {
+        "name": "async-generic-errors",
+        "status": 0
+      },
+      {
+        "name": "borrowed-host-paths",
+        "status": 0
+      }
+    ]
+  },
+  "real_model_measurement": false
+}

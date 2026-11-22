@@ -1,0 +1,21 @@
+struct Failure[T] { detail: T }
+class Factory[T] {
+    public value: T
+    fn init(value: T) { this.value = value }
+    public fn reject[E](payload: E) -> T ! Failure[E] | str {
+        Err(Failure[E] { detail: payload })
+    }
+}
+fn main() -> unit {
+    let factory = new Factory[int](0)
+    let number = factory.reject(42) else issue {
+        match issue { Failure[int](error) => error.detail, str(_) => -1 }
+    }
+    let text = factory.reject("message") else issue {
+        match issue { Failure[str](error) => len(error.detail), str(_) => -1 }
+    }
+    let items = factory.reject(["first", "second"]) else issue {
+        match issue { Failure[list[str]](error) => len(error.detail), str(_) => -1 }
+    }
+    print("METHOD", number, text, items)
+}

@@ -34,4 +34,4 @@ Reportes reproducibles: [SDK instalado](evidence/offline-native-install-report.j
 
 ## Integración
 
-PR #169 permanece en draft con CI exitoso. PR #170 apunta a main para que su CI se ejecute aunque #169 no se integre todavía. No hay comentarios de revisión pendientes en las consultas realizadas. La revisión automática bloqueó el intento de merge por la instrucción previa de mantener los PRs en draft; el cierre del código puede completarse y validarse, pero la integración requiere aprobación explícita nueva.
+Los PRs #169 y #170 se integraron en main el 2026-11-21 tras la aprobación explícita del mantenedor, con 39/39 checks correctos en cada uno. El rechazo automático anterior correspondía a una restricción de mantenerlos en draft que el mantenedor sustituyó después. Junto con #171, main/develop quedaron en `ab8480a`. Ese estado de integración no constituye una nueva medición con modelos.

@@ -86,6 +86,9 @@ def test_ci_workflow_contracts():
     assert 'actions/checkout' not in sdk_consumer
     assert 'needs: llvm-sdk-build' in sdk_consumer and 'validate_llvm_sdk.py' in sdk_consumer
     native_build, native_consumer = jobs['native-sdk-build'], jobs['installed-native-sdk']
+    assert 'cp -R tests/fixtures/language_combinations dist/native/language_combinations' in native_build
+    assert 'dist/native/language_combinations/' in native_build
+    assert '--language-fixtures native-artifact/language_combinations' in native_consumer
     for job in (native_build, native_consumer):
         assert 'os: [ubuntu-latest, macos-latest, windows-latest]' in job
         assert 'fail-fast: false' in job

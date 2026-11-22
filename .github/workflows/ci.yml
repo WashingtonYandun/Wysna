@@ -75,7 +75,12 @@ jobs:
       - name: Install test runner
         run: python -m pip install pytest==8.4.2
       - name: Verify native compiler diagnostics
-        run: python -m pytest -q tests/unit/test_selfhost_diagnostics.py tests/unit/test_native_generic_error_unions.py
+        run: >-
+          python -m pytest -q
+          tests/unit/test_selfhost_diagnostics.py
+          tests/unit/test_native_generic_error_unions.py
+          tests/unit/test_host_contracts.py
+          tests/unit/test_language_combinations.py
 
   llvm-smoke:
     name: LLVM backend smoke (${{ matrix.os }})
@@ -781,6 +786,7 @@ jobs:
         run: |
           mkdir -p dist/native
           python tools/package_native.py --output dist/native/wysna-native --archive --source-commit "$GITHUB_SHA" > dist/native/package-report.json
+          cp -R tests/fixtures/language_combinations dist/native/language_combinations
           cp tools/validate_native_sdk.py dist/native/validate_native_sdk.py
           cp selfhost/compiler.wysna dist/native/compiler.wysna
           cp -R examples/wysofia-ops dist/native/wysofia-ops
@@ -793,6 +799,7 @@ jobs:
             dist/native/validate_native_sdk.py
             dist/native/compiler.wysna
             dist/native/wysofia-ops/
+            dist/native/language_combinations/
             dist/native/package-report.json
           if-no-files-found: error
       - name: Preserve native bootstrap diagnostics
@@ -832,7 +839,7 @@ jobs:
         shell: bash
         run: |
           archive="$(cat native-archive.txt)"
-          python native-artifact/validate_native_sdk.py --sdk installed/wysna-native --archive "$archive" --application native-artifact/wysofia-ops --strict-source --compiler-source native-artifact/compiler.wysna --report native-install-report.json
+          python native-artifact/validate_native_sdk.py --sdk installed/wysna-native --archive "$archive" --application native-artifact/wysofia-ops --language-fixtures native-artifact/language_combinations --strict-source --compiler-source native-artifact/compiler.wysna --report native-install-report.json
       - uses: actions/upload-artifact@v4
         if: always()
         with:

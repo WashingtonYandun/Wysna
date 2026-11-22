@@ -146,6 +146,8 @@ Cada fila utiliza estrictamente una de las cinco categorías permitidas para **R
 
 ### `SIMP-05` · Conservar los oráculos de ejecución (Intérprete y `AST → C99`) pero unificar el registro de contratos `HostAbi`
 
+El cierre de v0.8.0 refuerza la comprobación inicial del subconjunto stdlib: exige igualdad entre los 49 bindings host y sus efectos, verifica aridades Python/C e incorpora pruebas de préstamo/cierre de buffers en los cuatro motores y en el SDK instalado. Ver [HOST_ABI_CONTRACTS.md](../HOST_ABI_CONTRACTS.md). Los oráculos mantienen implementaciones independientes y las declaraciones FFI de usuario siguen sin recibir confianza por nombre.
+
 - **Prioridad:** P2
 - **Decisión:** KEEP
 - **Evidencia:** [runtime/Interpreter.py](file:///Users/washingtonyandun/Documents/ChatGPT/w_lang_compiler/runtime/Interpreter.py), [runtime/HostAbi.py](file:///Users/washingtonyandun/Documents/ChatGPT/w_lang_compiler/runtime/HostAbi.py), [runtime/wysna_host.h](file:///Users/washingtonyandun/Documents/ChatGPT/w_lang_compiler/runtime/wysna_host.h), [src/codegen/CCodeGen.py](file:///Users/washingtonyandun/Documents/ChatGPT/w_lang_compiler/src/codegen/CCodeGen.py), [src/compiler/EffectModel.py:66-100](file:///Users/washingtonyandun/Documents/ChatGPT/w_lang_compiler/src/compiler/EffectModel.py#L66-L100). Nivel: **verificado**.

@@ -2,12 +2,14 @@
 
 Revisión del 2026-11-21 sobre main `fcdd1af`. Los PRs del evaluador se conservan separados. Este trabajo no usa modelos ni servicios externos de IA.
 
+Actualización del mismo día: `LANG-07` está integrado mediante PR #171 en `ab8480a`, junto con los PRs #169/#170. Cada PR pasó 39/39 checks. El endurecimiento descrito abajo completa los tres contratos host pendientes y las combinaciones de tipos antes de publicar v0.8.0; su integración y publicación requieren la CI del commit final.
+
 ## Decisión inmediata: cerrar la paridad de errores genéricos
 
 `LANG-01` a `LANG-06` ya están marcados como implementados en el backlog original. Repetir sus propuestas como si estuvieran pendientes sería incorrecto. Al contrastar `KNOWN_LIMITS.md`, el compilador nativo y la regresión existente de errores genéricos apareció una brecha real:
 
 - Seed acepta una función que devuelve `int ! BoxErr[int] | GenErr[str]` y permite recuperar cada payload con `match`.
-- El SDK nativo de main rechaza la misma función con `W2001: generic nominal types cannot be error union alternatives`.
+- El SDK nativo de la línea base `fcdd1af` rechaza la misma función con `W2001: generic nominal types cannot be error union alternatives`.
 - La prueba existente omitía Selfhost en ese caso, de modo que no cubría la discrepancia.
 
 Se implementa `LANG-07`: aceptar los nominales genéricos concretos en uniones de error, resolver sus argumentos en patrones y conservar identidades distintas para `Failure[int]` y `Failure[str]`. También se normaliza la unión después de sustituir parámetros. Si `Failure[T] | Failure[int]` se especializa con `T=int`, el resultado se rechaza con `W2001`, en lugar de llegar a MIR y terminar con `W9999`.
@@ -24,15 +26,14 @@ Un módulo puede publicar errores reutilizables `Failure[T]`, propagarlos con `?
 - Validar imports entre módulos, balance de memoria, ASan/UBSan en POSIX y bootstrap de tres etapas con punto fijo.
 - Incorporar las pruebas específicas al gate nativo de CI en Windows, macOS y Linux.
 
-## Orden de trabajo posterior
+## Cierre verificable para v0.8.0
 
-| Orden | Trabajo concreto | Motivo | Criterio de salida |
-| --- | --- | --- | --- |
-| 1 | Integrar `LANG-07` tras revisar su evidencia y CI | Es una diferencia de semántica reproducida entre implementaciones | Positivos y negativos coinciden en diagnósticos y salida; no hay fallos de memoria |
-| 2 | Resolver las entradas host ausentes y llevar efectos/ownership FFI a un catálogo verificable (`SIMP-R01`) | El código vigente sigue sin registrar `wysna_host_active_bytes`, `wysna_host_active_handles` y `wysna_host_fs_canonical` en `HOST_EFFECTS` | Cobertura de todos los símbolos host, firmas ABI coherentes y política `--allow/--deny` que conserve efectos reales; PR separado |
-| 3 | Ampliar la matriz de combinaciones de tipos, módulos y canales con programas de aplicaciones | La paridad de un conjunto de fixtures no demuestra que todas las combinaciones sean equivalentes | Cada divergencia nueva lleva repro mínimo, diagnóstico esperado y regresión de runtime cuando corresponda |
+1. **LANG-07 integrado:** errores genéricos concretos, identidad por especialización y normalización tras sustitución, con CI 39/39 y punto fijo de bootstrap.
+2. **SIMP-05, catálogo host:** se incorporan `wysna_host_active_bytes`, `wysna_host_active_handles` y `wysna_host_fs_canonical`. El gate exige igualdad entre los 49 símbolos ABI y sus 49 entradas de efectos y compara las aridades Python/C. Se verifican los efectos de filesystem, el préstamo de buffers, su cierre y la conservación del rechazo a FFI de usuario no certificada. El contrato y sus límites están en [HOST_ABI_CONTRACTS.md](../HOST_ABI_CONTRACTS.md). La mención anterior a `SIMP-R01` era incorrecta: esa hipótesis corresponde a compartir herramientas Agent-First, no a estos contratos.
+3. **Combinaciones del lenguaje:** reexportación de errores nominales genéricos entre módulos, métodos genéricos sobre clases parametrizadas y propagación mediante `await`/`?`. Los positivos se ejecutan en los cuatro motores; los negativos comparan `W2001`, `W2003` y `W2006` entre Seed y Selfhost. Se conservan los checks de memoria y ASan/UBSan en POSIX.
+4. **SDK y publicación:** los cuatro programas de aceptación (incluidos los buffers host) se copian al consumidor instalado y se ejecutan con PATH aislado. La publicación rechaza un paquete cuyo reporte no contiene esas comprobaciones. Se etiqueta v0.8.0 únicamente después de aprobar la CI del commit exacto de main; los archivos publicados deben coincidir con los hashes de los artefactos aceptados.
 
-El segundo bloque requiere revisar los efectos reales de cada función antes de asignarlos; no se resolverá declarando puros todos los externs. El tercero se ejecuta sobre capacidades existentes y no autoriza nueva gramática por defecto.
+No se añade gramática. El cierre de estos casos no demuestra paridad universal; cada nueva divergencia necesita su propio repro y regresión.
 
 ## Decisiones de arquitectura
 
@@ -41,4 +42,4 @@ El segundo bloque requiere revisar los efectos reales de cada función antes de 
 - No convertir el resultado del microbenchmark de `PERF-R02` en una migración global de structs: sus números pertenecen a un caso especializado en C. Reabrir esa implementación después de medir una carga Wysna representativa, con al menos 20% de mejora y paridad de igualdad, formato y ownership.
 - No usar la ausencia de acceso a modelos como bloqueo para corregir semántica, inferencia y paridad del compilador.
 
-La evidencia del cambio de tipos se conserva en [LANG-07](evidence/lang07-generic-error-unions.json) y en las pruebas de `tests/unit/test_native_generic_error_unions.py`. La integración permanece sujeta a aprobación explícita; no se modifica main ni develop desde esta rama.
+La evidencia inicial del cambio de tipos se conserva en [LANG-07](evidence/lang07-generic-error-unions.json). Los gates posteriores están en `tests/unit/test_host_contracts.py`, `tests/unit/test_language_combinations.py` y `tools/validate_native_sdk.py`. El mantenedor autorizó integrar el cierre y publicar v0.8.0 tras su validación; las campañas de IA siguen aplazadas.

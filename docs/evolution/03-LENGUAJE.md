@@ -251,7 +251,7 @@ Antes de proponer cambios, se evalúan los nueve ejes solicitados desde la persp
 - **Prueba de aceptación:** mismo resultado en intérprete, AST C99, Seed MIR C99 y Selfhost; regresión previa también verificada con LLVM. Rechazar handlers no exhaustivos (`W2003`), alternativas ajenas (`W2001`) y propagación incompatible (`W2006`). Comprobar payloads gestionados con ASan/UBSan en POSIX y memoria balanceada en los motores nativos.
 - **Fuentes:** `selfhost/src/08_semantics.wysna`, bundle regenerado y `tests/unit/test_native_generic_error_unions.py`.
 - **Compatibilidad:** no añade sintaxis ni cambia la ABI; amplía el perfil nativo para una construcción ya soportada en Seed.
-- **Estado:** implementado en rama candidata; sujeto a revisión e integración.
+- **Estado:** integrado mediante PR #171 en `ab8480a`, con CI 39/39. El cierre de v0.8.0 amplía sus combinaciones con reexportaciones, métodos genéricos y funciones async; ver el siguiente ciclo.
 
 ---
 

@@ -1,0 +1,27 @@
+extern "C" fn wysna_host_buffer_new() -> opaque
+extern "C" fn wysna_host_buffer_append(buffer: opaque, value: int) -> int
+extern "C" fn wysna_host_buffer_size(buffer: opaque) -> int
+extern "C" fn wysna_host_close(handle: opaque) -> int
+extern "C" fn wysna_host_active_handles() -> int
+extern "C" fn wysna_host_active_bytes() -> int
+extern "C" fn wysna_host_fs_canonical(path: opaque, output: opaque) -> int
+
+fn main() -> unit {
+    let baseline = wysna_host_active_handles()
+    let baseline_bytes = wysna_host_active_bytes()
+    for iteration in 0..10 {
+        let path = wysna_host_buffer_new()
+        let output = wysna_host_buffer_new()
+        wysna_host_buffer_append(path, 46)
+        if wysna_host_fs_canonical(path, output) <= 0 { exit(91) }
+        if wysna_host_buffer_size(path) != 1 { exit(92) }
+        if wysna_host_active_handles() != baseline + 2 { exit(93) }
+        if wysna_host_fs_canonical(path, output) != -1 { exit(94) }
+        if wysna_host_active_handles() != baseline + 2 { exit(95) }
+        wysna_host_close(output)
+        wysna_host_close(path)
+        if wysna_host_active_handles() != baseline { exit(96) }
+        if wysna_host_active_bytes() != baseline_bytes { exit(97) }
+    }
+    print("borrowed paths released")
+}
