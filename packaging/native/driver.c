@@ -39,8 +39,9 @@
 typedef struct {
     const char *command, *source, *output, *profile;
     const char *project_subcmd, *project_src_root, *unsupported_target;
+    const char *allow_caps, *deny_caps;
     int arguments, include_count, link_count, library_count, library_dir_count, dep_count;
-    int profile_set, timeout_set, project_json_v1, test_diagnostics;
+    int profile_set, timeout_set, project_json_v1, test_diagnostics, sandbox, json_v1;
     const char *includes[SDK_LINK_LIMIT], *links[SDK_LINK_LIMIT], *libraries[SDK_LINK_LIMIT], *library_dirs[SDK_LINK_LIMIT];
     const char *dep_aliases[SDK_LINK_LIMIT], *dep_roots[SDK_LINK_LIMIT];
     int64_t timeout, test_deadline;
@@ -160,7 +161,24 @@ static int sdk_parse(SdkOptions* options, int argc, char** argv) {
                 index++;
                 continue;
             }
-            if (strcmp(value, "--profile") == 0) {
+            if (strcmp(value, "--sandbox") == 0) { options->sandbox = 1; continue; }
+            if (strncmp(value, "--allow=", 8) == 0) {
+                if (options->allow_caps) return 0;
+                options->allow_caps = value + 8;
+                continue;
+            }
+            if (strncmp(value, "--deny=", 7) == 0) {
+                if (options->deny_caps) return 0;
+                options->deny_caps = value + 7;
+                continue;
+            }
+            if (strcmp(value, "--allow") == 0) {
+                if (++index >= argc || options->allow_caps) return 0;
+                options->allow_caps = argv[index];
+            } else if (strcmp(value, "--deny") == 0) {
+                if (++index >= argc || options->deny_caps) return 0;
+                options->deny_caps = argv[index];
+            } else if (strcmp(value, "--profile") == 0) {
                 if (++index >= argc || options->profile_set++) return 0;
                 options->profile = argv[index];
             } else if (strcmp(value, "--timeout-ms") == 0) {
@@ -183,6 +201,10 @@ static int sdk_parse(SdkOptions* options, int argc, char** argv) {
         }
         if (strcmp(options->profile, "dev") && strcmp(options->profile, "release") && strcmp(options->profile, "size")) return 0;
         if (options->timeout_set && strcmp(options->project_subcmd, "build") == 0) return 0;
+        if (options->allow_caps && options->deny_caps) return 0;
+        if ((options->sandbox || options->allow_caps || options->deny_caps) &&
+            (strcmp(options->project_subcmd, "test") == 0 ||
+             options->include_count || options->link_count || options->library_count || options->library_dir_count)) return 0;
         return 1;
     }
     if (argc < 3 || argc > SDK_ARGUMENT_LIMIT) return 0;
@@ -201,7 +223,21 @@ static int sdk_parse(SdkOptions* options, int argc, char** argv) {
         if (value[0] != '-') { if (options->source) return 0; options->source = value; continue; }
         if (strcmp(value, "--output-format=json-v1") == 0 &&
             (strcmp(options->command, "check") == 0 || strcmp(options->command, "fmt") == 0 ||
-             strcmp(options->command, "build") == 0 || strcmp(options->command, "emit-c") == 0)) continue;
+             strcmp(options->command, "build") == 0 || strcmp(options->command, "emit-c") == 0)) {
+            options->json_v1 = 1;
+            continue;
+        }
+        if (strcmp(value, "--sandbox") == 0) { options->sandbox = 1; continue; }
+        if (strncmp(value, "--allow=", 8) == 0) {
+            if (options->allow_caps) return 0;
+            options->allow_caps = value + 8;
+            continue;
+        }
+        if (strncmp(value, "--deny=", 7) == 0) {
+            if (options->deny_caps) return 0;
+            options->deny_caps = value + 7;
+            continue;
+        }
         if (strncmp(value, "--target=", 9) == 0) {
             const char* target = value + 9;
             if (sdk_is_wasm_target(target)) { options->unsupported_target = target; return 1; }
@@ -212,6 +248,8 @@ static int sdk_parse(SdkOptions* options, int argc, char** argv) {
         if (++index == argc) return 0;
         const char* argument = argv[index];
         if (strcmp(value, "-o") == 0) { if (options->output) return 0; options->output = argument; }
+        else if (strcmp(value, "--allow") == 0) { if (options->allow_caps) return 0; options->allow_caps = argument; }
+        else if (strcmp(value, "--deny") == 0) { if (options->deny_caps) return 0; options->deny_caps = argument; }
         else if (strcmp(value, "--target") == 0) {
             if (sdk_is_wasm_target(argument)) { options->unsupported_target = argument; return 1; }
             if (strcmp(argument, "native") != 0 && strcmp(argument, "native-cli") != 0) return 0;
@@ -220,6 +258,7 @@ static int sdk_parse(SdkOptions* options, int argc, char** argv) {
                  (strcmp(options->command, "check") == 0 || strcmp(options->command, "fmt") == 0 ||
                   strcmp(options->command, "build") == 0 || strcmp(options->command, "emit-c") == 0)) {
             if (strcmp(argument, "json-v1") != 0) return 0;
+            options->json_v1 = 1;
         }
         else if (strcmp(value, "--profile") == 0) { if (options->profile_set++) return 0; options->profile = argument; }
         else if (strcmp(value, "--timeout-ms") == 0) {
@@ -235,7 +274,13 @@ static int sdk_parse(SdkOptions* options, int argc, char** argv) {
     if (!options->source) return 0;
     if (strcmp(options->profile, "dev") && strcmp(options->profile, "release") && strcmp(options->profile, "size")) return 0;
     int compiles = strcmp(options->command, "build") == 0 || strcmp(options->command, "run") == 0 || strcmp(options->command, "test") == 0;
+    int allows_sandbox = strcmp(options->command, "build") == 0 || strcmp(options->command, "run") == 0 || strcmp(options->command, "emit-c") == 0;
     if (!compiles && (options->include_count || options->link_count || options->library_count || options->library_dir_count || options->profile_set)) return 0;
+    if (options->allow_caps && options->deny_caps) return 0;
+    if (options->sandbox || options->allow_caps || options->deny_caps) {
+        if (!allows_sandbox) return 0;
+        if (options->include_count || options->link_count || options->library_count || options->library_dir_count) return 0;
+    }
     if (options->timeout_set && strcmp(options->command, "run") != 0 && strcmp(options->command, "test") != 0) return 0;
     if (options->output && (strcmp(options->command, "check") == 0 || strcmp(options->command, "run") == 0 || strcmp(options->command, "test") == 0 || strcmp(options->command, "fmt") == 0)) return 0;
     return 1;
@@ -423,6 +468,20 @@ static int sdk_compile_source(SdkInvocation* invocation, const SdkOptions* optio
         engine_arguments[engine_count++] = invocation->scratch;
     }
     engine_arguments[engine_count++] = command_mode;
+    if (strcmp(command_mode, "--emit-c-mir") == 0) {
+        if (options->sandbox) engine_arguments[engine_count++] = "--sandbox";
+        if (options->allow_caps) {
+            engine_arguments[engine_count++] = "--allow";
+            engine_arguments[engine_count++] = options->allow_caps;
+        }
+        if (options->deny_caps) {
+            engine_arguments[engine_count++] = "--deny";
+            engine_arguments[engine_count++] = options->deny_caps;
+        }
+        if (options->json_v1 || options->project_json_v1) {
+            engine_arguments[engine_count++] = "--output-format=json-v1";
+        }
+    }
     engine_arguments[engine_count++] = source_path;
     if (need_product_dir || options->output) engine_arguments[engine_count++] = invocation->generated;
     return sdk_child(invocation->engine, engine_count, engine_arguments, sdk_compile_timeout(options));
@@ -550,7 +609,11 @@ static int sdk_execute_project(SdkInvocation* invocation, const SdkOptions* opti
     for (int i = 3; i < argc && pcount < SDK_ARGUMENT_LIMIT - 1; i++) {
         const char* v = argv[i];
         if (strcmp(v, "--") == 0) break;
-        if (strcmp(v, "--profile") == 0 || strcmp(v, "--timeout-ms") == 0 ||
+        if (strcmp(v, "--sandbox") == 0 || strncmp(v, "--allow=", 8) == 0 || strncmp(v, "--deny=", 7) == 0) {
+            continue;
+        }
+        if (strcmp(v, "--allow") == 0 || strcmp(v, "--deny") == 0 ||
+            strcmp(v, "--profile") == 0 || strcmp(v, "--timeout-ms") == 0 ||
             strcmp(v, "--include-dir") == 0 || strcmp(v, "--link") == 0 ||
             strcmp(v, "--library-dir") == 0 || strcmp(v, "--library") == 0) {
             i++;
@@ -852,6 +915,25 @@ static int sdk_execute(SdkInvocation* invocation, const SdkOptions* options, int
     if (invocation->output[0]) {
         if (sdk_same_file(invocation->source, invocation->output)) return sdk_error("W5002", "Output became a source alias during compilation", NULL);
         if (!sdk_publish(build ? invocation->product : invocation->generated, invocation->output)) return sdk_error("W5001", "Cannot publish the completed output", invocation->output);
+    }
+    if (options->json_v1 && (build || strcmp(options->command, "emit-c") == 0)) {
+        const char* kind = build ? "native_executable" : "c99_source";
+        const char* media = build ? "application/octet-stream" : "text/x-c";
+        printf("{\"schema_version\":\"wysna.tool-result/1\",\"command\":");
+        sdk_print_json_quoted(options->command);
+        printf(",\"status\":\"ok\",\"invocation_id\":\"native\",\"tool_exit_code\":0,\"process_exit_code\":0,\"execution\":null,\"toolchain\":{\"compiler\":\"" WYSNA_NATIVE_VERSION "\"},\"target\":{\"profile\":\"native-cli\",\"triple\":null},\"diagnostics\":[],\"artifacts\":");
+        if (invocation->output[0]) {
+            printf("[{\"kind\":");
+            sdk_print_json_quoted(kind);
+            printf(",\"media_type\":");
+            sdk_print_json_quoted(media);
+            printf(",\"path\":");
+            sdk_print_json_quoted(invocation->output);
+            printf("}]");
+        } else {
+            printf("[]");
+        }
+        puts(",\"telemetry\":null}");
     }
     if (run) {
         int count = options->arguments ? argc - options->arguments : 0;

@@ -92,6 +92,7 @@ fn diag_stage_for_code(code: str) -> str {
     if len(code) >= 2 and code[0] == "W" and (code[1] == "2" or code[1] == "3") { return "type" }
     if len(code) >= 2 and code[0] == "W" and code[1] == "4" { return "runtime" }
     if code == "W5005" { return "patch" }
+    if code == "W5006" { return "capability-policy" }
     if len(code) >= 2 and code[0] == "W" and code[1] == "5" { return "toolchain" }
     if len(code) >= 2 and code[0] == "W" and code[1] == "6" { return "lint" }
     return "internal"

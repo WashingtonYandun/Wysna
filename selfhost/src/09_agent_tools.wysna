@@ -1285,14 +1285,18 @@ fn tool_handle_check_v1(file: str, legacy_json: bool, json_v1: bool) -> unit {
         report_error(file, "W5003", 1, 1, "cannot read input file: " + file)
     }
     let src = loaded[1]
-    let module = mir_build(check_source(src, file))
+    let checked = check_source(src, file)
+    let module = mir_build(checked)
     mir_verify(module)
+    let warnings = lint_collect_warnings(checked, src, file)
+    let warnings_json = lint_warnings_json(warnings, src)
     let fn_count = str(len(module.functions))
     if json_v1 {
-        diag_write_output(diag_tool_envelope_json("check", "ok", 0, "[]", "", "", "[]"))
+        diag_write_output(diag_tool_envelope_json("check", "ok", 0, warnings_json, "", "", "[]"))
     } elif legacy_json {
-        diag_write_output("{\"schema_version\":\"wysna.cli.result/1\",\"compiler_version\":\"0.8.0\",\"command\":\"check\",\"ok\":true,\"exit_code\":0,\"diagnostics\":[],\"data\":{\"file\":" + diag_json_quote(file) + ",\"functions\":" + fn_count + "}}")
+        diag_write_output("{\"schema_version\":\"wysna.cli.result/1\",\"compiler_version\":\"0.8.0\",\"command\":\"check\",\"ok\":true,\"exit_code\":0,\"diagnostics\":" + warnings_json + ",\"data\":{\"file\":" + diag_json_quote(file) + ",\"functions\":" + fn_count + "}}")
     } else {
+        lint_print_warnings_stderr(warnings)
         print("[Wysna Compiler] Checked " + file + " (" + fn_count + " functions, MIR verified)")
     }
     exit(0)

@@ -1,0 +1,482 @@
+# Native SDK non-blocking lints (W6001 discarded pure expressions, W6002 ARC reference cycles)
+# and capability sandbox policy enforcement (W5006 + C99 WYSNA_DENY_CAP_* guards).
+
+struct LintWarning {
+    code: str
+    message: str
+    file: str
+    line: int
+    col: int
+    data_json: str
+}
+
+fn lint_is_pure_kind(kind: str) -> bool {
+    return kind == "integer" or kind == "float" or kind == "string" or kind == "boolean" or kind == "none" or kind == "binding" or kind == "unary" or kind == "binary" or kind == "member" or kind == "index"
+}
+
+fn lint_node_is_pure(program: CheckedProgram, node_id: int) -> bool {
+    if node_id < 0 or node_id >= len(program.nodes) { return false }
+    let node = program.nodes[node_id]
+    if not lint_is_pure_kind(node.kind) { return false }
+    for child in node.children {
+        if not lint_node_is_pure(program, child) { return false }
+    }
+    return true
+}
+
+fn lint_unit_like(program: CheckedProgram, type_id: int) -> bool {
+    if type_id < 0 or type_id >= len(program.types) { return true }
+    let t = program.types[type_id]
+    if t.kind == "unit" { return true }
+    if t.kind == "result" and len(t.args) >= 1 and program.types[t.args[0]].kind == "unit" { return true }
+    return false
+}
+
+fn lint_has_pos(warnings: list[LintWarning], line: int, col: int) -> bool {
+    for w in warnings {
+        if w.code == "W6001" and w.line == line and w.col == col { return true }
+    }
+    return false
+}
+
+fn lint_record_w6001(program: CheckedProgram, node_id: int, target_file: str, out: list[LintWarning]) -> list[LintWarning] {
+    let mut warnings = out
+    if not lint_node_is_pure(program, node_id) { return warnings }
+    let node = program.nodes[node_id]
+    if node.source.file != target_file and module_canonical(node.source.file) != target_file { return warnings }
+    if lint_has_pos(warnings, node.source.line, node.source.col) { return warnings }
+    let mut help_text = "Remove the statement, or use its value (bind it with 'let' or return it)."
+    if node.kind == "unary" and (node.text == "MINUS" or node.text == "PLUS" or node.text == "-" or node.text == "+") {
+        let op_ch = if node.text == "PLUS" or node.text == "+" { "+" } else { "-" }
+        help_text = "A line starting with '" + op_ch + "' begins a new statement. To continue the previous expression, put the operator at the end of the previous line."
+    }
+    let data_json = "{\"kind\":\"discarded_expression\",\"help\":" + diag_json_quote(help_text) + "}"
+    warnings.append(LintWarning {
+        code: "W6001",
+        message: "Expression result is discarded; the statement has no effect",
+        file: node.source.file,
+        line: node.source.line,
+        col: node.source.col,
+        data_json: data_json,
+    })
+    return warnings
+}
+
+fn lint_walk_node(program: CheckedProgram, node_id: int, discard_tail: bool, target_file: str, out: list[LintWarning]) -> list[LintWarning] {
+    let mut warnings = out
+    if node_id < 0 or node_id >= len(program.nodes) { return warnings }
+    let node = program.nodes[node_id]
+    if node.kind == "block" {
+        let n = len(node.children)
+        for i in 0..n {
+            let child = node.children[i]
+            let is_last = i == n - 1
+            let is_discarded = (not is_last) or discard_tail
+            if is_discarded {
+                warnings = lint_record_w6001(program, child, target_file, warnings)
+            }
+            warnings = lint_walk_node(program, child, is_discarded, target_file, warnings)
+        }
+        return warnings
+    }
+    if node.kind == "while" or node.kind == "for" {
+        if len(node.children) >= 1 { warnings = lint_walk_node(program, node.children[0], false, target_file, warnings) }
+        if len(node.children) >= 2 { warnings = lint_walk_node(program, node.children[1], true, target_file, warnings) }
+        return warnings
+    }
+    if node.kind == "if" {
+        let branch_discard = discard_tail or node.discard or lint_unit_like(program, node.type_id)
+        if len(node.children) >= 1 { warnings = lint_walk_node(program, node.children[0], false, target_file, warnings) }
+        if len(node.children) >= 2 { warnings = lint_walk_node(program, node.children[1], branch_discard, target_file, warnings) }
+        if len(node.children) >= 3 { warnings = lint_walk_node(program, node.children[2], branch_discard, target_file, warnings) }
+        return warnings
+    }
+    if node.kind == "match" {
+        let arm_discard = discard_tail or lint_unit_like(program, node.type_id)
+        for child in node.children { warnings = lint_walk_node(program, child, false, target_file, warnings) }
+        for arm_id in node.arms {
+            if arm_id >= 0 and arm_id < len(program.arms) {
+                let arm = program.arms[arm_id]
+                if arm.guard >= 0 { warnings = lint_walk_node(program, arm.guard, false, target_file, warnings) }
+                warnings = lint_walk_node(program, arm.body, arm_discard, target_file, warnings)
+            }
+        }
+        return warnings
+    }
+    if node.kind == "handler" {
+        let h_discard = discard_tail or lint_unit_like(program, node.type_id)
+        if len(node.children) >= 1 { warnings = lint_walk_node(program, node.children[0], false, target_file, warnings) }
+        if len(node.children) >= 2 { warnings = lint_walk_node(program, node.children[1], h_discard, target_file, warnings) }
+        return warnings
+    }
+    for child in node.children {
+        warnings = lint_walk_node(program, child, false, target_file, warnings)
+    }
+    return warnings
+}
+
+fn lint_collect_strong_targets(program: CheckedProgram, type_id: int, seen_records: list[int], out: list[str]) -> list[str] {
+    let mut targets = out
+    if type_id < 0 or type_id >= len(program.types) { return targets }
+    let t = program.types[type_id]
+    if t.kind == "weak" { return targets }
+    if t.kind == "class" {
+        if not tool_str_contains(targets, t.name) { targets.append(t.name) }
+        return targets
+    }
+    if t.kind == "optional" or t.kind == "list" or t.kind == "dict" or t.kind == "tuple" or t.kind == "result" or t.kind == "error_union" {
+        for arg in t.args {
+            targets = lint_collect_strong_targets(program, arg, seen_records, targets)
+        }
+        return targets
+    }
+    if t.kind == "struct" or t.kind == "enum" {
+        for s in seen_records { if s == type_id { return targets } }
+        let mut next_seen = seen_records
+        next_seen.append(type_id)
+        for rec in program.records {
+            if rec.type_id == type_id {
+                for f in rec.fields {
+                    targets = lint_collect_strong_targets(program, f.type_id, next_seen, targets)
+                }
+                for v in rec.variants {
+                    for p in v.payloads {
+                        targets = lint_collect_strong_targets(program, p, next_seen, targets)
+                    }
+                }
+            }
+        }
+    }
+    return targets
+}
+
+fn lint_class_index(names: list[str], target: str) -> int {
+    for i in 0..len(names) {
+        if names[i] == target { return i }
+    }
+    return -1
+}
+
+fn lint_find_class_token(tokens: list[Token], class_name: str) -> list[int] {
+    let n = len(tokens)
+    for i in 0..(n - 1) {
+        if tokens[i].kind == "CLASS" and tokens[i + 1].kind == "IDENT" and tokens[i + 1].val == class_name {
+            return [tokens[i + 1].line, tokens[i + 1].col]
+        }
+    }
+    return [1, 1]
+}
+
+fn lint_canonical_cycle_key(cycle: list[str]) -> str {
+    let n = len(cycle)
+    if n == 0 { return "" }
+    let mut min_idx = 0
+    for i in 1..n {
+        if tool_str_gt(cycle[min_idx], cycle[i]) { min_idx = i }
+    }
+    let mut rotated: list[str] = []
+    for k in 0..n {
+        rotated.append(cycle[(min_idx + k) % n])
+    }
+    return join_strings(rotated, "->")
+}
+
+fn lint_collect_cycles(program: CheckedProgram, src: str, file: str, out: list[LintWarning]) -> list[LintWarning] {
+    let mut warnings = out
+    let mut class_names: list[str] = []
+    let mut class_adj: list[list[str]] = []
+    for rec in program.records {
+        let t = program.types[rec.type_id]
+        if t.kind == "class" and not tool_str_contains(class_names, t.name) {
+            let mut edges: list[str] = []
+            for f in rec.fields {
+                edges = lint_collect_strong_targets(program, f.type_id, [], edges)
+            }
+            class_names.append(t.name)
+            class_adj.append(edges)
+        }
+    }
+    let count = len(class_names)
+    if count == 0 { return warnings }
+    let tokens = tokenize(src, file)
+    let mut seen_keys: list[str] = []
+    for start in 0..count {
+        # Iterative DFS from start to find shortest simple cycle returning to start
+        let mut stack_node: list[int] = [start]
+        let mut stack_edge: list[int] = [0]
+        while len(stack_node) > 0 {
+            let top = len(stack_node) - 1
+            let curr = stack_node[top]
+            let edge_idx = stack_edge[top]
+            let neighbors = class_adj[curr]
+            if edge_idx >= len(neighbors) {
+                stack_node.pop()
+                stack_edge.pop()
+                continue
+            }
+            stack_edge[top] = edge_idx + 1
+            let nxt_name = neighbors[edge_idx]
+            let nxt = lint_class_index(class_names, nxt_name)
+            if nxt < 0 { continue }
+            if nxt == start {
+                let mut cycle: list[str] = []
+                for idx_v in stack_node { cycle.append(class_names[idx_v]) }
+                let key = lint_canonical_cycle_key(cycle)
+                if not tool_str_contains(seen_keys, key) {
+                    seen_keys.append(key)
+                    let mut chain_parts: list[str] = []
+                    for c in cycle { chain_parts.append(c) }
+                    chain_parts.append(cycle[0])
+                    let chain = join_strings(chain_parts, " -> ")
+                    let pos = lint_find_class_token(tokens, cycle[0])
+                    let advisory = "Strong reference cycle detected across classes: " + chain + ". Under ARC, mutual strong references cause permanent memory retention. Consider breaking the cycle by annotating back-references with 'Weak[T]'."
+                    let mut cls_json: list[str] = ["["]
+                    for ci in 0..len(cycle) {
+                        if ci > 0 { cls_json.append(",") }
+                        cls_json.append(diag_json_quote(cycle[ci]))
+                    }
+                    cls_json.append("]")
+                    let data_json = "{\"kind\":\"reference_cycle\",\"classes\":" + join_strings(cls_json, "") + ",\"help\":" + diag_json_quote(advisory) + "}"
+                    warnings.append(LintWarning {
+                        code: "W6002",
+                        message: "strong reference cycle detected in nominal classes: " + chain,
+                        file: file,
+                        line: pos[0],
+                        col: pos[1],
+                        data_json: data_json,
+                    })
+                }
+                continue
+            }
+            if nxt < start { continue }
+            let mut in_path = false
+            for idx_v in stack_node { if idx_v == nxt { in_path = true } }
+            if not in_path and len(stack_node) < 16 {
+                stack_node.append(nxt)
+                stack_edge.append(0)
+            }
+        }
+    }
+    return warnings
+}
+
+fn lint_collect_warnings(program: CheckedProgram, src: str, file: str) -> list[LintWarning] {
+    let canonical = module_canonical(file)
+    let mut warnings: list[LintWarning] = []
+    for entry_id in program.entry {
+        warnings = lint_record_w6001(program, entry_id, canonical, warnings)
+        warnings = lint_walk_node(program, entry_id, true, canonical, warnings)
+    }
+    for func in program.functions {
+        let sig = program.types[func.type_id]
+        let ret_type = if len(sig.args) > 0 { sig.args[len(sig.args) - 1] } else { program.unit_type }
+        let discard_tail = lint_unit_like(program, ret_type)
+        warnings = lint_walk_node(program, func.body, discard_tail, canonical, warnings)
+    }
+    # Insertion-sort W6001 warnings by (line, col)
+    let n = len(warnings)
+    for i in 1..n {
+        let key = warnings[i]
+        let mut j = i - 1
+        while j >= 0 and (warnings[j].line > key.line or (warnings[j].line == key.line and warnings[j].col > key.col)) {
+            warnings[j + 1] = warnings[j]
+            j = j - 1
+        }
+        warnings[j + 1] = key
+    }
+    warnings = lint_collect_cycles(program, src, file, warnings)
+    return warnings
+}
+
+fn lint_warnings_json(warnings: list[LintWarning], src: str) -> str {
+    if len(warnings) == 0 { return "[]" }
+    let mut items: list[str] = []
+    for w in warnings {
+        let span_json = diag_primary_span_json(w.file, w.line, w.col, src)
+        items.append("{\"code\":" + diag_json_quote(w.code) + ",\"severity\":\"warning\",\"stage\":\"lint\",\"message\":" + diag_json_quote(w.message) + ",\"primary_span\":" + span_json + ",\"related\":[],\"data\":" + w.data_json + ",\"fixes\":[]}")
+    }
+    return "[" + join_strings(items, ",") + "]"
+}
+
+fn lint_print_warnings_stderr(warnings: list[LintWarning]) -> unit {
+    for w in warnings {
+        eprint("warning[" + w.code + "] " + w.file + ":" + str(w.line) + ":" + str(w.col) + " - " + w.message)
+    }
+}
+
+# ---- Capability Sandbox Enforcement (W5006 + C99 WYSNA_DENY_CAP_* macros) ----
+
+fn sandbox_all_capabilities() -> list[str] {
+    return ["arguments", "clock", "environment", "filesystem.read", "filesystem.write", "native-ffi", "network", "process-control", "processes", "stdio"]
+}
+
+fn sandbox_default_capabilities() -> list[str] {
+    return ["arguments", "stdio"]
+}
+
+fn sandbox_cap_macro(cap: str) -> str {
+    if cap == "arguments" { return "WYSNA_DENY_CAP_ARGUMENTS" }
+    if cap == "clock" { return "WYSNA_DENY_CAP_CLOCK" }
+    if cap == "environment" { return "WYSNA_DENY_CAP_ENVIRONMENT" }
+    if cap == "filesystem.read" { return "WYSNA_DENY_CAP_FILESYSTEM_READ" }
+    if cap == "filesystem.write" { return "WYSNA_DENY_CAP_FILESYSTEM_WRITE" }
+    if cap == "native-ffi" { return "WYSNA_DENY_CAP_NATIVE_FFI" }
+    if cap == "network" { return "WYSNA_DENY_CAP_NETWORK" }
+    if cap == "process-control" { return "WYSNA_DENY_CAP_PROCESS_CONTROL" }
+    if cap == "processes" { return "WYSNA_DENY_CAP_PROCESSES" }
+    if cap == "stdio" { return "WYSNA_DENY_CAP_STDIO" }
+    return ""
+}
+
+fn sandbox_parse_cap_list(raw: str) -> list[str] {
+    let valid = sandbox_all_capabilities()
+    let mut caps: list[str] = []
+    if raw == "" { report_error("<cli>", "W5002", 1, 1, "capability lists must be comma-separated names") }
+    let mut cur = ""
+    let n = len(raw)
+    for i in 0..(n + 1) {
+        let ch = if i < n { raw[i] } else { "," }
+        if ch == "," {
+            if cur == "" { report_error("<cli>", "W5002", 1, 1, "capability lists must be comma-separated names") }
+            if not tool_str_contains(valid, cur) {
+                report_error("<cli>", "W5002", 1, 1, "unknown capability: " + cur + ". Valid capabilities: " + join_strings(valid, ", "))
+            }
+            if tool_str_contains(caps, cur) {
+                report_error("<cli>", "W5002", 1, 1, "capability lists must not repeat names")
+            }
+            caps.append(cur)
+            cur = ""
+        } else {
+            cur = cur + ch
+        }
+    }
+    return caps
+}
+
+fn sandbox_is_trusted_host_extern(name: str) -> bool {
+    return name == "wysna_host_buffer_new" or name == "wysna_host_buffer_size" or name == "wysna_host_buffer_get" or name == "wysna_host_buffer_append" or name == "wysna_host_claim" or name == "wysna_host_claim_valid" or name == "wysna_host_borrow" or name == "wysna_host_close" or name == "wysna_host_is_open" or name == "wysna_host_active_handles" or name == "wysna_host_active_bytes" or name == "wysna_host_last_error" or name == "wysna_host_last_error_domain" or name == "wysna_host_fs" or name == "wysna_host_fs_canonical" or name == "wysna_host_file_open" or name == "wysna_host_file_read" or name == "wysna_host_file_write" or name == "wysna_host_http_request" or name == "wysna_host_http_async_start" or name == "wysna_host_http_async_poll" or name == "wysna_host_http_multi_poll" or name == "wysna_host_http_async_finish" or name == "wysna_host_http_async_cancel" or name == "wysna_host_process_run" or name == "wysna_host_process_capture" or name == "wysna_host_monotonic_ms" or name == "wysna_host_wall_ms" or name == "wysna_host_sleep" or name == "wysna_host_stdout_flush" or name == "wysna_host_stdin_read_line" or name == "wysna_host_stdin_read_all" or name == "wysna_host_stdin_read_exact" or name == "wysna_host_stdout_write_raw" or name == "wysna_host_self_executable" or name == "wysna_host_getcwd" or name == "wysna_host_project_path_key" or name == "wysna_host_project_entries" or name == "wysna_host_project_file_sha256" or name == "wysna_host_unicode_normalize" or name == "wysna_host_crypto_sha256" or name == "wysna_host_crypto_hmac_sha256" or name == "wysna_host_crypto_sha512" or name == "wysna_host_crypto_hmac_sha512" or name == "wysna_host_crypto_md5" or name == "wysna_host_crypto_random_bytes" or name == "wysna_host_crypto_constant_time_compare" or name == "wysna_host_crypto_chacha20_poly1305_seal" or name == "wysna_host_crypto_chacha20_poly1305_open"
+}
+
+fn sandbox_caps_for_symbol(name: str) -> list[str] {
+    if name == "wysna_builtin_print" or name == "wysna_builtin_eprint" or name == "wysna_host_stdout_flush" or name == "wysna_host_stdin_read_line" or name == "wysna_host_stdin_read_all" or name == "wysna_host_stdin_read_exact" or name == "wysna_host_stdout_write_raw" {
+        return ["stdio"]
+    }
+    if name == "wysna_builtin_args" { return ["arguments"] }
+    if name == "wysna_builtin_env" or name == "wysna_host_self_executable" or name == "wysna_host_getcwd" { return ["environment"] }
+    if name == "wysna_builtin_unix_time" or name == "wysna_host_monotonic_ms" or name == "wysna_host_wall_ms" or name == "wysna_host_sleep" { return ["clock"] }
+    if name == "wysna_builtin_exit" { return ["process-control"] }
+    if name == "wysna_builtin_read_file" or name == "wysna_host_fs_canonical" or name == "wysna_host_file_read" or name == "wysna_host_project_entries" or name == "wysna_host_project_file_sha256" {
+        return ["filesystem.read"]
+    }
+    if name == "wysna_builtin_write_file" or name == "wysna_host_file_write" or name == "wysna_host_close" {
+        return ["filesystem.write"]
+    }
+    if name == "wysna_host_fs" or name == "wysna_host_file_open" {
+        return ["filesystem.read", "filesystem.write"]
+    }
+    if name == "wysna_host_http_request" or name == "wysna_host_http_async_start" or name == "wysna_host_http_async_poll" or name == "wysna_host_http_multi_poll" or name == "wysna_host_http_async_finish" or name == "wysna_host_http_async_cancel" {
+        return ["network"]
+    }
+    if name == "wysna_host_process_run" or name == "wysna_host_process_capture" {
+        return ["processes"]
+    }
+    return []
+}
+
+fn sandbox_enforce_and_header(module: MirModule, file: str, mode: str, cap_list: list[str]) -> str {
+    let mut untrusted: list[str] = []
+    for ext in module.externs {
+        if not sandbox_is_trusted_host_extern(ext.native) {
+            untrusted.append(ext.native)
+        }
+    }
+    if len(untrusted) > 0 {
+        report_error(file, "W5006", 1, 1, "Capability policy cannot allow untrusted foreign declarations: " + join_strings(tool_sort_strings(untrusted), ", "))
+    }
+    let mut reachable: list[str] = []
+    let mut queue: list[str] = []
+    let mut has_entry = false
+    for func in module.functions {
+        if func.name == "wysna_program" { has_entry = true }
+    }
+    if has_entry {
+        reachable.append("wysna_program")
+        queue.append("wysna_program")
+    } else {
+        for func in module.functions {
+            reachable.append(func.name)
+            queue.append(func.name)
+        }
+    }
+    let mut qi = 0
+    while qi < len(queue) {
+        let cur_name = queue[qi]
+        qi = qi + 1
+        for func in module.functions {
+            if func.name != cur_name { continue }
+            for blk in func.blocks {
+                for op in blk.operations {
+                    if op.opcode == "call" or op.opcode == "function" or op.opcode == "direct_method" {
+                        if op.name != "" and not tool_str_contains(reachable, op.name) {
+                            reachable.append(op.name)
+                            queue.append(op.name)
+                        }
+                    } elif op.opcode == "virtual_call" {
+                        for rec in module.records {
+                            for m in rec.methods {
+                                if m.name == op.name and not tool_str_contains(reachable, m.target) {
+                                    reachable.append(m.target)
+                                    queue.append(m.target)
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+    let mut observed: list[str] = []
+    for func in module.functions {
+        if not tool_str_contains(reachable, func.name) { continue }
+        for blk in func.blocks {
+            for op in blk.operations {
+                if op.opcode == "runtime" or op.opcode == "foreign" or op.opcode == "call" {
+                    let mut sym_name = op.name
+                    for ext in module.externs {
+                        if ext.name == op.name { sym_name = ext.native }
+                    }
+                    let sym_caps = sandbox_caps_for_symbol(sym_name)
+                    for cap in sym_caps {
+                        if not tool_str_contains(observed, cap) { observed.append(cap) }
+                    }
+                }
+            }
+        }
+    }
+    let mut rejected: list[str] = []
+    for cap in observed {
+        if mode == "deny" {
+            if tool_str_contains(cap_list, cap) { rejected.append(cap) }
+        } else {
+            if not tool_str_contains(cap_list, cap) { rejected.append(cap) }
+        }
+    }
+    if len(rejected) > 0 {
+        let sorted_rej = tool_sort_strings(rejected)
+        if mode == "deny" {
+            report_error(file, "W5006", 1, 1, "Capability policy denied modeled capabilities: " + join_strings(sorted_rej, ", "))
+        } else {
+            report_error(file, "W5006", 1, 1, "Capability policy does not allow modeled capabilities: " + join_strings(sorted_rej, ", "))
+        }
+    }
+    let all_caps = sandbox_all_capabilities()
+    let mut lines: list[str] = ["/* Enforced Wysna capability sandbox policy */", "#define WYSNA_SANDBOX_ENFORCED 1"]
+    for cap in all_caps {
+        let denied = if mode == "deny" { tool_str_contains(cap_list, cap) } else { not tool_str_contains(cap_list, cap) }
+        if denied {
+            let macro_name = sandbox_cap_macro(cap)
+            if macro_name != "" { lines.append("#define " + macro_name + " 1") }
+        }
+    }
+    return join_strings(lines, "\n") + "\n"
+}

@@ -179,18 +179,60 @@ fn run_compiler() -> unit ! IoError {
         return
     }
     if len(cli) > 1 and (cli[1] == "--emit-mir" or cli[1] == "--emit-c-mir" or cli[1] == "--check-mir") {
-        if (len(cli) != 3 and len(cli) != 4) or cli[1] == "--check-mir" and len(cli) != 3 {
+        let mode_flag = cli[1]
+        let mut sandbox_on = false
+        let mut allow_raw = ""
+        let mut deny_raw = ""
+        let mut has_allow = false
+        let mut has_deny = false
+        let mut positional: list[str] = []
+        let mut ci = 2
+        while ci < len(cli) {
+            let arg = cli[ci]
+            if arg == "--sandbox" { sandbox_on = true ci = ci + 1 }
+            elif arg == "--allow" and ci + 1 < len(cli) {
+                if has_allow { eprint("[W5002] Duplicate --allow option") exit(2) }
+                has_allow = true allow_raw = cli[ci + 1] ci = ci + 2
+            } elif len(arg) > 8 and slice(arg, 0, 8) == "--allow=" {
+                if has_allow { eprint("[W5002] Duplicate --allow option") exit(2) }
+                has_allow = true allow_raw = slice(arg, 8, len(arg)) ci = ci + 1
+            } elif arg == "--deny" and ci + 1 < len(cli) {
+                if has_deny { eprint("[W5002] Duplicate --deny option") exit(2) }
+                has_deny = true deny_raw = cli[ci + 1] ci = ci + 2
+            } elif len(arg) > 7 and slice(arg, 0, 7) == "--deny=" {
+                if has_deny { eprint("[W5002] Duplicate --deny option") exit(2) }
+                has_deny = true deny_raw = slice(arg, 7, len(arg)) ci = ci + 1
+            } elif arg == "--output-format=json-v1" { ci = ci + 1 }
+            elif arg == "--output-format" and ci + 1 < len(cli) { ci = ci + 2 }
+            else { positional.append(arg) ci = ci + 1 }
+        }
+        if has_allow and has_deny { report_error("<cli>", "W5002", 1, 1, "cannot combine --allow and --deny") }
+        if (sandbox_on or has_allow or has_deny) and mode_flag != "--emit-c-mir" {
+            report_error("<cli>", "W5002", 1, 1, "--sandbox/--allow/--deny is supported only with --emit-c-mir")
+        }
+        if (len(positional) != 1 and len(positional) != 2) or (mode_flag == "--check-mir" and len(positional) != 1) {
             eprint("[W5002] Usage: Wysna Compiler --emit-mir INPUT")
             exit(2)
         }
-        let source = read_file(cli[2])?
-        let module = mir_build(check_source(source, cli[2]))
-        if cli[1] == "--check-mir" { mir_verify(module) }
-        else {
-            let output = if cli[1] == "--emit-mir" { mir_module_json(module) } else { mir_emit_c(module) }
-            if len(cli) == 4 {
-                if module_normalize(cli[2]) == module_normalize(cli[3]) { eprint("[W5002] Output must differ from input") exit(2) }
-                write_file(cli[3], output)?
+        let in_file = positional[0]
+        let source = read_file(in_file)?
+        let checked = check_source(source, in_file)
+        let module = mir_build(checked)
+        if mode_flag == "--check-mir" {
+            mir_verify(module)
+            let warnings = lint_collect_warnings(checked, source, in_file)
+            lint_print_warnings_stderr(warnings)
+        } else {
+            let mut prefix = ""
+            if sandbox_on or has_allow or has_deny {
+                let s_mode = if has_deny { "deny" } else { "allow" }
+                let s_caps = if has_deny { sandbox_parse_cap_list(deny_raw) } elif has_allow { sandbox_parse_cap_list(allow_raw) } else { sandbox_default_capabilities() }
+                prefix = sandbox_enforce_and_header(module, in_file, s_mode, s_caps)
+            }
+            let output = if mode_flag == "--emit-mir" { mir_module_json(module) } else { prefix + mir_emit_c(module) }
+            if len(positional) == 2 {
+                if module_normalize(in_file) == module_normalize(positional[1]) { eprint("[W5002] Output must differ from input") exit(2) }
+                write_file(positional[1], output)?
             } else { print(output) }
         }
         return
