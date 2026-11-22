@@ -24,7 +24,7 @@ class CapabilityPolicyTests(unittest.TestCase):
     def test_trusted_host_effects_have_interpreter_bindings(self):
         from compiler.EffectModel import HOST_EFFECTS
         from runtime.HostAbi import FUNCTIONS
-        self.assertLessEqual(set(HOST_EFFECTS), set(FUNCTIONS))
+        self.assertEqual(set(HOST_EFFECTS), set(FUNCTIONS))
 
     def test_unused_foreign_declaration_is_refused_before_binding(self):
         with tempfile.TemporaryDirectory(prefix='wysna-policy-') as temporary:

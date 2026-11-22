@@ -11,6 +11,8 @@
 
 La tabla de 37 ítems conserva el backlog de la auditoría inicial. La continuación del compilador, contrastada con main fcdd1af, está en [12-SIGUIENTE-CICLO-LENGUAJE.md](12-SIGUIENTE-CICLO-LENGUAJE.md). El primer cambio nuevo es `LANG-07`: paridad nativa de errores genéricos concretos, con identidad por especialización y normalización segura tras sustituir parámetros. Las campañas con modelos permanecen aplazadas y no son dependencia de este trabajo.
 
+`LANG-07` ya se integró en `ab8480a` mediante PR #171. El cierre para v0.8.0 añade cobertura host 49/49, regresiones cruzadas de reexportaciones/métodos/async y aceptación instalada obligatoria. El catálogo pertenece a `SIMP-05`; la hipótesis `SIMP-R01` de herramientas compartidas permanece como investigación separada.
+
 ## 1. Mapa de Documentos del Plan
 
 | Archivo | Propósito | Ítems accionables | Hipótesis `RESEARCH` |

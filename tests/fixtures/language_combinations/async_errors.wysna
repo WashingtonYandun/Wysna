@@ -1,0 +1,24 @@
+import "std/async" as tasks
+struct Failure[T] { detail: T }
+
+async fn fetch[T](value: T, fail: bool) -> T ! Failure[T] | str {
+    let _ = await tasks.sleep_ms(1)
+    if fail { return Err(Failure[T] { detail: value }) }
+    return Ok(value)
+}
+async fn propagate() -> list[str] ! Failure[list[str]] | str | bool {
+    return Ok(await fetch(["first", "second"], true)?)
+}
+fn main() -> unit {
+    let successful = await fetch(7, false) else issue { return }
+    print("ASYNC_OK", successful)
+    let result = await propagate() else issue {
+        match issue {
+            Failure[list[str]](error) => print("ASYNC_ERROR", len(error.detail), error.detail[1]),
+            str(error) => print("UNEXPECTED", error),
+            bool(_) => print("UNEXPECTED_BOOL"),
+        }
+        return
+    }
+    print("UNEXPECTED_OK", len(result))
+}

@@ -1,0 +1,8 @@
+import "facade.wysna" as api
+let value = api.errors.fail() else issue {
+    match issue {
+        api.errors.Failure[int](error) => error.detail,
+        api.errors.Failure[str](error) => len(error.detail),
+    }
+}
+print("REEXPORT", value)

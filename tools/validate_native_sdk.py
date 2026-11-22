@@ -45,7 +45,7 @@ def require(condition, detail):
         raise AssertionError(detail)
 
 
-def validate(sdk, report, strict_source=False, compiler_source=None, application=None):
+def validate(sdk, report, strict_source=False, compiler_source=None, application=None, language_fixtures=None):
     sdk = Path(sdk).resolve()
     manifest = json.loads((sdk / 'native-sdk.json').read_text(encoding='utf-8'))
     require(manifest['profile'] == 'native-core-v1', 'Unexpected compiler profile')
@@ -209,6 +209,20 @@ def validate(sdk, report, strict_source=False, compiler_source=None, application
                                    'print(a.get(), b.get())\n'
                                    'a.set(7)\nb.set("world")\nprint(a.get(), b.get())\n', encoding='utf-8')
         run('generic-class-methods', ['run', generic_methods], stdout=b'42 hello\n7 world\n')
+        if language_fixtures:
+            programs = project / 'language combinations'
+            shutil.copytree(language_fixtures, programs)
+            cases = [
+                ('reexported-generic-errors', 'reexports/main.wysna', b'REEXPORT 10\n'),
+                ('generic-method-errors', 'generic_methods.wysna', b'METHOD 42 7 2\n'),
+                ('async-generic-errors', 'async_errors.wysna', b'ASYNC_OK 7\nASYNC_ERROR 2 second\n'),
+                ('borrowed-host-paths', 'borrowed_paths.wysna', b'borrowed paths released\n'),
+            ]
+            memory_environment = dict(environment, WYSNA_MEM_CHECK='1')
+            for name, relative, expected in cases:
+                program = programs / relative
+                run('check-' + name, ['check', program], stdout=b'')
+                run(name, ['run', program], stdout=expected, custom=memory_environment)
         strings = project / 'strings.wysna'
         strings.write_text('let value = "á\\0界"\nprint(len(value), value)\n', encoding='utf-8')
         run('unicode-and-nul', ['run', strings], stdout='3 á\0界\n'.encode())
@@ -457,10 +471,12 @@ def main():
     parser.add_argument('--compiler-source', type=Path)
     parser.add_argument('--archive', type=Path)
     parser.add_argument('--application', type=Path)
+    parser.add_argument('--language-fixtures', type=Path)
     options = parser.parse_args()
     report = {'checks': [], 'success': False}
     try:
-        validate(options.sdk, report, options.strict_source, options.compiler_source, options.application)
+        validate(options.sdk, report, options.strict_source, options.compiler_source,
+                 options.application, options.language_fixtures)
         if options.archive is not None:
             report['archive_sha256'] = digest(options.archive)
         report['success'] = True

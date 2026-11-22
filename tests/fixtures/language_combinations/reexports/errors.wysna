@@ -1,0 +1,4 @@
+pub struct Failure[T] { detail: T }
+pub fn fail() -> int ! Failure[int] | Failure[str] {
+    Err(Failure[str] { detail: "reexported" })
+}

@@ -16,6 +16,7 @@ def test_native_release_requires_matching_archive_and_installed_checks(tmp_path)
             "ops-project-check", "ops-project-build", "ops-project-run", "ops-project-test",
             "ops-graph-cli", "ops-graph-mcp", "rebuilt-native-engine-emits-identical-C",
             "project-new", "scaffold-project-lock", "scaffold-project-test",
+            "reexported-generic-errors", "generic-method-errors", "async-generic-errors", "borrowed-host-paths",
         )
     ]
     for runner, platform, extension in (
@@ -36,6 +37,14 @@ def test_native_release_requires_matching_archive_and_installed_checks(tmp_path)
     staged = stage_native_sdks(tmp_path, source, "0.8.0", output)
     assert len(staged) == 3
     assert digest(output / staged["x86_64-windows"]["name"]) == staged["x86_64-windows"]["sha256"]
+
+    accepted_report = report.read_text(encoding="utf-8")
+    incomplete = json.loads(accepted_report)
+    incomplete['checks'] = [check for check in incomplete['checks'] if check['name'] != 'async-generic-errors']
+    report.write_text(json.dumps(incomplete), encoding="utf-8")
+    with pytest.raises(ValueError, match="x86_64-windows"):
+        stage_native_sdks(tmp_path, source, "0.8.0", output)
+    report.write_text(accepted_report, encoding="utf-8")
 
     archive.write_bytes(b"changed after validation")
     with pytest.raises(ValueError, match="x86_64-windows"):
