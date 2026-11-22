@@ -53,6 +53,7 @@ def validate(sdk, report, strict_source=False, compiler_source=None, application
             'Native fixed point is missing')
     require(not strict_source or manifest['source_dirty'] is False, 'CI package source was dirty')
     require(manifest['target'] == manifest['components']['zig']['target'], 'Target provenance mismatch')
+    require('packages' in manifest['commands'], 'Native package commands are missing from SDK discovery')
     for name, expected in manifest['files'].items():
         path = sdk / name
         require(path.is_relative_to(sdk) and '..' not in Path(name).parts, 'Invalid manifest path: ' + name)
@@ -381,6 +382,33 @@ def validate(sdk, report, strict_source=False, compiler_source=None, application
         api_env = json.loads(api_res.stdout.decode('utf-8'))
         require(api_env.get('status') == 'ok' and api_env.get('result', {}).get('schema_version') == 'wysna.api-index/1', api_env)
         require(any(m.get('identity') == 'std/json' for m in api_env.get('result', {}).get('modules', [])), api_env)
+
+        dependency = work / 'dependency'
+        run('package-create-dependency', ['project', 'new', dependency])
+        (dependency / 'src/values.wysna').write_text('pub fn answer() -> int { 42 }\n', encoding='utf-8')
+        package_archive = work / 'dependency.tar'
+        packed = run('package-pack-ustar', ['packages', 'pack', '--manifest', dependency / 'wysna.toml',
+                     '-o', package_archive, '--output-format=json-v1'])
+        pin = json.loads(packed.stdout)['result']['archive_sha256']
+        require(pin == digest(package_archive), 'Package pin differs from archive bytes')
+        consumer = work / 'consumer'
+        run('package-create-consumer', ['project', 'new', consumer])
+        consumer_manifest = consumer / 'wysna.toml'
+        (consumer / 'src/main.wysna').write_text('import "pkg/values/values" as values\nprint(values.answer())\n', encoding='utf-8')
+        package_cache = work / 'package cache'
+        run('package-fetch-pinned', ['packages', 'fetch', '--manifest', consumer_manifest,
+            '--sha256', pin, '--archive', package_archive, '--cache', package_cache])
+        run('package-add-dependency', ['packages', 'add', 'values', '--manifest', consumer_manifest,
+            '--path', 'vendor/' + pin])
+        run('package-lock', ['project', 'lock', '--manifest', consumer_manifest])
+        locked = (consumer / 'wysna.lock').read_bytes()
+        shutil.rmtree(consumer / 'vendor')
+        package_archive.unlink()
+        run('package-restore-offline', ['packages', 'restore', '--manifest', consumer_manifest, '--cache', package_cache])
+        require((consumer / 'wysna.lock').read_bytes() == locked, 'Restore changed the frozen lock')
+        require((consumer / 'vendor' / pin / 'src/values.wysna').read_bytes()
+                == (dependency / 'src/values.wysna').read_bytes(), 'Restored package differs from source')
+        run('package-consumer-frozen-run', ['project', 'run', '--manifest', consumer_manifest, '--frozen'], stdout=b'42\n')
 
         proj_dir = work / 'native_project_smoke'
         (proj_dir / 'src').mkdir(parents=True)

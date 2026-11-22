@@ -26,7 +26,7 @@ COMPONENTS = json.loads((ROOT / "packaging/native/components.json").read_text(en
 COMMANDS = [
     "check", "emit-c", "emit-mir", "build", "run", "test", "fmt",
     "graph", "inspect", "patch", "explain", "schema", "fix",
-    "skills", "capabilities", "api", "project", "mcp", "lsp",
+    "skills", "capabilities", "api", "project", "packages", "mcp", "lsp",
 ]
 # Cold release compilation of the compiler itself needs the SDK build budget.
 SDK_COMPONENT_BUILD_TIMEOUT_SECONDS = 600
