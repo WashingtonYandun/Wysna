@@ -1,13 +1,38 @@
 """Reject partial or stale LLVM evidence instead of publishing a qualified decision."""
 from copy import deepcopy
 import json
+import os
 from pathlib import Path
+import subprocess
+import sys
+import tempfile
 import unittest
 from tests.engine_harness import corpus_paths
 from tools.benchmark_llvm import require_qualification, decision, ROOT
 
 
 class LlvmEvidenceTests(unittest.TestCase):
+    def test_benchmark_cli_compiles_from_an_isolated_directory(self):
+        with tempfile.TemporaryDirectory(prefix='wysna benchmark ') as temporary:
+            directory = Path(temporary)
+            source = directory / 'main.wysna'
+            source.write_text('print(42)\n', encoding='utf-8')
+            binary = directory / 'program'
+            environment = {**os.environ, 'WYSNA_COMPILER_CACHE_HOME': str(directory / 'cache')}
+            environment.pop('PYTHONPATH', None)
+            environment.pop('WYSNA_LLVM_SDK', None)
+            process = subprocess.run(
+                [sys.executable, '-I', str(ROOT / 'tools/benchmark_llvm.py'),
+                 '--worker', str(source), '--backend', 'c99', '--profile', 'dev', '--binary', str(binary)],
+                cwd=directory, env=environment, capture_output=True, text=True, timeout=120)
+            self.assertEqual(process.returncode, 0, process.stderr)
+            self.assertEqual(process.stderr, '')
+            measured = json.loads(process.stdout)
+            self.assertEqual(measured['backend'], 'c99')
+            self.assertEqual(measured['executable_bytes'], binary.stat().st_size)
+            executed = subprocess.run([str(binary)], capture_output=True, timeout=20)
+            self.assertEqual((executed.returncode, executed.stdout, executed.stderr), (0, b'42\n', b''))
+
     def qualification(self):
         positives, negatives = corpus_paths()
         rows = [{'case': path.relative_to(ROOT).as_posix(), 'profile': profile, 'status': 'passed'}

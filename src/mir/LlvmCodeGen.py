@@ -30,6 +30,8 @@ declare void @wysna_llvm_concat(ptr nocapture, ptr nocapture readonly, ptr nocap
 declare i32 @wysna_llvm_compare(ptr nocapture readonly, ptr nocapture readonly, i32) readonly
 declare i32 @wysna_llvm_range_count(i64, i64, i32) readnone
 declare void @wysna_llvm_position(ptr nocapture readonly, i32, i32)
+declare void @wysna_llvm_push_frame(ptr, ptr, i32)
+declare void @wysna_llvm_pop_frame()
 declare void @wysna_llvm_fail(ptr nocapture readonly, ptr nocapture readonly, ptr nocapture readonly, i32, i32) cold noreturn
 declare void @wysna_llvm_exit(i64) cold noreturn
 '''
@@ -201,6 +203,15 @@ class LlvmCodeGen:
                 return '_take_task_value'
         return None
 
+    @staticmethod
+    def _runtime_frame_name(name):
+        raw = name[9:] if name.startswith('wysna_fn_') else name
+        if raw.startswith('__wysna_module_'):
+            end = raw.find('__', 15)
+            if end >= 0:
+                raw = raw[end + 2:]
+        return raw
+
     def function(self, function):
         if getattr(function, 'is_async', False):
             return self._async_function(function)
@@ -249,6 +260,11 @@ class LlvmCodeGen:
                 self.lines.append('  call void @llvm.dbg.declare(metadata ptr ' + self.pointer(binding.slot) + ', metadata !' + str(variable) + ', metadata !DIExpression())' + location)
         self.scratch = max([2] + [len(operation.args) + 1 for block in function.blocks for operation in block.operations])
         self.lines.append('  %scratch = alloca [' + str(self.scratch) + ' x %WysnaValue], align ' + str(ALIGNMENT))
+        track_frame = function.name.startswith('wysna_fn_')
+        if track_frame:
+            self.emit('call void @wysna_llvm_push_frame(ptr ' + self.string(self._runtime_frame_name(function.name)) +
+                      ', ptr ' + self.string(function.source.file or '<unknown>') +
+                      ', i32 ' + str(function.source.line or 0) + ')')
         self.lines.append('  br label %bb0')
         back_edge_targets = {target for block in function.blocks if block.terminator is not None
                              for target in block.terminator.targets if target <= block.id}
@@ -267,6 +283,8 @@ class LlvmCodeGen:
                 value = self.load(term.value)
                 self.emit('br i1 ' + value + ', label %bb' + str(term.targets[0]) + ', label %bb' + str(term.targets[1]))
             elif term.kind == 'return':
+                if track_frame:
+                    self.emit('call void @wysna_llvm_pop_frame()')
                 if is_managed(function.return_type):
                     self.emit('call void @wysna_llvm_move(ptr %out, ptr ' + self.pointer(term.value) + ')')
                     self.emit('ret void')

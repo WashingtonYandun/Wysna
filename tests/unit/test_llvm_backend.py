@@ -173,6 +173,40 @@ class LlvmBackendTests(unittest.TestCase):
                     self.assertEqual((actual.returncode, actual.stdout, actual.stderr),
                                      (reference.returncode, reference.stdout, reference.stderr))
 
+    def test_panic_frames_match_c99_after_returns_and_across_imports(self):
+        library = self.directory / 'library.wysna'
+        library.write_text('pub fn divide(a: int, b: int) -> int { a / b }\n', encoding='utf-8')
+        cases = [
+            ('corpus', (ROOT / 'tests/runtime/panic_division.wysna').read_text(encoding='utf-8')),
+            ('returns', '''
+fn scalar(n: int) -> int { if n > 0 { return n }; 0 }
+fn managed(n: int) -> str { if n > 0 { return "positive" }; "zero" }
+fn nothing(n: int) -> unit { if n > 0 { return }; print() }
+fn divide(a: int, b: int) -> int { a / b }
+fn main() {
+    for n in 0..80 { print(scalar(n), managed(n)); nothing(n) }
+    print(divide(10, 0))
+}
+main()
+'''),
+            ('import', 'import "library.wysna"\nfn main() { print(library.divide(10, 0)) }\nmain()\n'),
+        ]
+        for name, source in cases:
+            service, checked = self.checked(source)
+            reference = self.c99(service, checked)
+            self.assertNotEqual(reference.returncode, 0)
+            self.assertIn(b'[W4001]', reference.stderr)
+            self.assertEqual(reference.stderr.count(b'  at '), 2, reference.stderr)
+            self.assertIn(b'  at divide (', reference.stderr)
+            self.assertIn(b'  at main (', reference.stderr)
+            for profile in ('dev', 'release', 'size'):
+                with self.subTest(program=name, profile=profile):
+                    emission = service.emit_llvm(checked, profile=profile)
+                    build = LlvmToolchain(profile=profile).build(emission, self.directory / 'panic-frames')
+                    actual = self.execute(build.output_path)
+                    self.assertEqual((actual.returncode, actual.stdout, actual.stderr),
+                                     (reference.returncode, reference.stdout, reference.stderr))
+
     def test_existing_scalar_corpus_and_range_limits(self):
         for name in ('arithmetic', 'comparisons', 'recursion', 'generic_function',
                      'audit_bool_conversion', 'range_loop', 'range_inclusive',
