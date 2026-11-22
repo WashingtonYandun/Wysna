@@ -48,7 +48,7 @@ La evidencia inicial del cambio de tipos se conserva en [LANG-07](evidence/lang0
 
 La [calificación extendida del tag v0.8.0](https://github.com/WashingtonYandun/Wysna/actions/runs/44973834359) detectó una regresión de diagnóstico: `panic_division.wysna` imprime `at divide` y `at main` en C99, mientras LLVM omite ambos frames. Falla en los tres perfiles de Linux y macOS. La CI de integración y la publicación del backend estable C99 sí aprobaron sus controles; esos resultados no sustituyen la calificación LLVM.
 
-La reparación se prepara en un PR independiente sobre `main`:
+La reparación se integró mediante [PR #173](https://github.com/WashingtonYandun/Wysna/pull/173) en `c49e3d5`, con CI del candidato 39/39 y calificación completa 13/13. Incluye:
 
 1. Registrar los frames síncronos mediante el puente LLVM/runtime, retirar cada frame al retornar y presentar nombres importados igual que C99.
 2. Comparar íntegramente estado, stdout y stderr en regresiones de pánicos, imports y retornos escalares, gestionados y unitarios para `dev`, `release` y `size`.
@@ -57,4 +57,16 @@ La reparación se prepara en un PR independiente sobre `main`:
 
 El criterio de cierre es el resultado real de esos workflows. No se modifica el tag publicado, no se reduce el corpus y no se cambia el protocolo de medición ni sus presupuestos. LLVM conserva su estado experimental congelado.
 
-Validación local del candidato: 34 pruebas de backend/evidencia verificadas (la prueba de breakpoints se repitió fuera del sandbox para permitir LLDB) y 459/459 filas del corpus LLVM normal en 462.83 s, sin casos omitidos y con fuentes intactas durante la medición: 125 programas por tres perfiles y 84 rechazos. La validación sanitizada y las plataformas remotas requieren sus propios resultados de CI.
+Validación local del candidato: 34 pruebas de backend/evidencia verificadas (la prueba de breakpoints se repitió fuera del sandbox para permitir LLDB) y 459/459 filas del corpus LLVM normal en 462.83 s, sin casos omitidos y con fuentes intactas durante la medición. En CI aprobaron 459/459 filas por ejecución normal/sanitizada de ambos hosts y por calificación de ambos SDK; seis comparaciones contienen 12 cargas cada una y muestras frías/calientes/runtime 5/5/15 por motor. Es evidencia del candidato `6289b5c`, no del tag anterior. El run del SHA final `c49e3d5` es [44980185856](https://github.com/WashingtonYandun/Wysna/actions/runs/44980185856).
+
+## Ciclo aprobado: proyectos para agentes de IA
+
+Los agentes son el usuario principal. Las mejoras deben permitir descubrir capacidades, seleccionar trabajo, verificar entradas y reparar fallos sin interpretar texto de terminal ni responder preguntas interactivas. La evaluación de calidad con modelos continúa aplazada; la verificación de protocolos utiliza pruebas locales y CI.
+
+1. **DOC-A01 — Cierre documental.** Referencias portables, separación explícita de línea base y estado vigente, identificación correcta de investigaciones y evidencia con su commit. Este cambio cierra la coherencia documental; no convierte mediciones aplazadas en resultados.
+2. **TEST-A01 — Pruebas de proyecto.** Ampliar `project test` con listado/descubrimiento determinista, salida `json-v1`, datos de fallo y streams acotados por caso, fixtures temporales y JUnit. Conservar filtro, timeout y el rechazo de suites vacías. Cierre: paridad Seed/SDK nativo en los tres sistemas, sin Python para procesos del SDK; un agente puede listar, ejecutar una selección y localizar el fallo desde el JSON.
+3. **PKG-A01 — Dependencias reproducibles.** Extender la base local con adquisición explícita, caché verificada y empaquetado. Empezar con fuentes fijadas y contenido verificable; las operaciones de construcción congelada permanecen offline. No ejecutar hooks de instalación. Cierre: un proyecto con dependencias se restaura y prueba desde un directorio limpio, el lock detecta alteraciones y todos los errores tienen clasificación estable en JSON. El registro público es una etapa posterior.
+4. **FUZZ-A01 — Combinaciones y compatibilidad.** Ampliar el generador existente con proyectos multiarchivo, genéricos, errores, closures y async dentro del perfil común. Conservar semillas y reducción de casos; agregar proyectos de referencia de v0.8. Cierre: divergencias reproducibles y minimizadas, rechazos esperados sin `W9999` y contratos CLI/JSON compatibles.
+5. **OPS-A01 — Integración real.** Usar dependencias y pruebas de proyecto en `wysofia-ops`, con escritura segura y rutas de recuperación verificadas. Cierre: flujo completo desde SDK instalado, lock congelado, datos válidos/inválidos y fallos de escritura simulados; el agente obtiene artefactos y diagnósticos verificables.
+
+TEST-A01, PKG-A01, FUZZ-A01 y OPS-A01 están aprobados para implementación; todavía no se presentan como terminados. Cada bloque requiere su propio código, regresiones y evidencia. Se conserva C99 como backend estable, LLVM congelado y el límite explícito entre Seed y el perfil nativo.
