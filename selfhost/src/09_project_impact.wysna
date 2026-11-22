@@ -1,0 +1,162 @@
+# Manifest-level impact analysis (consumed by `wysna graph --manifest ... --rel impact`).
+
+struct ProjectImpactEntry {
+    name: str, kind: str, entry: str, profile: str, graph: ToolGraph,
+}
+
+fn proj_impact_graph(m: ProjectManifest, entry: str, aliases: list[str], roots: list[str]) -> ToolGraph {
+    let file = module_canonical(m.root + "/" + entry)
+    let source = read_file(file) else err {
+        report_error(file, "W5004", 1, 1, "cannot read project entry: " + err.message)
+        ""
+    }
+    let expanded = module_tokens_with_project(source, file, m.source_root_abs, aliases, roots)
+    let checked = check_program(expanded, file, true)
+    for node in checked.nodes {
+        if node.kind == "unsupported" {
+            report_error_at("W2013", node.source, "Compiler native-core-v1 does not support expression " + node.text)
+        }
+    }
+    return tool_build_checked_graph(source, file, expanded, checked, [], [], true)
+}
+
+fn proj_impact_matches(a: ToolGraphNode, b: ToolGraphNode) -> bool {
+    return a.file == b.file and a.kind == b.kind and a.line == b.line and a.col == b.col and a.name == b.name
+}
+
+fn proj_impact_entry_json(item: ProjectImpactEntry, target: ToolGraphNode, root: str, output_json: bool) -> str {
+    let graph = item.graph
+    let mut ids: list[str] = []
+    let mut next_edges: list[ToolGraphEdge] = []
+    for n in graph.nodes {
+        if proj_impact_matches(n, target) {
+            ids.append(n.id)
+            next_edges.append(ToolGraphEdge { from_id: "", to_id: "", kind: "", context: "", file: "", line: 0 })
+            break
+        }
+    }
+    let mut index = 0
+    while index < len(ids) {
+        for e in graph.edges {
+            if e.to_id == ids[index] and not tool_str_contains(ids, e.from_id) {
+                ids.append(e.from_id)
+                next_edges.append(e)
+            }
+        }
+        index = index + 1
+    }
+
+    let mut paths: list[str] = []
+    let mut labels: list[str] = []
+    let mut entry_ids: list[str] = []
+    let mut boundaries: list[str] = []
+    if item.profile == "browser-library" { boundaries.append("javascript") }
+    for n in graph.nodes {
+        if n.kind == "extern" and mcp_is_within_root(n.file, root) and not tool_str_contains(boundaries, "c-ffi") {
+            boundaries.append("c-ffi")
+        }
+        if n.file != graph.entry_file { continue }
+        let is_root = if item.profile == "browser-library" { n.kind == "fn" and n.visibility == "public" }
+            else { n.kind == "entrypoint" or (n.kind == "fn" and n.name == "main") }
+        if not is_root { continue }
+        entry_ids.append(n.id)
+        let mut route: list[str] = []
+        let mut description = n.id
+        let mut cursor = -1
+        for i in 0..len(ids) {
+            if ids[i] == n.id { cursor = i break }
+        }
+        if cursor < 0 { continue }
+        while cursor > 0 {
+            let edge = next_edges[cursor]
+            route.append("{\"from\":" + diag_json_quote(edge.from_id) + ",\"to\":" + diag_json_quote(edge.to_id) + ",\"kind\":" + diag_json_quote(edge.kind) + "}")
+            description = description + " --" + edge.kind + "--> " + edge.to_id
+            for j in 0..cursor {
+                if ids[j] == edge.to_id { cursor = j break }
+            }
+        }
+        paths.append("{\"entry_symbol\":" + diag_json_quote(n.id) + ",\"chain\":[" + join_strings(route, ",") + "]}")
+        labels.append(description)
+    }
+    let mut visited = entry_ids
+    let mut head = 0
+    while head < len(visited) {
+        let id = visited[head]
+        head = head + 1
+        let idx = tool_find_node_idx(graph, id)
+        if idx >= 0 and graph.nodes[idx].indirect_call {
+            boundaries.append("indirect-call")
+            break
+        }
+        for edge in graph.edges {
+            if edge.from_id == id and not tool_str_contains(visited, edge.to_id) {
+                visited.append(edge.to_id)
+            }
+        }
+    }
+    let affected = len(paths) > 0
+    let impact_status = if affected { "affected" } elif len(boundaries) > 0 { "uncertain" } else { "no-static-path" }
+    if not output_json {
+        print(item.kind + " " + item.name + " (" + item.entry + "): " + (if impact_status == "no-static-path" { "no static path" } else { impact_status }))
+        for label in labels { print("  " + label) }
+        if len(boundaries) > 0 { print("  External boundaries: " + join_strings(boundaries, ", ")) }
+    }
+    return "{\"kind\":" + diag_json_quote(item.kind) + ",\"name\":" + diag_json_quote(item.name) +
+        ",\"entry\":" + diag_json_quote(item.entry) + ",\"profile\":" + diag_json_quote(item.profile) +
+        ",\"affected\":" + (if affected { "true" } else { "false" }) +
+        ",\"impact_status\":" + diag_json_quote(impact_status) +
+        ",\"paths\":[" + join_strings(paths, ",") + "],\"unanalyzed_boundaries\":" + tool_str_list_json(boundaries) + "}"
+}
+
+fn proj_handle_impact(manifest: str, symbol: str, json_mode: bool) -> unit {
+    let m = proj_load_manifest(manifest)
+    if not m.ok { report_error(manifest, m.err_code, 1, 1, m.err_msg) }
+    let mut aliases: list[str] = []
+    let mut roots: list[str] = []
+    for dep in m.deps {
+        aliases.append(dep.alias)
+        roots.append(dep.source_root_abs)
+    }
+    let mut entries: list[ProjectImpactEntry] = []
+    for target in m.targets {
+        let graph = proj_impact_graph(m, target.entry, aliases, roots)
+        entries.append(ProjectImpactEntry { name: target.name, kind: "target", entry: target.entry, profile: target.profile, graph: graph })
+    }
+    for test in m.tests {
+        let graph = proj_impact_graph(m, test.entry, aliases, roots)
+        entries.append(ProjectImpactEntry { name: test.name, kind: "test", entry: test.entry, profile: "native-cli", graph: graph })
+    }
+    let mut candidates: list[ToolGraphNode] = []
+    let mut match_rank = 0
+    for item in entries {
+        for n in item.graph.nodes {
+            if n.kind == "entrypoint" { continue }
+            let rank = if n.id == symbol { 3 } elif n.qualified_name == symbol { 2 } elif n.name == symbol { 1 } else { 0 }
+            if rank == 0 or rank < match_rank { continue }
+            if rank > match_rank {
+                candidates = []
+                match_rank = rank
+            }
+            let mut seen = false
+            for candidate in candidates {
+                if proj_impact_matches(candidate, n) { seen = true break }
+            }
+            if not seen { candidates.append(n) }
+        }
+    }
+    if len(candidates) != 1 {
+        let msg = if len(candidates) == 0 { "symbol not found in declared targets or tests: " } else { "ambiguous project symbol: " }
+        report_error(manifest, "W5002", 1, 1, msg + symbol)
+    }
+    let selected = candidates[0]
+    let mut results: list[str] = []
+    for item in entries {
+        results.append(proj_impact_entry_json(item, selected, m.root, json_mode))
+    }
+    if json_mode {
+        let payload = "{\"schema_version\":\"wysna.project-impact/1\",\"symbol\":{\"id\":" + diag_json_quote(selected.id) +
+            ",\"name\":" + diag_json_quote(selected.name) + ",\"file\":" + diag_json_quote(selected.file) + ",\"line\":" + str(selected.line) +
+            "},\"entries\":[" + join_strings(results, ",") + "]}"
+        diag_write_output(diag_tool_envelope_json("graph", "ok", 0, "[]", "result", payload, "[]"))
+    }
+}

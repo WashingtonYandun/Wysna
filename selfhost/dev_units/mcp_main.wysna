@@ -1,0 +1,12 @@
+# Standalone dev unit entrypoint for `wysna-mcp` (~1.6k LOC, <1.5s rebuild).
+
+fn run_mcp_unit() -> unit {
+    let clean = diag_clean_cli_args()
+    if len(clean) == 0 or clean[0] != "mcp" {
+        eprint("[W5002] Usage: wysna-mcp mcp [--root DIR]")
+        exit(2)
+    }
+    mcp_serve(clean)
+}
+
+run_mcp_unit()

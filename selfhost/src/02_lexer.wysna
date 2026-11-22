@@ -1,46 +1,5 @@
-fn report_error(file: str, code: str, line: int, col: int, msg: str) -> unit {
-    diag_emit_and_exit(file, code, line, col, msg)
-}
-
-fn report_error_at(code: str, token: Token, msg: str) -> unit {
-    report_error(token.file, code, token.line, token.col, msg)
-}
-
-fn report_error_at_location(code: str, file: str, line: int, col: int, msg: str) -> unit {
-    report_error(file, code, line, col, msg)
-}
-
-fn is_alpha(c: int) -> bool {
-    return c >= 65 and c <= 90 or c >= 97 and c <= 122 or c == 95
-}
-
-fn is_digit(c: int) -> bool {
-    return c >= 48 and c <= 57
-}
-
-fn is_alnum(c: int) -> bool {
-    return is_alpha(c) or is_digit(c)
-}
-
-fn is_space(c: int) -> bool {
-    return c == 32 or c == 9 or c == 10 or c == 13
-}
-
 fn line_terminates_statement(kind: str) -> bool {
     return kind == "INT" or kind == "FLOAT" or kind == "STR" or kind == "TRUE" or kind == "FALSE" or kind == "NONE" or kind == "IDENT" or kind == "THIS" or kind == "SUPER" or kind == "RPAREN" or kind == "RBRACKET" or kind == "RBRACE" or kind == "QUESTION" or kind == "BREAK" or kind == "CONTINUE"
-}
-
-fn hex_val(c: int) -> int {
-    if c >= 48 and c <= 57 {
-        return c - 48
-    }
-    if c >= 65 and c <= 70 {
-        return c - 55
-    }
-    if c >= 97 and c <= 102 {
-        return c - 87
-    }
-    return 0
 }
 
 fn keyword_kind(word: str) -> str {

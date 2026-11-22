@@ -24,17 +24,21 @@
 #ifdef _WIN32
 #include <process.h>
 #define SDK_ENGINE "libexec/wysna-compiler.exe"
+#define SDK_PROJECT_ENGINE "libexec/wysna-project.exe"
+#define SDK_MCP_ENGINE "libexec/wysna-mcp.exe"
 #define SDK_ZIG "toolchain/zig/zig.exe"
 #define SDK_PROGRAM "program.exe"
 #else
 #define SDK_ENGINE "libexec/wysna-compiler"
+#define SDK_PROJECT_ENGINE "libexec/wysna-project"
+#define SDK_MCP_ENGINE "libexec/wysna-mcp"
 #define SDK_ZIG "toolchain/zig/zig"
 #define SDK_PROGRAM "program"
 #endif
 
 typedef struct {
     const char *command, *source, *output, *profile;
-    const char *project_subcmd, *project_src_root;
+    const char *project_subcmd, *project_src_root, *unsupported_target;
     int arguments, include_count, link_count, library_count, library_dir_count, dep_count;
     int profile_set, timeout_set, project_json_v1, test_diagnostics;
     const char *includes[SDK_LINK_LIMIT], *links[SDK_LINK_LIMIT], *libraries[SDK_LINK_LIMIT], *library_dirs[SDK_LINK_LIMIT];
@@ -42,7 +46,8 @@ typedef struct {
     int64_t timeout, test_deadline;
 } SdkOptions;
 typedef struct {
-    char root[SDK_PATH_CAP], engine[SDK_PATH_CAP], zig[SDK_PATH_CAP], stdlib[SDK_PATH_CAP];
+    char root[SDK_PATH_CAP], engine[SDK_PATH_CAP], project_engine[SDK_PATH_CAP], mcp_engine[SDK_PATH_CAP];
+    char zig[SDK_PATH_CAP], stdlib[SDK_PATH_CAP];
     char source[SDK_PATH_CAP], output[SDK_PATH_CAP], parent[SDK_PATH_CAP];
     char workspace[SDK_PATH_CAP], generated[SDK_PATH_CAP], product[SDK_PATH_CAP];
     char scratch[SDK_PATH_CAP], global_cache[SDK_PATH_CAP];
@@ -82,6 +87,7 @@ static void sdk_help(void) {
          "       wysna capabilities [--output-format=json-v1]\n"
          "       wysna api [MODULE] [--manifest PATH] [--output-format=json-v1]\n"
          "       wysna project <new|lock|check|build|run|test> [--manifest PATH] [--target NAME] [--profile dev|release|size] [-o OUTPUT] [--filter NAME] [-- ARGUMENTS]\n"
+         "       wysna packages <subcommand> [options]\n"
          "       wysna mcp [--root DIR]\n"
          "       wysna lsp\n"
          "Build and run accept --include-dir DIR, --link FILE, --library-dir DIR and --library NAME.\n"
@@ -94,12 +100,19 @@ static int sdk_has_json_v1(int argc, char** argv) {
     }
     return 0;
 }
+static int sdk_is_wasm_target(const char* target) {
+    return strcmp(target, "wasi") == 0 || strcmp(target, "wasi-command") == 0 ||
+           strcmp(target, "wasm32-wasi") == 0 || strcmp(target, "wasm32-wasip1") == 0 ||
+           strcmp(target, "web") == 0 || strcmp(target, "browser-library") == 0 ||
+           strcmp(target, "wasm32-unknown-emscripten") == 0;
+}
 static int sdk_is_agent_passthrough(const char* cmd) {
     return strcmp(cmd, "graph") == 0 || strcmp(cmd, "inspect") == 0 ||
            strcmp(cmd, "patch") == 0 || strcmp(cmd, "explain") == 0 ||
            strcmp(cmd, "schema") == 0 || strcmp(cmd, "fix") == 0 ||
            strcmp(cmd, "skills") == 0 || strcmp(cmd, "capabilities") == 0 ||
-           strcmp(cmd, "api") == 0 || strcmp(cmd, "mcp") == 0 || strcmp(cmd, "lsp") == 0;
+           strcmp(cmd, "api") == 0 || strcmp(cmd, "packages") == 0 ||
+           strcmp(cmd, "mcp") == 0 || strcmp(cmd, "lsp") == 0;
 }
 static int sdk_parse_timeout_ms(const char* argument, int64_t* out) {
     char* end = NULL; errno = 0; long parsed = strtol(argument, &end, 10);
@@ -117,7 +130,7 @@ static int sdk_parse(SdkOptions* options, int argc, char** argv) {
     if (argc >= 2 && argc <= SDK_ARGUMENT_LIMIT &&
         (strcmp(argv[1], "lsp") == 0 || strcmp(argv[1], "mcp") == 0 ||
          strcmp(argv[1], "skills") == 0 || strcmp(argv[1], "capabilities") == 0 ||
-         strcmp(argv[1], "api") == 0)) {
+         strcmp(argv[1], "api") == 0 || strcmp(argv[1], "packages") == 0)) {
         options->command = argv[1];
         options->profile = "dev";
         options->timeout = (strcmp(argv[1], "lsp") == 0 || strcmp(argv[1], "mcp") == 0) ? 0 : 600000;
@@ -187,13 +200,25 @@ static int sdk_parse(SdkOptions* options, int argc, char** argv) {
         if (strcmp(value, "--") == 0 && (strcmp(options->command, "run") == 0 || strcmp(options->command, "test") == 0)) { options->arguments = index + 1; break; }
         if (value[0] != '-') { if (options->source) return 0; options->source = value; continue; }
         if (strcmp(value, "--output-format=json-v1") == 0 &&
-            (strcmp(options->command, "check") == 0 || strcmp(options->command, "fmt") == 0)) continue;
+            (strcmp(options->command, "check") == 0 || strcmp(options->command, "fmt") == 0 ||
+             strcmp(options->command, "build") == 0 || strcmp(options->command, "emit-c") == 0)) continue;
+        if (strncmp(value, "--target=", 9) == 0) {
+            const char* target = value + 9;
+            if (sdk_is_wasm_target(target)) { options->unsupported_target = target; return 1; }
+            if (strcmp(target, "native") == 0 || strcmp(target, "native-cli") == 0) continue;
+            return 0;
+        }
         if ((strcmp(value, "--write") == 0 || strcmp(value, "-w") == 0) && strcmp(options->command, "fmt") == 0) continue;
         if (++index == argc) return 0;
         const char* argument = argv[index];
         if (strcmp(value, "-o") == 0) { if (options->output) return 0; options->output = argument; }
+        else if (strcmp(value, "--target") == 0) {
+            if (sdk_is_wasm_target(argument)) { options->unsupported_target = argument; return 1; }
+            if (strcmp(argument, "native") != 0 && strcmp(argument, "native-cli") != 0) return 0;
+        }
         else if (strcmp(value, "--output-format") == 0 &&
-                 (strcmp(options->command, "check") == 0 || strcmp(options->command, "fmt") == 0)) {
+                 (strcmp(options->command, "check") == 0 || strcmp(options->command, "fmt") == 0 ||
+                  strcmp(options->command, "build") == 0 || strcmp(options->command, "emit-c") == 0)) {
             if (strcmp(argument, "json-v1") != 0) return 0;
         }
         else if (strcmp(value, "--profile") == 0) { if (options->profile_set++) return 0; options->profile = argument; }
@@ -220,7 +245,14 @@ static int sdk_component_paths(SdkInvocation* invocation) {
         !sdk_parent(invocation->scratch, invocation->root) || !sdk_parent(invocation->root, invocation->scratch) ||
         !sdk_join(invocation->stdlib, invocation->root, "stdlib") ||
         !sdk_join(invocation->engine, invocation->root, SDK_ENGINE) || !sdk_join(invocation->zig, invocation->root, SDK_ZIG)) return 0;
-    return sdk_is_file(invocation->engine);
+    if (!sdk_is_file(invocation->engine)) return 0;
+    if (!sdk_join(invocation->project_engine, invocation->root, SDK_PROJECT_ENGINE) || !sdk_is_file(invocation->project_engine)) {
+        (void)sdk_copy(invocation->project_engine, invocation->engine);
+    }
+    if (!sdk_join(invocation->mcp_engine, invocation->root, SDK_MCP_ENGINE) || !sdk_is_file(invocation->mcp_engine)) {
+        (void)sdk_copy(invocation->mcp_engine, invocation->engine);
+    }
+    return 1;
 }
 static void* sdk_buffer(const char* data, size_t size) {
     void* buffer = wysna_host_buffer_new();
@@ -489,6 +521,7 @@ static int sdk_execute_project(SdkInvocation* invocation, const SdkOptions* opti
     if (strcmp(options->project_subcmd, "build") != 0 &&
         strcmp(options->project_subcmd, "run") != 0 &&
         strcmp(options->project_subcmd, "test") != 0) {
+        const char* target_exe = strcmp(options->project_subcmd, "check") == 0 ? invocation->engine : invocation->project_engine;
         const char* engine_arguments[SDK_ARGUMENT_LIMIT + 3];
         engine_arguments[0] = "--stdlib-root";
         engine_arguments[1] = invocation->stdlib;
@@ -496,7 +529,10 @@ static int sdk_execute_project(SdkInvocation* invocation, const SdkOptions* opti
         for (int i = 1; i < argc && out_count < SDK_ARGUMENT_LIMIT + 2; i++) {
             engine_arguments[out_count++] = argv[i];
         }
-        return sdk_child(invocation->engine, out_count, engine_arguments, options->timeout);
+        if (strcmp(target_exe, invocation->engine) != 0) {
+            (void)sdk_environment("WYSNA_SELFHOST_COMPILER", invocation->engine);
+        }
+        return sdk_child(target_exe, out_count, engine_arguments, options->timeout);
     }
 
     char plan_dir[SDK_PATH_CAP], plan_path[SDK_PATH_CAP];
@@ -522,7 +558,10 @@ static int sdk_execute_project(SdkInvocation* invocation, const SdkOptions* opti
         }
         plan_argv[pcount++] = v;
     }
-    int plan_rc = sdk_child(invocation->engine, pcount, plan_argv, SDK_COMPILE_TIMEOUT_MS);
+    if (strcmp(invocation->project_engine, invocation->engine) != 0) {
+        (void)sdk_environment("WYSNA_SELFHOST_COMPILER", invocation->engine);
+    }
+    int plan_rc = sdk_child(invocation->project_engine, pcount, plan_argv, SDK_COMPILE_TIMEOUT_MS);
     char* plan_buf = NULL;
     size_t plan_len = 0;
     int read_ok = (plan_rc == 0) && sdk_read_file(plan_path, &plan_buf, &plan_len);
@@ -707,8 +746,12 @@ static int sdk_execute(SdkInvocation* invocation, const SdkOptions* options, int
         return sdk_execute_project(invocation, options, argc, argv);
     }
     if (strcmp(options->command, "lsp") == 0 || strcmp(options->command, "mcp") == 0) {
+        const char* target_exe = strcmp(options->command, "mcp") == 0 ? invocation->mcp_engine : invocation->engine;
+        if (strcmp(target_exe, invocation->engine) != 0) {
+            (void)sdk_environment("WYSNA_SELFHOST_COMPILER", invocation->engine);
+        }
         const char* engine_arguments[SDK_ARGUMENT_LIMIT + 4];
-        engine_arguments[0] = invocation->engine;
+        engine_arguments[0] = target_exe;
         engine_arguments[1] = "--stdlib-root";
         engine_arguments[2] = invocation->stdlib;
         int out_count = 3;
@@ -717,15 +760,19 @@ static int sdk_execute(SdkInvocation* invocation, const SdkOptions* options, int
         }
         engine_arguments[out_count] = NULL;
 #ifdef _WIN32
-        return sdk_spawn_stdio_win32(invocation->engine, out_count, engine_arguments);
+        return sdk_spawn_stdio_win32(target_exe, out_count, engine_arguments);
 #else
-        execv(invocation->engine, (char* const*)engine_arguments);
-        return sdk_error("W5001", "Cannot start the native stdio server", invocation->engine);
+        execv(target_exe, (char* const*)engine_arguments);
+        return sdk_error("W5001", "Cannot start the native stdio server", target_exe);
 #endif
     }
     if (sdk_is_agent_passthrough(options->command) ||
         (strcmp(options->command, "check") == 0 && sdk_has_json_v1(argc, argv)) ||
         strcmp(options->command, "fmt") == 0) {
+        const char* target_exe = strcmp(options->command, "packages") == 0 ? invocation->project_engine : invocation->engine;
+        if (strcmp(target_exe, invocation->engine) != 0) {
+            (void)sdk_environment("WYSNA_SELFHOST_COMPILER", invocation->engine);
+        }
         const char* engine_arguments[SDK_ARGUMENT_LIMIT + 3];
         engine_arguments[0] = "--stdlib-root";
         engine_arguments[1] = invocation->stdlib;
@@ -733,7 +780,7 @@ static int sdk_execute(SdkInvocation* invocation, const SdkOptions* options, int
         for (int i = 1; i < argc && out_count < SDK_ARGUMENT_LIMIT + 2; i++) {
             engine_arguments[out_count++] = argv[i];
         }
-        return sdk_child(invocation->engine, out_count, engine_arguments, options->timeout);
+        return sdk_child(target_exe, out_count, engine_arguments, options->timeout);
     }
     int build = strcmp(options->command, "build") == 0;
     int run = strcmp(options->command, "run") == 0;
@@ -819,6 +866,23 @@ int main(int argc, char** argv) {
     if (argc == 2 && (strcmp(argv[1], "--help") == 0 || strcmp(argv[1], "-h") == 0)) { sdk_help(); wysna_runtime_cleanup(); return 0; }
     SdkOptions options = {0};
     if (!sdk_parse(&options, argc, argv)) { int status = sdk_error("W5002", "Invalid command; run wysna --help", NULL); wysna_runtime_cleanup(); return status; }
+    if (options.unsupported_target) {
+        char message[512];
+        snprintf(message, sizeof(message),
+                 "Target '%s' is not available in the Native SDK yet; use the Seed distribution for WebAssembly/WASI builds (tracked post-v1.0 via bundled zig)",
+                 options.unsupported_target);
+        if (sdk_has_json_v1(argc, argv)) {
+            printf("{\"schema_version\":\"wysna.tool-result/1\",\"command\":");
+            sdk_print_json_quoted(options.command ? options.command : "build");
+            printf(",\"status\":\"usage_error\",\"invocation_id\":\"native\",\"tool_exit_code\":2,\"process_exit_code\":2,\"execution\":null,\"toolchain\":{\"compiler\":\"" WYSNA_NATIVE_VERSION "\"},\"target\":{\"profile\":\"native-cli\",\"triple\":null},\"diagnostics\":[{\"code\":\"W2013\",\"stage\":\"target\",\"severity\":\"error\",\"message\":");
+            sdk_print_json_quoted(message);
+            puts(",\"primary_span\":null,\"related\":[],\"data\":{},\"fixes\":[]}],\"artifacts\":[],\"telemetry\":null}");
+        } else {
+            fprintf(stderr, "[W2013] %s\n", message);
+        }
+        wysna_runtime_cleanup();
+        return 2;
+    }
     SdkInvocation* invocation = calloc(1, sizeof(*invocation));
     if (!invocation) { wysna_runtime_cleanup(); return sdk_error("W5001", "Cannot allocate command context", NULL); }
 #ifdef _WIN32

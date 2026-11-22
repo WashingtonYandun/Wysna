@@ -171,23 +171,7 @@ class SchemaDeclSet {
     }
 }
 
-fn schema_split_lines(src: str) -> list[str] {
-    let mut lines: list[str] = []
-    let mut start = 0
-    let n = len(src)
-    for i in 0..n {
-        if src[i] == "\n" {
-            let mut end_idx = i
-            if end_idx > start and src[end_idx - 1] == "\r" { end_idx = end_idx - 1 }
-            lines.append(slice(src, start, end_idx))
-            start = i + 1
-        }
-    }
-    let mut tail_end = n
-    if tail_end > start and src[tail_end - 1] == "\r" { tail_end = tail_end - 1 }
-    lines.append(slice(src, start, tail_end))
-    return lines
-}
+# schema_split_lines lives in 01_tool_common.wysna.
 
 fn schema_leading_doc(lines: list[str], decl_line: int) -> list[str] {
     let mut idx = decl_line - 2

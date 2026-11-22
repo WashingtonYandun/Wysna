@@ -1,0 +1,12 @@
+# Native-only `wysna packages` entrypoint (staged for PKG-A01 under Option C).
+
+fn tool_handle_packages(args: list[str], json_mode: bool) -> unit {
+    let msg = "wysna packages is owned exclusively by Selfhost and staged for PKG-A01; use wysna project lock for current local path dependencies"
+    if json_mode {
+        let diag = diag_record_json("W2013", "target", "error", msg, "<cli>", 1, 1, "")
+        diag_write_output(diag_tool_envelope_json("packages", "usage_error", 2, "[" + diag + "]", "", "", "[]"))
+    } else {
+        eprint("[W2013] " + msg)
+    }
+    exit(2)
+}

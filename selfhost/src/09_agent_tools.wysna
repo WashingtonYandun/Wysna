@@ -1,10 +1,5 @@
 # Agent-first semantic graph, symbol inspection, hash-guarded checked patching, and diagnostic explain tools.
-
-extern "C" fn wysna_host_fs(first: opaque, second: opaque, operation: int) -> int
-extern "C" fn wysna_host_getcwd(output: opaque) -> int
-extern "C" fn wysna_host_file_open(path: opaque, mode: int) -> opaque
-extern "C" fn wysna_host_file_write(file: opaque, data: opaque) -> int
-extern "C" fn wysna_host_is_open(file: opaque) -> int
+# Shared host externs live in 01_tool_common.wysna.
 
 class ToolGraphNode {
     id: str
@@ -141,54 +136,7 @@ class ToolGraph {
     }
 }
 
-fn tool_str_contains(xs: list[str], value: str) -> bool {
-    for item in xs {
-        if item == value { return true }
-    }
-    return false
-}
-
-fn tool_str_gt(a: str, b: str) -> bool {
-    let la = len(a)
-    let lb = len(b)
-    let limit = if la < lb { la } else { lb }
-    for i in 0..limit {
-        let ca = ord(a[i])
-        let cb = ord(b[i])
-        if ca > cb { return true }
-        if ca < cb { return false }
-    }
-    return la > lb
-}
-
-fn tool_sort_strings(xs: list[str]) -> list[str] {
-    let mut out: list[str] = []
-    for x in xs {
-        if not tool_str_contains(out, x) { out.append(x) }
-    }
-    let n = len(out)
-    for i in 1..n {
-        let key = out[i]
-        let mut j = i - 1
-        while j >= 0 and tool_str_gt(out[j], key) {
-            out[j + 1] = out[j]
-            j = j - 1
-        }
-        out[j + 1] = key
-    }
-    return out
-}
-
-fn tool_str_list_json(xs: list[str]) -> str {
-    let sorted = tool_sort_strings(xs)
-    let mut parts: list[str] = ["["]
-    for i in 0..len(sorted) {
-        if i > 0 { parts.append(",") }
-        parts.append(diag_json_quote(sorted[i]))
-    }
-    parts.append("]")
-    return join_strings(parts, "")
-}
+# tool_str_contains, tool_str_gt, tool_sort_strings, tool_str_list_json live in 01_tool_common.wysna.
 
 fn tool_short_name(raw: str) -> str {
     let prefix = "__wysna_module_"
@@ -480,17 +428,7 @@ fn tool_effect_to_cap(eff: str) -> str {
     return ""
 }
 
-fn tool_basename(path: str) -> str {
-    let mut last_sep = -1
-    for i in 0..len(path) {
-        if path[i] == "/" or path[i] == "\\" { last_sep = i }
-    }
-    let name = if last_sep >= 0 { slice(path, last_sep + 1, len(path)) } else { path }
-    if len(name) > 6 and slice(name, len(name) - 6, len(name)) == ".wysna" {
-        return slice(name, 0, len(name) - 6)
-    }
-    return name
-}
+# tool_basename lives in 01_tool_common.wysna.
 
 fn tool_scan_decl_nodes(graph: ToolGraph, program: CheckedProgram, src: str, file: str) -> unit {
     let is_entry = file == graph.entry_file
@@ -1978,11 +1916,7 @@ fn selfhost_format_body(source: str, in_path: str) -> str {
     return join_strings(out_lines, "\n")
 }
 
-fn tool_buf_from_str(text: str) -> opaque {
-    let buf = wysna_host_buffer_new()
-    for b in bytes(text) { wysna_host_buffer_append(buf, b) }
-    return buf
-}
+# tool_buf_from_str lives in 01_tool_common.wysna.
 
 fn tool_write_atomic_verified(path: str, expected_sha256: str, content: str) -> unit {
     let disk_text = read_file(path) else err {
@@ -2038,38 +1972,7 @@ fn tool_write_atomic_verified(path: str, expected_sha256: str, content: str) -> 
     wysna_host_close(empty_buf)
 }
 
-fn tool_skills_topic_content(topic: str) -> str {
-    if topic == "overview" {
-        return "# Wysna v0.8.0 — Agent-First Native Language & Toolchain\n- Default workflow uses checked static inspection before execution.\n- Memory model: Single-threaded ARC + Copy-on-Write (`Weak[C]` breaks strong cycles).\n- Error channel: Typed values `T ! E`, unwrap with `?` or `else err { fallback }`.\n- Core agent loop: `wysna skills` -> `wysna graph` -> `wysna inspect` -> `wysna patch` -> `wysna fix` -> `wysna check`.\n- Topics available: overview, agent-loop, syntax, graph, patch, project-tests, contracts, stdlib."
-    }
-    if topic == "agent-loop" {
-        return "# Agent Coding Loop (Token-Efficient, Hash-Guarded)\n1. Discover relationships: `wysna graph <file.wysna> --output-format=json-v1`\n2. Inspect one symbol instead of reading whole files: `wysna inspect <file.wysna> --symbol <name> --with-deps --output-format=json-v1`\n3. Submit checked edits guarded by graph hash: `wysna patch <file.wysna> --symbol <name> --expect-graph-hash <hash> --with <code> --apply`\n4. Auto-repair mechanical diagnostics: `wysna fix --apply --output-format=json-v1 <file.wysna>`\n5. Decode any Wxxxx error: `wysna explain --code W2001 --output-format=json-v1`\n6. Verify & bound runtime: `wysna run --max-steps=100000 --max-heap-mb=64 <file.wysna>`"
-    }
-    if topic == "project-tests" { return "# Pruebas de proyecto para agentes\n1. Lista sin ejecutar: `wysna project test --discover --list --frozen --output-format=json-v1`.\n2. Usa los IDs exactos de result.cases: `--case test:example`; --filter conserva selección por subcadena.\n3. Ejecuta con `--expect-plan-hash <result.plan_hash> --output-format=json-v1 --report-json tests.json --report-junit tests.xml`.\n4. Lee result.cases[].failure_kind, diagnostics y los hashes de stdout/stderr; no interpretes texto de terminal.\n5. W5005 indica plan obsoleto: vuelve a listar. Una suite vacía devuelve 2; una cancelación devuelve 130.\n6. std/test ofrece igualdad genérica, tolerancia flotante, opcionales y fixture_directory(); los fixtures se eliminan después del caso.\nEl hash cubre manifiesto, lock, versión y entradas seleccionadas, no todos los imports. El SDK native-core-v1 ejecuta estos comandos sin Python.\n" }
-    if topic == "syntax" {
-        return "# Wysna Canonical Syntax Quick Reference\n- Bindings: `let x = 1` (immutable), `let mut y = 2` (mutable).\n- Functions: `fn add(a: int, b: int) -> int { return a + b }`\n- Cooperative Async: `async fn fetch_id() -> int { ... }`, `let v = await task`.\n- Optionals & Errors: `T?`, `T ! E`, unwrap `?`, recover `expr else err { fallback }`.\n- OOP & Contracts: `interface Drawable { fn draw() -> str }`, `class Rect implements Drawable { fn draw() -> str { ... } }`.\n- Lambdas: `|n: int| => n * n` (capture outer variables by immutable snapshot).\n- Ranges & Loops: `for i in 0..10 { ... }`, inclusive `0..=10`."
-    }
-    if topic == "graph" {
-        return "# Semantic Relationship Graph (`wysna graph`)\n- `wysna graph <file> --output-format=json-v1`: full nodes, edges, and `graph_hash`.\n- `--symbol <name> --rel implements`: find all classes implementing an interface (or vice-versa).\n- `--symbol <name> --rel usages`: find every class, function, field, and param using the type.\n- `--symbol <name> --rel callers|callees`: traverse the resolved call graph.\n- `--symbol <name> --rel impact`: compute transitive blast radius before refactoring."
-    }
-    if topic == "patch" {
-        return "# Checked Semantic Patching (`wysna patch`)\n- Dry-run check in memory (default): validates syntax, types, and interface contracts before disk writes.\n- Optimistic locking: pass `--expect-graph-hash graph:...`; stale hashes fail with `[W5005]`.\n- Target classes, interfaces, structs, enums, functions, or `ClassName.method`."
-    }
-    if topic == "contracts" {
-        return "# Contracts, Schemas, Quotas & Trace Replay\n- Pre/postconditions: `fn f(x: int) -> int requires x > 0 ensures result >= 0 { ... }` (runtime `[W4005]`).\n- Tool Schema export: `wysna schema --emit-codecs --output-format=json-v1 <file.wysna>`.\n- Deterministic quotas: `--max-steps=<N>`, `--max-heap-mb=<N>` (fail-stop `[W4004]`).\n- Offline effect cassettes: `--record-trace <path>`, `--replay-trace <path>`."
-    }
-    if topic == "stdlib" {
-        return "# Standard Library (18 Modules)\n- Data & Text: `std/math`, `std/text`, `std/bytes`, `std/regex`, `std/collections`, `std/json`, `std/csv`, `std/parse`.\n- Systems & I/O: `std/fs`, `std/files`, `std/buffer`, `std/env`, `std/path`, `std/process`, `std/time`.\n- Network, Concurrency & Security: `std/http`, `std/async`, `std/algorithms` (`parallel_map`), `std/crypto`."
-    }
-    return ""
-}
-
-fn tool_skills_payload_json(topic: str) -> str {
-    let content = tool_skills_topic_content(topic)
-    if content == "" { return "" }
-    let topics_json = "[\"agent-loop\",\"contracts\",\"graph\",\"overview\",\"patch\",\"project-tests\",\"stdlib\",\"syntax\"]"
-    return "{\"schema_version\":\"wysna.skills/1\",\"compiler_version\":\"0.8.0\",\"topic\":" + diag_json_quote(topic) + ",\"available_topics\":" + topics_json + ",\"content\":" + diag_json_quote(content) + "}"
-}
+# tool_skills_topic_content and tool_skills_payload_json live in 01_tool_common.wysna.
 
 fn tool_handle_skills(args: list[str], json_mode: bool) -> unit {
     let mut topic = "overview"
@@ -2109,24 +2012,7 @@ fn tool_handle_skills(args: list[str], json_mode: bool) -> unit {
     exit(0)
 }
 
-fn tool_capabilities_payload_json() -> str {
-    let cmds = "[\"run\",\"check\",\"fmt\",\"ast\",\"mir\",\"tokens\",\"emit-c\",\"emit-mir\",\"build\",\"test\",\"project.new\",\"project.lock\",\"project.check\",\"project.build\",\"project.run\",\"project.test\",\"api\",\"capabilities\",\"explain\",\"graph\",\"inspect\",\"patch\",\"skills\",\"fix\",\"schema\",\"mcp\",\"lsp\"]"
-    let mcmds = "[\"check\",\"fmt\",\"project.new\",\"project.lock\",\"project.check\",\"project.test\",\"api\",\"capabilities\",\"explain\",\"graph\",\"inspect\",\"patch\",\"skills\",\"fix\",\"schema\"]"
-    let profs = "[\"native-cli\",\"wasi-command\",\"browser-library\",\"c99-source\"]"
-    let targs = "[\"native\",\"wasm32-wasip1\",\"wasm32-unknown-emscripten\"]"
-    let runtimes = "{\"wasi-command\":\"wasmtime-python==50.0.1\",\"browser-library\":\"browser or Node.js\"}"
-    let native_caps = "[\"stdio\",\"filesystem\",\"environment\",\"processes\",\"network\",\"native-ffi\"]"
-    let wasi_caps = "[\"stdio\",\"arguments\",\"clock\",\"random\",\"manifest-declared-preopens\"]"
-    let browser_caps = "[\"linear-memory\",\"generated-utf8-abi\",\"bigint-int64\"]"
-    let caps = "{\"native-cli\":" + native_caps + ",\"wasi-command\":" + wasi_caps + ",\"browser-library\":" + browser_caps + "}"
-    let p_native = "{\"profile\":\"native-cli\",\"engine\":\"wysna-selfhost\",\"backend\":\"c99\",\"triple\":null,\"artifact_kind\":\"native_executable\",\"capabilities\":" + native_caps + ",\"build_requirements\":[{\"name\":\"c99-compiler\",\"version\":null,\"provided_by\":\"Host C99 toolchain\"}],\"run_requirements\":[{\"name\":\"host-operating-system\",\"version\":null,\"provided_by\":null}]}"
-    let p_wasi = "{\"profile\":\"wasi-command\",\"engine\":\"wysna-seed\",\"backend\":\"c99\",\"triple\":\"wasm32-wasip1\",\"artifact_kind\":\"wasm_module\",\"capabilities\":" + wasi_caps + ",\"build_requirements\":[{\"name\":\"wasi-sdk\",\"version\":\"34\",\"provided_by\":null}],\"run_requirements\":[{\"name\":\"wasmtime-python\",\"version\":\"50.0.1\",\"provided_by\":null}]}"
-    let p_browser = "{\"profile\":\"browser-library\",\"engine\":\"wysna-seed\",\"backend\":\"c99\",\"triple\":\"wasm32-unknown-emscripten\",\"artifact_kind\":\"wasm_module\",\"capabilities\":" + browser_caps + ",\"build_requirements\":[{\"name\":\"emscripten\",\"version\":\"5.0.1\",\"provided_by\":null}],\"run_requirements\":[{\"name\":\"browser-or-nodejs\",\"version\":null,\"provided_by\":null}]}"
-    let tprofiles = "[" + p_native + "," + p_wasi + "," + p_browser + "]"
-    let reqs = "{\"std/http\":{\"interpreter\":\"install wysna[http] with libcurl 8.3.0 or newer\",\"native\":\"install libcurl 8.3.0 or newer development files and expose curl-config on PATH\",\"wasi-command\":\"unavailable\",\"browser-library\":\"unavailable\"}}"
-    let limits = "[\"native-cli capabilities describe host access and are not a sandbox\",\"WASI Preview 1 does not provide networking, child processes, or native FFI\",\"browser-library exposes only generated scalar and UTF-8 exports; WVal and pointers remain internal\",\"project dependencies are local paths only\",\"project lockfiles do not claim bit-for-bit binary reproducibility\"]"
-    return "{\"schema_version\":\"wysna.capabilities/1\",\"compiler_version\":\"0.8.0\",\"commands\":" + cmds + ",\"machine_output\":{\"format\":\"json-v1\",\"commands\":" + mcmds + "},\"profiles\":" + profs + ",\"targets\":" + targs + ",\"runtimes\":" + runtimes + ",\"capabilities\":" + caps + ",\"target_profiles\":" + tprofiles + ",\"requirements\":" + reqs + ",\"limitations\":" + limits + "}"
-}
+# tool_capabilities_payload_json lives in 01_tool_common.wysna.
 
 fn tool_handle_capabilities(args: list[str], json_mode: bool) -> unit {
     let mut i = 1

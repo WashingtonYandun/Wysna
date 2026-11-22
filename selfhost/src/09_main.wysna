@@ -60,6 +60,10 @@ fn run_compiler() -> unit ! IoError {
         tool_handle_project(clean, json_v1)
         return
     }
+    if cmd == "packages" {
+        tool_handle_packages(clean, json_v1)
+        return
+    }
     if cmd == "schema" {
         tool_handle_schema(clean, json_v1)
         return

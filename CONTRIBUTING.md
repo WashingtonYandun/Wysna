@@ -25,6 +25,18 @@ All contributors and participants are expected to adhere to our [Code of Conduct
 
 ## Architecture Overview
 
+> **Ownership Rule (ADR-05 / SIMP-R01):** Language semantics (syntax, types, HIR/MIR) are validated against Seed; tooling (`project`, `packages`, `mcp`, `lsp`, `schema`) lives in Selfhost.
+
+- **Compiler differential oracle:** Language changes must pass Seed (Interpreter, AST C99, MIR C99) and Selfhost (`native-core-v1`) until `v1.0` freezes the language surface.
+- **Native-owned tooling & delegation:** `./wysna project|packages|mcp|lsp|schema` delegates to the native dev SDK (`.wysna_cache/dev-sdk/bin/wysna`) when built. Pass `--engine=seed` (or `WYSNA_DELEGATE_NATIVE=0`) only when exercising Seed-specific oracles or WebAssembly/WASI targets. `wysna packages` is native-only.
+- **Fast dev rebuilds (`<5 s`):** Iterate on Selfhost tooling units without running a 3-stage bootstrap:
+  ```bash
+  python3 tools/build_selfhost_dev.py --unit project   # ~1.5–2.5 s (project + packages)
+  python3 tools/build_selfhost_dev.py --unit mcp       # ~1.0–1.5 s
+  python3 tools/build_selfhost_dev.py --unit driver    # ~0.5 s
+  ```
+  Run `python3 tools/bundle_selfhost.py` and full 3-stage bootstrap verification before opening a PR.
+
 The Wysna toolchain consists of two primary compiler engines and a unified C99 runtime.
 Seed's batch CLI and LSP share `compiler/CompilerService.py`, which returns a
 session-bound `CheckedProgram`. Consumers get isolated syntax trees; linking and lowering

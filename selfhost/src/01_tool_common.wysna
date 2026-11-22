@@ -1,0 +1,814 @@
+# Shared host/buffer/string/JSON helpers for independent native tooling units (project, packages, mcp, lsp, schema, fix).
+
+extern "C" fn wysna_host_fs(first: opaque, second: opaque, operation: int) -> int
+extern "C" fn wysna_host_getcwd(output: opaque) -> int
+extern "C" fn wysna_host_file_open(path: opaque, mode: int) -> opaque
+extern "C" fn wysna_host_file_write(file: opaque, data: opaque) -> int
+extern "C" fn wysna_host_is_open(file: opaque) -> int
+extern "C" fn wysna_host_stdin_read_line(output: opaque) -> int
+extern "C" fn wysna_host_stdin_read_exact(output: opaque, count: int) -> int
+extern "C" fn wysna_host_stdout_write_raw(input: opaque) -> int
+extern "C" fn wysna_host_self_executable(output: opaque) -> int
+extern "C" fn wysna_host_process_run(executable: opaque, arguments: opaque, timeout_ms: int) -> int
+extern "C" fn wysna_host_last_error() -> int
+
+fn tool_buf_from_str(text: str) -> opaque {
+    let buf = wysna_host_buffer_new()
+    for b in bytes(text) { wysna_host_buffer_append(buf, b) }
+    return buf
+}
+
+fn tool_str_contains(xs: list[str], value: str) -> bool {
+    for item in xs {
+        if item == value { return true }
+    }
+    return false
+}
+
+fn tool_str_gt(a: str, b: str) -> bool {
+    let la = len(a)
+    let lb = len(b)
+    let limit = if la < lb { la } else { lb }
+    for i in 0..limit {
+        let ca = ord(a[i])
+        let cb = ord(b[i])
+        if ca > cb { return true }
+        if ca < cb { return false }
+    }
+    return la > lb
+}
+
+fn tool_sort_strings(xs: list[str]) -> list[str] {
+    let mut out: list[str] = []
+    for x in xs {
+        if not tool_str_contains(out, x) { out.append(x) }
+    }
+    let n = len(out)
+    for i in 1..n {
+        let key = out[i]
+        let mut j = i - 1
+        while j >= 0 and tool_str_gt(out[j], key) {
+            out[j + 1] = out[j]
+            j = j - 1
+        }
+        out[j + 1] = key
+    }
+    return out
+}
+
+fn tool_str_list_json(xs: list[str]) -> str {
+    let sorted = tool_sort_strings(xs)
+    let mut parts: list[str] = ["["]
+    for i in 0..len(sorted) {
+        if i > 0 { parts.append(",") }
+        parts.append(diag_json_quote(sorted[i]))
+    }
+    parts.append("]")
+    return join_strings(parts, "")
+}
+
+fn tool_basename(path: str) -> str {
+    let mut last_sep = -1
+    for i in 0..len(path) {
+        if path[i] == "/" or path[i] == "\\" { last_sep = i }
+    }
+    let name = if last_sep >= 0 { slice(path, last_sep + 1, len(path)) } else { path }
+    if len(name) > 6 and slice(name, len(name) - 6, len(name)) == ".wysna" {
+        return slice(name, 0, len(name) - 6)
+    }
+    return name
+}
+
+fn schema_split_lines(src: str) -> list[str] {
+    let mut lines: list[str] = []
+    let mut start = 0
+    let n = len(src)
+    for i in 0..n {
+        if src[i] == "\n" {
+            let mut end_idx = i
+            if end_idx > start and src[end_idx - 1] == "\r" { end_idx = end_idx - 1 }
+            lines.append(slice(src, start, end_idx))
+            start = i + 1
+        }
+    }
+    let mut tail_end = n
+    if tail_end > start and src[tail_end - 1] == "\r" { tail_end = tail_end - 1 }
+    lines.append(slice(src, start, tail_end))
+    return lines
+}
+
+fn lsp_buf_from_str(text: str) -> opaque {
+    let buf = wysna_host_buffer_new()
+    for b in bytes(text) { wysna_host_buffer_append(buf, b) }
+    return buf
+}
+
+fn lsp_buf_to_str(buf: opaque, count: int) -> str {
+    let mut parts: list[str] = []
+    let mut i = 0
+    while i < count {
+        let first = wysna_host_buffer_get(buf, i)
+        if first < 0 { break }
+        let width = if first < 128 { 1 } elif first < 224 { 2 } elif first < 240 { 3 } else { 4 }
+        if i + width > count { break }
+        let mut cp = if width == 1 { first } elif width == 2 { first % 32 } elif width == 3 { first % 16 } else { first % 8 }
+        for offset in 1..width {
+            cp = cp * 64 + (wysna_host_buffer_get(buf, i + offset) % 64)
+        }
+        parts.append(chr(cp))
+        i = i + width
+    }
+    return join_strings(parts, "")
+}
+
+fn lsp_pack_argv_buf(arguments: list[str]) -> opaque {
+    let buf = wysna_host_buffer_new()
+    for arg in arguments {
+        let raw = bytes(arg)
+        let n = len(raw)
+        let b0 = (n / 16777216) % 256
+        let b1 = (n / 65536) % 256
+        let b2 = (n / 256) % 256
+        let b3 = n % 256
+        wysna_host_buffer_append(buf, b0)
+        wysna_host_buffer_append(buf, b1)
+        wysna_host_buffer_append(buf, b2)
+        wysna_host_buffer_append(buf, b3)
+        for ch in raw { wysna_host_buffer_append(buf, ch) }
+    }
+    return buf
+}
+
+fn lsp_remove_file(path: str) -> unit {
+    if path == "" { return }
+    let first = lsp_buf_from_str(path)
+    let second = lsp_buf_from_str("")
+    let _st = wysna_host_fs(first, second, 3)
+    wysna_host_close(first)
+    wysna_host_close(second)
+}
+
+fn lsp_self_exe_path() -> str {
+    let buf = wysna_host_buffer_new()
+    let sz = wysna_host_self_executable(buf)
+    let path = if sz > 0 { lsp_buf_to_str(buf, sz) } else { "" }
+    wysna_host_close(buf)
+    if path != "" { return path }
+    let a = args()
+    if len(a) > 0 { return a[0] }
+    return ""
+}
+
+fn lsp_compiler_exe_path() -> str {
+    let configured = env("WYSNA_SELFHOST_COMPILER") ?? ""
+    if configured != "" { return configured }
+    return lsp_self_exe_path()
+}
+
+fn lsp_stdlib_root_arg() -> str {
+    let raw = args()
+    let mut i = 1
+    while i < len(raw) {
+        if raw[i] == "--stdlib-root" and i + 1 < len(raw) { return raw[i + 1] }
+        i = i + 1
+    }
+    return ""
+}
+
+fn lsp_tmp_dir() -> str {
+    let t1 = env("TMPDIR") ?? ""
+    if t1 != "" {
+        let n1 = len(t1)
+        return if n1 > 1 and t1[n1 - 1] == "/" { slice(t1, 0, n1 - 1) } else { t1 }
+    }
+    let t2 = env("TEMP") ?? ""
+    if t2 != "" { return t2 }
+    return "/tmp"
+}
+
+fn lsp_ascii_lower(s: str) -> str {
+    let mut parts: list[str] = []
+    for i in 0..len(s) {
+        let ch = s[i]
+        let c = ord(ch)
+        if c >= 65 and c <= 90 { parts.append(chr(c + 32)) } else { parts.append(ch) }
+    }
+    return join_strings(parts, "")
+}
+
+fn lsp_trim(s: str) -> str {
+    let mut lo = 0
+    let mut hi = len(s)
+    while lo < hi and (s[lo] == " " or s[lo] == "\t" or s[lo] == "\r" or s[lo] == "\n") { lo = lo + 1 }
+    while hi > lo and (s[hi - 1] == " " or s[hi - 1] == "\t" or s[hi - 1] == "\r" or s[hi - 1] == "\n") { hi = hi - 1 }
+    return slice(s, lo, hi)
+}
+
+fn lsp_parse_int(s: str, default_val: int) -> int {
+    let t = lsp_trim(s)
+    if t == "" { return default_val }
+    let mut sign = 1
+    let mut idx = 0
+    if t[0] == "-" {
+        sign = -1
+        idx = 1
+    } elif t[0] == "+" {
+        idx = 1
+    }
+    if idx >= len(t) { return default_val }
+    let mut acc = 0
+    while idx < len(t) {
+        let c = ord(t[idx])
+        if c < 48 or c > 57 { return default_val }
+        acc = acc * 10 + (c - 48)
+        idx = idx + 1
+    }
+    return acc * sign
+}
+
+fn lsp_buf_read_line_len(buf: opaque) -> int {
+    let mut n = 0
+    while wysna_host_buffer_get(buf, n) >= 0 { n = n + 1 }
+    return n
+}
+
+class LspJson {
+    kind: str
+    str_val: str
+    int_val: int
+    bool_val: bool
+    keys: list[str]
+    vals: list[LspJson]
+    items: list[LspJson]
+
+    fn init(kind: str) {
+        this.kind = kind
+        this.str_val = ""
+        this.int_val = 0
+        this.bool_val = false
+        let ks: list[str] = []
+        this.keys = ks
+        let vs: list[LspJson] = []
+        this.vals = vs
+        let its: list[LspJson] = []
+        this.items = its
+    }
+}
+
+fn lsp_json_null() -> LspJson {
+    return new LspJson("null")
+}
+
+fn lsp_json_has(obj: LspJson, key: str) -> bool {
+    if obj.kind != "object" { return false }
+    for k in obj.keys {
+        if k == key { return true }
+    }
+    return false
+}
+
+fn lsp_json_get(obj: LspJson, key: str) -> LspJson {
+    if obj.kind != "object" { return lsp_json_null() }
+    for i in 0..len(obj.keys) {
+        if obj.keys[i] == key { return obj.vals[i] }
+    }
+    return lsp_json_null()
+}
+
+fn lsp_json_str(obj: LspJson, key: str, def_val: str) -> str {
+    let v = lsp_json_get(obj, key)
+    if v.kind == "str" { return v.str_val }
+    return def_val
+}
+
+fn lsp_json_int(obj: LspJson, key: str, def_val: int) -> int {
+    let v = lsp_json_get(obj, key)
+    if v.kind == "int" { return v.int_val }
+    return def_val
+}
+
+fn lsp_json_bool(obj: LspJson, key: str, def_val: bool) -> bool {
+    let v = lsp_json_get(obj, key)
+    if v.kind == "bool" { return v.bool_val }
+    return def_val
+}
+
+fn lsp_json_raw_literal(v: LspJson) -> str {
+    if v.kind == "int" { return str(v.int_val) }
+    if v.kind == "str" { return diag_json_quote(v.str_val) }
+    if v.kind == "bool" { return if v.bool_val { "true" } else { "false" } }
+    return "null"
+}
+
+class LspJsonCursor {
+    src: str
+    pos: int
+
+    fn init(src: str) {
+        this.src = src
+        this.pos = 0
+    }
+}
+
+fn lsp_jc_skip_ws(c: LspJsonCursor) -> unit {
+    let n = len(c.src)
+    while c.pos < n {
+        let ch = c.src[c.pos]
+        if ch == " " or ch == "\t" or ch == "\r" or ch == "\n" {
+            c.pos = c.pos + 1
+        } else {
+            return
+        }
+    }
+}
+
+fn lsp_jc_hex4(c: LspJsonCursor) -> int {
+    if c.pos + 4 > len(c.src) { return -1 }
+    let mut acc = 0
+    for k in 0..4 {
+        let d = hex_val(ord(c.src[c.pos + k]))
+        if d < 0 { return -1 }
+        acc = acc * 16 + d
+    }
+    c.pos = c.pos + 4
+    return acc
+}
+
+fn lsp_jc_parse_str(c: LspJsonCursor) -> str {
+    let n = len(c.src)
+    if c.pos >= n or c.src[c.pos] != "\"" { return "" }
+    c.pos = c.pos + 1
+    let mut parts: list[str] = []
+    while c.pos < n {
+        let ch = c.src[c.pos]
+        c.pos = c.pos + 1
+        if ch == "\"" { return join_strings(parts, "") }
+        if ch == "\\" and c.pos < n {
+            let esc = c.src[c.pos]
+            c.pos = c.pos + 1
+            if esc == "\"" { parts.append("\"") }
+            elif esc == "\\" { parts.append("\\") }
+            elif esc == "/" { parts.append("/") }
+            elif esc == "b" { parts.append(chr(8)) }
+            elif esc == "f" { parts.append(chr(12)) }
+            elif esc == "n" { parts.append("\n") }
+            elif esc == "r" { parts.append("\r") }
+            elif esc == "t" { parts.append("\t") }
+            elif esc == "u" {
+                let code = lsp_jc_hex4(c)
+                if code >= 55296 and code <= 56319 and c.pos + 2 <= n and c.src[c.pos] == "\\" and c.src[c.pos + 1] == "u" {
+                    c.pos = c.pos + 2
+                    let low = lsp_jc_hex4(c)
+                    if low >= 56320 and low <= 57343 {
+                        let cp = 65536 + ((code - 55296) * 1024) + (low - 56320)
+                        parts.append(chr(cp))
+                    } else {
+                        parts.append(chr(code))
+                    }
+                } elif code >= 0 {
+                    parts.append(chr(code))
+                }
+            } else {
+                parts.append(esc)
+            }
+        } else {
+            parts.append(ch)
+        }
+    }
+    return join_strings(parts, "")
+}
+
+fn lsp_jc_parse_val(c: LspJsonCursor) -> LspJson {
+    lsp_jc_skip_ws(c)
+    let n = len(c.src)
+    if c.pos >= n { return lsp_json_null() }
+    let ch = c.src[c.pos]
+    if ch == "\"" {
+        let out = new LspJson("str")
+        out.str_val = lsp_jc_parse_str(c)
+        return out
+    }
+    if ch == "{" {
+        c.pos = c.pos + 1
+        let obj = new LspJson("object")
+        lsp_jc_skip_ws(c)
+        if c.pos < n and c.src[c.pos] == "}" {
+            c.pos = c.pos + 1
+            return obj
+        }
+        while c.pos < n {
+            lsp_jc_skip_ws(c)
+            let k = lsp_jc_parse_str(c)
+            lsp_jc_skip_ws(c)
+            if c.pos < n and c.src[c.pos] == ":" { c.pos = c.pos + 1 }
+            let v = lsp_jc_parse_val(c)
+            obj.keys.append(k)
+            obj.vals.append(v)
+            lsp_jc_skip_ws(c)
+            if c.pos < n and c.src[c.pos] == "," {
+                c.pos = c.pos + 1
+                continue
+            }
+            if c.pos < n and c.src[c.pos] == "}" { c.pos = c.pos + 1 }
+            break
+        }
+        return obj
+    }
+    if ch == "[" {
+        c.pos = c.pos + 1
+        let arr = new LspJson("array")
+        lsp_jc_skip_ws(c)
+        if c.pos < n and c.src[c.pos] == "]" {
+            c.pos = c.pos + 1
+            return arr
+        }
+        while c.pos < n {
+            let item = lsp_jc_parse_val(c)
+            arr.items.append(item)
+            lsp_jc_skip_ws(c)
+            if c.pos < n and c.src[c.pos] == "," {
+                c.pos = c.pos + 1
+                continue
+            }
+            if c.pos < n and c.src[c.pos] == "]" { c.pos = c.pos + 1 }
+            break
+        }
+        return arr
+    }
+    if ch == "t" and c.pos + 4 <= n and slice(c.src, c.pos, c.pos + 4) == "true" {
+        c.pos = c.pos + 4
+        let out = new LspJson("bool")
+        out.bool_val = true
+        return out
+    }
+    if ch == "f" and c.pos + 5 <= n and slice(c.src, c.pos, c.pos + 5) == "false" {
+        c.pos = c.pos + 5
+        let out = new LspJson("bool")
+        out.bool_val = false
+        return out
+    }
+    if ch == "n" and c.pos + 4 <= n and slice(c.src, c.pos, c.pos + 4) == "null" {
+        c.pos = c.pos + 4
+        return lsp_json_null()
+    }
+    let start = c.pos
+    if c.pos < n and c.src[c.pos] == "-" { c.pos = c.pos + 1 }
+    while c.pos < n and is_digit(ord(c.src[c.pos])) { c.pos = c.pos + 1 }
+    let int_part = slice(c.src, start, c.pos)
+    while c.pos < n {
+        let nc = c.src[c.pos]
+        if nc == "." or nc == "e" or nc == "E" or nc == "+" or nc == "-" or is_digit(ord(nc)) {
+            c.pos = c.pos + 1
+        } else {
+            break
+        }
+    }
+    let num = new LspJson("int")
+    num.int_val = lsp_parse_int(int_part, 0)
+    return num
+}
+
+fn lsp_parse_json(src: str) -> LspJson {
+    let cursor = new LspJsonCursor(src)
+    return lsp_jc_parse_val(cursor)
+}
+
+fn mcp_getcwd() -> str {
+    let buf = wysna_host_buffer_new()
+    let sz = wysna_host_getcwd(buf)
+    let raw = if sz > 0 { lsp_buf_to_str(buf, sz) } else { "" }
+    wysna_host_close(buf)
+    return raw
+}
+
+fn mcp_is_abs_path(p: str) -> bool {
+    if len(p) == 0 { return false }
+    if p[0] == "/" or p[0] == "\\" { return true }
+    if len(p) >= 2 and p[1] == ":" { return true }
+    return false
+}
+
+fn mcp_norm_cmp_prefix(p: str, is_win_drive: bool) -> str {
+    if is_win_drive { return lsp_ascii_lower(p) }
+    return p
+}
+
+fn mcp_is_within_root(cand: str, root: str) -> bool {
+    if cand == "" or root == "" { return false }
+    let win_drive = len(cand) >= 2 and cand[1] == ":" and len(root) >= 2 and root[1] == ":"
+    let c_cmp = mcp_norm_cmp_prefix(cand, win_drive)
+    let r_cmp = mcp_norm_cmp_prefix(root, win_drive)
+    if c_cmp == r_cmp { return true }
+    if r_cmp == "/" { return len(c_cmp) > 0 and c_cmp[0] == "/" }
+    if len(c_cmp) > len(r_cmp) and slice(c_cmp, 0, len(r_cmp)) == r_cmp and c_cmp[len(r_cmp)] == "/" {
+        return true
+    }
+    return false
+}
+
+fn mcp_json_error() -> LspJson {
+    return new LspJson("error")
+}
+
+fn mcp_hex_digit(code: int) -> int {
+    if code >= 48 and code <= 57 { return code - 48 }
+    if code >= 65 and code <= 70 { return code - 55 }
+    if code >= 97 and code <= 102 { return code - 87 }
+    return -1
+}
+
+fn mcp_strict_hex4(c: LspJsonCursor) -> int {
+    if c.pos + 4 > len(c.src) { return -1 }
+    let mut acc = 0
+    for k in 0..4 {
+        let d = mcp_hex_digit(ord(c.src[c.pos + k]))
+        if d < 0 { return -1 }
+        acc = acc * 16 + d
+    }
+    c.pos = c.pos + 4
+    return acc
+}
+
+fn mcp_strict_parse_str_wrap(c: LspJsonCursor) -> list[str] {
+    let n = len(c.src)
+    if c.pos >= n or c.src[c.pos] != "\"" { return ["0", ""] }
+    c.pos = c.pos + 1
+    let mut parts: list[str] = []
+    while c.pos < n {
+        let ch = c.src[c.pos]
+        let code = ord(ch)
+        if code < 32 { return ["0", ""] }
+        c.pos = c.pos + 1
+        if ch == "\"" { return ["1", join_strings(parts, "")] }
+        if ch == "\\" {
+            if c.pos >= n { return ["0", ""] }
+            let esc = c.src[c.pos]
+            c.pos = c.pos + 1
+            if esc == "\"" { parts.append("\"") }
+            elif esc == "\\" { parts.append("\\") }
+            elif esc == "/" { parts.append("/") }
+            elif esc == "b" { parts.append(chr(8)) }
+            elif esc == "f" { parts.append(chr(12)) }
+            elif esc == "n" { parts.append("\n") }
+            elif esc == "r" { parts.append("\r") }
+            elif esc == "t" { parts.append("\t") }
+            elif esc == "u" {
+                let cp_hi = mcp_strict_hex4(c)
+                if cp_hi < 0 { return ["0", ""] }
+                if cp_hi >= 55296 and cp_hi <= 56319 and c.pos + 2 <= n and c.src[c.pos] == "\\" and c.src[c.pos + 1] == "u" {
+                    c.pos = c.pos + 2
+                    let cp_lo = mcp_strict_hex4(c)
+                    if cp_lo < 56320 or cp_lo > 57343 { return ["0", ""] }
+                    parts.append(chr(65536 + ((cp_hi - 55296) * 1024) + (cp_lo - 56320)))
+                } else {
+                    parts.append(chr(cp_hi))
+                }
+            } else {
+                return ["0", ""]
+            }
+        } else {
+            parts.append(ch)
+        }
+    }
+    return ["0", ""]
+}
+
+fn mcp_strict_parse_val(c: LspJsonCursor) -> LspJson {
+    lsp_jc_skip_ws(c)
+    let n = len(c.src)
+    if c.pos >= n { return mcp_json_error() }
+    let ch = c.src[c.pos]
+    if ch == "\"" {
+        let sres = mcp_strict_parse_str_wrap(c)
+        if sres[0] != "1" { return mcp_json_error() }
+        let out = new LspJson("str")
+        out.str_val = sres[1]
+        return out
+    }
+    if ch == "{" {
+        c.pos = c.pos + 1
+        let obj = new LspJson("object")
+        lsp_jc_skip_ws(c)
+        if c.pos < n and c.src[c.pos] == "}" {
+            c.pos = c.pos + 1
+            return obj
+        }
+        while true {
+            lsp_jc_skip_ws(c)
+            if c.pos >= n or c.src[c.pos] != "\"" { return mcp_json_error() }
+            let kres = mcp_strict_parse_str_wrap(c)
+            if kres[0] != "1" { return mcp_json_error() }
+            lsp_jc_skip_ws(c)
+            if c.pos >= n or c.src[c.pos] != ":" { return mcp_json_error() }
+            c.pos = c.pos + 1
+            let val = mcp_strict_parse_val(c)
+            if val.kind == "error" { return mcp_json_error() }
+            obj.keys.append(kres[1])
+            obj.vals.append(val)
+            lsp_jc_skip_ws(c)
+            if c.pos >= n { return mcp_json_error() }
+            if c.src[c.pos] == "," {
+                c.pos = c.pos + 1
+                continue
+            }
+            if c.src[c.pos] == "}" {
+                c.pos = c.pos + 1
+                return obj
+            }
+            return mcp_json_error()
+        }
+        return mcp_json_error()
+    }
+    if ch == "[" {
+        c.pos = c.pos + 1
+        let arr = new LspJson("array")
+        lsp_jc_skip_ws(c)
+        if c.pos < n and c.src[c.pos] == "]" {
+            c.pos = c.pos + 1
+            return arr
+        }
+        while true {
+            let item = mcp_strict_parse_val(c)
+            if item.kind == "error" { return mcp_json_error() }
+            arr.items.append(item)
+            lsp_jc_skip_ws(c)
+            if c.pos >= n { return mcp_json_error() }
+            if c.src[c.pos] == "," {
+                c.pos = c.pos + 1
+                continue
+            }
+            if c.src[c.pos] == "]" {
+                c.pos = c.pos + 1
+                return arr
+            }
+            return mcp_json_error()
+        }
+        return mcp_json_error()
+    }
+    if ch == "t" and c.pos + 4 <= n and slice(c.src, c.pos, c.pos + 4) == "true" {
+        c.pos = c.pos + 4
+        let out = new LspJson("bool")
+        out.bool_val = true
+        return out
+    }
+    if ch == "f" and c.pos + 5 <= n and slice(c.src, c.pos, c.pos + 5) == "false" {
+        c.pos = c.pos + 5
+        let out = new LspJson("bool")
+        out.bool_val = false
+        return out
+    }
+    if ch == "n" and c.pos + 4 <= n and slice(c.src, c.pos, c.pos + 4) == "null" {
+        c.pos = c.pos + 4
+        return lsp_json_null()
+    }
+    let start = c.pos
+    if c.src[c.pos] == "-" { c.pos = c.pos + 1 }
+    if c.pos >= n or not is_digit(ord(c.src[c.pos])) { return mcp_json_error() }
+    let int_start = c.pos
+    while c.pos < n and is_digit(ord(c.src[c.pos])) { c.pos = c.pos + 1 }
+    let int_str = slice(c.src, start, c.pos)
+    if c.pos < n and c.src[c.pos] == "." {
+        c.pos = c.pos + 1
+        if c.pos >= n or not is_digit(ord(c.src[c.pos])) { return mcp_json_error() }
+        while c.pos < n and is_digit(ord(c.src[c.pos])) { c.pos = c.pos + 1 }
+    }
+    if c.pos < n and (c.src[c.pos] == "e" or c.src[c.pos] == "E") {
+        c.pos = c.pos + 1
+        if c.pos < n and (c.src[c.pos] == "+" or c.src[c.pos] == "-") { c.pos = c.pos + 1 }
+        if c.pos >= n or not is_digit(ord(c.src[c.pos])) { return mcp_json_error() }
+        while c.pos < n and is_digit(ord(c.src[c.pos])) { c.pos = c.pos + 1 }
+    }
+    if int_start == c.pos { return mcp_json_error() }
+    let num = new LspJson("int")
+    num.int_val = lsp_parse_int(int_str, 0)
+    num.str_val = slice(c.src, int_start, c.pos)
+    return num
+}
+
+fn mcp_parse_json_strict(src: str) -> LspJson {
+    let cursor = new LspJsonCursor(src)
+    let val = mcp_strict_parse_val(cursor)
+    if val.kind == "error" { return val }
+    lsp_jc_skip_ws(cursor)
+    if cursor.pos != len(cursor.src) { return mcp_json_error() }
+    return val
+}
+
+fn fix_extract_json_delimited_field(raw: str, field_key: str, open_ch: str, close_ch: str, fallback: str) -> str {
+    let needle = "\"" + field_key + "\""
+    let n = len(raw)
+    let klen = len(needle)
+    let mut i = 0
+    let mut in_str = false
+    let mut depth = 0
+    while i < n {
+        let ch = raw[i]
+        if in_str {
+            if ch == "\\" and i + 1 < n {
+                i = i + 2
+                continue
+            }
+            if ch == "\"" { in_str = false }
+            i = i + 1
+        } else {
+            if ch == "\"" {
+                if depth == 1 and i + klen <= n and slice(raw, i, i + klen) == needle {
+                    let mut p = i + klen
+                    while p < n and (raw[p] == " " or raw[p] == "\t" or raw[p] == "\r" or raw[p] == "\n") { p = p + 1 }
+                    if p < n and raw[p] == ":" {
+                        p = p + 1
+                        while p < n and (raw[p] == " " or raw[p] == "\t" or raw[p] == "\r" or raw[p] == "\n") { p = p + 1 }
+                        if p < n and raw[p] == open_ch {
+                            let start = p
+                            let mut bdepth = 0
+                            let mut instr2 = false
+                            while p < n {
+                                let c2 = raw[p]
+                                if instr2 {
+                                    if c2 == "\\" and p + 1 < n { p = p + 2 continue }
+                                    if c2 == "\"" { instr2 = false }
+                                    p = p + 1
+                                } else {
+                                    if c2 == "\"" { instr2 = true }
+                                    elif c2 == open_ch { bdepth = bdepth + 1 }
+                                    elif c2 == close_ch {
+                                        bdepth = bdepth - 1
+                                        if bdepth == 0 { return slice(raw, start, p + 1) }
+                                    }
+                                    p = p + 1
+                                }
+                            }
+                        }
+                    }
+                }
+                in_str = true
+            } elif ch == "{" or ch == "[" {
+                depth = depth + 1
+            } elif ch == "}" or ch == "]" {
+                if depth > 0 { depth = depth - 1 }
+            }
+            i = i + 1
+        }
+    }
+    return fallback
+}
+
+fn fix_extract_json_array_field(raw: str, field_key: str) -> str {
+    return fix_extract_json_delimited_field(raw, field_key, "[", "]", "[]")
+}
+
+fn fix_extract_json_object_field(raw: str, field_key: str) -> str {
+    return fix_extract_json_delimited_field(raw, field_key, "{", "}", "")
+}
+
+fn tool_skills_topic_content(topic: str) -> str {
+    if topic == "overview" {
+        return "# Wysna v0.8.0 — Agent-First Native Language & Toolchain\n- Default workflow uses checked static inspection before execution.\n- Memory model: Single-threaded ARC + Copy-on-Write (`Weak[C]` breaks strong cycles).\n- Error channel: Typed values `T ! E`, unwrap with `?` or `else err { fallback }`.\n- Core agent loop: `wysna skills` -> `wysna graph` -> `wysna inspect` -> `wysna patch` -> `wysna fix` -> `wysna check`.\n- Topics available: overview, agent-loop, syntax, graph, patch, project-tests, contracts, stdlib."
+    }
+    if topic == "agent-loop" {
+        return "# Agent Coding Loop (Token-Efficient, Hash-Guarded)\n1. Discover relationships: `wysna graph <file.wysna> --output-format=json-v1`\n2. Inspect one symbol instead of reading whole files: `wysna inspect <file.wysna> --symbol <name> --with-deps --output-format=json-v1`\n3. Submit checked edits guarded by graph hash: `wysna patch <file.wysna> --symbol <name> --expect-graph-hash <hash> --with <code> --apply`\n4. Auto-repair mechanical diagnostics: `wysna fix --apply --output-format=json-v1 <file.wysna>`\n5. Decode any Wxxxx error: `wysna explain --code W2001 --output-format=json-v1`\n6. Verify & bound runtime: `wysna run --max-steps=100000 --max-heap-mb=64 <file.wysna>`"
+    }
+    if topic == "project-tests" { return "# Pruebas de proyecto para agentes\n1. Lista sin ejecutar: `wysna project test --discover --list --frozen --output-format=json-v1`.\n2. Usa los IDs exactos de result.cases: `--case test:example`; --filter conserva selección por subcadena.\n3. Ejecuta con `--expect-plan-hash <result.plan_hash> --output-format=json-v1 --report-json tests.json --report-junit tests.xml`.\n4. Lee result.cases[].failure_kind, diagnostics y los hashes de stdout/stderr; no interpretes texto de terminal.\n5. W5005 indica plan obsoleto: vuelve a listar. Una suite vacía devuelve 2; una cancelación devuelve 130.\n6. std/test ofrece igualdad genérica, tolerancia flotante, opcionales y fixture_directory(); los fixtures se eliminan después del caso.\nEl hash cubre manifiesto, lock, versión y entradas seleccionadas, no todos los imports. El SDK native-core-v1 ejecuta estos comandos sin Python.\n" }
+    if topic == "syntax" {
+        return "# Wysna Canonical Syntax Quick Reference\n- Bindings: `let x = 1` (immutable), `let mut y = 2` (mutable).\n- Functions: `fn add(a: int, b: int) -> int { return a + b }`\n- Cooperative Async: `async fn fetch_id() -> int { ... }`, `let v = await task`.\n- Optionals & Errors: `T?`, `T ! E`, unwrap `?`, recover `expr else err { fallback }`.\n- OOP & Contracts: `interface Drawable { fn draw() -> str }`, `class Rect implements Drawable { fn draw() -> str { ... } }`.\n- Lambdas: `|n: int| => n * n` (capture outer variables by immutable snapshot).\n- Ranges & Loops: `for i in 0..10 { ... }`, inclusive `0..=10`."
+    }
+    if topic == "graph" {
+        return "# Semantic Relationship Graph (`wysna graph`)\n- `wysna graph <file> --output-format=json-v1`: full nodes, edges, and `graph_hash`.\n- `--symbol <name> --rel implements`: find all classes implementing an interface (or vice-versa).\n- `--symbol <name> --rel usages`: find every class, function, field, and param using the type.\n- `--symbol <name> --rel callers|callees`: traverse the resolved call graph.\n- `--symbol <name> --rel impact`: compute transitive blast radius before refactoring."
+    }
+    if topic == "patch" {
+        return "# Checked Semantic Patching (`wysna patch`)\n- Dry-run check in memory (default): validates syntax, types, and interface contracts before disk writes.\n- Optimistic locking: pass `--expect-graph-hash graph:...`; stale hashes fail with `[W5005]`.\n- Target classes, interfaces, structs, enums, functions, or `ClassName.method`."
+    }
+    if topic == "contracts" {
+        return "# Contracts, Schemas, Quotas & Trace Replay\n- Pre/postconditions: `fn f(x: int) -> int requires x > 0 ensures result >= 0 { ... }` (runtime `[W4005]`).\n- Tool Schema export: `wysna schema --emit-codecs --output-format=json-v1 <file.wysna>`.\n- Deterministic quotas: `--max-steps=<N>`, `--max-heap-mb=<N>` (fail-stop `[W4004]`).\n- Offline effect cassettes: `--record-trace <path>`, `--replay-trace <path>`."
+    }
+    if topic == "stdlib" {
+        return "# Standard Library (18 Modules)\n- Data & Text: `std/math`, `std/text`, `std/bytes`, `std/regex`, `std/collections`, `std/json`, `std/csv`, `std/parse`.\n- Systems & I/O: `std/fs`, `std/files`, `std/buffer`, `std/env`, `std/path`, `std/process`, `std/time`.\n- Network, Concurrency & Security: `std/http`, `std/async`, `std/algorithms` (`parallel_map`), `std/crypto`."
+    }
+    return ""
+}
+
+fn tool_skills_payload_json(topic: str) -> str {
+    let content = tool_skills_topic_content(topic)
+    if content == "" { return "" }
+    let topics_json = "[\"agent-loop\",\"contracts\",\"graph\",\"overview\",\"patch\",\"project-tests\",\"stdlib\",\"syntax\"]"
+    return "{\"schema_version\":\"wysna.skills/1\",\"compiler_version\":\"0.8.0\",\"topic\":" + diag_json_quote(topic) + ",\"available_topics\":" + topics_json + ",\"content\":" + diag_json_quote(content) + "}"
+}
+
+fn tool_capabilities_payload_json() -> str {
+    let cmds = "[\"run\",\"check\",\"fmt\",\"ast\",\"mir\",\"tokens\",\"emit-c\",\"emit-mir\",\"build\",\"test\",\"project.new\",\"project.lock\",\"project.check\",\"project.build\",\"project.run\",\"project.test\",\"api\",\"capabilities\",\"explain\",\"graph\",\"inspect\",\"patch\",\"skills\",\"fix\",\"schema\",\"mcp\",\"lsp\"]"
+    let mcmds = "[\"check\",\"fmt\",\"project.new\",\"project.lock\",\"project.check\",\"project.test\",\"api\",\"capabilities\",\"explain\",\"graph\",\"inspect\",\"patch\",\"skills\",\"fix\",\"schema\"]"
+    let profs = "[\"native-cli\",\"wasi-command\",\"browser-library\",\"c99-source\"]"
+    let targs = "[\"native\",\"wasm32-wasip1\",\"wasm32-unknown-emscripten\"]"
+    let runtimes = "{\"wasi-command\":\"wasmtime-python==50.0.1\",\"browser-library\":\"browser or Node.js\"}"
+    let native_caps = "[\"stdio\",\"filesystem\",\"environment\",\"processes\",\"network\",\"native-ffi\"]"
+    let wasi_caps = "[\"stdio\",\"arguments\",\"clock\",\"random\",\"manifest-declared-preopens\"]"
+    let browser_caps = "[\"linear-memory\",\"generated-utf8-abi\",\"bigint-int64\"]"
+    let caps = "{\"native-cli\":" + native_caps + ",\"wasi-command\":" + wasi_caps + ",\"browser-library\":" + browser_caps + "}"
+    let p_native = "{\"profile\":\"native-cli\",\"engine\":\"wysna-selfhost\",\"backend\":\"c99\",\"triple\":null,\"artifact_kind\":\"native_executable\",\"capabilities\":" + native_caps + ",\"build_requirements\":[{\"name\":\"c99-compiler\",\"version\":null,\"provided_by\":\"Host C99 toolchain\"}],\"run_requirements\":[{\"name\":\"host-operating-system\",\"version\":null,\"provided_by\":null}]}"
+    let p_wasi = "{\"profile\":\"wasi-command\",\"engine\":\"wysna-seed\",\"backend\":\"c99\",\"triple\":\"wasm32-wasip1\",\"artifact_kind\":\"wasm_module\",\"capabilities\":" + wasi_caps + ",\"build_requirements\":[{\"name\":\"wasi-sdk\",\"version\":\"34\",\"provided_by\":null}],\"run_requirements\":[{\"name\":\"wasmtime-python\",\"version\":\"50.0.1\",\"provided_by\":null}]}"
+    let p_browser = "{\"profile\":\"browser-library\",\"engine\":\"wysna-seed\",\"backend\":\"c99\",\"triple\":\"wasm32-unknown-emscripten\",\"artifact_kind\":\"wasm_module\",\"capabilities\":" + browser_caps + ",\"build_requirements\":[{\"name\":\"emscripten\",\"version\":\"5.0.1\",\"provided_by\":null}],\"run_requirements\":[{\"name\":\"browser-or-nodejs\",\"version\":null,\"provided_by\":null}]}"
+    let tprofiles = "[" + p_native + "," + p_wasi + "," + p_browser + "]"
+    let reqs = "{\"std/http\":{\"interpreter\":\"install wysna[http] with libcurl 8.3.0 or newer\",\"native\":\"install libcurl 8.3.0 or newer development files and expose curl-config on PATH\",\"wasi-command\":\"unavailable\",\"browser-library\":\"unavailable\"}}"
+    let limits = "[\"native-cli capabilities describe host access and are not a sandbox\",\"WASI Preview 1 does not provide networking, child processes, or native FFI\",\"browser-library exposes only generated scalar and UTF-8 exports; WVal and pointers remain internal\",\"project dependencies are local paths only\",\"project lockfiles do not claim bit-for-bit binary reproducibility\"]"
+    return "{\"schema_version\":\"wysna.capabilities/1\",\"compiler_version\":\"0.8.0\",\"commands\":" + cmds + ",\"machine_output\":{\"format\":\"json-v1\",\"commands\":" + mcmds + "},\"profiles\":" + profs + ",\"targets\":" + targs + ",\"runtimes\":" + runtimes + ",\"capabilities\":" + caps + ",\"target_profiles\":" + tprofiles + ",\"requirements\":" + reqs + ",\"limitations\":" + limits + "}"
+}

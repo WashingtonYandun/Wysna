@@ -82,6 +82,7 @@ jobs:
           tests/unit/test_host_contracts.py
           tests/unit/test_language_combinations.py
           tests/unit/test_agent_project_tests.py
+          tests/unit/test_block1_dev_split_and_delegation.py
 
   llvm-smoke:
     name: LLVM backend smoke (${{ matrix.os }})

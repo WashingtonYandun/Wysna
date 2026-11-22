@@ -160,6 +160,13 @@ def main(argv=None) -> None:
         print(f"Try '{prog} --help' for usage.", file=sys.stderr)
         raise SystemExit(2)
 
+    if args and args[0] in ("project", "packages", "mcp", "lsp", "schema"):
+        from tooling.NativeDelegation import maybe_delegate_native, strip_engine_flag
+        delegated = maybe_delegate_native(args)
+        if delegated is not None:
+            raise SystemExit(delegated)
+        _, args = strip_engine_flag(args)
+
     if args and args[0] == "project":
         from tooling.ProjectCLI import run_project_command
         raise SystemExit(run_project_command(args[1:]))

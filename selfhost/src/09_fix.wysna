@@ -64,72 +64,7 @@ fn fix_run_check_subprocess(canonical_file: str, candidate_src: str, pass_idx: i
     return diag_raw
 }
 
-fn fix_extract_json_delimited_field(raw: str, field_key: str, open_ch: str, close_ch: str, fallback: str) -> str {
-    let needle = "\"" + field_key + "\""
-    let n = len(raw)
-    let klen = len(needle)
-    let mut i = 0
-    let mut in_str = false
-    let mut depth = 0
-    while i < n {
-        let ch = raw[i]
-        if in_str {
-            if ch == "\\" and i + 1 < n {
-                i = i + 2
-                continue
-            }
-            if ch == "\"" { in_str = false }
-            i = i + 1
-        } else {
-            if ch == "\"" {
-                if depth == 1 and i + klen <= n and slice(raw, i, i + klen) == needle {
-                    let mut p = i + klen
-                    while p < n and (raw[p] == " " or raw[p] == "\t" or raw[p] == "\r" or raw[p] == "\n") { p = p + 1 }
-                    if p < n and raw[p] == ":" {
-                        p = p + 1
-                        while p < n and (raw[p] == " " or raw[p] == "\t" or raw[p] == "\r" or raw[p] == "\n") { p = p + 1 }
-                        if p < n and raw[p] == open_ch {
-                            let start = p
-                            let mut bdepth = 0
-                            let mut instr2 = false
-                            while p < n {
-                                let c2 = raw[p]
-                                if instr2 {
-                                    if c2 == "\\" and p + 1 < n { p = p + 2 continue }
-                                    if c2 == "\"" { instr2 = false }
-                                    p = p + 1
-                                } else {
-                                    if c2 == "\"" { instr2 = true }
-                                    elif c2 == open_ch { bdepth = bdepth + 1 }
-                                    elif c2 == close_ch {
-                                        bdepth = bdepth - 1
-                                        if bdepth == 0 { return slice(raw, start, p + 1) }
-                                    }
-                                    p = p + 1
-                                }
-                            }
-                        }
-                    }
-                }
-                in_str = true
-            } elif ch == "{" or ch == "[" {
-                depth = depth + 1
-            } elif ch == "}" or ch == "]" {
-                if depth > 0 { depth = depth - 1 }
-            }
-            i = i + 1
-        }
-    }
-    return fallback
-}
-
-fn fix_extract_json_array_field(raw: str, field_key: str) -> str {
-    return fix_extract_json_delimited_field(raw, field_key, "[", "]", "[]")
-}
-
-fn fix_extract_json_object_field(raw: str, field_key: str) -> str {
-    return fix_extract_json_delimited_field(raw, field_key, "{", "}", "")
-}
+# fix_extract_json_* helpers live in 01_tool_common.wysna.
 
 fn fix_line_col_from_char(src: str, target_char: int) -> list[int] {
     let mut line = 1

@@ -1,0 +1,101 @@
+# Shared path canonicalization, character predicates, and error entrypoints used across compiler and tooling units.
+extern "C" fn wysna_host_fs_canonical(path: opaque, output: opaque) -> int
+
+fn report_error(file: str, code: str, line: int, col: int, msg: str) -> unit {
+    diag_emit_and_exit(file, code, line, col, msg)
+}
+
+fn report_error_at(code: str, token: Token, msg: str) -> unit {
+    report_error(token.file, code, token.line, token.col, msg)
+}
+
+fn report_error_at_location(code: str, file: str, line: int, col: int, msg: str) -> unit {
+    report_error(file, code, line, col, msg)
+}
+
+fn is_alpha(c: int) -> bool {
+    return c >= 65 and c <= 90 or c >= 97 and c <= 122 or c == 95
+}
+
+fn is_digit(c: int) -> bool {
+    return c >= 48 and c <= 57
+}
+
+fn is_alnum(c: int) -> bool {
+    return is_alpha(c) or is_digit(c)
+}
+
+fn is_space(c: int) -> bool {
+    return c == 32 or c == 9 or c == 10 or c == 13
+}
+
+fn hex_val(c: int) -> int {
+    if c >= 48 and c <= 57 {
+        return c - 48
+    }
+    if c >= 65 and c <= 70 {
+        return c - 55
+    }
+    if c >= 97 and c <= 102 {
+        return c - 87
+    }
+    return 0
+}
+
+fn module_normalize(path: str) -> str {
+    let mut parts: list[str] = []
+    let mut part = ""
+    for i in 0..len(path) + 1 {
+        let mut ch = "/"
+        if i < len(path) { ch = path[i] }
+        if ch == "\\" { ch = "/" }
+        if ch == "/" {
+            if part == ".." and len(parts) > 0 { parts.pop() }
+            elif part != "" and part != "." { parts.append(part) }
+            part = ""
+        } else { part = part + ch }
+    }
+    let mut result = ""
+    if len(path) > 0 and (path[0] == "/" or path[0] == "\\") { result = "/" }
+    if len(path) > 1 and (path[0] == "/" or path[0] == "\\") and (path[1] == "/" or path[1] == "\\") { result = "//" }
+    for i in 0..len(parts) {
+        if i > 0 { result = result + "/" }
+        result = result + parts[i]
+    }
+    return result
+}
+
+fn module_directory(path: str) -> str {
+    let mut boundary = -1
+    for i in 0..len(path) { if path[i] == "/" { boundary = i } }
+    if boundary < 0 { return "" }
+    return slice(path, 0, boundary + 1)
+}
+
+fn module_canonical_resolved(path: str) -> str {
+    let input = wysna_host_buffer_new()
+    let output = wysna_host_buffer_new()
+    for byte in bytes(path) { wysna_host_buffer_append(input, byte) }
+    let size = wysna_host_fs_canonical(input, output)
+    let mut parts: list[str] = []
+    let mut index = 0
+    if size >= 0 {
+        while index < size {
+            let first = wysna_host_buffer_get(output, index)
+            let width = if first < 128 { 1 } elif first < 224 { 2 } elif first < 240 { 3 } else { 4 }
+            let mut codepoint = if width == 1 { first } elif width == 2 { first % 32 } elif width == 3 { first % 16 } else { first % 8 }
+            for offset in 1..width { codepoint = codepoint * 64 + wysna_host_buffer_get(output, index + offset) % 64 }
+            parts.append(chr(codepoint))
+            index = index + width
+        }
+    }
+    wysna_host_close(input)
+    wysna_host_close(output)
+    if size < 0 { return "" }
+    return module_normalize(join_strings(parts, ""))
+}
+
+fn module_canonical(path: str) -> str {
+    let resolved = module_canonical_resolved(path)
+    return if resolved == "" { module_normalize(path) } else { resolved }
+}
