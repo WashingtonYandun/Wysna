@@ -159,7 +159,7 @@ fn main() -> unit ! http.HttpError | json.JsonError {{
     print("STATUS", error_status.status)
     error_status.body.close()
 
-    let empty = new buffer.Bytes()
+    let empty = buffer.Bytes()
     let large = http.request("{http_url}/large", "GET", [], empty, 30000, 16)
     empty.close()
     match large {{
@@ -179,7 +179,7 @@ fn main() -> unit ! http.HttpError | json.JsonError {{
         }},
     }}
 
-    let timeout_body = new buffer.Bytes()
+    let timeout_body = buffer.Bytes()
     let slow = http.request("{http_url}/slow", "GET", [], timeout_body, 100, 1024)
     timeout_body.close()
     match slow {{

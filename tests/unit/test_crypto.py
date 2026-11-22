@@ -54,12 +54,12 @@ fn main() -> unit {
     let b1 = crypto.random_bytes(8) else err {
         eprint("random_bytes(8) failed")
         exit(1)
-        new buffer.Bytes()
+        buffer.Bytes()
     }
     let b2 = crypto.random_bytes(32) else err {
         eprint("random_bytes(32) failed")
         exit(1)
-        new buffer.Bytes()
+        buffer.Bytes()
     }
     if b1.size() != 8 or b2.size() != 32 {
         eprint("random_bytes sizes mismatch")
@@ -79,7 +79,7 @@ fn main() -> unit {
     # 3. Test negative / zero count handling
     let bad_count = crypto.random_bytes(0) else err {
         # Expected error
-        new buffer.Bytes()
+        buffer.Bytes()
     }
     bad_count.close()
 

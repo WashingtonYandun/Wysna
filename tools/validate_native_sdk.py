@@ -204,8 +204,8 @@ def validate(sdk, report, strict_source=False, compiler_source=None, application
                                    'fn init(value: T) { this.value = value }\n'
                                    'fn get() -> T { this.value }\n'
                                    'fn set(value: T) { this.value = value } }\n'
-                                   'let a: Box[int] = new Box[int](42)\n'
-                                   'let b: Box[str] = new Box[str]("hello")\n'
+                                   'let a: Box[int] = Box[int](42)\n'
+                                   'let b: Box[str] = Box[str]("hello")\n'
                                    'print(a.get(), b.get())\n'
                                    'a.set(7)\nb.set("world")\nprint(a.get(), b.get())\n', encoding='utf-8')
         run('generic-class-methods', ['run', generic_methods], stdout=b'42 hello\n7 world\n')

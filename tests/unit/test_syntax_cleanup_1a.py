@@ -37,7 +37,7 @@ class TestSyntaxCleanup1A(unittest.TestCase):
             out_c = Path(td) / "bad.c"
             src.write_text(source, encoding="utf-8")
             seed = subprocess.run(
-                [sys.executable, str(ROOT / "src/Main.py"), "check", str(src)],
+                [sys.executable, str(ROOT / "main.py"), "check", str(src)],
                 cwd=ROOT,
                 capture_output=True,
                 text=True,

@@ -528,7 +528,7 @@ extern "C" fn audit_live() -> int32
 fn main() {
 let handle = audit_open()
 let first = resources.acquire(handle, |value: opaque| -> int { audit_dispose(value) }) else error { exit(2) return }
-let second = new resources.Resource(handle, |value: opaque| -> int { audit_dispose(value) })
+let second = resources.Resource(handle, |value: opaque| -> int { audit_dispose(value) })
 second.borrow() else error { print(error.message) }
 print(second.close(), audit_live(), first.close(), audit_live(), first.close())
 }

@@ -36,7 +36,7 @@ def _run_cli(cwd: Path, *args: str) -> subprocess.CompletedProcess[str]:
     env = dict(os.environ)
     env["PYTHONPATH"] = str(ROOT) + (os.pathsep + env["PYTHONPATH"] if env.get("PYTHONPATH") else "")
     return subprocess.run(
-        [sys.executable, str(ROOT / "src/Main.py"), *args],
+        [sys.executable, str(ROOT / "main.py"), *args],
         cwd=cwd,
         env=env,
         capture_output=True,
