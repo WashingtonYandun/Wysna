@@ -16,7 +16,7 @@ from node.NodeType import (
     UnaryExpr, BinaryExpr, CoalesceExpr, RangeExpr, PostfixTryExpr, ElseErrExpr, CallExpr,
     MemberExpr, IndexExpr, AssignmentExpr, StructInitExpr, ListExpr, DictExpr, TupleExpr,
     IfExpr, MatchExpr, Pattern, IdentifierPattern, TuplePattern, EnumPattern, ErrorTypePattern,
-    LiteralPattern, WildcardPattern,
+    LiteralPattern, WildcardPattern, OrPattern, RangePattern, StructPattern,
     GenericType, NamedType, OptionalType as AstOptionalType, ListType as AstListType, DictType as AstDictType
 )
 from runtime.Values import (
@@ -800,6 +800,26 @@ class Interpreter:
         raise WysnaRuntimeError(f"Method '{method}' not found on '{receiver}'", file=self.file)
 
     def match_pattern(self, pattern: Pattern, value: WysnaValue) -> Tuple[bool, Dict[str, WysnaValue]]:
+        if isinstance(pattern, OrPattern):
+            for alternative in pattern.alternatives:
+                matched, bindings = self.match_pattern(alternative, value)
+                if matched:
+                    return True, bindings
+            return False, {}
+        if isinstance(pattern, RangePattern):
+            matched = isinstance(value, WysnaInt) and pattern.start <= value.value and (
+                value.value <= pattern.end if pattern.inclusive else value.value < pattern.end)
+            return matched, {}
+        if isinstance(pattern, StructPattern):
+            if not isinstance(value, WysnaStructInstance) or value.struct_name != pattern.struct_name:
+                return False, {}
+            bindings = {}
+            for field in pattern.fields:
+                matched, children = self.match_pattern(field.pattern, value.storage.data[field.name])
+                if not matched:
+                    return False, {}
+                bindings.update(children)
+            return True, bindings
         if isinstance(pattern, WildcardPattern):
             return True, {}
 

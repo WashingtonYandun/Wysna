@@ -76,3 +76,21 @@ def lint_discarded_expressions(program, file: str) -> List[WysnaError]:
             ).with_data(kind="discarded_expression"))
     warnings.sort(key=lambda w: (w.line, w.col))
     return warnings
+
+
+def lint_unreachable_match_arms(program, file):
+    from node.NodeType import MatchExpr
+    from checker.PatternTraversal import subsumed
+    warnings = []
+    for node in _walk(program):
+        if not isinstance(node, MatchExpr):
+            continue
+        covered = []
+        for arm in node.arms:
+            if subsumed(covered, arm.pattern):
+                warnings.append(WysnaError('Match arm is unreachable: earlier unguarded patterns cover it',
+                    line=arm.pattern.line, col=arm.pattern.col, file=file, code='W6003', severity='warning',
+                    stage='lint', help='Remove this arm or place the more specific pattern before the covering arm.'))
+            if arm.guard is None:
+                covered.append(arm.pattern)
+    return warnings

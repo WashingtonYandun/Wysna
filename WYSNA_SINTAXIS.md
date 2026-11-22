@@ -418,6 +418,34 @@ fn describe_code(code: int) -> str {
 }
 ```
 
+
+#### Patrones compuestos y cobertura
+
+`|` agrupa alternativas de un mismo brazo. Todas deben enlazar los mismos nombres
+con los mismos tipos; la guarda se evalúa una sola vez después de seleccionar la
+primera alternativa que coincide. El sujeto de `match` también se evalúa una sola vez.
+Los patrones se pueden anidar dentro de tuplas, variantes y structs.
+
+`inicio..fin` excluye el extremo final; `inicio..=fin` lo incluye. Los dos extremos
+son constantes enteras de 64 bits, con signo opcional. Los rangos vacíos, invertidos
+o aplicados a otro tipo se rechazan. La cobertura puede combinar intervalos hasta
+cubrir todo `int64`; las guardas no aportan cobertura incondicional.
+
+`Point { x: 0 | 1, y }` reconoce campos y enlaza `y`. Un campo omitido requiere `..`,
+por ejemplo `Box[Point] { value: Point { x, .. }, .. }`. La identidad nominal, los
+argumentos genéricos, los campos y sus tipos se verifican antes de generar código.
+No se permiten campos repetidos o desconocidos. Un struct cuyos campos estén
+cubiertos puede tener un `match` exhaustivo sin `_`.
+
+`W6003` advierte cuando patrones anteriores sin guarda cubren un brazo posterior.
+La advertencia no altera la ejecución ni hace que una guarda aporte cobertura.
+
+```wysna
+fn category(value: int) -> str {
+    match value { 0 | 1 => "small", 2..=10 => "medium", _ => "large" }
+}
+```
+
 ---
 
 ## 8. Estructuras de Datos y Programación Orientada a Objetos

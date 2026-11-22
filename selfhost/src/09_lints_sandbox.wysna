@@ -94,9 +94,14 @@ fn lint_walk_node(program: CheckedProgram, node_id: int, discard_tail: bool, tar
     if node.kind == "match" {
         let arm_discard = discard_tail or lint_unit_like(program, node.type_id)
         for child in node.children { warnings = lint_walk_node(program, child, false, target_file, warnings) }
+        let mut covered: list[int] = []
         for arm_id in node.arms {
             if arm_id >= 0 and arm_id < len(program.arms) {
                 let arm = program.arms[arm_id]
+                if lint_pattern_subsumed(program, covered, arm.pattern) {
+                    warnings.append(LintWarning { code: "W6003", message: "Match arm is unreachable: earlier unguarded patterns cover it", file: arm.source.file, line: arm.source.line, col: arm.source.col, data_json: "{\"kind\":\"unreachable_match_arm\"}" })
+                }
+                if arm.guard < 0 { covered.append(arm.pattern) }
                 if arm.guard >= 0 { warnings = lint_walk_node(program, arm.guard, false, target_file, warnings) }
                 warnings = lint_walk_node(program, arm.body, arm_discard, target_file, warnings)
             }
@@ -479,4 +484,67 @@ fn sandbox_enforce_and_header(module: MirModule, file: str, mode: str, cap_list:
         }
     }
     return join_strings(lines, "\n") + "\n"
+}
+
+# W6003 only reports definite coverage; guards never add unconditional coverage.
+fn lint_pattern_bounds(program: CheckedProgram, id: int) -> list[int] {
+    let pattern = program.patterns[id]
+    let mut bounds: list[int] = []
+    if program.types[pattern.type_id].kind != "int" { return bounds }
+    if pattern.name == "range" or pattern.name == "range_inclusive" {
+        let lower = program.patterns[pattern.children[0]].name
+        let upper = program.patterns[pattern.children[1]].name
+        bounds = [int(slice(lower, 8, len(lower))), int(slice(upper, 8, len(upper)))]
+        if pattern.name == "range" { bounds[1] = bounds[1] - 1 }
+    } elif len(pattern.name) >= 8 and slice(pattern.name, 0, 8) == "literal:" {
+        let value = int(slice(pattern.name, 8, len(pattern.name)))
+        bounds = [value, value]
+    }
+    return bounds
+}
+fn lint_expand_or(program: CheckedProgram, ids: list[int]) -> list[int] {
+    let mut result: list[int] = []
+    for id in ids {
+        if program.patterns[id].name == "or" { for child in lint_expand_or(program, program.patterns[id].children) { result.append(child) } }
+        else { result.append(id) }
+    }
+    return result
+}
+fn lint_pattern_subsumed(program: CheckedProgram, previous: list[int], id: int) -> bool {
+    let patterns = lint_expand_or(program, previous)
+    for earlier in patterns { if program.patterns[earlier].name == "*" { return true } }
+    let query = program.patterns[id]
+    if query.name == "or" {
+        for child in query.children { if not lint_pattern_subsumed(program, patterns, child) { return false } }
+        return true
+    }
+    let range = lint_pattern_bounds(program, id)
+    if len(range) == 2 {
+        let mut point = range[0]
+        while true {
+            let mut found = false
+            let mut maximum = point
+            for earlier in patterns {
+                let bound = lint_pattern_bounds(program, earlier)
+                if len(bound) == 2 and bound[0] <= point and point <= bound[1] {
+                    if not found or bound[1] > maximum { maximum = bound[1] }
+                    found = true
+                }
+            }
+            if not found { return false }
+            if maximum >= range[1] { return true }
+            point = maximum + 1
+        }
+    }
+    for earlier in patterns {
+        let pattern = program.patterns[earlier]
+        if pattern.name == query.name and pattern.type_id == query.type_id and len(pattern.children) == len(query.children) {
+            let mut covered = true
+            for index in 0..len(query.children) {
+                if not lint_pattern_subsumed(program, [pattern.children[index]], query.children[index]) { covered = false }
+            }
+            if covered { return true }
+        }
+    }
+    return false
 }

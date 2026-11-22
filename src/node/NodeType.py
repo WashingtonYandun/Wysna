@@ -235,6 +235,88 @@ class WildcardPattern(Pattern):
         return {"kind": "WildcardPattern", "line": self.line, "col": self.col}
 
 
+class OrPattern(Pattern):
+    """Disjunctive pattern: pat1 | pat2 | ..."""
+    def __init__(self, alternatives: List[Pattern], line: int = 1, col: int = 1):
+        super().__init__(line, col)
+        self.alternatives = alternatives
+
+    def to_dict(self) -> dict:
+        return {
+            "kind": "OrPattern",
+            "alternatives": [a.to_dict() for a in self.alternatives],
+            "line": self.line,
+            "col": self.col,
+        }
+
+
+class RangePattern(Pattern):
+    """Integer range pattern: start..end (exclusive) or start..=end (inclusive)."""
+    def __init__(self, start: int, end: int, inclusive: bool = False, line: int = 1, col: int = 1):
+        super().__init__(line, col)
+        self.start = start
+        self.end = end
+        self.inclusive = inclusive
+
+    def to_dict(self) -> dict:
+        return {
+            "kind": "RangePattern",
+            "start": self.start,
+            "end": self.end,
+            "inclusive": self.inclusive,
+            "line": self.line,
+            "col": self.col,
+        }
+
+
+class StructPatternField(Node):
+    """Single field entry in a struct destructuring pattern."""
+    def __init__(self, name: str, pattern: Pattern, shorthand: bool = False, line: int = 1, col: int = 1):
+        super().__init__(line, col)
+        self.name = name
+        self.pattern = pattern
+        self.shorthand = shorthand
+
+    def to_dict(self) -> dict:
+        return {
+            "kind": "StructPatternField",
+            "name": self.name,
+            "pattern": self.pattern.to_dict(),
+            "shorthand": self.shorthand,
+            "line": self.line,
+            "col": self.col,
+        }
+
+
+class StructPattern(Pattern):
+    """Struct destructuring pattern: StructName { field: pat, shorthand, .. }."""
+    def __init__(
+        self,
+        struct_name: str,
+        fields: List[StructPatternField],
+        has_rest: bool = False,
+        line: int = 1,
+        col: int = 1,
+        type_args: Optional[List[TypeNode]] = None,
+    ):
+        super().__init__(line, col)
+        self.struct_name = struct_name
+        self.fields = fields
+        self.has_rest = has_rest
+        self.type_args = list(type_args) if type_args else []
+
+    def to_dict(self) -> dict:
+        return {
+            "kind": "StructPattern",
+            "struct_name": self.struct_name,
+            "fields": [f.to_dict() for f in self.fields],
+            "has_rest": self.has_rest,
+            "type_args": [arg.to_dict() for arg in self.type_args],
+            "line": self.line,
+            "col": self.col,
+        }
+
+
 # ==========================================
 # Block Node (with optional tail expression)
 # ==========================================

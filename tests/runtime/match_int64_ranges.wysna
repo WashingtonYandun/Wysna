@@ -1,0 +1,4 @@
+fn classify(x: int) -> int {
+    match x { -9223372036854775808..0 => 1, 0..=9223372036854775807 => 2 }
+}
+print(classify(-9223372036854775808), classify(-1), classify(0), classify(9223372036854775807))

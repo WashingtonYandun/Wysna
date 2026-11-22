@@ -230,12 +230,18 @@ class CompilerService:
         from checker.Lints import lint_discarded_expressions
         return lint_discarded_expressions(checked._unit.program, file_name or checked.source.file)
 
+    def lint_syntax_warnings(self, checked, file_name=None):
+        from checker.Lints import lint_unreachable_match_arms
+        self._validate(checked)
+        path = file_name or checked.source.file
+        return self.lint_discarded_expressions(checked, path) + lint_unreachable_match_arms(checked._unit.program, path)
+
     def lint_warnings(self, checked, file_name=None):
         """Return all non-blocking W6001/W6002 WysnaError warnings without redundant AST clones."""
         self._validate(checked)
         from node.NodeType import ClassDecl
         path = file_name or checked.source.file
-        warnings = list(self.lint_discarded_expressions(checked, path))
+        warnings = list(self.lint_syntax_warnings(checked, path))
         class_pos = {
             c.name: (getattr(c, 'line', 1), getattr(c, 'col', 1))
             for c in checked._unit.program.body

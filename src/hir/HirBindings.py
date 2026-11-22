@@ -74,6 +74,11 @@ class HirBindings:
             scope[pattern.name] = type_id
             if hasattr(pattern, "symbol_id") and pattern.symbol_id:
                 scope[pattern.symbol_id.id] = type_id
+        elif isinstance(pattern, H.HirOrPattern):
+            self.bind(pattern.alternatives[0], scope)
+        elif isinstance(pattern, H.HirStructPattern):
+            for _, child in pattern.fields:
+                self.bind(child, scope)
         elif isinstance(pattern, H.HirTuplePattern):
             entry = self.interner.get_entry(type_id) if type_id is not None else None
             types = entry.data if entry and entry.tag == 'tuple' else [None] * len(pattern.elements)
@@ -119,6 +124,12 @@ class HirBindings:
             for statement in node.statements:
                 self.visit(statement, scope)
             self.visit(node.tail_expr, scope)
+            return
+        if isinstance(node, H.HirConstructTuple):
+            for child, expected in zip(node.elems, node.elem_type_ids):
+                self.visit(child, scope)
+                if not self.compatible(child.type_id, expected):
+                    self.verifier._fail(node, 'Tuple element does not match its declared type')
             return
         if isinstance(node, H.HirSequence):
             inner = dict(scope)

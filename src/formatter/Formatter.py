@@ -3,7 +3,7 @@ import math
 from typing import List, Optional
 from node.NodeType import (
     ExternFnDecl, LambdaExpr, FunctionType as AstFunctionType, Program, Stmt, Expr, TypeNode, NamedType, GenericType, TypeParam, OptionalType, ListType, DictType, TupleType, ResultType, ErrorUnionType,
-    Pattern, IdentifierPattern, TuplePattern, EnumPattern, ErrorTypePattern, LiteralPattern, WildcardPattern,
+    Pattern, IdentifierPattern, TuplePattern, EnumPattern, ErrorTypePattern, LiteralPattern, WildcardPattern, OrPattern, RangePattern, StructPattern,
     Block, ExprStmt, Param, FnDecl, StructField, StructDecl, EnumDecl,
     InterfaceMethod, InterfaceDecl, ClassField, MethodDecl, ClassDecl,
     ImportDecl, UseDecl, UseSymbol, LetDecl, WhileStmt, ForStmt, ReturnStmt, BreakStmt, ContinueStmt,
@@ -96,6 +96,17 @@ class Formatter:
     # ==========================================
 
     def format_pattern(self, p: Pattern) -> str:
+        if isinstance(p, OrPattern):
+            return " | ".join(self.format_pattern(part) for part in p.alternatives)
+        if isinstance(p, RangePattern):
+            return str(p.start) + ("..=" if p.inclusive else "..") + str(p.end)
+        if isinstance(p, StructPattern):
+            fields = [field.name if field.shorthand else field.name + ": " + self.format_pattern(field.pattern)
+                      for field in p.fields]
+            if p.has_rest:
+                fields.append("..")
+            arguments = "[" + ", ".join(self.format_type(arg) for arg in p.type_args) + "]" if p.type_args else ""
+            return p.struct_name + arguments + " { " + ", ".join(fields) + " }"
         if isinstance(p, WildcardPattern):
             return "_"
         if isinstance(p, IdentifierPattern):

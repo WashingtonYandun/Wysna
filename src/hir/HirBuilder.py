@@ -5,7 +5,7 @@ from node.NodeType import (
     ErrorUnionType as AstErrorUnionType,
     NamedType, OptionalType as AstOptionalType, ListType as AstListType, DictType as AstDictType,
     GenericType,
-    Pattern, IdentifierPattern, TuplePattern, EnumPattern, ErrorTypePattern, LiteralPattern, WildcardPattern,
+    Pattern, IdentifierPattern, TuplePattern, EnumPattern, ErrorTypePattern, LiteralPattern, WildcardPattern, OrPattern, RangePattern, StructPattern,
     Block, ExprStmt, Param, FnDecl, StructDecl, EnumDecl, ImportDecl,
     InterfaceDecl, ClassDecl, ClassField, MethodDecl,
     LetDecl, WhileStmt, ForStmt, ReturnStmt, BreakStmt, ContinueStmt,
@@ -29,7 +29,7 @@ from hir.HirNodes import (
     HirTryPropagate, HirCoalesce, HirElseHandle, HirIf, HirMatch, HirMatchArm, HirRange,
     SymbolId, FieldId, VariantId, CallTarget, DirectCallTarget, BuiltinCallTarget, VirtualCallTarget, CollectionCallTarget,
     CowPath, CowProjection, CowFieldProjection, CowIndexProjection,
-    HirPattern, HirWildcardPattern, HirBindingPattern, HirLiteralPattern, HirEnumPattern, HirErrorTypePattern, HirTuplePattern,
+    HirPattern, HirOrPattern, HirRangePattern, HirStructPattern, HirWildcardPattern, HirBindingPattern, HirLiteralPattern, HirEnumPattern, HirErrorTypePattern, HirTuplePattern,
     HirCoerce
 )
 
@@ -127,6 +127,28 @@ class HirBuilder:
         if isinstance(pat, HirPattern):
             return pat
         span = self._span(pat)
+        if isinstance(pat, OrPattern):
+            alternatives = [self._lower_pattern(part, expected_tid) for part in pat.alternatives]
+            def bindings(pattern):
+                if isinstance(pattern, HirBindingPattern):
+                    return [pattern]
+                children = (getattr(pattern, 'alternatives', []) + getattr(pattern, 'elements', [])
+                            + getattr(pattern, 'subpatterns', []) + [child for _, child in getattr(pattern, 'fields', [])])
+                if isinstance(pattern, HirErrorTypePattern):
+                    children.append(pattern.binding)
+                return [binding for child in children for binding in bindings(child)]
+            shared = {binding.name: binding.symbol_id for binding in bindings(alternatives[0])}
+            for alternative in alternatives:
+                for binding in bindings(alternative):
+                    binding.symbol_id = shared[binding.name]
+            self.scopes[-1].update(shared)
+            return HirOrPattern(alternatives, expected_tid, span)
+        if isinstance(pat, RangePattern):
+            return HirRangePattern(pat.start, pat.end, pat.inclusive, expected_tid, span)
+        if isinstance(pat, StructPattern):
+            fields = [(field.name, self._lower_pattern(field.pattern, field.pattern.inferred_type_id))
+                      for field in pat.fields]
+            return HirStructPattern(fields, expected_tid, span)
         if isinstance(pat, WildcardPattern):
             return HirWildcardPattern(expected_tid, span)
         if isinstance(pat, IdentifierPattern):
@@ -874,7 +896,17 @@ class HirBuilder:
             return HirConstructDict(k_tid, v_tid, entries_hir, tid or self.interner.mk_dict(k_tid, v_tid), span)
         elif isinstance(expr, TupleExpr):
             elems_hir = [self._lower_expr(e) for e in expr.elements]
-            elem_tids = [e.type_id for e in elems_hir]
+            entry = self.interner.get_entry(tid) if tid is not None else None
+            elem_tids = list(entry.data) if entry and entry.tag == "tuple" else [e.type_id for e in elems_hir]
+            converted = []
+            for element, expected in zip(elems_hir, elem_tids):
+                target = self.interner.get_entry(expected)
+                if element.type_id == TYPE_NONE and target.tag == "optional":
+                    element = self._construct_enum("Option", "None", 1, expected, element.span)
+                elif element.type_id == TYPE_INT and expected == TYPE_FLOAT:
+                    element = HirCoerce(element, expected, kind="int_to_float", span=element.span)
+                converted.append(element)
+            elems_hir = converted
             return HirConstructTuple(elem_tids, elems_hir, tid or self.interner.mk_tuple(tuple(elem_tids)), span)
         elif isinstance(expr, CallExpr):
             if getattr(expr, "indirect_call", False):

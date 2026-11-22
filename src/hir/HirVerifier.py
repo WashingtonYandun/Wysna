@@ -162,7 +162,8 @@ class HirVerifier:
             return
         if isinstance(value, H.HirPattern):
             if type(value) not in (H.HirWildcardPattern, H.HirBindingPattern, H.HirTuplePattern,
-                                   H.HirEnumPattern, H.HirErrorTypePattern, H.HirLiteralPattern):
+                                   H.HirEnumPattern, H.HirErrorTypePattern, H.HirLiteralPattern,
+                                   H.HirOrPattern, H.HirRangePattern, H.HirStructPattern):
                 self._fail(value, "Unsupported HIR pattern")
             self._type(value.type_id, value, "pattern type")
             if isinstance(value, H.HirBindingPattern):
@@ -175,6 +176,34 @@ class HirVerifier:
                 }.get(value.literal_kind)
                 if expected is not None and value.type_id != expected:
                     self._fail(value, "Literal pattern type mismatch")
+            elif isinstance(value, H.HirRangePattern):
+                if value.type_id != TYPE_INT or not all(-(1 << 63) <= item < (1 << 63) for item in (value.start, value.end)) or value.start > value.end or (value.start == value.end and not value.inclusive):
+                    self._fail(value, 'Invalid integer range pattern')
+            elif isinstance(value, H.HirOrPattern):
+                if not value.alternatives or any(child.type_id != value.type_id for child in value.alternatives):
+                    self._fail(value, 'Invalid or-pattern alternatives')
+                def binding_map(pattern):
+                    if isinstance(pattern, H.HirBindingPattern) and pattern.name != 'None':
+                        return {pattern.name: (pattern.type_id, pattern.symbol_id)}
+                    children = (getattr(pattern, 'alternatives', []) + getattr(pattern, 'elements', [])
+                                + getattr(pattern, 'subpatterns', []) + [child for _, child in getattr(pattern, 'fields', [])])
+                    if isinstance(pattern, H.HirErrorTypePattern):
+                        children.append(pattern.binding)
+                    found = {}
+                    for child in children:
+                        found.update(binding_map(child))
+                    return found
+                expected_bindings = binding_map(value.alternatives[0])
+                if any(binding_map(child) != expected_bindings for child in value.alternatives[1:]):
+                    self._fail(value, 'Or-pattern alternatives must share binding identities and types')
+            elif isinstance(value, H.HirStructPattern):
+                subject = self.interner.get_entry(value.type_id)
+                if subject.tag != 'struct':
+                    self._fail(value, 'Struct pattern requires resolved struct type')
+                fields = self.interner.struct_defs[subject.data].fields
+                names = [name for name, _ in value.fields]
+                if len(set(names)) != len(names) or any(name not in fields or child.type_id != fields[name] for name, child in value.fields):
+                    self._fail(value, 'Invalid struct pattern field')
             elif isinstance(value, H.HirErrorTypePattern):
                 self._type(value.error_type_id, value, "error_type_id")
                 subject = self.interner.get_entry(value.type_id)
@@ -191,7 +220,7 @@ class HirVerifier:
                 self._fail(value, "Cyclic HIR pattern")
             self.active.add(id(value))
             try:
-                for field in ("subpatterns", "elements", "binding"):
+                for field in ("subpatterns", "elements", "binding", "alternatives", "fields"):
                     self._visit(getattr(value, field, []), loop_depth, in_function)
             finally:
                 self.active.remove(id(value))

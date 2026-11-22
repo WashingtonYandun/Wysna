@@ -186,6 +186,24 @@ class HirPattern(HirNode):
         self.type_id = type_id
 
 
+class HirOrPattern(HirPattern):
+    def __init__(self, alternatives, type_id, span):
+        super().__init__(type_id, span)
+        self.alternatives = alternatives
+
+
+class HirRangePattern(HirPattern):
+    def __init__(self, start, end, inclusive, type_id, span):
+        super().__init__(type_id, span)
+        self.start, self.end, self.inclusive = start, end, inclusive
+
+
+class HirStructPattern(HirPattern):
+    def __init__(self, fields, type_id, span):
+        super().__init__(type_id, span)
+        self.fields = fields
+
+
 class HirWildcardPattern(HirPattern):
     def __init__(self, type_id: int, span: Span):
         super().__init__(type_id, span)

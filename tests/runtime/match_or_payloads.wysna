@@ -1,0 +1,5 @@
+enum Value { A(str), B(str), Empty }
+fn extract(value: Value) -> str {
+    match value { Value.A(text) | Value.B(text) => text, Value.Empty => "empty" }
+}
+print(extract(Value.A("a")), extract(Value.B("b")), extract(Value.Empty))

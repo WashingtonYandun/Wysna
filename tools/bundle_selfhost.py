@@ -22,6 +22,7 @@ MODULE_ORDER = [
     "08_checked_records.wysna",
     "08_checked_verify.wysna",
     "08_semantics.wysna",
+    "08_pattern_extensions.wysna",
     "08_generics.wysna",
     "08_checker.wysna",
     "08_mir.wysna",

@@ -87,6 +87,8 @@ _CODE_DETAILS = {
               'fn f(x: int) -> int { x + 1\n return x }', 'fn f(x: int) -> int { return x + 1 }'),
     'W6002': ('lint', ['Strong circular references detected between classes (uncollected under ARC)'],
               'class A { b: B? }\nclass B { a: A? }', 'class A { b: B? }\nclass B { a: Weak[A] }'),
+    'W6003': ('lint', ['Match arm can never be reached because earlier unguarded patterns cover all of its values'],
+              'match x { _ => 0, 1 => 1 }', 'match x { 1 => 1, _ => 0 }'),
     'W9998': ('compiler', ['Frontend accepted syntax that backend lowering refused'],
               'unsupported target construct', 'check docs/KNOWN_LIMITS.md or report issue'),
     'W9999': ('compiler', ['Internal compiler invariant violation across IR phase boundaries'],

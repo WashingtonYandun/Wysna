@@ -1,0 +1,5 @@
+struct Point { x: int, y: int }
+fn choose(point: Point) -> int {
+    match point { Point { x: 1 | 2, y } => y, _ => 0 }
+}
+print(choose(Point { x: 2, y: 42 }), choose(Point { x: 3, y: 8 }))

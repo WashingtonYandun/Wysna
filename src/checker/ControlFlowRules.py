@@ -138,84 +138,12 @@ def check_match_expr(checker: "TypeChecker", expr: MatchExpr, is_statement_conte
     for arm in expr.arms:
         previous_coverage = set(covered_variants)
         previous_wildcard = has_wildcard
-        if isinstance(subject_t, ErrorUnionType) and isinstance(arm.pattern, (EnumPattern, ErrorTypePattern)):
-            arm.pattern = checker._resolve_error_type_pattern(arm.pattern, subject_t)
-        elif expected_variants is not None and isinstance(arm.pattern, IdentifierPattern) and arm.pattern.name in expected_variants:
-            owner_name = getattr(subject_t, "name", None)
-            if getattr(subject_t, "template_name", None) in ("Option", "Result"):
-                owner_name = subject_t.template_name
-            arm.pattern = EnumPattern(
-                enum_name=owner_name,
-                variant=arm.pattern.name,
-                args=[],
-                line=arm.pattern.line,
-                col=arm.pattern.col
-            )
-        arm.pattern.inferred_type_id = checker.interner.intern(subject_t)
-        arm.pattern.session_arena_id = checker.interner.arena_id
+        from checker.PatternRules import resolve_pattern
+        arm.pattern = resolve_pattern(checker, arm.pattern, subject_t)
         arm_bindings: Dict[str, WysnaType] = {}
-
-        if isinstance(arm.pattern, WildcardPattern):
+        checker._bind_pattern_type(arm.pattern, subject_t, arm_bindings, arm.line, arm.col)
+        if checker._pattern_matrix_exhaustive([subject_t], [[arm.pattern]]):
             has_wildcard = True
-
-        elif isinstance(arm.pattern, IdentifierPattern):
-            if arm.pattern.name in ("None", "none") and expected_variants and "None" in expected_variants:
-                covered_variants.add("None")
-            else:
-                has_wildcard = True
-                arm_bindings[arm.pattern.name] = subject_t
-
-        elif isinstance(arm.pattern, TuplePattern):
-            checker._bind_pattern_type(arm.pattern, subject_t, arm_bindings, arm.line, arm.col)
-
-        elif isinstance(arm.pattern, LiteralPattern):
-            if isinstance(arm.pattern.literal, NoneLiteral) and expected_variants and "None" in expected_variants:
-                covered_variants.add("None")
-            else:
-                lit_t = checker._check_expr(arm.pattern.literal)
-                if not checker.type_relations.is_assignable(lit_t, subject_t):
-                    raise TypeError(
-                        message=f"Literal pattern type '{lit_t}' incompatible with subject '{subject_t}'",
-                        line=arm.line,
-                        col=arm.col,
-                        file=checker.file,
-                        code="W2001"
-                    )
-
-        elif isinstance(arm.pattern, ErrorTypePattern):
-            if not isinstance(subject_t, ErrorUnionType):
-                raise TypeError(message="Error type pattern requires an error union", line=arm.line,
-                                col=arm.col, file=checker.file, code="W2001")
-            checker._bind_pattern_type(arm.pattern.binding, arm.pattern.matched_type,
-                                    arm_bindings, arm.line, arm.col)
-            covered_variants.add(checker._error_pattern_name(arm.pattern.matched_type))
-
-        elif isinstance(arm.pattern, EnumPattern):
-            v_name = arm.pattern.variant
-            checker._validate_pattern_owner(arm.pattern, subject_t)
-
-            if expected_variants is not None and v_name not in expected_variants:
-                raise TypeError(
-                    message=f"Pattern variant '{v_name}' is incompatible with match subject '{subject_t}'",
-                    line=arm.line,
-                    col=arm.col,
-                    file=checker.file,
-                    code="W2001"
-                )
-            if isinstance(subject_t, EnumType) and getattr(subject_t, "template_name", None) not in ("Option", "Result"):
-                arm.pattern.enum_name = subject_t.name
-            covered_variants.add(v_name)
-            expected_payloads = payload_types_map.get(v_name, [])
-            if len(arm.pattern.args) != len(expected_payloads):
-                raise TypeError(
-                    message=f"Variant '{v_name}' expects {len(expected_payloads)} arguments, found {len(arm.pattern.args)}",
-                    line=arm.line,
-                    col=arm.col,
-                    file=checker.file,
-                    code="W2005"
-                )
-            for arg_pat, arg_type in zip(arm.pattern.args, expected_payloads):
-                checker._bind_pattern_type(arg_pat, arg_type, arm_bindings, arm.line, arm.col)
 
         if arm.guard is not None:
             guard_scope = Scope(parent=checker.current_scope)
@@ -267,7 +195,8 @@ def check_match_expr(checker: "TypeChecker", expr: MatchExpr, is_statement_conte
             any(at != UnitType for at in arm_types)
             or (outer_expected is not None and outer_expected != UnitType)
         )
-        if yields_value and not has_wildcard:
+        complete = checker._pattern_matrix_exhaustive([subject_t], [[arm.pattern] for arm in expr.arms if arm.guard is None])
+        if yields_value and not complete:
             raise TypeError(
                 message=f"Non-exhaustive match: '{subject_t}' is an open domain, "
                         f"so a '_ =>' fallback arm is required when the match produces a value",

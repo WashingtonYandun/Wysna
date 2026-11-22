@@ -56,6 +56,7 @@ DIAGNOSTIC_CODES: Dict[str, str] = {
     # W6xxx — Lints (warnings; never block compilation)
     "W6001": "Pure expression statement result is discarded",
     "W6002": "Strong reference cycle between classes can leak under ARC",
+    "W6003": "Unreachable match arm is already covered by earlier patterns",
 }
 
 def normalize_diagnostic_code(code: str, default: str = "W0001") -> str:

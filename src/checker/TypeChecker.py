@@ -1265,54 +1265,8 @@ class TypeChecker:
                 line=pattern.line, col=pattern.col, file=self.file, code="W2001")
 
     def _bind_pattern_type(self, pattern: Pattern, expected_type: WysnaType, bindings: Dict[str, WysnaType], line: int, col: int) -> None:
-        pattern.inferred_type_id = self.interner.intern(expected_type)
-        pattern.session_arena_id = self.interner.arena_id
-        if isinstance(pattern, IdentifierPattern):
-            if pattern.name in bindings:
-                raise TypeError(message=f"Duplicate pattern binding '{pattern.name}'",
-                                line=pattern.line, col=pattern.col, file=self.file, code="W1002")
-            bindings[pattern.name] = expected_type
-        elif isinstance(pattern, WildcardPattern):
-            pass
-        elif isinstance(pattern, TuplePattern):
-            if not isinstance(expected_type, TupleType) or len(pattern.elements) != len(expected_type.elements):
-                raise TypeError(
-                    message=f"Tuple pattern cannot match type '{expected_type}'",
-                    line=line,
-                    col=col,
-                    file=self.file,
-                    code="W2001"
-                )
-            for sub_p, sub_t in zip(pattern.elements, expected_type.elements):
-                self._bind_pattern_type(sub_p, sub_t, bindings, line, col)
-        elif isinstance(pattern, EnumPattern):
-            self._validate_pattern_owner(pattern, expected_type)
-            optional = self._builtin_arguments(expected_type, "Option")
-            result = self._builtin_arguments(expected_type, "Result")
-            if optional:
-                payloads = {"Some": optional, "None": []}
-            elif result:
-                payloads = {"Ok": [result[0]], "Err": [result[1]]}
-            elif isinstance(expected_type, EnumType):
-                payloads = expected_type.variant_payloads
-                pattern.enum_name = expected_type.name
-            else:
-                raise TypeError("Enum pattern requires enum type", line=line, col=col, file=self.file, code="W2001")
-            types = payloads.get(pattern.variant)
-            if types is None or len(types) != len(pattern.args):
-                raise TypeError("Enum pattern payload does not match variant", line=line, col=col, file=self.file, code="W2001")
-            for child, child_type in zip(pattern.args, types):
-                self._bind_pattern_type(child, child_type, bindings, line, col)
-        elif isinstance(pattern, LiteralPattern):
-            lit_t = self._check_expr(pattern.literal)
-            if not self.type_relations.is_assignable(lit_t, expected_type):
-                raise TypeError(
-                    message=f"Literal pattern type '{lit_t}' incompatible with '{expected_type}'",
-                    line=line,
-                    col=col,
-                    file=self.file,
-                    code="W2001"
-                )
+        from checker.PatternRules import bind_pattern
+        bind_pattern(self, pattern, expected_type, bindings)
 
     # ==========================================
     # Generics and Monomorphization Helpers

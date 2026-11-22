@@ -1258,7 +1258,8 @@ fn sem_prefix(context: SemanticContext, allow_struct: bool, statement: bool) -> 
         }
         let first = sem_expression(context, 0, true)
         if sem_match(context, "COMMA") {
-            let mut types: list[int] = [first.type_id]
+            if is_tuple_ctx and len(context.types[expected_tuple].args) > 0 { sem_require_at(context, first.type_id, context.types[expected_tuple].args[0], "W2001", source) }
+            let mut types: list[int] = [if is_tuple_ctx and len(context.types[expected_tuple].args) > 0 { context.types[expected_tuple].args[0] } else { first.type_id }]
             let mut values: list[int] = [first.node]
             let mut elem_idx = 1
             while not sem_is(context, "RPAREN") {
@@ -1268,7 +1269,10 @@ fn sem_prefix(context: SemanticContext, allow_struct: bool, statement: bool) -> 
                     context.expected_type = -1
                 }
                 let next = sem_expression(context, 0, true)
-                types.append(next.type_id)
+                if is_tuple_ctx and elem_idx < len(context.types[expected_tuple].args) {
+                    sem_require_at(context, next.type_id, context.types[expected_tuple].args[elem_idx], "W2001", source)
+                    types.append(context.types[expected_tuple].args[elem_idx])
+                } else { types.append(next.type_id) }
                 values.append(next.node)
                 elem_idx = elem_idx + 1
                 if not sem_match(context, "COMMA") { break }
@@ -2147,7 +2151,17 @@ fn sem_constructors(context: SemanticContext, subject: int) -> list[SemConstruct
     let type_ = context.types[subject]
     let mut constructors: list[SemConstructor] = []
     let empty: list[int] = []
-    if type_.kind == "tuple" { constructors.append(SemConstructor { name: "tuple", payloads: type_.args }) }
+    if type_.kind == "struct" {
+        let mut payloads: list[int] = []
+        let generic = sem_generic_type(context, type_.name)
+        for field in context.fields {
+            if field.owner == type_.name {
+                payloads.append(if generic >= 0 { sem_substitute_type(context, field.type_id, context.generic_types[generic].params, type_.args) } else { field.type_id })
+            }
+        }
+        constructors.append(SemConstructor { name: "struct", payloads: payloads })
+    }
+    elif type_.kind == "tuple" { constructors.append(SemConstructor { name: "tuple", payloads: type_.args }) }
     elif type_.kind == "bool" {
         constructors.append(SemConstructor { name: "literal:true", payloads: empty })
         constructors.append(SemConstructor { name: "literal:false", payloads: empty })
@@ -2178,10 +2192,24 @@ fn sem_constructors(context: SemanticContext, subject: int) -> list[SemConstruct
 fn sem_pattern_matrix(context: SemanticContext, types: list[int], rows: list[list[int]]) -> bool {
     if len(types) == 0 { return len(rows) > 0 }
     if len(rows) == 0 { return false }
+    let mut expanded: list[list[int]] = []
+    let mut has_or = false
+    for row in rows {
+        if context.patterns[row[0]].name == "or" {
+            has_or = true
+            for child in context.patterns[row[0]].children {
+                let mut next = [child]
+                for item in slice(row, 1, len(row)) { next.append(item) }
+                expanded.append(next)
+            }
+        } else { expanded.append(row) }
+    }
+    if has_or { return sem_pattern_matrix(context, types, expanded) }
     let tail = slice(types, 1, len(types))
     let mut defaults: list[list[int]] = []
     for row in rows { if context.patterns[row[0]].name == "*" { defaults.append(slice(row, 1, len(row))) } }
     if len(defaults) > 0 and sem_pattern_matrix(context, tail, defaults) { return true }
+    if sem_kind(context, types[0]) == "int" { return sem_integer_pattern_matrix(context, tail, rows) }
     let constructors = sem_constructors(context, types[0])
     if len(constructors) == 0 { return false }
     for constructor in constructors {
@@ -2205,7 +2233,7 @@ fn sem_pattern_matrix(context: SemanticContext, types: list[int], rows: list[lis
     }
     return true
 }
-fn sem_pattern(context: SemanticContext, subject: int) -> str {
+fn sem_pattern_atom(context: SemanticContext, subject: int) -> str {
     let source = sem_at(context)
     let name = sem_pattern_syntax(context, subject, source)
     if name == "None" and sem_kind(context, subject) != "optional" and sem_kind(context, subject) != "enum" { report_error_at("W2001", source, "none pattern requires an optional subject") }
@@ -2223,17 +2251,12 @@ fn sem_pattern_syntax(context: SemanticContext, subject: int, source: Token) -> 
     if sem_match(context, "STAR") { report_error_at("W0001", source, "wildcard '* =>' has been removed in match; use canonical '_ =>'") }
     if sem_match(context, "ELSE") { report_error_at("W0001", source, "wildcard 'else =>' has been removed in match; use canonical '_ =>'") }
     if sem_match(context, "MINUS") {
-        let literal = sem_take(context)
-        if literal.kind != "INT" { report_error_at("W0002", literal, "expected integer pattern after '-'") }
-        sem_require_at(context, context.integer_type, subject, "W2001", literal)
-        return sem_leaf_pattern(context, "literal:-" + literal.val)
+        return sem_pattern_number(context, subject, source, true, sem_expect(context, "INT"))
     }
-    if sem_is(context, "INT") or sem_is(context, "STR") or sem_is(context, "TRUE") or sem_is(context, "FALSE") {
+    if sem_is(context, "INT") { return sem_pattern_number(context, subject, source, false, sem_take(context)) }
+    if sem_is(context, "STR") or sem_is(context, "TRUE") or sem_is(context, "FALSE") {
         let token = sem_take(context)
-        let mut type_id = context.boolean_type
-        if token.kind == "INT" { type_id = context.integer_type }
-        elif token.kind == "FLOAT" { type_id = context.float_type }
-        elif token.kind == "STR" { type_id = context.string_type }
+        let type_id = if token.kind == "STR" { context.string_type } else { context.boolean_type }
         sem_require_at(context, type_id, subject, "W2001", token)
         return sem_leaf_pattern(context, "literal:" + token.val)
     }
@@ -2261,6 +2284,16 @@ fn sem_pattern_syntax(context: SemanticContext, subject: int, source: Token) -> 
     if name == "none" { report_error_at("W0001", source, "lowercase 'none' pattern has been removed; use canonical 'None'") }
     if sem_match(context, "DOT") { owner = name name = sem_expect(context, "IDENT").val }
     let kind = sem_kind(context, subject)
+    if (sem_is(context, "LBRACE") or sem_is(context, "LBRACKET")) and kind == "struct" {
+        let pattern_name = if owner == "" { name } else { owner + "." + name }
+        if pattern_name != context.types[subject].name { report_error_at("W2001", source, "struct pattern identity does not match subject") }
+        if sem_is(context, "LBRACKET") {
+            context.pos = pattern_start
+            let specified = sem_type(context)
+            if specified != subject { report_error_at("W2001", source, "struct pattern type arguments do not match subject") }
+        }
+        return sem_struct_pattern(context, subject, source)
+    }
     if kind == "error_union" and (sem_is(context, "LBRACKET") or sem_is(context, "LPAREN")) {
         if owner != "" { report_error_at("W2001", source, "error type patterns must be unqualified") }
         context.pos = pattern_start
@@ -2346,7 +2379,7 @@ fn sem_match_expression(context: SemanticContext, statement_context: bool) -> Se
         let pattern_kind = context.tokens[pattern_start].kind
         let bare_pattern = pattern_kind == "IDENT" or pattern_kind == "INT" or pattern_kind == "STR" or pattern_kind == "TRUE" or pattern_kind == "FALSE"
         let following = context.tokens[pattern_start + 1]
-        if bare_pattern and following.kind == "LBRACE" {
+        if bare_pattern and following.kind == "LBRACE" and not sem_pattern_brace(context.tokens, pattern_start + 1) {
             report_error_at("W0001", following, "expected '=>' after match pattern")
         }
     }
