@@ -511,6 +511,18 @@ class CCodeGen:
             return
         c_name = self.c_fn(stmt.name, ns=ns)
         params_sig = ", ".join([f"WVal v_{p.name}" for p in stmt.params]) if stmt.params else "void"
+        for name in ('group_cancelled', 'cancel_group'):
+            if stdlib_declaration(stmt, 'async', name, 0):
+                self.fn_Definitions.append(f"static WVal {c_name}(void) {{\n    return wysna_bool(wysna_{name}());\n}}")
+                return
+        if stdlib_declaration(stmt, 'async', '_run_task_group', 5):
+            inputs, limit, deadline, fail_fast, work = (f"v_{parameter.name}" for parameter in stmt.params)
+            self.fn_Definitions.append(
+                f"static WVal {c_name}({params_sig}) {{\n"
+                f"    return wysna_run_task_group({inputs}, wysna_as_int({limit}), "
+                f"wysna_as_int({deadline}), wysna_as_bool({fail_fast}), {work});\n}}"
+            )
+            return
         if any(stdlib_declaration(stmt, 'algorithms', name, arity) for name, arity in (('parallel_map', 2), ('parallel_batch', 3), ('parallel_filter', 2))):
             if stdlib_declaration(stmt, 'algorithms', 'parallel_map', 2):
                 self.fn_Definitions.append(f"static WVal {c_name}({params_sig}) {{\n    return wysna_parallel_map(v_{stmt.params[0].name}, v_{stmt.params[1].name});\n}}")

@@ -105,9 +105,10 @@ fuente ni un sandbox. C manual, FFI y binarios nativos arbitrarios no quedan ais
 por cuotas, replay, ARC o W2014/W2015. Para ejecutar código no confiable se necesita
 un proceso y una política de aislamiento del sistema operativo apropiados.
 
-TaskGroup, deadlines, backpressure y cancelación pública siguen en R2. No se
-habilitan objetos mutables compartidos. Los anchos numéricos nuevos y perfiles
-móviles siguen en R3/R4; no se cambia el backend C99 por este trabajo.
+Los [grupos de CPU](TASK_GROUPS.md) usan esta frontera de transferencia y
+añaden límite de concurrencia, resultados por índice y cancelación cooperativa.
+La gestión de grupos de I/O y la política de cancelación del scheduler siguen
+en R2. Los anchos numéricos nuevos y perfiles móviles siguen en R3/R4.
 
 ## Verificación reproducible
 

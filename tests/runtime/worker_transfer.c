@@ -57,9 +57,46 @@ static WVal simultaneous_conversion(WVal environment, int32_t argc, const WVal* 
     return wysna_builtin_int(wysna_str("invalid"));
 }
 
+static WVal group_barrier(WVal environment, int32_t argc, const WVal* argv) {
+    (void)environment;
+    assert(argc == 1);
+    assert(wysna_atomic_add_i64(&wysna_runtime_context.active_workers, 0) <= 2);
+    wysna_atomic_inc_i32(&arrived);
+    while (wysna_atomic_load_i32(&arrived) < 2 && !wysna_group_cancelled()) {
+        wysna_host_sleep_ms_internal(1);
+    }
+    return wysna_ok(wysna_clone(argv[0]));
+}
+
+static void verify_group_limit(void) {
+    WVal items[] = {wysna_int(1), wysna_int(2), wysna_int(3), wysna_int(4)};
+    WVal inputs = wysna_make_list(4, items);
+    WVal fn = wysna_function_new(group_barrier, wysna_unit());
+    WVal result = wysna_run_task_group(inputs, 2, 2000, false, fn);
+    WListBuf* output = wysna_as_list(result);
+    assert(output->len == 4);
+    for (int index = 0; index < output->len; index++) {
+        WTupleBuf* pair = wysna_as_tuple(output->data[index]);
+        assert(wysna_as_int(pair->items[0]) == WYSNA_GROUP_RUNNING);
+        assert(wysna_is_ok(wysna_as_enum(pair->items[1])->payload));
+    }
+    assert(wysna_atomic_load_i32(&arrived) == 4);
+    assert(wysna_atomic_add_i64(&wysna_runtime_context.active_workers, 0) == 0);
+    assert(!wysna_group_cancelled());
+    wysna_release(result);
+    wysna_release(fn);
+    wysna_release(inputs);
+}
+
 int main(int argc, char** argv) {
     wysna_init_args(argc, argv);
     if (argc > 1) {
+        if (strcmp(argv[1], "task-group") == 0) {
+            verify_group_limit();
+            wysna_runtime_cleanup();
+            puts("task group bounded and joined");
+            return 0;
+        }
         if (strcmp(argv[1], "simultaneous-traps") == 0 || strcmp(argv[1], "simultaneous-conversions") == 0) {
             WVal inputs[4] = {wysna_unit(), wysna_unit(), wysna_unit(), wysna_unit()};
             WVal values = wysna_make_list(4, inputs);

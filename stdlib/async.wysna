@@ -10,6 +10,60 @@ pub enum FutureState[T] {
     Failed(str),
 }
 
+pub enum TaskOutcome[T, E] {
+    Completed(T),
+    Failed(E),
+    Cancelled,
+    DeadlineExceeded,
+}
+
+pub enum TaskGroupError {
+    InvalidConcurrency,
+    InvalidDeadline,
+}
+
+fn _run_task_group[I, T, E](inputs: list[I], max_concurrency: int, deadline_ms: int,
+                            fail_fast: bool, work: fn(I) -> T ! E) -> list[tuple[int, (T ! E)?]] {
+    return []
+}
+
+# An in-flight group callback can poll this at its own interruption points.
+pub fn group_cancelled() -> bool {
+    return false
+}
+
+pub fn cancel_group() -> bool {
+    return false
+}
+
+pub fn run_group[I, T, E](inputs: list[I], max_concurrency: int, deadline_ms: int,
+                          fail_fast: bool, work: fn(I) -> T ! E) -> list[TaskOutcome[T, E]] ! TaskGroupError {
+    if max_concurrency < 1 { return Err(TaskGroupError.InvalidConcurrency) }
+    if deadline_ms < -1 { return Err(TaskGroupError.InvalidDeadline) }
+    let records = _run_task_group[I, T, E](inputs, max_concurrency, deadline_ms, fail_fast, work)
+    let mut outcomes: list[TaskOutcome[T, E]] = []
+    for status, result in records {
+        match result {
+            Some(value) => {
+                match value {
+                    Ok(item) => outcomes.append(TaskOutcome.Completed[T, E](item)),
+                    Err(error) => outcomes.append(TaskOutcome.Failed[T, E](error)),
+                }
+            },
+            None => {
+                if status == 2 {
+                    let expired: TaskOutcome[T, E] = TaskOutcome.DeadlineExceeded
+                    outcomes.append(expired)
+                } else {
+                    let cancelled: TaskOutcome[T, E] = TaskOutcome.Cancelled
+                    outcomes.append(cancelled)
+                }
+            },
+        }
+    }
+    return outcomes
+}
+
 pub struct Task[T] {
     id: int,
     handle: int,
