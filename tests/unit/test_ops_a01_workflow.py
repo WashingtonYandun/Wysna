@@ -17,6 +17,7 @@ if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
 from common.Platform import executable_name
+from common.Version import WYSNA_VERSION
 from tools.build_selfhost_dev import assemble_dev_sdk
 
 
@@ -48,8 +49,8 @@ def test_ops_a01_wysofia_ops_with_pinned_package_frozen_tests_and_write_recovery
     (dep_root / "src").mkdir(parents=True)
     (dep_root / "wysna.toml").write_text(
         'manifest_version = 1\n\n'
-        '[package]\nname = "ops-policy"\nversion = "0.1.0"\nlanguage = "0.8"\n\n'
-        '[toolchain]\ncompiler = "0.8.0"\nstdlib = "bundled"\n\n'
+        f'[package]\nname = "ops-policy"\nversion = "0.1.0"\nlanguage = "{".".join(WYSNA_VERSION.split(".")[:2])}"\n\n'
+        f'[toolchain]\ncompiler = "{WYSNA_VERSION}"\nstdlib = "bundled"\n\n'
         '[sources]\nroot = "src"\n\n'
         '[targets.app]\nentry = "src/rules.wysna"\nprofile = "native-cli"\n',
         encoding="utf-8",

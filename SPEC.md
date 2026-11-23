@@ -1,6 +1,6 @@
 # Wysna Language Specification
 
-> **Status:** This specification defines Wysna `0.8.0`. Sections 1–11 describe the normative grammar; sections 12–14 describe implementation contracts.
+> **Status:** This specification defines Wysna `0.9.0`. Sections 1–11 describe the normative grammar; sections 12–14 describe implementation contracts.
 >
 > **Implementations:** `Wysna Seed` is the reference implementation that determines whether a program is valid. `Wysna Compiler` is an independent self-hosted compiler; its supported subset is measured against the public release corpus. The parity matrix documents this boundary in [docs/ENGINE_PARITY_MATRIX.md](docs/ENGINE_PARITY_MATRIX.md).
 >
@@ -791,7 +791,7 @@ pub import "std/path"
      "tool_exit_code": 0,
      "process_exit_code": 0,
      "execution": null,
-     "toolchain": {"compiler": "0.8.0"},
+     "toolchain": {"compiler": "0.9.0"},
      "target": {"profile": "native-cli", "triple": null},
      "diagnostics": [],
      "artifacts": [],

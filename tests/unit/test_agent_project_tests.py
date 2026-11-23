@@ -12,6 +12,7 @@ from pathlib import Path
 import xml.etree.ElementTree as ET
 
 from project.Resolver import ProjectResolver
+from common.Version import WYSNA_VERSION
 from project.Scaffold import create_project
 from tests.unit.test_project_scaffold import run_cli
 
@@ -402,7 +403,7 @@ def test_native_report_utf8_replacement_matches_seed(tmp_path):
     else:
         flags = ['-lm']
     built = subprocess.run([*command, '-std=c99', '-Wno-unused-function',
-                            '-DWYSNA_NATIVE_VERSION="0.8.0"', '-DWYSNA_NATIVE_TARGET="native-host"',
+                            f'-DWYSNA_NATIVE_VERSION="{WYSNA_VERSION}"', '-DWYSNA_NATIVE_TARGET="native-host"',
                             '-I' + str(root), str(path), *flags, '-o', str(binary)],
                            capture_output=True, timeout=60)
     assert built.returncode == 0, built.stderr

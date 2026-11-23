@@ -1,6 +1,7 @@
 # Evolución del runtime para agentes: decisiones y secuencia ejecutable
 
-Fecha: 2026-11-22. Base integrada: `4ad7c5e` (PR #176). Esta hoja separa
+Fecha: 2026-11-22. R0 integrado: `ba0953e` (PR #177, CI 39/39); base híbrida de PR #176.
+La alineación de versión y migración 0.9 se verifica en un ciclo separado. Esta hoja separa
 implementación en curso de funcionalidades futuras. No requiere proveedores de IA.
 
 ## Decisiones

@@ -9,8 +9,9 @@
 
 ## Estado vigente de la arquitectura y el runtime
 
-PR #176 está integrado en `main`/`develop` en `4ad7c5e`; el CI del merge terminó
-correctamente. Consultar primero
+PR #176 estableció la arquitectura híbrida; PR #177 integró R0 en `ba0953e`
+con 39/39 controles correctos. La alineación de versión y migración 0.9 se prepara
+en un cambio separado. Consultar primero
 [ADR-05](ADR-05-arquitectura-hibrida-tooling-selfhost.md) y el
 [ciclo y su evidencia](12-SIGUIENTE-CICLO-LENGUAJE.md#arquitectura-híbrida-integrada-y-siguiente-ciclo).
 `SIMP-R01` ya tiene una decisión implementada: lenguaje con oráculo de cuatro
@@ -22,7 +23,7 @@ El siguiente trabajo está en [13-RUNTIME-AGENT-FIRST.md](13-RUNTIME-AGENT-FIRST
 y [ADR-06](ADR-06-metadatos-tipados-y-runtime-agentes.md): metadatos propios tipados,
 introspección y reparación de patrones, seguidos de transferencia segura entre
 workers, grupos estructurados, tipos de ancho explícito y portabilidad comprobada.
-La rama implementa R0; R1–R4 siguen pendientes y tienen criterios de cierre.
+R0 está integrado; R1–R4 siguen pendientes y tienen criterios de cierre.
 
 ## Estado histórico de cierre y siguiente ciclo
 

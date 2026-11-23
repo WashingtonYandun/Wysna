@@ -16,6 +16,7 @@ if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
 from tests.engine_harness import ENGINES, compare, run_engine
+from common.Version import WYSNA_VERSION
 from tests.fuzz.multifile_fuzzer import (
     MultiFileCase,
     NEGATIVE_KINDS,
@@ -213,8 +214,8 @@ class TestFuzzA01Combinations(unittest.TestCase):
             )
             (ref_dir / "wysna.toml").write_text(
                 'manifest_version = 1\n\n'
-                '[package]\nname = "ref-v08-combo"\nversion = "0.1.0"\nlanguage = "0.8"\n\n'
-                '[toolchain]\ncompiler = "0.8.0"\nstdlib = "bundled"\n\n'
+                f'[package]\nname = "ref-v08-combo"\nversion = "0.1.0"\nlanguage = "{".".join(WYSNA_VERSION.split(".")[:2])}"\n\n'
+                f'[toolchain]\ncompiler = "{WYSNA_VERSION}"\nstdlib = "bundled"\n\n'
                 '[sources]\nroot = "src"\n\n'
                 '[targets.app]\nentry = "src/main.wysna"\nprofile = "native-cli"\n\n'
                 '[[tests]]\nname = "combo"\nentry = "tests/test_combo.wysna"\ntimeout_ms = 10000\n',

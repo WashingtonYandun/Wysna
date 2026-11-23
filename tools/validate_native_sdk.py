@@ -252,6 +252,34 @@ def validate(sdk, report, strict_source=False, compiler_source=None, application
                 program = programs / relative
                 run('check-' + name, ['check', program], stdout=b'')
                 run(name, ['run', program], stdout=expected, custom=memory_environment)
+            legacy = programs / 'migration_v08'
+            legacy_manifest = legacy / 'wysna.toml'
+            legacy_lock = legacy / 'wysna.lock'
+            before_manifest = legacy_manifest.read_bytes()
+            before_lock = legacy_lock.read_bytes()
+            rejected = run('migration-v08-rejected', ['project', 'check', '--manifest', legacy_manifest,
+                '--frozen', '--output-format=json-v1'], expected=2)
+            require(json.loads(rejected.stdout)['diagnostics'][0]['code'] == 'W5002', rejected.stdout)
+            require(legacy_manifest.read_bytes() == before_manifest and legacy_lock.read_bytes() == before_lock,
+                    'Version rejection mutated a legacy project')
+            language_version = '.'.join(manifest['version'].split('.')[:2])
+            migrated = before_manifest.decode('utf-8').replace('\r\n', '\n').replace(
+                'language = "0.8"', f'language = "{language_version}"').replace(
+                'compiler = "0.8.0"', f'compiler = "{manifest["version"]}"')
+            legacy_manifest.write_bytes(migrated.encode('utf-8'))
+            stale = run('migration-v08-stale-lock', ['project', 'check', '--manifest', legacy_manifest,
+                '--frozen', '--output-format=json-v1'], expected=2)
+            require('stale' in json.loads(stale.stdout)['diagnostics'][0]['message'].lower(), stale.stdout)
+            require(legacy_lock.read_bytes() == before_lock, 'Frozen validation overwrote the legacy lock')
+            checks.append({'name': 'migration-v08-no-silent-mutation', 'status': 0})
+            run('migration-v08-lock', ['project', 'lock', '--manifest', legacy_manifest])
+            migrated_lock = legacy_lock.read_bytes()
+            tested = run('migration-v08-frozen-tests', ['project', 'test', '--manifest', legacy_manifest,
+                '--frozen', '--output-format=json-v1'])
+            require(json.loads(tested.stdout)['result']['passed'] == 1, tested.stdout)
+            run('migration-v08-frozen-run', ['project', 'run', '--manifest', legacy_manifest, '--frozen'],
+                stdout=b'Hello, Wysna!\n')
+            require(legacy_lock.read_bytes() == migrated_lock, 'Execution changed the frozen migrated lock')
         strings = project / 'strings.wysna'
         strings.write_text('let value = "á\\0界"\nprint(len(value), value)\n', encoding='utf-8')
         run('unicode-and-nul', ['run', strings], stdout='3 á\0界\n'.encode())

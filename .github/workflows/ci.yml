@@ -93,6 +93,7 @@ jobs:
           tests/unit/test_native_delegation_profiles.py
           tests/unit/test_project_packages.py
           tests/unit/test_ops_a01_workflow.py
+          tests/unit/test_v09_project_migration.py
 
   llvm-smoke:
     name: LLVM backend smoke (${{ matrix.os }})

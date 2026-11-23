@@ -2,10 +2,12 @@
 
 ## Arquitectura híbrida integrada y siguiente ciclo
 
-[PR #176](https://github.com/WashingtonYandun/Wysna/pull/176) está integrado en
-`main` y `develop` en `4ad7c5e`. El [CI del merge](https://github.com/WashingtonYandun/Wysna/actions/runs/45073946830)
-terminó correctamente. El siguiente trabajo vive en `feat/v0.9-agent-contracts-annotations-patterns`;
-su secuencia está en [Runtime agent-first](13-RUNTIME-AGENT-FIRST.md) y [ADR-06](ADR-06-metadatos-tipados-y-runtime-agentes.md).
+PR #176 estableció la arquitectura híbrida. [PR #177](https://github.com/WashingtonYandun/Wysna/pull/177)
+integró R0 en `ba0953e` con [CI 39/39](https://github.com/WashingtonYandun/Wysna/actions/runs/45105563683):
+anotaciones propias, introspección, catálogo común y correcciones de patrones/runtime.
+La versión 0.9 se alinea y verifica por separado, incluida la
+[migración de proyectos 0.8](../MIGRATING_0_8_TO_0_9.md).
+La secuencia posterior está en [Runtime agent-first](13-RUNTIME-AGENT-FIRST.md) y [ADR-06](ADR-06-metadatos-tipados-y-runtime-agentes.md).
 La decisión vigente es [ADR-05](ADR-05-arquitectura-hibrida-tooling-selfhost.md):
 el lenguaje conserva el oráculo diferencial de cuatro motores y el tooling se
 implementa en Selfhost; `packages` es exclusivamente nativo.

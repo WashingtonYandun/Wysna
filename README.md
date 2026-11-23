@@ -16,7 +16,7 @@ Wysna is statically typed and builds native executables through C99. Use it to p
 
 ## Installation
 
-Choose a distribution for your platform on [GitHub Releases](https://github.com/WashingtonYandun/Wysna/releases). The native SDK and project impact workflows shown here require **Wysna 0.8.0 or later**.
+Selecciona tu distribución en [GitHub Releases](https://github.com/WashingtonYandun/Wysna/releases). Los flujos mostrados aquí requieren **Wysna 0.9.0 o posterior**. Para proyectos existentes, sigue la [guía de migración 0.8 → 0.9](docs/MIGRATING_0_8_TO_0_9.md).
 
 | Distribution | Use it for | Platforms |
 | --- | --- | --- |
