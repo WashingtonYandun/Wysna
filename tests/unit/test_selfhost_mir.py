@@ -241,6 +241,7 @@ if len(fault) >= 7 and slice(fault, 0, 7) == "result_" {
         module.functions[1].slots.append(MirSlot { type_id: 7, name: "", parameter: false, origin: -1, predicate: false, counter: false })
         let mut literal = mir_literal_unit()
         literal.type_id = 7
+        literal.integer = 256
         let operands: list[int] = []
         module.functions[1].blocks[0].operations.append(MirOperation { owner_type: 0, labels: mir_empty_labels(), place: mir_empty_place(), opcode: "const", result: slot, args: operands, name: "", value: literal, source: module.functions[1].source })
     }

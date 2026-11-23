@@ -1,7 +1,7 @@
 """Independent MIR shape, binding, layout, CFG and ARC dataflow verification."""
 from collections import deque
 import re
-from checker.TypeInterner import TYPE_BOOL, TYPE_INT, TYPE_UNIT, TYPE_NONE, TYPE_FLOAT, TYPE_STR
+from checker.TypeInterner import TYPE_BOOL, TYPE_INT, TYPE_U8, TYPE_UNIT, TYPE_NONE, TYPE_FLOAT, TYPE_STR
 from checker.TypeRelations import TypeRelations
 from error.Error import WysnaError
 from mir.Nodes import EFFECTS, Place
@@ -12,7 +12,7 @@ RUNTIME = {
     'wysna_make_range', 'wysna_empty_weak', 'wysna_index_get_owned_at', 'wysna_unwrap_optional', 'wysna_unwrap_ok',
     'wysna_unwrap_err', 'wysna_unwrap_success', 'wysna_enum_payload_owned', 'wysna_dict_get', 'wysna_dict_keys', 'wysna_dict_values',
     'wysna_builtin_print', 'wysna_builtin_eprint', 'wysna_builtin_len', 'wysna_builtin_str', 'wysna_builtin_int',
-    'wysna_builtin_float', 'wysna_builtin_ord', 'wysna_builtin_chr', 'wysna_builtin_slice', 'wysna_builtin_bytes',
+    'wysna_builtin_u8', 'wysna_builtin_float', 'wysna_builtin_ord', 'wysna_builtin_chr', 'wysna_builtin_slice', 'wysna_builtin_bytes',
     'wysna_builtin_args', 'wysna_builtin_env', 'wysna_builtin_unix_time', 'wysna_builtin_exit', 'wysna_builtin_enumerate', 'wysna_builtin_dict_items',
     'wysna_builtin_read_file', 'wysna_builtin_write_file', 'wysna_builtin_join_strings', 'wysna_builtin_weak_owned',
     'wysna_builtin_upgrade', 'wysna_builtin_contract_assert_at', 'wysna_await', 'wysna_contains',
@@ -23,7 +23,7 @@ RUNTIME_ARITIES = {
     **dict.fromkeys(('wysna_neg', 'wysna_not', 'wysna_ok', 'wysna_err', 'wysna_enum_payload', 'wysna_wrap_result',
                      'wysna_unwrap_optional', 'wysna_unwrap_ok', 'wysna_unwrap_err', 'wysna_unwrap_success',
                      'wysna_enum_payload_owned', 'wysna_dict_keys', 'wysna_dict_values', 'wysna_builtin_len',
-                     'wysna_builtin_str', 'wysna_builtin_int', 'wysna_builtin_float', 'wysna_builtin_ord',
+                     'wysna_builtin_str', 'wysna_builtin_int', 'wysna_builtin_u8', 'wysna_builtin_float', 'wysna_builtin_ord',
                      'wysna_builtin_chr', 'wysna_builtin_bytes', 'wysna_builtin_exit', 'wysna_builtin_enumerate',
                      'wysna_builtin_dict_items', 'wysna_builtin_read_file', 'wysna_builtin_weak_owned',
                      'wysna_builtin_upgrade', 'wysna_builtin_env', 'wysna_await',
@@ -149,8 +149,10 @@ class Verifier:
                     isinstance(operation.data.get('inclusive'), bool))
         elif name == 'wysna_builtin_len':
             require(result.type_id == TYPE_INT and (types[0] == TYPE_STR or entry(0).tag in ('list', 'dict', 'tuple')))
+        elif name == 'wysna_builtin_u8':
+            require(types == [TYPE_INT] and returned.tag == 'optional' and returned.data == TYPE_U8)
         elif name in ('wysna_builtin_int', 'wysna_builtin_float'):
-            require(types[0] in (TYPE_INT, TYPE_FLOAT, TYPE_BOOL, TYPE_STR) and
+            require(types[0] in (TYPE_INT, TYPE_U8, TYPE_FLOAT, TYPE_BOOL, TYPE_STR) and
                     result.type_id == (TYPE_INT if name == 'wysna_builtin_int' else TYPE_FLOAT))
         elif name == 'wysna_builtin_ord':
             require(types == [TYPE_STR] and result.type_id == TYPE_INT)
@@ -299,6 +301,8 @@ class Verifier:
             value = data.get('value')
             if data.get('placeholder'):
                 valid = value is None
+            elif result.type_id == TYPE_U8:
+                valid = type(value) is int and 0 <= value <= 255
             elif data.get('default'):
                 valid = (result.type_id not in (TYPE_BOOL, TYPE_INT, TYPE_FLOAT, TYPE_STR) if value is None
                          else {bool: TYPE_BOOL, int: TYPE_INT, float: TYPE_FLOAT, str: TYPE_STR}.get(type(value)) == result.type_id)
@@ -466,7 +470,7 @@ class Verifier:
         for index, slot in enumerate(function.slots):
             if slot.id != index or self.interner.get_entry(slot.type_id) is None or slot.type_id == 0:
                 self.fail('Invalid MIR slot identity/type', function.source)
-            allowed = {TYPE_INT: ('integer', 'counter'), TYPE_FLOAT: ('float',),
+            allowed = {TYPE_INT: ('integer', 'counter'), TYPE_U8: ('integer',), TYPE_FLOAT: ('float',),
                        TYPE_BOOL: ('boolean', 'predicate')}.get(slot.type_id, ('value',))
             if slot.storage not in allowed or slot.ownership not in ('owned', 'borrowed'):
                 self.fail('Invalid MIR physical storage/type contract', function.source)

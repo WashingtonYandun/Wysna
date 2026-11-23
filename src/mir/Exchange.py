@@ -11,7 +11,7 @@ from mir.Nodes import (
 
 FORMAT = "wysna.mir"
 SCHEMA_VERSION = 1
-SEMANTIC_REVISION = "0.5.0"
+SEMANTIC_REVISION = "0.6.0"
 RUNTIME_ABI_VERSION = 3
 
 _NODE_TYPES = {
@@ -202,7 +202,7 @@ def import_module(payload: str):
     if envelope.get("schema_version") != SCHEMA_VERSION:
         _fail(f"Unsupported MIR schema version: {envelope.get('schema_version')!r}")
     if envelope.get("semantic_revision") != SEMANTIC_REVISION:
-        _fail(f"Unsupported Wysna semantic revision: {envelope.get('semantic_revision')!r}")
+        _fail(f"Unsupported Wysna semantic revision: {envelope.get('semantic_revision')!r}. Regenerate MIR from the original source with this compiler.")
     if envelope.get("runtime_abi_version") != RUNTIME_ABI_VERSION:
         _fail(f"Unsupported runtime ABI version: {envelope.get('runtime_abi_version')!r}")
     try:

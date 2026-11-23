@@ -1,5 +1,5 @@
 """C scalar/opaque adapters with explicit width checks and no Wysna allocation transfer."""
-C_TYPES = {'int': 'int64_t', 'int64': 'int64_t', 'int32': 'int32_t',
+C_TYPES = {'int': 'int64_t', 'int64': 'int64_t', 'int32': 'int32_t', 'u8': 'uint8_t',
            'float': 'double', 'double': 'double', 'bool': 'bool', 'opaque': 'void*', 'unit': 'void'}
 
 
@@ -10,14 +10,14 @@ def foreign_wrapper(c_name, native_name, signature):
     arguments = []
     for index, type_ in enumerate(params):
         value = 'v_' + str(index)
-        extractor = {'int': 'wysna_as_int', 'int64': 'wysna_as_int', 'float': 'wysna_as_float',
+        extractor = {'int': 'wysna_as_int', 'int64': 'wysna_as_int', 'u8': 'wysna_as_u8', 'float': 'wysna_as_float',
                      'double': 'wysna_as_float', 'bool': 'wysna_as_bool', 'opaque': 'wysna_as_pointer'}.get(type_)
         arguments.append('wysna_ffi_int32(' + value + ')' if type_ == 'int32' else extractor + '(' + value + ')')
     call = native_name + '(' + ', '.join(arguments) + ')'
     if returned == 'unit':
         body = call + '; return wysna_unit();'
     else:
-        constructor = {'int': 'wysna_int', 'int64': 'wysna_int', 'int32': 'wysna_int', 'float': 'wysna_float',
+        constructor = {'int': 'wysna_int', 'int64': 'wysna_int', 'int32': 'wysna_int', 'u8': 'wysna_int', 'float': 'wysna_float',
                        'double': 'wysna_float', 'bool': 'wysna_bool', 'opaque': 'wysna_pointer'}[returned]
         if native_name in ('wysna_host_buffer_new', 'wysna_host_file_open'):
             constructor = 'wysna_host_owned_pointer'

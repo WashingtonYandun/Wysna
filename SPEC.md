@@ -98,6 +98,7 @@ process(item)
 ### 4.1 Primitive & Built-in Types
 * `int`: 64-bit signed integer.
 * `float`: 64-bit floating point.
+* `u8`: Unsigned 8-bit integer with range `0..255`. A literal in a `u8` context is checked at compile time. Use `u8(value: int) -> u8?` for computed values and handle `None` when the value falls outside the range. Use `int(value)` for integer arithmetic and `float(value)` for floating-point arithmetic. C FFI uses `uint8_t`. The C99 runtime stores each element of a `list[u8]` in one byte, with a shared list header and copy-on-write semantics.
 * `bool`: Boolean truth value.
 * `str`: Immutable UTF-8 text with code-point indexing.
 * `unit`: Type indicating the absence of a meaningful value for functions that return nothing.

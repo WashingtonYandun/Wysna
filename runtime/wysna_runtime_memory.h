@@ -749,19 +749,20 @@ static inline void wysna_list_detach(WVal* v) {
     new_b->len = old_b->len;
     new_b->cap = old_b->cap > 0 ? old_b->cap : 4;
     new_b->scalar_only = old_b->scalar_only;
-    new_b->data = (WVal*)wysna_alloc_safe(sizeof(WVal) * new_b->cap);
+    size_t element_size = wysna_list_element_size(old_b);
+    new_b->data = (WVal*)wysna_alloc_safe(element_size * new_b->cap);
     wysna_mem_on_alloc();
 
     /* B02: CoW detach telemetry */
     wysna_atomic_add_i64(&wysna_g_cow_detach_list, 1);
     wysna_atomic_add_i64(&wysna_g_cow_copied_slots, old_b->len);
-    wysna_atomic_add_i64(&wysna_g_cow_copied_bytes, (int64_t)(sizeof(WVal) * old_b->len));
-    wysna_atomic_add_i64(&wysna_g_cow_allocated_bytes, (int64_t)(sizeof(WListBuf) + (sizeof(WVal) * new_b->cap)));
+    wysna_atomic_add_i64(&wysna_g_cow_copied_bytes, (int64_t)(element_size * old_b->len));
+    wysna_atomic_add_i64(&wysna_g_cow_allocated_bytes, (int64_t)(sizeof(WListBuf) + element_size * new_b->cap));
     wysna_atomic_add_i64(&wysna_g_cow_alloc_count, 2);
 
     if (old_b->scalar_only) {
         if (old_b->len > 0) {
-            memcpy(new_b->data, old_b->data, sizeof(WVal) * (size_t)old_b->len);
+            memcpy(new_b->data, old_b->data, element_size * (size_t)old_b->len);
         }
     } else {
         for (int32_t i = 0; i < old_b->len; i++) {

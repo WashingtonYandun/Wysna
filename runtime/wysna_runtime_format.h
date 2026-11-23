@@ -309,7 +309,7 @@ static inline char* wysna_to_cstr(WVal v, bool quote_str) {
                 wysna_format_push_text(&tasks, &task_count, &task_capacity, &heap_tasks, "]");
                 for (int32_t i = list->len - 1; i >= 0; i--) {
                     wysna_format_push_value(&tasks, &task_count, &task_capacity, &heap_tasks,
-                                        list->data[i], true);
+                                        wysna_list_load(list, i), true);
                     if (i > 0) wysna_format_push_text(&tasks, &task_count, &task_capacity,
                                                   &heap_tasks, ", ");
                 }

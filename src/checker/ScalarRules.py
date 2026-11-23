@@ -17,6 +17,7 @@ from node.NodeType import (
 from checker.WysnaType import (
     WysnaType,
     IntType,
+    U8Type,
     FloatType,
     BoolType,
     StrType,
@@ -39,6 +40,11 @@ def check_lambda_expr(checker: "TypeChecker", expr: LambdaExpr, is_statement_con
 
 
 def check_int_literal(checker: "TypeChecker", expr: IntLiteral, is_statement_context: bool = False) -> WysnaType:
+    if checker.expected_type == U8Type:
+        if not 0 <= expr.value <= 255:
+            raise TypeError("u8 literal is outside [0, 255]", line=expr.line, col=expr.col,
+                            file=checker.file, code="W0002")
+        return U8Type
     if expr.value > 9223372036854775807 or expr.value < -9223372036854775808:
         raise TypeError(
             message=f"Integer literal {expr.value} exceeds 64-bit signed range [-9223372036854775808, 9223372036854775807]",

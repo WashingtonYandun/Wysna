@@ -33,7 +33,7 @@ fn mir_literal_str(value: str) -> MirLiteral {
     return MirLiteral { type_id: 5, integer: 0, floating: 0.0, boolean: false, text: value }
 }
 
-fn mir_value_storage(type_id: int) -> bool { return type_id == 1 or type_id >= 5 }
+fn mir_value_storage(type_id: int) -> bool { return type_id == 1 or (type_id >= 5 and type_id != 7) }
 
 fn mir_unsupported(token: Token, feature: str) {
     report_error_at("W2013", token, "Compiler MIR native-core-v1 does not support " + feature)
@@ -46,7 +46,7 @@ fn mir_intern(context: MirBuilder, kind: str, name: str, args_: list[int]) -> in
 }
 fn mir_type(context: MirBuilder, type_id: int, source: Token) -> int {
     let type_ = context.program.types[type_id]
-    let names: list[str] = ["error", "unit", "bool", "int", "float", "str", "none"]
+    let names: list[str] = ["error", "unit", "bool", "int", "float", "str", "none", "u8"]
     for i in 0..len(names) { if type_.kind == names[i] { return i } }
     if type_.kind == "struct" or type_.kind == "enum" or type_.kind == "class" or type_.kind == "interface" {
         if not checked_type_concrete(context.program.types, context.program.templates, type_id) { mir_unsupported(source, "nominal values with unresolved type arguments; add an explicit type context") }
@@ -264,7 +264,7 @@ fn mir_ids(ids: list[int], tuple_: bool) -> str {
 fn mir_literal_json(value: MirLiteral) -> str {
     if value.type_id == 1 or value.type_id == 6 { return "null" }
     if value.type_id == 2 { return str(value.boolean) }
-    if value.type_id == 3 { return str(value.integer) }
+    if value.type_id == 3 or value.type_id == 7 { return str(value.integer) }
     if value.type_id == 5 { return mir_quote(value.text) }
     return str(value.floating)
 }
@@ -336,7 +336,7 @@ fn mir_function_json(function: MirFunction) -> str {
         let slot = function.slots[i]
         let mut storage = "value"
         if slot.type_id == 2 { storage = if slot.predicate { "predicate" } else { "boolean" } }
-        elif slot.type_id == 3 { storage = if slot.counter { "counter" } else { "integer" } }
+        elif slot.type_id == 3 or slot.type_id == 7 { storage = if slot.counter { "counter" } else { "integer" } }
         elif slot.type_id == 4 { storage = "float" }
         let ownership = if slot.parameter { "borrowed" } else { "owned" }
         slots = slots + "{\"$type\":\"Slot\",\"id\":" + str(i) + ",\"type_id\":" + str(slot.type_id) + ",\"name\":" + mir_quote(slot.name) + ",\"storage\":" + mir_quote(storage) + ",\"ownership\":" + mir_quote(ownership) + ",\"parameter\":" + str(slot.parameter) + "}"
@@ -370,7 +370,7 @@ fn mir_dictionary_key(module: MirModule, root: int) -> bool {
         if id < 0 {
             active.pop()
             seen.append(-id - 1)
-        } elif id != 2 and id != 3 and id != 5 {
+        } elif id != 2 and id != 3 and id != 5 and id != 7 {
             if id < 0 or id >= len(module.types) { return false }
             if module.types[id].kind == "tuple" {
                 for elem_id in module.types[id].args { pending.append(elem_id) }
@@ -407,7 +407,7 @@ fn mir_arena_json(module: MirModule) -> str {
         let type_ = types[i]
         let mut tag = type_.kind
         let mut data = "null"
-        if (i > 0 and i < 7) or tag == "opaque" { tag = "primitive" data = mir_quote(type_.kind) }
+        if (i > 0 and i <= 7) or tag == "opaque" { tag = "primitive" data = mir_quote(type_.kind) }
         elif tag == "optional" or tag == "weak" or tag == "list" { data = str(type_.args[0]) }
         elif tag == "struct" or tag == "enum" or tag == "class" or tag == "interface" { data = mir_quote(type_.name) }
         elif tag == "function" {
@@ -417,7 +417,7 @@ fn mir_arena_json(module: MirModule) -> str {
         }
         elif tag != "error" and tag != "any" { data = mir_ids(type_.args, false) }
         entries = entries + "{\"tag\":" + mir_quote(tag) + ",\"data\":" + data + "}"
-        let retain = str(i == 5 or i >= 7)
+        let retain = str(i == 5 or i > 7)
         let key = str(mir_dictionary_key(module, i))
         let comparable = str(tag != "result" and tag != "error_union" and tag != "function")
         let reference = str(mir_reference_type(types, i))
@@ -451,7 +451,7 @@ class MirBuilder {
         this.program = program
         let empty_type_args: list[int] = []
         let mut initial_types: list[MirType] = []
-        let primitive_names: list[str] = ["error", "unit", "bool", "int", "float", "str", "none"]
+        let primitive_names: list[str] = ["error", "unit", "bool", "int", "float", "str", "none", "u8"]
         for name in primitive_names { initial_types.append(MirType { kind: name, name: "", args: empty_type_args }) }
         this.types = initial_types
         let initial_functions: list[MirFunction] = []

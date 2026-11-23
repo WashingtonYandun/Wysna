@@ -1,6 +1,7 @@
 """CCodeGen expression rules; mutable state belongs to the invoking context."""
 from typing import TYPE_CHECKING
 from common.ExpressionDispatch import reject_unknown_node
+from checker.WysnaType import ListType, U8Type
 
 from typing import List
 from node.NodeType import (
@@ -62,7 +63,7 @@ def emit_string_literal(emitter: "CCodeGen", expr: StringLiteral, out: List[str]
         return f"wysna_str_n({emitter.escape_c_str(expr.value)}, {utf8_len})"
     literal = emitter.new_aux("_literal")
     out.append(f"static WStringLiteral {literal} = {{0}};")
-    return f"wysna_literal_str_n(&{literal}, {emitter.escape_c_str(expr.value)}, {utf8_len})"
+    return emitter._bind_call(f"wysna_literal_str_n(&{literal}, {emitter.escape_c_str(expr.value)}, {utf8_len})", out)
 
 
 def emit_bool_literal(emitter: "CCodeGen", expr: BoolLiteral, out: List[str]) -> str:
@@ -246,10 +247,16 @@ def emit_else_err_expr(emitter: "CCodeGen", expr: ElseErrExpr, out: List[str]) -
 
 
 def emit_assignment_expr(emitter: "CCodeGen", expr: AssignmentExpr, out: List[str]) -> str:
-    lref = emitter.prepare_assignment_ref(expr.target, out)
+    target = expr.target
+    byte_index = isinstance(target, IndexExpr) and getattr(target, 'inferred_type', None) == U8Type
+    lref = emitter.prepare_assignment_ref(target.object if byte_index else target, out)
+    index = emitter.emit_value(target.index, out) if byte_index else None
     val = emitter.emit_expr(expr.value, out)
     rhs_hold = emitter.new_aux("_rhs")
     emitter._declare_owned_var(rhs_hold, emitter._own_expr(val), out)
+    if byte_index:
+        store = emitter._source_call("wysna_index_store_at", f"{lref}, {index}, wysna_move(&{rhs_hold})", target)
+        return emitter._bind_call(f"wysna_clone({store})", out)
     if isinstance(expr.target, IdentExpr):
         c_target = emitter.c_var(expr.target.name)
         out.append(f"wysna_assign(&{c_target}, wysna_move(&{rhs_hold}));")
@@ -337,6 +344,7 @@ def emit_call_expr(emitter: "CCodeGen", expr: CallExpr, out: List[str]) -> str:
             "len": "wysna_builtin_len",
             "str": "wysna_builtin_str",
             "int": "wysna_builtin_int",
+            "u8": "wysna_builtin_u8",
             "float": "wysna_builtin_float",
             "ord": "wysna_builtin_ord",
             "chr": "wysna_builtin_chr",
@@ -471,12 +479,14 @@ def emit_call_expr(emitter: "CCodeGen", expr: CallExpr, out: List[str]) -> str:
 
 
 def emit_list_expr(emitter: "CCodeGen", expr: ListExpr, out: List[str]) -> str:
+    type_ = getattr(expr, 'inferred_type', None)
+    constructor = "wysna_make_u8_list" if isinstance(type_, ListType) and type_.element == U8Type else "wysna_make_list"
     if not expr.elements:
-        return emitter._bind_call("wysna_make_list(0, NULL)", out)
+        return emitter._bind_call(f"{constructor}(0, NULL)", out)
     elem_vals = [emitter.emit_value(e, out) for e in expr.elements]
     arr_tmp = emitter.new_aux("_arr")
     out.append(f"WVal {arr_tmp}[{len(elem_vals)}] = {{ {', '.join(elem_vals)} }};")
-    return emitter._bind_call(f"wysna_make_list({len(elem_vals)}, {arr_tmp})", out)
+    return emitter._bind_call(f"{constructor}({len(elem_vals)}, {arr_tmp})", out)
 
 
 def emit_tuple_expr(emitter: "CCodeGen", expr: TupleExpr, out: List[str]) -> str:

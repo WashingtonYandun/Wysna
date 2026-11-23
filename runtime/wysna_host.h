@@ -2197,7 +2197,7 @@ static inline WVal wysna_parallel_map_configured(WVal values, WVal transform,
         tasks[w].outputs = outputs;
         WysnaWorkerCopy memo = {0};
         tasks[w].fn = wysna_worker_copy_value(&memo, transform, 0);
-        for (int32_t i = cursor; i < cursor + span; i++) inputs[i] = wysna_worker_copy_value(&memo, list->data[i], 0);
+        for (int32_t i = cursor; i < cursor + span; i++) inputs[i] = wysna_worker_copy_value(&memo, wysna_list_load(list, i), 0);
         wysna_worker_copy_clear(&memo);
         tasks[w].start = cursor;
         tasks[w].end = cursor + span;
@@ -2279,11 +2279,11 @@ static inline WVal wysna_parallel_batch(WVal values, int64_t batch_size, WVal tr
     int32_t offset = 0;
     while (offset < len) {
         int32_t chunk = (step < (int64_t)(len - offset)) ? (int32_t)step : (len - offset);
-        WVal slice_list = wysna_make_list(chunk, list->data + offset);
+        WVal slice_list = wysna_list_slice(list, offset, chunk);
         WVal mapped = wysna_parallel_map(slice_list, transform);
         WListBuf* mapped_list = wysna_as_list(mapped);
         for (int32_t i = 0; i < chunk; i++) {
-            outputs[offset + i] = wysna_clone(mapped_list->data[i]);
+            outputs[offset + i] = wysna_clone(wysna_list_load(mapped_list, i));
         }
         wysna_release(mapped);
         wysna_release(slice_list);
@@ -2308,12 +2308,12 @@ static inline WVal wysna_parallel_filter(WVal values, WVal predicate) {
     WVal* kept = (WVal*)wysna_alloc_safe(sizeof(WVal) * (size_t)len);
     int32_t kept_count = 0;
     for (int32_t i = 0; i < len; i++) {
-        WVal flag = flags_list->data[i];
+        WVal flag = wysna_list_load(flags_list, i);
         if (wysna_tag(flag) == W_BOOL && wysna_as_bool(flag)) {
-            kept[kept_count++] = wysna_clone(list->data[i]);
+            kept[kept_count++] = wysna_clone(wysna_list_load(list, i));
         }
     }
-    WVal result = wysna_make_list(kept_count, kept);
+    WVal result = wysna_list_is_u8(list) ? wysna_make_u8_list(kept_count, kept) : wysna_make_list(kept_count, kept);
     for (int32_t i = 0; i < kept_count; i++) wysna_release(kept[i]);
     free(kept);
     wysna_release(flags);

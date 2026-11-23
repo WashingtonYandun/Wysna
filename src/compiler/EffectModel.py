@@ -18,6 +18,7 @@ RUNTIME_EFFECTS = {name: frozenset({
     'wysna_builtin_ord',
     'wysna_builtin_slice',
     'wysna_builtin_str',
+    'wysna_builtin_u8',
     'wysna_builtin_upgrade',
     'wysna_builtin_weak_owned',
     'wysna_contains',

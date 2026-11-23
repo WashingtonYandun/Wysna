@@ -40,6 +40,8 @@ def _type_node_to_schema(node, known_defs):
         name = node.name
         if name == "int":
             return {"type": "integer"}
+        if name == "u8":
+            return {"type": "integer", "minimum": 0, "maximum": 255}
         if name == "float":
             return {"type": "number"}
         if name == "bool":
@@ -385,6 +387,8 @@ def _encode_scalar_expr(expr, type_node, known_defs):
         name = type_node.name
         if name == "int":
             return f"json.from_int({expr})"
+        if name == "u8":
+            return f"json.from_int(int({expr}))"
         if name == "float":
             return f"json.from_float({expr})"
         if name == "bool":
@@ -402,6 +406,8 @@ def _decode_scalar_expr(val_expr, type_node, known_defs):
         name = type_node.name
         if name == "int":
             return f"json.to_int({val_expr})?"
+        if name == "u8":
+            return f'(u8(json.to_int({val_expr})?) else {{ return Err(json.error(0, "u8 out of range")) }})'
         if name == "float":
             return f"json.to_float({val_expr})?"
         if name == "bool":
@@ -523,9 +529,9 @@ def generate_codecs_source(declarations) -> str:
                 if fkind in ("NamedType", "PrimitiveType") and fnode.name in ("int", "float", "bool", "str"):
                     dec_lines.append(f'    let _f_{fname} = json.get_{fnode.name}(raw_val, "{fname}")?')
                 else:
-                    dec_lines.append(
-                        f'    let _f_{fname} = decode_{fnode.name}(json.get_required(raw_val, "{fname}")?)?'
-                    )
+                    raw_field = f'json.get_required(raw_val, "{fname}")?'
+                    decoder = _decode_scalar_expr(raw_field, fnode, known_defs)
+                    dec_lines.append(f'    let _f_{fname} = {decoder}')
                 ctor_fields.append(f"{fname}: _f_{fname}")
                 continue
 
@@ -550,12 +556,12 @@ def generate_codecs_source(declarations) -> str:
                     dec_lines.append(
                         f'    let _raw_opt_{fname} = json.get(raw_val, "{fname}")\n'
                         f'    let _f_{fname}: {ftype_str} = match _raw_opt_{fname} {{\n'
-                        f'        None => none,\n'
-                        f'        Some(_opt_item) => if json.is_null(_opt_item) {{\n'
-                        f'            none\n'
-                        f'        }} else {{\n'
+                        f'        Some(_opt_item) => if not json.is_null(_opt_item) {{\n'
                         f'            Some({inner_dec})\n'
+                        f'        }} else {{\n'
+                        f'            None\n'
                         f'        }},\n'
+                        f'        None => None,\n'
                         f'    }}'
                     )
                 ctor_fields.append(f"{fname}: _f_{fname}")

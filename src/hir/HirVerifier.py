@@ -1,6 +1,6 @@
 """Validate HIR structure, type decorations and control-flow invariants."""
 from error.Error import WysnaError
-from checker.TypeInterner import TYPE_BOOL, TYPE_INT, TYPE_FLOAT, TYPE_STR, TYPE_UNIT, TYPE_NONE
+from checker.TypeInterner import TYPE_BOOL, TYPE_INT, TYPE_U8, TYPE_FLOAT, TYPE_STR, TYPE_UNIT, TYPE_NONE
 from checker.TypeRelations import TypeRelations
 from hir import HirNodes as H
 
@@ -70,7 +70,10 @@ class HirVerifier:
         literals = {H.HirConstInt: TYPE_INT, H.HirConstFloat: TYPE_FLOAT,
                     H.HirConstBool: TYPE_BOOL, H.HirConstStr: TYPE_STR,
                     H.HirConstUnit: TYPE_UNIT, H.HirConstNone: TYPE_NONE}
-        if type(value) in literals and value.type_id != literals[type(value)]:
+        if isinstance(value, H.HirConstInt) and value.type_id == TYPE_U8:
+            if not 0 <= value.value <= 255:
+                self._fail(value, "u8 constant is outside its range")
+        elif type(value) in literals and value.type_id != literals[type(value)]:
             self._fail(value, 'Literal type does not match its value kind')
         if isinstance(value, H.HirUnaryOp):
             operand = value.operand.type_id
