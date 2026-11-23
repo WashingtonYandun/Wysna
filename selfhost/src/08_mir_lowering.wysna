@@ -99,6 +99,7 @@ fn mir_expression(context: MirBuilder, id: int) -> int {
     if node.kind == "callee" and node.target >= 0 { return mir_function_value(context, mir_type(context, node.type_id, source), mir_abi_name(context.program.signatures[node.target].name), [], source) }
     if node.kind == "indirect_call" { return mir_indirect(context, node) }
     if node.kind == "match" { return mir_match(context, node) }
+    if node.kind == "postcondition" { return mir_postcondition(context, node) }
     if node.kind == "new" { return mir_new(context, node) }
     if node.kind == "virtual_call" { return mir_virtual_call(context, node) }
     if node.kind == "binding" { return mir_lookup(context, node.binding, source) }
@@ -168,6 +169,37 @@ fn mir_expression(context: MirBuilder, id: int) -> int {
     }
     mir_unsupported(source, "checked expression " + node.kind)
     return -1
+}
+
+fn mir_postcondition(context: MirBuilder, node: CheckedNode) -> int {
+    let source = node.source
+    let raw = mir_expression(context, node.children[0])
+    if context.current < 0 { return -1 }
+    let target = mir_type(context, node.type_id, source)
+    let result = if target == 1 { mir_constant(context, mir_literal_unit(), 1, source) } else { mir_coerce(context, raw, target, true, source) }
+    let channel = mir_is_result(context.types, target)
+    let mut done = -1
+    if channel {
+        let failed = mir_error_test(context, result, source)
+        let check = mir_new_block(context, source)
+        done = mir_new_block(context, source)
+        mir_terminate(context, "branch", [done, check], failed, source)
+        context.current = check
+    }
+    let bindings = context.bindings
+    mir_push_scope(context)
+    let success = if channel { mir_op(context, "runtime", context.types[target].args[0], [result], "wysna_unwrap_ok", mir_literal_unit(), source) } else { result }
+    context.bindings.append(MirBinding { symbol: node.binding, slot: success })
+    let guards = mir_block(context, node.children[1])
+    if context.current >= 0 {
+        mir_release(context, guards, source)
+        mir_cleanup(context, len(context.scopes) - 1, source)
+        if channel { mir_jump(context, done, source) }
+    }
+    context.scopes.pop()
+    context.bindings = bindings
+    if channel { context.current = done }
+    return result
 }
 
 fn mir_block(context: MirBuilder, id: int) -> int {

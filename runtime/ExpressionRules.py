@@ -388,7 +388,6 @@ def evaluate_assignment_expr(interpreter: "Interpreter", expr: AssignmentExpr, e
             return val
         if isinstance(obj, WysnaStructInstance):
             obj.set_field(target.property, val)
-            interpreter.check_struct_contracts(obj, expr)
             return val
         raise WysnaRuntimeError(f"Cannot assign to property of '{type(obj).__name__}'", line=target.line, col=target.col, file=interpreter.file)
 

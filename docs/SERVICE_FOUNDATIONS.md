@@ -3,9 +3,10 @@
 The synchronous toolkit supports bounded file tools and an HTTP/HTTPS client. An
 experimental local JSON server now supervises isolated native Wysna worker processes.
 It is a pilot for application shape and failure boundaries, not a general-purpose
-production server. The runtime still has no language-level scheduler, asynchronous
-sockets or cancellation. The HTTP client and service host are not network or OS
-sandboxes; host permissions and deployment isolation remain outside their contracts.
+production server. El runtime dispone de corrutinas cooperativas, timers y
+operaciones HTTP por polling. Los grupos con deadlines y cancelación pública
+siguen en R2. Los permisos de host y el aislamiento del sistema operativo se
+configuran en el despliegue.
 
 ## Implemented resource boundary
 
@@ -13,7 +14,9 @@ Standard File and Bytes handles have trusted runtime owners. Returning an owner,
 storing it in a container or capturing it in a lambda retains its lifetime. Explicit
 close invalidates the checked ID for every alias. Borrowing does not create an owner.
 Raw FFI disposal remains explicit; arbitrary callbacks never run from ARC release.
-There is no strong-cycle collector and no language-level panic unwinding.
+El recolector nativo de ciclos fuertes se ejecuta bajo presión de cuota o al
+salir con `WYSNA_COLLECT_CYCLES=1`. Los traps terminan la ejecución sin
+desenrollar recursos de aplicación.
 
 Run `python3 -m tests.unit.test_foundations` to execute README examples, unit-result
 parity and 10,000/100,000 request iterations in each engine. Every completed request

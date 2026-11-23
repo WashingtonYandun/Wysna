@@ -59,7 +59,7 @@ fn checked_verify(program: CheckedProgram) {
         let mut valid = false
         if node.kind == "integer" or node.kind == "float" or node.kind == "string" or node.kind == "boolean" or node.kind == "unit" or node.kind == "none" or node.kind == "binding" or node.kind == "super" or node.kind == "callee" or node.kind == "closure" or node.kind == "break" or node.kind == "continue" { valid = count == 0 }
         elif node.kind == "unary" or node.kind == "propagate" or node.kind == "let" or node.kind == "return" { valid = count == 1 }
-        elif node.kind == "binary" or node.kind == "assign" or node.kind == "index" or node.kind == "handler" or node.kind == "while" { valid = count == 2 }
+        elif node.kind == "binary" or node.kind == "assign" or node.kind == "index" or node.kind == "handler" or node.kind == "while" or node.kind == "postcondition" { valid = count == 2 }
         elif node.kind == "if" { valid = count == 3 }
         elif node.kind == "new" or node.kind == "new_callee" or node.kind == "method" or node.kind == "direct_method" or node.kind == "virtual_call" or node.kind == "struct" or node.kind == "struct_call" or node.kind == "enum" or node.kind == "enum_call" or node.kind == "namespace" or node.kind == "constructor" or node.kind == "enum_callee" or node.kind == "call" or node.kind == "block" or node.kind == "list" or node.kind == "tuple" or node.kind == "collection_call" { valid = true }
         elif node.kind == "indirect_call" { valid = count >= 1 }
@@ -76,10 +76,17 @@ fn checked_verify(program: CheckedProgram) {
         }
         if node.total and node.kind != "match" { report_error_at("W9999", node.source, "unexpected checked match totality") }
         if node.discard and node.kind != "if" { report_error_at("W9999", node.source, "invalid checked discard marker") }
-        if node.kind == "super" or node.kind == "binding" or node.kind == "let" or node.kind == "handler" and node.binding >= 0 {
+        if node.kind == "super" or node.kind == "binding" or node.kind == "let" or node.kind == "postcondition" or node.kind == "handler" and node.binding >= 0 {
             if node.binding < 0 or node.binding >= len(program.bindings) { report_error_at("W9999", node.source, "invalid checked binding identity") }
             if node.kind == "binding" and node.type_id != program.bindings[node.binding].type_id { report_error_at("W9999", node.source, "checked binding type mismatch") }
         } elif node.binding != -1 { report_error_at("W9999", node.source, "unexpected checked binding") }
+        if node.kind == "postcondition" {
+            let type_ = program.types[node.type_id]
+            let success_type = if type_.kind == "result" { type_.args[0] } else { node.type_id }
+            if program.bindings[node.binding].type_id != success_type or program.nodes[node.children[1]].type_id != program.unit_type {
+                report_error_at("W9999", node.source, "invalid checked postcondition")
+            }
+        }
         if node.kind == "closure" {
             if node.target < 0 or node.target >= len(program.functions) { report_error_at("W9999", node.source, "invalid checked closure target") }
             let function = program.functions[node.target]

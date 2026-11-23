@@ -192,17 +192,16 @@ defaults must not change stderr or exit status based on build mode. Native runti
 
 ---
 
-## 6. Structured Deterministic Concurrency vs. Arbitrary Multithreading
+## 6. Workers de CPU y scheduler de I/O
 
-The runtime provides bounded, index-preserving multi-core worker dispatch for data-parallel
-algorithms (`std/algorithms.parallel_map`, `parallel_batch`, `parallel_filter`, `parallel_reduce`)
-and batch I/O (`std/http.batch_get`), protected by internal runtime host and quota locks.
-Arbitrary preemptive threads with shared mutable memory remain out of scope to preserve
-deterministic single-threaded ARC lifetime guarantees and avoid data races.
+En el candidato R1, `std/algorithms` ejecuta callbacks de CPU comprobados sobre
+grafos privados. Map, batch y filter conservan los índices. Reduce combina los
+resultados secuencialmente de izquierda a derecha. `std/http.batch_get` usa la
+ruta de I/O del host en el scheduler.
 
-**Decision: closed for the current release line.** Maintain structured deterministic
-concurrency over CoW values and worker pools; do not introduce arbitrary preemptive
-threads with shared mutable state into the core language model.
+El [contrato de workers](WORKER_SAFETY.md) exige propiedad aislada y rechaza
+workers anidados, efectos de host y callbacks no verificables. TaskGroup,
+backpressure y cancelación pública siguen en R2.
 
 ---
 

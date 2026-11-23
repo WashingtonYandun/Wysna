@@ -206,5 +206,10 @@ El cierre de v0.8.0 refuerza la comprobación inicial del subconjunto stdlib: ex
 
 ### `SIMP-R01` · Hipótesis: Compilar las herramientas Agent-First una sola vez desde código Wysna compartido o invocar el binario nativo desde la CLI de Seed
 
+Decisión aplicada en #176. Seed delega las herramientas de producto a Selfhost
+y se conserva para la conformidad del lenguaje y los perfiles que lo requieren.
+[ADR-05](ADR-05-arquitectura-hibrida-tooling-selfhost.md).
+
+
 - **Observación:** Incluso después de **`SIMP-01`** (que blinda la paridad mediante tests diferenciales), mantener `7,876` líneas en `src/tooling/*.py` y `8,935` líneas en `selfhost/src/09_*.wysna` significa que cualquier mejora futura a `schema`, `fix`, `graph` o `lsp` requiere escribirse dos veces (una en Python y otra en Wysna).
 - **Cómo falsificarla:** Medir en el próximo ciclo cuántos PRs tocan simultáneamente `src/tooling/` y `selfhost/src/09_*.wysna`. Si **`>= 3` PRs** requieren cambios duplicados en ambos árboles y `09_*.wysna` ya alcanza el 100% de paridad en `test_tooling_engine_parity.py`, evaluar hacer que la CLI de Python (`src/tooling/CLI.py`) delegue `graph`, `inspect`, `patch`, `schema`, `fix` y `api` (para el perfil `native-core-v1`) directamente al binario `.wysna_cache/wysna_selfhost`, retirando las implementaciones Python duplicadas.

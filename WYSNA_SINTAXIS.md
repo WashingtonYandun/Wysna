@@ -263,7 +263,8 @@ pub fn add(a: int, b: int) -> int {
 ### 5.2 Contratos de Primer Orden (`requires` / `ensures`)
 Wysna soporta formalmente la especificación de contratos en tiempo de compilación y ejecución:
 * **`requires` (Precondición):** Expresión booleana que debe cumplirse antes de ingresar al cuerpo de la función. Múltiples precondiciones se separan por comas.
-* **`ensures` (Postcondición):** Expresión booleana que valida el estado tras la ejecución. La palabra clave especial `result` está ligada al valor de retorno de la función.
+* **`ensures` (Postcondición):** Expresión booleana evaluada al retornar, incluido el retorno implícito de `unit`. En `T ! E`, `result` se refiere al valor de éxito de tipo `T`. Un `Err` conserva su canal y no ejecuta la postcondición.
+* **`requires` en campos:** Comprueba los valores al construir el struct, incluido `Struct { ..base, campo: valor }`. Una asignación a un campo conserva las reglas de mutabilidad y CoW. Usa la construcción con spread si necesitas volver a comprobar las condiciones del struct después de cambiar valores.
 
 ```wysna
 pub fn withdraw(balance: int, amount: int) -> int
@@ -278,7 +279,7 @@ let remaining = withdraw(100, 30)  # 70
 ```
 
 > [!NOTE]
-> `wysna schema` exporta las restricciones representables, como límites numéricos (`minimum`, `exclusiveMinimum`), a JSON Schema Draft 2020-12. Relaciones entre campos y postcondiciones generales necesitan el contrato ejecutable; la exportación parcial no es equivalente a validarlo completo.
+> `wysna schema` exporta las restricciones representables, como límites numéricos (`minimum`, `exclusiveMinimum`), a JSON Schema Draft 2020-12. Relaciones entre campos y postcondiciones generales necesitan el contrato ejecutable; la exportación parcial no es equivalente a validarlo completo. El descriptor de la herramienta indica `contract_projection: "representable_subset"` y conserva todos los predicados en `requires` y `ensures`.
 
 ### 5.3 Funciones Genéricas
 Las funciones admiten parámetros de tipo encerrados entre corchetes `[T]`:

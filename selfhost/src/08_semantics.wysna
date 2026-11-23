@@ -2605,6 +2605,50 @@ fn sem_let_nodes(context: SemanticContext) -> list[int] {
 fn sem_let(context: SemanticContext) -> int {
     return sem_let_nodes(context)[0]
 }
+fn sem_success_type(context: SemanticContext, returned: int) -> int {
+    if sem_kind(context, returned) == "result" { return context.types[returned].args[0] }
+    return returned
+}
+
+fn sem_guard_return(context: SemanticContext, value: int, returned: int, source: Token) -> int {
+    if not context.capture_nodes or len(context.active_ensures_tokens) == 0 { return value }
+    let tokens = context.active_ensures_tokens
+    let previous_variables = context.variables
+    let previous_position = context.pos
+    let previous_expected = context.expected_type
+    let previous_return = context.return_type
+    let previous_loop = context.loop
+    let previous_statement = context.statement_context
+    context.variables = context.active_ensures_variables
+    context.active_ensures_tokens = []
+    context.return_type = -1
+    context.loop = 0
+    context.statement_context = false
+    let scope = sem_enter_scope(context)
+    let binding = sem_declare(context, "result", sem_success_type(context, returned), false)
+    let mut guards: list[int] = []
+    for position in tokens {
+        context.pos = position
+        let location = sem_at(context)
+        context.expected_type = context.boolean_type
+        let condition = sem_expression(context, 0, false)
+        sem_require_at(context, condition.type_id, context.boolean_type, "W2001", location)
+        let text = "Postcondition ('ensures') failed in '" + context.current_function + "'"
+        let message = sem_node(context, "string", context.string_type, location, text, [], -1, -1)
+        guards.append(sem_node(context, "call", context.unit_type, location, "contract_assert", [condition.node, message], -1, -1))
+    }
+    let checks = sem_node(context, "block", context.unit_type, source, "", guards, -1, -1)
+    sem_leave_scope(context, scope)
+    context.variables = previous_variables
+    context.active_ensures_tokens = tokens
+    context.pos = previous_position
+    context.expected_type = previous_expected
+    context.return_type = previous_return
+    context.loop = previous_loop
+    context.statement_context = previous_statement
+    return sem_node(context, "postcondition", returned, source, "", [value, checks], binding, -1)
+}
+
 fn sem_block(context: SemanticContext, statement: bool) -> SemFlow {
     let source = sem_expect(context, "LBRACE")
     let outer_expected = context.expected_type
@@ -2641,30 +2685,8 @@ fn sem_block(context: SemanticContext, statement: bool) -> SemFlow {
             if context.return_type < 0 { context.return_type = value }
             sem_require_at(context, value, context.return_type, "W2004", return_source)
             sem_complete_constructor(context)
-            if len(context.active_ensures_tokens) > 0 and context.capture_nodes {
-                let saved_pos = context.pos
-                let ens_scope = sem_enter_scope(context)
-                let result_var = sem_declare(context, "result", value, false)
-                let result_let = sem_node(context, "let", context.unit_type, statement_source, "result", [returned_node], result_var, -1)
-                statements.append(result_let)
-                for ens_pos in context.active_ensures_tokens {
-                    context.pos = ens_pos
-                    sem_skip_separators(context)
-                    sem_take(context)
-                    let ens_src = sem_at(context)
-                    let cond_val = sem_expression(context, 0, false)
-                    let msg_text = "Postcondition ('ensures') failed in '" + context.current_function + "'"
-                    let msg_node = sem_node(context, "string", context.string_type, ens_src, msg_text, [], -1, -1)
-                    let assert_node = sem_node(context, "call", context.unit_type, ens_src, "contract_assert", [cond_val.node, msg_node], -1, -1)
-                    statements.append(assert_node)
-                }
-                let res_ref = sem_node(context, "binding", value, return_source, "result", [], result_var, -1)
-                statements.append(sem_node(context, "return", context.unit_type, statement_source, "", [res_ref], -1, -1))
-                sem_leave_scope(context, ens_scope)
-                context.pos = saved_pos
-            } else {
-                statements.append(sem_node(context, "return", context.unit_type, statement_source, "", [returned_node], -1, -1))
-            }
+            let guarded = sem_guard_return(context, returned_node, context.return_type, statement_source)
+            statements.append(sem_node(context, "return", context.unit_type, statement_source, "", [guarded], -1, -1))
             terminates = true
             tail = context.unit_type
         } elif sem_match(context, "WHILE") {
@@ -2812,36 +2834,43 @@ fn sem_check_function(context: SemanticContext, function: SemFunction) {
         while context.pos < function.body and not sem_is(context, "EOF") and not sem_is(context, "LBRACE") {
             sem_skip_separators(context)
             if context.pos >= function.body or sem_is(context, "LBRACE") { break }
-            if sem_at(context).kind == "IDENT" and sem_at(context).val == "requires" {
-                sem_take(context)
-                let req_src = sem_at(context)
-                let cond_val = sem_expression(context, 0, false)
-                sem_require_at(context, cond_val.type_id, context.boolean_type, "W2001", req_src)
-                let msg_text = "Precondition ('requires') failed in '" + function.name + "'"
-                let msg_node = sem_node(context, "string", context.string_type, req_src, msg_text, [], -1, -1)
-                let assert_node = sem_node(context, "call", context.unit_type, req_src, "contract_assert", [cond_val.node, msg_node], -1, -1)
-                req_assert_nodes.append(assert_node)
-            } elif sem_at(context).kind == "IDENT" and sem_at(context).val == "ensures" {
-                let ens_tok_pos = context.pos
-                ens_start_tokens.append(ens_tok_pos)
-                sem_take(context)
-                let ens_scope = sem_enter_scope(context)
-                let _res = sem_declare(context, "result", context.return_type, false)
-                let ens_src = sem_at(context)
-                let cond_val = sem_expression(context, 0, false)
-                sem_require_at(context, cond_val.type_id, context.boolean_type, "W2001", ens_src)
-                sem_leave_scope(context, ens_scope)
-            } else {
-                break
+            let clause = sem_take(context)
+            if clause.kind != "IDENT" or (clause.val != "requires" and clause.val != "ensures") {
+                report_error_at("W0006", clause, "expected requires or ensures")
+            }
+            let mut more = true
+            while more {
+                while sem_match(context, "NEWLINE") {}
+                let location = sem_at(context)
+                if context.pos >= function.body { report_error_at("W0006", location, "expected contract predicate") }
+                let expected = context.expected_type
+                context.expected_type = context.boolean_type
+                if clause.val == "requires" {
+                    let condition = sem_expression(context, 0, false)
+                    sem_require_at(context, condition.type_id, context.boolean_type, "W2001", location)
+                    let text = "Precondition ('requires') failed in '" + function.name + "'"
+                    let message = sem_node(context, "string", context.string_type, location, text, [], -1, -1)
+                    req_assert_nodes.append(sem_node(context, "call", context.unit_type, location, "contract_assert", [condition.node, message], -1, -1))
+                } else {
+                    ens_start_tokens.append(context.pos)
+                    let scope = sem_enter_scope(context)
+                    let _result = sem_declare(context, "result", sem_success_type(context, context.return_type), false)
+                    let condition = sem_expression(context, 0, false)
+                    sem_require_at(context, condition.type_id, context.boolean_type, "W2001", location)
+                    sem_leave_scope(context, scope)
+                }
+                context.expected_type = expected
+                more = sem_match(context, "COMMA")
             }
         }
         context.pos = contract_pos
     }
     let previous_ensures = context.active_ensures_tokens
+    let previous_ensures_variables = context.active_ensures_variables
     context.active_ensures_tokens = ens_start_tokens
+    context.active_ensures_variables = context.variables
     context.pos = function.body
     let mut flow = sem_block(context, sem_unit_return(context, context.return_type))
-    context.active_ensures_tokens = previous_ensures
     if not flow.terminates {
         sem_require_tail_at(context, flow.type_id, context.return_type, context.tokens[function.body])
         if sem_kind(context, context.return_type) == "result" and sem_unit_return(context, context.return_type) { sem_mark_unit_tail(context, flow.node) }
@@ -2852,35 +2881,13 @@ fn sem_check_function(context: SemanticContext, function: SemFunction) {
         for old_child in context.nodes[flow.node].children { new_children.append(old_child) }
         context.nodes[flow.node].children = new_children
     }
-    if not flow.terminates and len(ens_start_tokens) > 0 and context.capture_nodes and flow.node >= 0 {
-        if len(context.nodes[flow.node].children) > 0 and flow.type_id != context.unit_type {
-            let last_idx = len(context.nodes[flow.node].children) - 1
-            let tail_child = context.nodes[flow.node].children[last_idx]
-            let saved_pos = context.pos
-            let tail_src = context.tokens[function.body]
-            let ens_scope = sem_enter_scope(context)
-            let result_var = sem_declare(context, "result", flow.type_id, false)
-            let result_let = sem_node(context, "let", context.unit_type, tail_src, "result", [tail_child], result_var, -1)
-            let mut children = context.nodes[flow.node].children
-            children[last_idx] = result_let
-            for ens_pos in ens_start_tokens {
-                context.pos = ens_pos
-                sem_skip_separators(context)
-                sem_take(context)
-                let ens_src = sem_at(context)
-                let cond_val = sem_expression(context, 0, false)
-                let msg_text = "Postcondition ('ensures') failed in '" + function.name + "'"
-                let msg_node = sem_node(context, "string", context.string_type, ens_src, msg_text, [], -1, -1)
-                let assert_node = sem_node(context, "call", context.unit_type, ens_src, "contract_assert", [cond_val.node, msg_node], -1, -1)
-                children.append(assert_node)
-            }
-            let res_ref = sem_node(context, "binding", flow.type_id, tail_src, "result", [], result_var, -1)
-            children.append(res_ref)
-            flow.node = sem_node(context, "block", flow.type_id, tail_src, "", children, -1, -1)
-            sem_leave_scope(context, ens_scope)
-            context.pos = saved_pos
-        }
+    if not flow.terminates and len(ens_start_tokens) > 0 and context.capture_nodes {
+        let source = context.tokens[function.body]
+        let checked = sem_guard_return(context, flow.node, context.return_type, source)
+        flow.node = sem_node(context, "block", context.return_type, source, "", [checked], -1, -1)
     }
+    context.active_ensures_tokens = previous_ensures
+    context.active_ensures_variables = previous_ensures_variables
     sem_complete_constructor(context)
     if context.capture_nodes {
         let raw_type_id = if function.is_async { sem_external_async_signature(context, function.type_id) } else { function.type_id }

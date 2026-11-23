@@ -82,6 +82,13 @@ objetos mutables compartidos como atajo.
 
 ## R2 — Grupos, backpressure y cancelación
 
+Primera entrega. Usar un grupo para ejecutar CPU transferible con límite de
+trabajo en vuelo y resultados por índice. Definir estados cola, en ejecución y
+terminal. Un caso de prueba con barrera debe verificar el límite real y que,
+tras cerrar, cada tarea tenga un estado terminal y cada handle se libere.
+Extender el scheduler de I/O solo después de tener esa prueba y un reloj de
+prueba para reproducir la carrera entre cancelación y finalización.
+
 - Diseñar `TaskGroup[T]` como biblioteca sobre el scheduler, sin una nueva palabra
   clave. Entrada explícita: `max_concurrency`, `deadline_ms`, política ante primer error.
 - Mantener orden de resultados por entrada; reportar estados por tarea y errores
@@ -99,6 +106,10 @@ separado, con hardware, workers, throughput, p95, pico RSS y tiempo de shutdown.
 
 ## R3 — Tipos de ancho explícito y densidad
 
+Primera entrega. Especificar `u8` y las conversiones de frontera. Probar
+`0`, `255`, `-1`, `256`, round-trip de bytes y tamaño real de almacenamiento.
+Completar `list[u8]` antes de ampliar la misma matriz a `i32`, `u32` y `f32`.
+
 1. Especificar literales contextuales, overflow, promociones y conversiones. Mantener
    `int`/`float` simples para agentes; exigir conversión al mezclar signedness/ancho.
 2. Implementar `u8`, `i32`, `u32`, `f32` en checker, intérprete, HIR/MIR, ambos emisores,
@@ -114,6 +125,12 @@ fuera de rango trunca silenciosamente. La reducción de memoria debe aparecer en
 datos medidos, no inferirse de `sizeof(int32_t)`.
 
 ## R4 — Portabilidad y compilación
+
+La publicación 0.9.0 ya cubre procedencia, checksums y aceptación instalada
+sin herramientas del host en macOS, Linux y Windows. El siguiente gate de
+portabilidad es ejecutar el SDK Linux en un contenedor sin privilegios,
+con filesystem de instalación de solo lectura, y comprobar `check`, `build`
+y `run` con los recursos declarados por el proyecto.
 
 - Conservar el build incremental por unidad y la trazabilidad de entradas/versiones.
   Medir compilación fría, caliente, tamaño y ejecución sobre el mismo corpus antes

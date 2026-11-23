@@ -75,6 +75,7 @@ class HirBuilder:
         self._in_struct_contract_helper: bool = False
         self._in_method: bool = False
         self._current_ensures: List[Expr] = []
+        self._current_ensures_scopes = []
         self._current_ret_tid: int = TYPE_UNIT
         self._current_owner_name: str = ""
 
@@ -375,6 +376,15 @@ class HirBuilder:
         )
         return HirExprStmt(call_hir, span)
 
+    def _lower_ensures_predicate(self, predicate: Expr) -> HirExpr:
+        previous = self.scopes
+        result = self.scopes[-1]["result"]
+        self.scopes = [*self._current_ensures_scopes, {"result": result}]
+        try:
+            return self._lower_expr(predicate)
+        finally:
+            self.scopes = previous
+
     def _build_ensures_stmts_and_ret(self, val_hir: HirExpr, span: Span) -> Tuple[List[HirStmt], HirExpr]:
         return_entry = self.interner.get_entry(self._current_ret_tid)
         if return_entry.tag == "result":
@@ -385,7 +395,7 @@ class HirBuilder:
                 let_stmt = HirLet("result", ok_tid, False, val_hir.expr, span, symbol_id=res_sym)
                 assert_stmts = [
                     self._make_contract_assert(
-                        self._lower_expr(ens),
+                        self._lower_ensures_predicate(ens),
                         f"Postcondition ('ensures') failed in '{self._current_owner_name}'",
                         self._span(ens),
                     )
@@ -405,7 +415,7 @@ class HirBuilder:
                 let_stmt = HirLet("result", ok_tid, False, val_hir, span, symbol_id=res_sym)
                 assert_stmts = [
                     self._make_contract_assert(
-                        self._lower_expr(ens),
+                        self._lower_ensures_predicate(ens),
                         f"Postcondition ('ensures') failed in '{self._current_owner_name}'",
                         self._span(ens),
                     )
@@ -430,7 +440,7 @@ class HirBuilder:
             )
             assert_stmts = [
                 self._make_contract_assert(
-                    self._lower_expr(ens),
+                    self._lower_ensures_predicate(ens),
                     f"Postcondition ('ensures') failed in '{self._current_owner_name}'",
                     self._span(ens),
                 )
@@ -458,7 +468,7 @@ class HirBuilder:
         let_stmt = HirLet("result", self._current_ret_tid, False, val_hir, span, symbol_id=res_sym)
         assert_stmts = [
             self._make_contract_assert(
-                self._lower_expr(ens),
+                self._lower_ensures_predicate(ens),
                 f"Postcondition ('ensures') failed in '{self._current_owner_name}'",
                 self._span(ens),
             )
@@ -550,9 +560,11 @@ class HirBuilder:
             for req in getattr(decl, "requires", None) or ()
         ]
         old_ensures = self._current_ensures
+        old_ensures_scopes = self._current_ensures_scopes
         old_ret_tid = self._current_ret_tid
         old_owner = self._current_owner_name
         self._current_ensures = list(getattr(decl, "ensures", None) or ())
+        self._current_ensures_scopes = list(self.scopes)
         self._current_ret_tid = ret_tid
         self._current_owner_name = decl.name
         try:
@@ -575,6 +587,7 @@ class HirBuilder:
                     body_hir.tail_expr = ret_ref
         finally:
             self._current_ensures = old_ensures
+            self._current_ensures_scopes = old_ensures_scopes
             self._current_ret_tid = old_ret_tid
             self._current_owner_name = old_owner
             self._pop_scope()
@@ -636,10 +649,12 @@ class HirBuilder:
         ret_tid = self._get_type_id_from_node(decl.return_type) if decl.return_type else TYPE_UNIT
         old_in_method = self._in_method
         old_ensures = self._current_ensures
+        old_ensures_scopes = self._current_ensures_scopes
         old_ret_tid = self._current_ret_tid
         old_owner = self._current_owner_name
         self._in_method = True
         self._current_ensures = list(getattr(decl, "ensures", None) or ())
+        self._current_ensures_scopes = list(self.scopes)
         self._current_ret_tid = ret_tid
         self._current_owner_name = decl.name
         try:
@@ -671,6 +686,7 @@ class HirBuilder:
         finally:
             self._in_method = old_in_method
             self._current_ensures = old_ensures
+            self._current_ensures_scopes = old_ensures_scopes
             self._current_ret_tid = old_ret_tid
             self._current_owner_name = old_owner
             self._pop_scope()

@@ -187,9 +187,13 @@ Todas las cifras de este documento provienen de mediciones ejecutadas sobre el c
 
 ---
 
-## 3. Hipótesis (`RESEARCH` — No Medidas Localmente con su Protocolo)
+## 3. Hipótesis de la auditoría inicial sin medición equivalente
 
-### `PERF-R01` · Medición del tamaño de `.wasm` (`browser-library` y `wasi-command`) y latencia de cruce ABI JS↔Wasm
+Los informes [PERF-R01](research/PERF-R01-cow-contention.md) y
+[PERF-R02](research/PERF-R02-struct-layout.md) miden CoW y layout de structs.
+Sus resultados se conservan separados de estas propuestas.
+
+### Medición pendiente del tamaño de `.wasm` (`browser-library` y `wasi-command`) y latencia de cruce ABI JS↔Wasm
 
 - **Por qué no se pudo medir en esta sesión:** En el host de evaluación no están instalados `emcc` (`Emscripten 5.0.1`) ni `wasi-sdk 34` (`[W5005] Emscripten 5.0.1 was not found` en [build_web.json](evidence/prog_c_wasm/build_web.json)).
 - **Protocolo reproducible de medición:**
@@ -200,7 +204,7 @@ Todas las cifras de este documento provienen de mediciones ejecutadas sobre el c
   2. Registrar tamaño en bytes de `web.runtime.wasm` sin comprimir y con `gzip -9`, especialmente verificando si los `3,974` LOC de `runtime/wysna_unicode_tables.h` se incluyen en el `.wasm` aunque el módulo no llame a `std/text.normalize_nfc`!
   3. Medir en Node.js (`node docs/evolution/evidence/prog_c_wasm/consumer.mjs`) la mediana de 1,000 llamadas a `compute_discount_cents` (escalar `BigInt`) vs `evaluate_cart_json` (`str` UTF-8 + JSON parse/stringify).
 
-### `PERF-R02` · Persistir la caché incremental `interface_digest` de `CompilationSession` en `.wysna_cache/` para invocaciones CLI en frío
+### Propuesta diferida de persistir la caché incremental `interface_digest` de `CompilationSession` en `.wysna_cache/` para invocaciones CLI en frío
 
 - **Estado:** En [perf_measurements.json](evidence/perf_measurements.json), el chequeo en caliente dentro de una misma `CompilationSession` en memoria baja de `97.38 ms` a `15.32 ms` (`6.36x`), pero ese ahorro se pierde entre comandos CLI separados (`./wysna check ...`) porque la caché de `CompilationSession` vive solo en RAM.
 - **Protocolo para falsificarla:** Antes de añadir serialización a disco de `CompilationSession` en Python, medir en un proyecto de `>= 10` módulos cuánto tiempo consume el arranque del intérprete Python (`~73 ms`) frente al parseo/chequeo de módulos importados. Si el binario nativo `.wysna_cache/wysna_selfhost check` ya verifica proyectos medianos en `< 30 ms` sin caché en disco, serializar `CompilationSession` en Python no vale la complejidad añadida.
