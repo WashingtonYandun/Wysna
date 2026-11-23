@@ -59,10 +59,13 @@ fn check_delimiters(tokens: list[Token]) -> unit {
 
 fn check_program(tokens: list[Token], file: str, capture: bool) -> CheckedProgram {
     check_delimiters(tokens)
-    let context = SemanticContext(capture)
+    let context = SemanticContext(capture or worker_needs_nodes(tokens))
     sem_validate(context, tokens)
     sem_complete_specializations(context)
-    return checked_finish(context, tokens, file)
+    sem_validate_field_contracts(context)
+    let checked = checked_finish(context, tokens, file)
+    worker_check(checked)
+    return checked
 }
 
 fn check_source_with_overlays(src: str, in_path: str, ov_paths: list[str], ov_texts: list[str]) -> CheckedProgram {

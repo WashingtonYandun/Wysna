@@ -238,6 +238,34 @@ def validate(sdk, report, strict_source=False, compiler_source=None, application
         rejected = run('missing-pattern-families', ['check', missing, '--output-format=json-v1'], expected=1)
         diagnostic = json.loads(rejected.stdout)['diagnostics'][0]
         require(diagnostic['code'] == 'W2003' and diagnostic['data']['uncovered_pattern_families'] == ['B(_)'], diagnostic)
+        worker_source = project / 'worker-snapshots.wysna'
+        worker_source.write_text('import "std/algorithms" as alg\nimport "std/async" as tasks\n'
+            'struct Data { values: list[int] }\n'
+            'fn change(input:Data)->Data { let mut owned=input; owned.values[0]+=1; owned }\n'
+            'let original=Data { values:[10] }\nlet copies=alg.parallel_map([original,original],change)\n'
+            'let mut captured=[41]\nlet task=tasks.spawn(||=>captured[0]+1)\ncaptured[0]=99\n'
+            'let value=tasks.wait(task) else err {-1}\n'
+            'print(original.values[0],copies[0].values[0],copies[1].values[0],value,captured[0])\n', encoding='utf-8')
+        run('worker-private-graphs', ['run', worker_source], stdout=b'10 11 11 42 99\n',
+            custom=dict(environment, WYSNA_MEM_CHECK='1'))
+        for code, body in [
+            ('W2014', 'class Counter { fn init() {} }\nlet counter=Counter()\nalg.parallel_map([1],|x:int|=>len(str(counter)))'),
+            ('W2015', 'fn effect(x:int)->int { print(x) x }\nalg.parallel_map([1],effect)'),
+        ]:
+            rejected_worker = project / (code + '-worker.wysna')
+            rejected_worker.write_text('import "std/algorithms" as alg\n' + body, encoding='utf-8')
+            rejected = run('reject-worker-' + code, ['check', rejected_worker, '--output-format=json-v1'], expected=1)
+            diagnostic = json.loads(rejected.stdout)['diagnostics'][0]
+            require(diagnostic['code'] == code and diagnostic['data']['boundary_line'] > 0, diagnostic)
+        field_guard = project / 'field-contract-trap.wysna'
+        field_guard.write_text('struct Positive { value:int requires value>0 }\n'
+                               'let invalid=Positive { value:-1 }\nprint(invalid.value)\n', encoding='utf-8')
+        run('field-contract-negative', ['run', field_guard], expected=1, error='[W4005]')
+        worker_trap = project / 'main-trap-with-worker.wysna'
+        worker_trap.write_text('import "std/async" as tasks\nstruct Positive { value:int requires value>0 }\n'
+            'fn forever()->int { while true {} 0 }\nlet task=tasks.spawn(forever)\n'
+            'let invalid=Positive { value:-1 }\nprint(invalid.value)\n', encoding='utf-8')
+        run('fatal-worker-shutdown', ['run', worker_trap], expected=1, error='[W4005]', timeout=60)
         if language_fixtures:
             programs = project / 'language combinations'
             shutil.copytree(language_fixtures, programs)

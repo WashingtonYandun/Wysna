@@ -529,9 +529,10 @@ def emit_struct_init_expr(emitter: "CCodeGen", expr: StructInitExpr, out: List[s
         for s in inner:
             out.append(f"    {s}")
         out.append("}")
-        return res
+        return emitter.guard_struct(expr.struct_name, res, out)
     if not expr.fields:
-        return emitter._bind_call(f'wysna_make_struct_static("{expr.struct_name}", 0, NULL, NULL)', out)
+        value = emitter._bind_call(f'wysna_make_struct_static("{expr.struct_name}", 0, NULL, NULL)', out)
+        return emitter.guard_struct(expr.struct_name, value, out)
     evaluated = {field.name: emitter.emit_value(field.value, out) for field in expr.fields}
     field_order = list(expr.inferred_type.fields)
     f_names = [f'"{name}"' for name in field_order]
@@ -540,7 +541,8 @@ def emit_struct_init_expr(emitter: "CCodeGen", expr: StructInitExpr, out: List[s
     v_tmp = emitter.new_aux("_v")
     out.append(f"static const char* const {k_tmp}[{len(f_names)}] = {{ {', '.join(f_names)} }};")
     out.append(f"WVal {v_tmp}[{len(f_vals)}] = {{ {', '.join(f_vals)} }};")
-    return emitter._bind_call(f'wysna_make_struct_static("{expr.struct_name}", {len(f_names)}, {k_tmp}, {v_tmp})', out)
+    value = emitter._bind_call(f'wysna_make_struct_static("{expr.struct_name}", {len(f_names)}, {k_tmp}, {v_tmp})', out)
+    return emitter.guard_struct(expr.struct_name, value, out)
 
 
 def emit_if_expr(emitter: "CCodeGen", expr: IfExpr, out: List[str]) -> str:

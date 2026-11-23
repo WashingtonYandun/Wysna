@@ -383,7 +383,7 @@ static void wysna_release_graph(WVal v) {
                 int32_t new_capacity = capacity;
                 while (new_capacity < count + produced) new_capacity *= 2;
                 WVal* grown = (WVal*)malloc(sizeof(WVal) * (size_t)new_capacity);
-                if (!grown) { fprintf(stderr, "[W4003] RuntimeError: out of memory\n"); wysna_panic_exit(1); }
+                if (!grown) { wysna_runtime_fail("W4003", "out of memory"); }
                 memcpy(grown, work, sizeof(WVal) * (size_t)count);
                 if (heap_work) free(work);
                 work = grown;
@@ -449,7 +449,7 @@ static WVal* wysna_release_deferred(WVal* slot, int32_t* produced) {
                 wysna_mem_on_free();
                 if (environment.bits != WVAL_UNIT_BITS) {
                     WVal* out = (WVal*)malloc(sizeof(WVal));
-                    if (!out) { fprintf(stderr, "[W4003] RuntimeError: out of memory\n"); wysna_panic_exit(1); }
+                    if (!out) { wysna_runtime_fail("W4003", "out of memory"); }
                     out[0] = environment;
                     *produced = 1;
                     return out;
@@ -484,7 +484,7 @@ static WVal* wysna_release_deferred(WVal* slot, int32_t* produced) {
             }
             WVal* out = b->len > 0 ? (WVal*)malloc(sizeof(WVal) * (size_t)b->len) : NULL;
             int32_t len = b->len;
-            if (len > 0 && !out) { fprintf(stderr, "[W4003] RuntimeError: out of memory\n"); wysna_panic_exit(1); }
+            if (len > 0 && !out) { wysna_runtime_fail("W4003", "out of memory"); }
             for (int32_t i = 0; i < len; i++) out[i] = b->data[i];
             free(b->data);
             free(b);
@@ -501,7 +501,7 @@ static WVal* wysna_release_deferred(WVal* slot, int32_t* produced) {
             d->refcount = -1;
             int32_t total = d->len * 2;
             WVal* out = total > 0 ? (WVal*)malloc(sizeof(WVal) * (size_t)total) : NULL;
-            if (total > 0 && !out) { fprintf(stderr, "[W4003] RuntimeError: out of memory\n"); wysna_panic_exit(1); }
+            if (total > 0 && !out) { wysna_runtime_fail("W4003", "out of memory"); }
             for (int32_t i = 0; i < d->len; i++) {
                 out[i * 2] = d->keys[i];
                 out[i * 2 + 1] = d->vals[i];
@@ -525,7 +525,7 @@ static WVal* wysna_release_deferred(WVal* slot, int32_t* produced) {
             control->object = NULL;
             int32_t len = object->len;
             WVal* out = len > 0 ? (WVal*)malloc(sizeof(WVal) * (size_t)len) : NULL;
-            if (len > 0 && !out) { fprintf(stderr, "[W4003] RuntimeError: out of memory\n"); wysna_panic_exit(1); }
+            if (len > 0 && !out) { wysna_runtime_fail("W4003", "out of memory"); }
             for (int32_t i = 0; i < len; i++) out[i] = object->vals[i];
             free(object);
             wysna_mem_on_free();
@@ -546,7 +546,7 @@ static WVal* wysna_release_deferred(WVal* slot, int32_t* produced) {
             st->refcount = -1;
             int32_t len = st->len;
             WVal* out = len > 0 ? (WVal*)malloc(sizeof(WVal) * (size_t)len) : NULL;
-            if (len > 0 && !out) { fprintf(stderr, "[W4003] RuntimeError: out of memory\n"); wysna_panic_exit(1); }
+            if (len > 0 && !out) { wysna_runtime_fail("W4003", "out of memory"); }
             for (int32_t i = 0; i < len; i++) out[i] = st->vals[i];
             free(st);
             wysna_mem_on_free();
@@ -562,7 +562,7 @@ static WVal* wysna_release_deferred(WVal* slot, int32_t* produced) {
             t->refcount = -1;
             int32_t len = t->len;
             WVal* out = len > 0 ? (WVal*)malloc(sizeof(WVal) * (size_t)len) : NULL;
-            if (len > 0 && !out) { fprintf(stderr, "[W4003] RuntimeError: out of memory\n"); wysna_panic_exit(1); }
+            if (len > 0 && !out) { wysna_runtime_fail("W4003", "out of memory"); }
             for (int32_t i = 0; i < len; i++) out[i] = t->items[i];
             free(t);
             wysna_mem_on_free();
@@ -584,7 +584,7 @@ static WVal* wysna_release_deferred(WVal* slot, int32_t* produced) {
                 return NULL;
             }
             WVal* out = (WVal*)malloc(sizeof(WVal));
-            if (!out) { fprintf(stderr, "[W4003] RuntimeError: out of memory\n"); wysna_panic_exit(1); }
+            if (!out) { wysna_runtime_fail("W4003", "out of memory"); }
             out[0] = inner;
             *produced = 1;
             return out;
@@ -608,7 +608,7 @@ static WVal* wysna_release_deferred(WVal* slot, int32_t* produced) {
                 return NULL;
             }
             WVal* out = (WVal*)malloc(sizeof(WVal));
-            if (!out) { fprintf(stderr, "[W4003] RuntimeError: out of memory\n"); wysna_panic_exit(1); }
+            if (!out) { wysna_runtime_fail("W4003", "out of memory"); }
             out[0] = inner;
             *produced = 1;
             return out;
@@ -628,7 +628,7 @@ static inline WVal wysna_function_new(WInvoke invoke, WVal environment) {
 static inline WVal wysna_call(WVal function, int32_t argc, const WVal* argv) {
     WFunctionBuf* fn = wysna_as_function(function);
     if (!fn) {
-        fprintf(stderr, "[W4003] RuntimeError: Indirect call requires function\n"); wysna_panic_exit(1);
+        wysna_runtime_fail("W4003", "Indirect call requires function");
     }
     return fn->invoke(fn->environment, argc, argv);
 }
@@ -735,8 +735,7 @@ static inline bool wysna_is_enum_variant(WVal value, const char* enum_name, cons
 static inline WVal wysna_peek_enum_payload(WVal value) {
     WEnumBuf* en = wysna_as_enum(value);
     if (en && en->has_payload) return en->payload;
-    fprintf(stderr, "[W4003] RuntimeError: enum payload access on invalid value\n");
-    wysna_panic_exit(1);
+    wysna_runtime_fail("W4003", "enum payload access on invalid value");
 }
 
 static inline void wysna_list_detach(WVal* v) {
@@ -1276,6 +1275,8 @@ static void wysna_cycle_scrub_slot(WVal* slot, void* ctx) {
 }
 
 static inline int64_t wysna_collect_cycles(void) {
+    /* Identity-bearing objects and their cycle graph are confined to the owner. */
+    if (wysna_worker_depth > 0) return 0;
     if (wysna_runtime_context.collecting_cycles || !wysna_runtime_context.purple_head) return 0;
     wysna_runtime_context.collecting_cycles = true;
 

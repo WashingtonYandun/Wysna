@@ -87,6 +87,9 @@ jobs:
           tests/unit/test_match_extensions.py
           tests/unit/test_static_attributes.py
           tests/unit/test_agent_contract.py
+          tests/unit/test_worker_safety.py
+          tests/unit/test_worker_transfer.py
+          tests/unit/test_security_contracts.py
           tests/unit/test_native_thread_diagnostics.py
           tests/unit/test_native_intrinsic_identity.py
           tests/unit/test_runtime_modular_linking.py
@@ -520,6 +523,15 @@ jobs:
       - name: Verify the full acyclic runtime and example corpus with ASan and UBSan
         # Linux also enables LSan; Darwin does not support leak detection.
         run: python3 tools/ci_conformance.py --sanitize
+      - name: Verify worker graph ownership with ASan and UBSan
+        run: |
+          clang -std=c99 -O1 -g -pthread -I. -fsanitize=address,undefined -fno-omit-frame-pointer tests/runtime/worker_transfer.c -o worker-transfer-asan
+          WYSNA_MEM_CHECK=1 ./worker-transfer-asan
+      - name: Verify worker graph races with ThreadSanitizer on macOS
+        if: runner.os == 'macOS'
+        run: |
+          clang -std=c99 -O1 -g -pthread -I. -fsanitize=thread tests/runtime/worker_transfer.c -o worker-transfer-tsan
+          WYSNA_MEM_CHECK=1 ./worker-transfer-tsan
       - name: Verify targeted ownership, telemetry and isolated strong-cycle evidence
         run: |
           WYSNA_SANITIZE=1 python3 -m tests.unit.test_audit_remediation

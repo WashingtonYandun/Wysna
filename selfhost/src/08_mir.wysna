@@ -358,7 +358,7 @@ fn mir_function_json(function: MirFunction) -> str {
         blocks = blocks + "{\"$type\":\"BasicBlock\",\"id\":" + str(i) + ",\"operations\":" + operations + ",\"terminator\":" + term + "}"
     }
     let async_flag = if function.is_async { "true" } else { "false" }
-    return "{\"$type\":\"Function\",\"name\":" + mir_quote(function.name) + ",\"return_type\":" + str(function.return_type) + ",\"slots\":" + slots + ",\"blocks\":" + blocks + "],\"params\":" + mir_ids(function.params, false) + ",\"source\":" + mir_source_json(function.source) + ",\"is_async\":" + async_flag + ",\"async_return_type\":" + str(function.async_return_type) + "}"
+    return "{\"$type\":\"Function\",\"name\":" + mir_quote(function.name) + ",\"declaration_name\":" + mir_quote(function.declaration_name) + ",\"return_type\":" + str(function.return_type) + ",\"slots\":" + slots + ",\"blocks\":" + blocks + "],\"params\":" + mir_ids(function.params, false) + ",\"source\":" + mir_source_json(function.source) + ",\"is_async\":" + async_flag + ",\"async_return_type\":" + str(function.async_return_type) + "}"
 }
 
 fn mir_dictionary_key(module: MirModule, root: int) -> bool {

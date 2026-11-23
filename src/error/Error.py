@@ -35,6 +35,8 @@ DIAGNOSTIC_CODES: Dict[str, str] = {
     "W2011": "Recursive generic instantiation cycle or infinite layout",
     "W2012": "Generic constraint violation",
     "W2013": "Feature unsupported by the selected backend",
+    "W2014": "Value cannot cross a worker boundary",
+    "W2015": "Worker callback has an unverified or forbidden effect",
     # W3xxx — Mutability & OOP Contracts
     "W3001": "Mutation of immutable value binding",
     "W3002": "Invalid member access/mutation or private visibility violation",

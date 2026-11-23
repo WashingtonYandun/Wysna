@@ -121,7 +121,7 @@ static W_RUNTIME_NOINLINE bool wysna_string_offset_slow(WVal value, int64_t inde
             return *length != 0;
         }
         if (blen > SIZE_MAX / sizeof(size_t) - 1) {
-            fprintf(stderr, "[W4003] RuntimeError: String index too large\n"); wysna_panic_exit(1);
+            wysna_runtime_fail("W4003", "String index too large");
         }
         size_t count_hint = owner->codepoint_count;
         if (count_hint == SIZE_MAX) count_hint = (size_t)wysna_utf8_cp_len_n(sdata, blen);

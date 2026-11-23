@@ -573,6 +573,25 @@ cleanup. Native spawn and parallel pools use OS threads; diagnostic source posit
 and call stacks are thread-local. ARC atomics do not establish general race freedom
 for classes, host handles, globals or arbitrary FFI.
 
+### Contrato de workers de CPU (R1)
+
+Los callbacks de `std/async.spawn` y de los combinadores paralelos se comprueban
+antes del lowering en Seed y Selfhost. W2014 rechaza clases, interfaces, Weak,
+handles y compuestos que los contienen. W2015 rechaza globals no capturados,
+efectos transitivos, FFI, scheduler, workers anidados y callbacks sin resolver.
+Solo funciones nombradas, lambdas y alias inmutables comprobables cruzan la frontera.
+
+Entradas, capturas y resultados tienen grafos privados, con alias internos
+preservados y profundidad máxima 256. Una asignación ordinaria sigue usando CoW;
+la transferencia entre propietarios necesita copia completa. El mapper de
+`parallel_reduce` es paralelo y el combiner es un fold izquierdo secuencial.
+
+Un error recuperable `T ! E` es un resultado normal. Un trap W4001–W4005 termina
+la ejecución, incluso con workers activos: C99 aborta sin ejecutar joins de salida;
+el intérprete notifica el fallo fatal a los workers en puntos de evaluación.
+Esto no añade una API pública de cancelación ni permite interrumpir FFI bloqueante.
+El contrato completo y los límites de aislamiento están en [WORKER_SAFETY](docs/WORKER_SAFETY.md).
+
 ## 9. Module System
 
 Wysna provides two distinct, formal mechanisms for modular decomposition and symbol resolution:

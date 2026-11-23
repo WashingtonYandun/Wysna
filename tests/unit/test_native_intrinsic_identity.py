@@ -25,12 +25,12 @@ class NativeIntrinsicIdentityTests(unittest.TestCase):
                     (ROOT / 'stdlib' / (name + '.wysna')).read_text(encoding='utf-8'), encoding='utf-8')
             source = root / 'main.wysna'
             source.write_text('import "std/async" as a\nimport "std/algorithms" as alg\n'
-                'fn slow()->int { let _ = a.wait(a.sleep_ms(80)); 1 }\n'
-                'fn fast()->int { let _ = a.wait(a.sleep_ms(2)); 2 }\n'
+                'fn slow()->int { 1 }\n'
+                'fn fast()->int { 2 }\n'
                 'let slow_task = a.spawn[int](||=>slow())\nlet fast_task = a.spawn[int](||=>fast())\n'
-                'let winner = a.race[int]([slow_task,fast_task]) else err {-1}\n'
+                'let values = a.all[int]([slow_task,fast_task]) else err {[0,0]}\n'
                 'let mapped = alg.parallel_map[int,int]([1,2,3],|x:int|=>x*2)\n'
-                'print(winner,mapped[2])\n', encoding='utf-8')
+                'print(values[1],mapped[2])\n', encoding='utf-8')
             generated = root / 'main.c'
             emitted = subprocess.run([str(self.compiler), '--stdlib-root', str(stdlib),
                 str(source), str(generated)], capture_output=True, text=True, timeout=60)

@@ -116,3 +116,14 @@ def test_mir_exchange_rejects_unresolved_type_parameter():
     with pytest.raises(WysnaError) as exc:
         export_module(module, interner)
     assert "unresolved generic type parameter" in str(exc.value)
+
+
+def test_worker_intrinsic_declaration_identity_survives_exchange():
+    from mir.CCodeGen import CCodeGen
+    module, interner = lower('import "std/algorithms" as alg\nprint(alg.parallel_map([1], |x:int| => x + 1))')
+    payload = export_module(module, interner)
+    restored, restored_interner = import_module(payload)
+    intrinsic = [function for function in restored.functions if function.declaration_name == 'parallel_map']
+    assert len(intrinsic) == 1
+    assert intrinsic[0].source.file.endswith('/stdlib/algorithms.wysna')
+    assert 'return wysna_parallel_map(' in CCodeGen(restored_interner).generate(restored)

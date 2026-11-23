@@ -1,4 +1,5 @@
 from common.ExpressionDispatch import reject_unknown_node
+from compiler.StdlibIdentity import stdlib_declaration
 from codegen.ExpressionRules import EXPRESSION_RULES
 from typing import Dict, List, Optional, Set, Tuple
 from node.NodeType import (
@@ -44,12 +45,14 @@ class CCodeGen:
             "Err": "Result",
         }
         self.classes: Dict[str, ClassDecl] = {}
+        self.struct_contracts: Dict[str, StructDecl] = {}
         self.class_order: List[str] = []
         self.dispatch_methods: List[Tuple[str, int]] = []
         self.current_class: Optional[ClassDecl] = None
         self.fallible_fns: Dict[str, bool] = {}
         self.fn_err_types: Dict[str, str] = {}
         self.current_fn_fallible: bool = False
+        self.current_fn_ensures = ()
         self.current_fn_err_type: str = ""
         self.current_ns: str = ""
         self.imported_modules: Set[str] = set()
@@ -150,6 +153,8 @@ class CCodeGen:
         self.interner = getattr(program, "interner", None)
         self._collect_declarations(program, ns="")
         self._prepare_oop_prototypes()
+        for declaration in self.struct_contracts.values():
+            self._emit_struct_contract(declaration)
 
         # Emit all top-level functions, class methods, and imported module functions
         main_stmts: List[str] = []
@@ -208,7 +213,10 @@ class CCodeGen:
 
     def _collect_declarations(self, program: Program, ns: str) -> None:
         for stmt in program.body:
-            if isinstance(stmt, EnumDecl):
+            if isinstance(stmt, StructDecl) and any(field.requires for field in stmt.fields):
+                self.struct_contracts[stmt.name] = stmt
+                self.fn_Prototypes.append(f"static WVal wysna_guard_{stmt.name}(WVal record);")
+            elif isinstance(stmt, EnumDecl):
                 self.enum_names.add(stmt.name)
                 for v in stmt.variants:
                     v_name = v.name if hasattr(v, "name") else str(v)
@@ -236,6 +244,60 @@ class CCodeGen:
                 gv_name = f"v_{ns}_{stmt.name}" if ns else f"v_{stmt.name}"
                 if gv_name not in self.global_vars:
                     self.global_vars.append(gv_name)
+
+    def _emit_struct_contract(self, declaration: StructDecl) -> None:
+        previous_scopes = self.scope_stack
+        self.scope_stack = []
+        self._push_scope('fn')
+        statements = []
+        self._declare_owned_var('v_self', 'wysna_clone(record)', statements)
+        for field in declaration.fields:
+            self._declare_owned_var('v_' + field.name,
+                f'wysna_clone(wysna_member_get(record, {self.escape_c_str(field.name)}))', statements)
+        for field in declaration.fields:
+            for requirement in field.requires:
+                condition = self.emit_value(requirement, statements)
+                message_text = f"Struct field contract ('requires') failed on '{declaration.name}.{field.name}'"
+                message = self.emit_value(StringLiteral(message_text, requirement.line, requirement.col), statements)
+                statements.append(self._source_call('wysna_builtin_contract_assert_at',
+                    f'{condition}, {message}', requirement) + ';')
+        self._pop_scope(statements)
+        statements.append('return wysna_clone(record);')
+        self.fn_Definitions.append(f'static WVal wysna_guard_{declaration.name}(WVal record) {{\n' +
+            '\n'.join('    ' + statement for statement in statements) + '\n}')
+        self.scope_stack = previous_scopes
+
+    def guard_struct(self, name: str, value: str, out: List[str]) -> str:
+        if name in self.struct_contracts:
+            return self._bind_call(f'wysna_guard_{name}({value})', out)
+        return value
+
+    def _emit_contract_predicates(self, requirements, message, out):
+        for requirement in requirements:
+            condition = self.emit_value(requirement, out)
+            text = self.emit_value(StringLiteral(message, requirement.line, requirement.col), out)
+            out.append(self._source_call('wysna_builtin_contract_assert_at', f'{condition}, {text}', requirement) + ';')
+
+    def _emit_postconditions(self, value, out):
+        if not self.current_fn_ensures:
+            return
+        statements = []
+        self._push_scope('block')
+        if self.current_fn_fallible:
+            wrapped = self._bind_call(f'wysna_wrap_result(wysna_clone({value}), "{self.current_fn_err_type}")', statements)
+            statements.append(f'if (wysna_tag({wrapped}) != W_ERR) {{')
+            self._push_scope('block')
+            self._declare_owned_var('v_result', f'wysna_clone(wysna_as_box({wrapped})->val)', statements)
+        else:
+            self._declare_owned_var('v_result', f'wysna_clone({value})', statements)
+        self._emit_contract_predicates(self.current_fn_ensures, 'Function ensures clause failed', statements)
+        self._pop_scope(statements)
+        if self.current_fn_fallible:
+            statements.append('}')
+            self._pop_scope(statements)
+        out.append('{')
+        out.extend('    ' + statement for statement in statements)
+        out.append('}')
 
     def _find_class_method(self, class_name: str, method_name: str) -> Optional[Tuple[str, MethodDecl]]:
         curr: Optional[str] = class_name
@@ -426,32 +488,33 @@ class CCodeGen:
             return
         c_name = self.c_fn(stmt.name, ns=ns)
         params_sig = ", ".join([f"WVal v_{p.name}" for p in stmt.params]) if stmt.params else "void"
-        algo_mod = "616c676f726974686d732e7779736e61__"
-        if algo_mod in c_name:
-            if (f"{algo_mod}parallel_map__" in c_name or c_name.endswith(f"{algo_mod}parallel_map")) and len(stmt.params) == 2:
+        if any(stdlib_declaration(stmt, 'algorithms', name, arity) for name, arity in (('parallel_map', 2), ('parallel_batch', 3), ('parallel_filter', 2))):
+            if stdlib_declaration(stmt, 'algorithms', 'parallel_map', 2):
                 self.fn_Definitions.append(f"static WVal {c_name}({params_sig}) {{\n    return wysna_parallel_map(v_{stmt.params[0].name}, v_{stmt.params[1].name});\n}}")
                 return
-            if (f"{algo_mod}parallel_batch__" in c_name or c_name.endswith(f"{algo_mod}parallel_batch")) and len(stmt.params) == 3:
+            if stdlib_declaration(stmt, 'algorithms', 'parallel_batch', 3):
                 self.fn_Definitions.append(f"static WVal {c_name}({params_sig}) {{\n    return wysna_parallel_batch(v_{stmt.params[0].name}, wysna_as_int(v_{stmt.params[1].name}), v_{stmt.params[2].name});\n}}")
                 return
-            if (f"{algo_mod}parallel_filter__" in c_name or c_name.endswith(f"{algo_mod}parallel_filter")) and len(stmt.params) == 2:
+            if stdlib_declaration(stmt, 'algorithms', 'parallel_filter', 2):
                 self.fn_Definitions.append(f"static WVal {c_name}({params_sig}) {{\n    return wysna_parallel_filter(v_{stmt.params[0].name}, v_{stmt.params[1].name});\n}}")
                 return
-        async_mod = "6173796e632e7779736e61__"
-        if async_mod in c_name:
-            if (f"{async_mod}_spawn_handle__" in c_name or c_name.endswith(f"{async_mod}_spawn_handle")) and len(stmt.params) == 1:
+        if stdlib_declaration(stmt, 'async', '_spawn_handle', 1) or stdlib_declaration(stmt, 'async', '_take_task_value', 2):
+            if stdlib_declaration(stmt, 'async', '_spawn_handle', 1):
                 self.fn_Definitions.append(f"static WVal {c_name}({params_sig}) {{\n    return wysna_int(wysna_async_spawn_handle(v_{stmt.params[0].name}));\n}}")
                 return
-            if (f"{async_mod}_take_task_value__" in c_name or c_name.endswith(f"{async_mod}_take_task_value")) and len(stmt.params) == 2:
+            if stdlib_declaration(stmt, 'async', '_take_task_value', 2):
                 self.fn_Definitions.append(f"static WVal {c_name}({params_sig}) {{\n    return wysna_spawn_take_option(v_{stmt.params[0].name}, v_{stmt.params[1].name});\n}}")
                 return
         prev_fallible = self.current_fn_fallible
         prev_err_type = self.current_fn_err_type
+        previous_ensures = self.current_fn_ensures
+        self.current_fn_ensures = getattr(stmt, 'ensures', ())
         self.current_fn_fallible = isinstance(stmt.return_type, ResultType)
         self.current_fn_err_type = self.fn_err_types.get(c_name, "")
 
         body_stmts: List[str] = []
         self._push_scope("fn")
+        self._emit_contract_predicates(getattr(stmt, 'requires', ()), 'Function requires clause failed', body_stmts)
         ret_expr = self.emit_block_value(stmt.body, body_stmts)
         if stmt.return_type is None or isinstance(stmt.return_type, NamedType) and stmt.return_type.name == 'unit':
             ret_expr = 'wysna_unit()'
@@ -460,6 +523,7 @@ class CCodeGen:
         if isinstance(stmt.return_type, ResultType) and isinstance(stmt.return_type.ok_type, NamedType) and stmt.return_type.ok_type.name == 'unit':
             owned_return = f"wysna_discard_result_value({owned_return})"
         body_stmts.append(f"WVal {ret_hold} = {owned_return};")
+        self._emit_postconditions(ret_hold, body_stmts)
         self._pop_scope(body_stmts)
         if self.current_fn_fallible:
             body_stmts.append(f'return wysna_wrap_result({ret_hold}, "{self.current_fn_err_type}");')
@@ -508,6 +572,7 @@ class CCodeGen:
             self.fn_Definitions.append("\n".join(fn_lines))
         self.current_fn_fallible = prev_fallible
         self.current_fn_err_type = prev_err_type
+        self.current_fn_ensures = previous_ensures
 
     # ==========================================
     # Statement Emission
@@ -559,12 +624,14 @@ class CCodeGen:
                 val = self.emit_expr(stmt.value, out)
                 ret_hold = self.new_aux("_ret")
                 out.append(f"WVal {ret_hold} = {self._own_expr(val)};")
+                self._emit_postconditions(ret_hold, out)
                 self._emit_cleanup_until_fn(out)
                 if self.current_fn_fallible:
                     out.append(f'return wysna_wrap_result({ret_hold}, "{self.current_fn_err_type}");')
                 else:
                     out.append(f"return {ret_hold};")
             else:
+                self._emit_postconditions('wysna_unit()', out)
                 self._emit_cleanup_until_fn(out)
                 if self.current_fn_fallible:
                     out.append("return wysna_ok(wysna_unit());")

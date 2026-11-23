@@ -269,6 +269,7 @@ class Lowering:
         is_async = bool(getattr(declaration, 'is_async', False))
         inner_ret = getattr(declaration, 'async_return_type_id', 0) or declaration.return_type_id
         self.begin(name, declaration.return_type_id, self.source(declaration), is_async=is_async, async_return_type=inner_ret)
+        self.function.declaration_name = getattr(declaration, 'declaration_name', declaration.name)
         self.current_class = owner
         self.fallible, self.err_type = declaration.is_fallible, declaration.err_type_name
         source_file = getattr(declaration.span, 'file_path', None)

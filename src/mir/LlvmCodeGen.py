@@ -1,5 +1,6 @@
 """Textual LLVM IR from verified MIR; no syntax traversal or C program emission."""
 import struct
+from compiler.StdlibIdentity import stdlib_declaration
 from checker.TypeInterner import TYPE_UNIT, TYPE_BOOL, TYPE_INT, TYPE_FLOAT, TYPE_STR
 from mir.LlvmDebug import DebugInfo
 from mir.LlvmText import quote_bytes
@@ -191,16 +192,9 @@ class LlvmCodeGen:
 
     @staticmethod
     def _async_runtime_helper(function):
-        name = function.name
-        async_mod = '6173796e632e7779736e61__'
-        if async_mod not in name:
-            return None
-        if f'{async_mod}_spawn_handle__' in name or name.endswith(f'{async_mod}_spawn_handle'):
-            if len(function.params) == 1:
-                return '_spawn_handle'
-        elif f'{async_mod}_take_task_value__' in name or name.endswith(f'{async_mod}_take_task_value'):
-            if len(function.params) == 2:
-                return '_take_task_value'
+        for name, arity in (('_spawn_handle', 1), ('_take_task_value', 2)):
+            if stdlib_declaration(function, 'async', name, arity):
+                return name
         return None
 
     @staticmethod

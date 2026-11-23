@@ -7,7 +7,7 @@ struct CheckedArm { pattern: int, guard: int, body: int, source: Token }
 struct CheckedNode { pattern: int, arms: list[int], total: bool, labels: list[str], kind: str, type_id: int, source: Token, text: str, children: list[int], binding: int, target: int, discard: bool }
 struct CheckedBinding { name: str, type_id: int, mutable: bool, global: bool, source: Token }
 struct CheckedFunction { declaration_name: str, captures: list[int], closure: bool, name: str, type_id: int, params: list[int], body: int, source: Token, is_async: bool, async_return_type: int }
-struct CheckedSignature { attributes: list[StaticAttribute], abi_params: list[str], abi_return: str, native: str, name: str, params: list[str], type_params: list[str], type_id: int, foreign: bool, abstract: bool }
+struct CheckedSignature { declaration_name: str, source: Token, attributes: list[StaticAttribute], abi_params: list[str], abi_return: str, native: str, name: str, params: list[str], type_params: list[str], type_id: int, foreign: bool, abstract: bool }
 struct CheckedProgram {
     templates: list[SemGenericType], obligations: list[SemObligation], has_nodes: bool, file: str, source: Token, records: list[CheckedRecord], types: list[SemType], signatures: list[CheckedSignature],
     patterns: list[SemPattern], arms: list[CheckedArm], nodes: list[CheckedNode], bindings: list[CheckedBinding], functions: list[CheckedFunction], entry: list[int], unit_type: int,
@@ -214,7 +214,7 @@ fn checked_finish(context: SemanticContext, tokens: list[Token], file: str) -> C
             params = ["self"]
             for name in function.params { params.append(name) }
         }
-        signatures.append(CheckedSignature { attributes: function.attributes, abi_params: function.abi_params, abi_return: function.abi_return, native: foreign_native_name(function.name), name: function.name, params: params, type_params: function.type_params, type_id: type_id, foreign: function.body < 0 and function.owner == "", abstract: function.body < 0 and function.owner != "" })
+        signatures.append(CheckedSignature { declaration_name: function.declaration_name, source: function.source, attributes: function.attributes, abi_params: function.abi_params, abi_return: function.abi_return, native: foreign_native_name(function.name), name: function.name, params: params, type_params: function.type_params, type_id: type_id, foreign: function.body < 0 and function.owner == "", abstract: function.body < 0 and function.owner != "" })
     }
     let mut records: list[CheckedRecord] = []
     if context.capture_nodes { records = checked_records(context) }

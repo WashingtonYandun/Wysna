@@ -52,7 +52,7 @@ def suggest_mutable(error, sym, file: str):
         if not error.help:
             error.help = (
                 "Closures capture values as immutable snapshots by design. "
-                "Use a 'class' (reference type) for shared mutable state, or return the updated value from the closure."
+                "Return the updated value from the closure. Classes cannot cross worker boundaries."
             )
         return error
     if not sym_name or sym_name.startswith("__wysna_"):

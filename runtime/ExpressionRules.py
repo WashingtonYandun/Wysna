@@ -2,6 +2,7 @@
 from typing import TYPE_CHECKING
 
 from error.Error import WysnaRuntimeError
+from compiler.StdlibIdentity import stdlib_declaration
 from node.NodeType import (
     LambdaExpr,
     IntLiteral,
@@ -477,16 +478,17 @@ def evaluate_call_expr(interpreter: "Interpreter", expr: CallExpr, env: Environm
     if isinstance(callee, WysnaNativeFunction):
         return callee.call_fn(args)
     if isinstance(callee, WysnaFunction):
-        fn_name = callee.decl.name
-        base_fn_name = fn_name
-        for candidate in ("parallel_batch", "parallel_map", "parallel_filter", "parallel_reduce", "batch_get", "_spawn_handle", "_take_task_value"):
-            if fn_name == candidate or f"__{candidate}__" in fn_name or fn_name.endswith(f"__{candidate}"):
+        base_fn_name = None
+        for module, candidate, arity in (('algorithms', 'parallel_batch', 3), ('algorithms', 'parallel_map', 2),
+                ('algorithms', 'parallel_filter', 2), ('algorithms', 'parallel_reduce', 4),
+                ('async', '_spawn_handle', 1), ('async', '_take_task_value', 2)):
+            if stdlib_declaration(callee.decl, module, candidate, arity):
                 base_fn_name = candidate
                 break
         if base_fn_name == "_spawn_handle" and len(args) == 1 and isinstance(args[0], WysnaFunction):
             from runtime.HostAbi import spawn_async_task
-            work_fn = args[0]
-            tid = spawn_async_task(lambda: interpreter.call_function(work_fn, []))
+            from runtime.WorkerTransfer import prepare_spawn
+            tid = spawn_async_task(prepare_spawn(interpreter, args[0]))
             return WysnaInt(tid)
         if base_fn_name == "_take_task_value" and len(args) == 2 and isinstance(args[0], WysnaInt):
             handle_val = args[0].value
@@ -523,14 +525,6 @@ def evaluate_call_expr(interpreter: "Interpreter", expr: CallExpr, env: Environm
             for item in mapped:
                 acc = interpreter.call_function(combiner, [acc, item]) if isinstance(combiner, WysnaFunction) else combiner(acc, item)
             return acc
-        if base_fn_name == "batch_get" and len(args) == 1 and isinstance(args[0], WysnaList) and len(args[0].storage.data) > 1:
-            urls = args[0].storage.data
-            def _get_one(u):
-                single_list = WysnaList(elements=[u])
-                res_list = interpreter.call_function(callee, [single_list])
-                return res_list.storage.data[0]
-            results = interpreter.parallel_worker_dispatch(_get_one, urls)
-            return WysnaList(elements=results)
         return interpreter.call_function(callee, args)
     if isinstance(callee, WysnaBoundMethod):
         return interpreter.call_bound_method(callee, args)

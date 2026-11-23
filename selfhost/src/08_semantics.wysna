@@ -329,12 +329,12 @@ fn sem_resolve_async_task_type(context: SemanticContext, inner_tid: int) -> int 
     }
     let empty: list[int] = []
     let tid = sem_intern(context, "struct", task_name, empty)
-    context.fields.append(SemField { owner: task_name, name: "id", type_id: context.integer_type, visible: true })
-    context.fields.append(SemField { owner: task_name, name: "handle", type_id: context.integer_type, visible: true })
-    context.fields.append(SemField { owner: task_name, name: "is_ready", type_id: context.boolean_type, visible: true })
-    context.fields.append(SemField { owner: task_name, name: "is_failed", type_id: context.boolean_type, visible: true })
-    context.fields.append(SemField { owner: task_name, name: "value", type_id: sem_wrap(context, "optional", inner_tid), visible: true })
-    context.fields.append(SemField { owner: task_name, name: "error", type_id: sem_wrap(context, "optional", context.string_type), visible: true })
+    context.fields.append(SemField { owner: task_name, name: "id", type_id: context.integer_type, visible: true, requires: [] })
+    context.fields.append(SemField { owner: task_name, name: "handle", type_id: context.integer_type, visible: true, requires: [] })
+    context.fields.append(SemField { owner: task_name, name: "is_ready", type_id: context.boolean_type, visible: true, requires: [] })
+    context.fields.append(SemField { owner: task_name, name: "is_failed", type_id: context.boolean_type, visible: true, requires: [] })
+    context.fields.append(SemField { owner: task_name, name: "value", type_id: sem_wrap(context, "optional", inner_tid), visible: true, requires: [] })
+    context.fields.append(SemField { owner: task_name, name: "error", type_id: sem_wrap(context, "optional", context.string_type), visible: true, requires: [] })
     return tid
 }
 fn sem_external_async_signature(context: SemanticContext, fn_tid: int) -> int {
@@ -554,7 +554,7 @@ fn sem_mutable_at(context: SemanticContext, root: str, location: Token) {
     if len(root) >= 5 and slice(root, 0, 5) == "this:" { return }
     if root != "" {
         let variable = sem_lookup(context, root)
-        if variable >= 0 and context.capture_depth >= 0 and context.variables[variable].depth < context.capture_depth { report_error_at("W3001", location, "captured snapshots are immutable (use a `class` for shared mutable state or return the updated value)") }
+        if variable >= 0 and context.capture_depth >= 0 and context.variables[variable].depth < context.capture_depth { report_error_at("W3001", location, "captured snapshots are immutable (return the updated value; classes cannot cross worker boundaries)") }
         if variable < 0 or not context.variables[variable].mutable { report_error_at("W3001", location, "mutation of immutable binding") }
     }
 }
@@ -649,7 +649,8 @@ fn sem_collect_function(context: SemanticContext, owner: str, visible: bool, is_
     let mut end = context.pos
     if sem_is(context, "LBRACE") { body = context.pos end = sem_skip_block(context) }
     context.type_params = previous_type_params
-    context.functions.append(SemFunction { declaration_name: local, attributes: [], abi_params: abi_params, abi_return: abi_return, name: name, params: params, type_params: type_params, constraints: constraints, type_id: signature, body: body, end: end, owner: owner, visible: visible, contract_start: contract_start, is_async: is_async })
+    let declaration_source = if body >= 0 { context.tokens[body] } else { context.tokens[if end > 0 { end - 1 } else { 0 }] }
+    context.functions.append(SemFunction { source: declaration_source, declaration_name: local, attributes: [], abi_params: abi_params, abi_return: abi_return, name: name, params: params, type_params: type_params, constraints: constraints, type_id: signature, body: body, end: end, owner: owner, visible: visible, contract_start: contract_start, is_async: is_async })
 }
 fn sem_collect_record(context: SemanticContext, kind: str) {
     sem_take(context)
@@ -755,6 +756,7 @@ fn sem_collect_record(context: SemanticContext, kind: str) {
             let field = sem_expect(context, "IDENT").val
             sem_expect(context, "COLON")
             let field_type = sem_type(context)
+            let mut field_requires: list[Token] = []
             if sem_at(context).kind == "IDENT" and sem_at(context).val == "requires" {
                 let mut depth_p = 0
                 let mut depth_b = 0
@@ -764,10 +766,10 @@ fn sem_collect_record(context: SemanticContext, kind: str) {
                     elif sem_is(context, "LBRACKET") { depth_b = depth_b + 1 }
                     elif sem_is(context, "RBRACKET") { if depth_b > 0 { depth_b = depth_b - 1 } }
                     elif (sem_is(context, "NEWLINE") or sem_is(context, "COMMA") or sem_is(context, "RBRACE")) and depth_p == 0 and depth_b == 0 { break }
-                    sem_take(context)
+                    field_requires.append(sem_take(context))
                 }
             }
-            context.fields.append(SemField { owner: name, name: field, type_id: field_type, visible: visible })
+            context.fields.append(SemField { owner: name, name: field, type_id: field_type, visible: visible, requires: field_requires })
             sem_match(context, "COMMA")
         }
     }
@@ -1595,7 +1597,7 @@ fn sem_prefix(context: SemanticContext, allow_struct: bool, statement: bool) -> 
                     if context.capture_nodes { context.nodes[constructed_sp.node].labels = initialized }
                     sem_leave_scope(context, sp_scope)
                     let wrapped = sem_node(context, "block", named_type, source, "", [sp_let, constructed_sp.node], -1, -1)
-                    return SemValue { type_id: named_type, root: "", writable: -1, terminates: false, node: wrapped }
+                    return sem_struct_contracts(context, SemValue { type_id: named_type, root: "", writable: -1, terminates: false, node: wrapped }, source)
                 } else {
                     for mi in 0..len(missing_names) {
                         let sp_member = sem_node(context, "member", missing_types[mi], spread_source, missing_names[mi], [spread_val.node], -1, -1)
@@ -1613,7 +1615,7 @@ fn sem_prefix(context: SemanticContext, allow_struct: bool, statement: bool) -> 
             }
             let constructed = sem_expr(context, "struct", sem_value(named_type), source, name, values, -1, -1)
             if context.capture_nodes { context.nodes[constructed.node].labels = initialized }
-            return constructed
+            return sem_struct_contracts(context, constructed, source)
         }
         return sem_value(named_type)
     }
@@ -1794,6 +1796,7 @@ fn sem_expression(context: SemanticContext, minimum: int, allow_struct: bool) ->
                     context.nodes[left.node].text = context.functions[concrete_target].name
                 }
             }
+            if sem_kind(context, callee.type_id) == "struct_ctor" { left = sem_struct_contracts(context, left, call_token) }
         } elif sem_match(context, "DOT") {
             let name_token = sem_at(context)
             if sem_is(context, "INT") {
@@ -2048,6 +2051,7 @@ fn sem_expression(context: SemanticContext, minimum: int, allow_struct: bool) ->
         }
     }
     if left.root == "#method" or left.root == "#collection" or sem_kind(context, left.type_id) == "builtin" or sem_kind(context, left.type_id) == "constructor" { sem_error(context, "W2013", "callable syntax requires an explicit lambda adapter") }
+    worker_sem_value(context, left)
     return left
 }
 fn sem_intersect(left: list[str], right: list[str]) -> list[str] {
@@ -2620,6 +2624,7 @@ fn sem_block(context: SemanticContext, statement: bool) -> SemFlow {
             tail = context.unit_type
         }
         elif sem_match(context, "RETURN") {
+            if context.return_type < 0 and context.capture_depth < 0 { report_error_at("W1004", statement_source, "return outside function") }
             let previous = context.expected_type
             context.expected_type = context.return_type
             let mut value = context.unit_type
@@ -2835,7 +2840,7 @@ fn sem_check_function(context: SemanticContext, function: SemFunction) {
     let previous_ensures = context.active_ensures_tokens
     context.active_ensures_tokens = ens_start_tokens
     context.pos = function.body
-    let flow = sem_block(context, sem_unit_return(context, context.return_type))
+    let mut flow = sem_block(context, sem_unit_return(context, context.return_type))
     context.active_ensures_tokens = previous_ensures
     if not flow.terminates {
         sem_require_tail_at(context, flow.type_id, context.return_type, context.tokens[function.body])
@@ -2856,7 +2861,8 @@ fn sem_check_function(context: SemanticContext, function: SemFunction) {
             let ens_scope = sem_enter_scope(context)
             let result_var = sem_declare(context, "result", flow.type_id, false)
             let result_let = sem_node(context, "let", context.unit_type, tail_src, "result", [tail_child], result_var, -1)
-            context.nodes[flow.node].children[last_idx] = result_let
+            let mut children = context.nodes[flow.node].children
+            children[last_idx] = result_let
             for ens_pos in ens_start_tokens {
                 context.pos = ens_pos
                 sem_skip_separators(context)
@@ -2866,10 +2872,11 @@ fn sem_check_function(context: SemanticContext, function: SemFunction) {
                 let msg_text = "Postcondition ('ensures') failed in '" + function.name + "'"
                 let msg_node = sem_node(context, "string", context.string_type, ens_src, msg_text, [], -1, -1)
                 let assert_node = sem_node(context, "call", context.unit_type, ens_src, "contract_assert", [cond_val.node, msg_node], -1, -1)
-                context.nodes[flow.node].children.append(assert_node)
+                children.append(assert_node)
             }
             let res_ref = sem_node(context, "binding", flow.type_id, tail_src, "result", [], result_var, -1)
-            context.nodes[flow.node].children.append(res_ref)
+            children.append(res_ref)
+            flow.node = sem_node(context, "block", flow.type_id, tail_src, "", children, -1, -1)
             sem_leave_scope(context, ens_scope)
             context.pos = saved_pos
         }
@@ -2961,8 +2968,8 @@ fn sem_initialize(context: SemanticContext, tokens: list[Token]) {
     sem_intern(context, "struct", "IoError", empty)
     sem_intern(context, "struct", "NetError", empty)
     sem_intern(context, "opaque", "opaque", empty)
-    context.fields.append(SemField { owner: "IoError", name: "message", type_id: context.string_type, visible: true })
-    context.fields.append(SemField { owner: "NetError", name: "message", type_id: context.string_type, visible: true })
+    context.fields.append(SemField { owner: "IoError", name: "message", type_id: context.string_type, visible: true, requires: [] })
+    context.fields.append(SemField { owner: "NetError", name: "message", type_id: context.string_type, visible: true, requires: [] })
     for i in 0..len(tokens) - 1 {
         let kind = tokens[i].kind
         if kind == "STRUCT" or kind == "CLASS" or kind == "INTERFACE" or kind == "ENUM" {
@@ -3121,6 +3128,8 @@ fn sem_lambda(context: SemanticContext) -> SemValue {
     let previous_loop = context.loop
     let previous_captures = context.capture_names
     let previous_capture_depth = context.capture_depth
+    let previous_ensures = context.active_ensures_tokens
+    context.active_ensures_tokens = []
     context.capture_depth = context.depth
     let empty_names: list[str] = []
     context.capture_names = empty_names
@@ -3174,6 +3183,7 @@ fn sem_lambda(context: SemanticContext) -> SemValue {
     context.expected_type = expected
     context.capture_names = previous_captures
     context.capture_depth = previous_capture_depth
+    context.active_ensures_tokens = previous_ensures
     for name in captures {
         let variable = sem_lookup(context, name)
         if variable >= 0 and context.capture_depth >= 0 and context.variables[variable].depth < context.capture_depth and not module_contains(context.capture_names, name) { context.capture_names.append(name) }

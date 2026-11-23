@@ -1,3 +1,4 @@
+import threading
 import weakref
 from typing import Any, Dict, List, Optional
 
@@ -338,16 +339,24 @@ class WysnaErr(WysnaResult):
 class CowTelemetry:
     """Process-wide logical CoW counters; Python storage has no C ABI byte model."""
     def __init__(self):
+        self.lock = threading.Lock()
         self.detach_list: int = 0
         self.detach_dict: int = 0
         self.detach_struct: int = 0
         self.copied_slots: int = 0
 
     def reset(self) -> None:
-        self.detach_list = 0
-        self.detach_dict = 0
-        self.detach_struct = 0
-        self.copied_slots = 0
+        with self.lock:
+            self.detach_list = 0
+            self.detach_dict = 0
+            self.detach_struct = 0
+            self.copied_slots = 0
+
+    def record(self, kind: str, slots: int) -> None:
+        with self.lock:
+            name = 'detach_' + kind
+            setattr(self, name, getattr(self, name) + 1)
+            self.copied_slots += slots
 
 cow_telemetry = CowTelemetry()
 
@@ -386,8 +395,7 @@ class WysnaList(CowOwner):
         if self.storage.refcount > 1:
             self.storage.refcount -= 1
             n = len(self.storage.data)
-            cow_telemetry.detach_list += 1
-            cow_telemetry.copied_slots += n
+            cow_telemetry.record('list', n)
             # Perform CoW detachment
             self.storage = SharedBuffer([elem.clone_value() for elem in self.storage.data])
 
@@ -451,8 +459,7 @@ class WysnaDict(CowOwner):
         if self.storage.refcount > 1:
             self.storage.refcount -= 1
             n = len(self.storage.data)
-            cow_telemetry.detach_dict += 1
-            cow_telemetry.copied_slots += n * 2
+            cow_telemetry.record('dict', n * 2)
             self.storage = SharedBuffer({k: v.clone_value() for k, v in self.storage.data.items()})
 
     def set(self, key: Any, val: WysnaValue) -> None:
@@ -505,8 +512,7 @@ class WysnaStructInstance(CowOwner):
         if self.storage.refcount > 1:
             self.storage.refcount -= 1
             n = len(self.storage.data)
-            cow_telemetry.detach_struct += 1
-            cow_telemetry.copied_slots += n
+            cow_telemetry.record('struct', n)
             self.storage = SharedBuffer({k: v.clone_value() for k, v in self.storage.data.items()})
 
     def get_field(self, name: str) -> WysnaValue:
@@ -542,6 +548,7 @@ class WysnaNativeFunction(WysnaValue):
     def __init__(self, name: str, call_fn: Any):
         self.name = name
         self.call_fn = call_fn
+        self.worker_safe = False
 
     def __str__(self) -> str:
         return f"<native fn {self.name}>"

@@ -448,6 +448,11 @@ def create_global_environment(stdout: Optional[TextIO] = None,
     env.declare("Option", WysnaEnumNamespace("Option", ["Some", "None"]), is_mut=False)
     env.declare("Result", WysnaEnumNamespace("Result", ["Ok", "Err"]), is_mut=False)
 
+    from checker.WorkerSafety import PURE_BUILTINS
+    for name in PURE_BUILTINS:
+        value = env.bindings.get(name)
+        if isinstance(value, WysnaNativeFunction):
+            value.worker_safe = True
     return env
 
 

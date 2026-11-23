@@ -1,0 +1,11 @@
+let limit = 10
+struct Bounded { value: int requires value < limit }
+struct Box[T] { values: list[T] requires len(values) > 0 }
+fn make(value: int) -> Bounded {
+    let limit = -1
+    Bounded { value: value }
+}
+let first = make(3)
+let second = Bounded { ..first, value: 4 }
+let boxed = Box[int] { values: [7] }
+print(first.value, second.value, boxed.values[0])

@@ -14,6 +14,18 @@ exist. Otherwise, use `:reset` and import again. Module initialization runs agai
 
 ---
 
+## Seguridad posterior a v0.9.0
+
+El candidato R1 tiene un [contrato cerrado de workers](WORKER_SAFETY.md): copia
+los grafos de valores y rechaza efectos y referencias compartidas no verificables.
+Los wrappers de callbacks con efectos desconocidos y workers anidados se rechazan.
+TaskGroup y cancelación pública siguen pendientes.
+
+v0.9.0 publicada omite contratos de campos en Selfhost y el oráculo AST; este
+candidato los ejecuta y añade pruebas negativas. Hasta publicar la corrección,
+no se debe atribuir esa garantía al SDK v0.9.0. El candidato también corrige el
+alcance de contratos importados y `ensures` sobre retornos implícitos nativos.
+
 ## 1. Closures capture immutable snapshots
 
 **What happens.** A lambda captures by value at creation time. The captured names are

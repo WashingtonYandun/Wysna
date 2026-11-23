@@ -2,19 +2,17 @@
 
 The Wysna team takes security, memory safety, and compiler correctness seriously. This policy explains how to report vulnerabilities, how we respond, and which versions receive support.
 
-## Supported Versions
+## Versiones y límites
 
-Only the latest minor release line receives security updates and backports.
+La línea pre-1.0 publicada es v0.9.0. Los cambios R1 de seguridad de workers y
+contratos son un candidato posterior y no forman parte de sus artefactos.
+Se mantienen el tag y los checksums originales. Véanse [límites conocidos](docs/KNOWN_LIMITS.md)
+y [contrato de workers](docs/WORKER_SAFETY.md) para distinguir garantías comprobadas
+de trabajo pendiente.
 
-| Version | Supported | Security status |
-| --- | --- | --- |
-| 0.7.0 | ✅ | Current pre-1.0 release line |
-| 0.6.0 | ❌ | Superseded by Wysna 0.7.0 |
-| 0.5.0 | ❌ | Superseded by Wysna 0.7.0 |
-| 0.3.0.dev1 | ❌ | Superseded by the Wysna 0.4.0 alpha line |
-| 0.2.x | ❌ | Superseded by Wysna 0.3.0 |
-| 0.1.x | ❌ | Historical version without support |
-| < 0.1.0 | ❌ | Experimental versions without support |
+ARC, cuotas, replay y capacidades de la CLI no sustituyen el aislamiento del
+sistema operativo para código no confiable. FFI y C manual requieren una frontera
+externa de confianza; no heredan una garantía universal de seguridad de memoria.
 
 ## Reporting a Vulnerability
 

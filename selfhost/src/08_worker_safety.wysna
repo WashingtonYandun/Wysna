@@ -1,0 +1,243 @@
+# Closed worker callbacks are checked before lowering, including transitively called helpers.
+fn worker_has(ids: list[int], id: int) -> bool {
+    for candidate in ids { if candidate == id { return true } }
+    return false
+}
+fn worker_library(file: str, name: str) -> bool {
+    let configured = lsp_stdlib_root_arg()
+    let root = if configured == "" { "stdlib" } else { configured }
+    return module_canonical(file) == module_canonical(root + "/" + name + ".wysna")
+}
+fn worker_needs_nodes(tokens: list[Token]) -> bool {
+    let mut files: list[str] = []
+    for token in tokens {
+        if not module_contains(files, token.file) {
+            files.append(token.file)
+            if worker_library(token.file, "algorithms") or worker_library(token.file, "async") { return true }
+        }
+    }
+    return false
+}
+fn worker_signature(program: CheckedProgram, target: int, module_name: str, name: str, arity: int) -> bool {
+    if target < 0 { return false }
+    let signature = program.signatures[target]
+    return tool_short_name(signature.declaration_name) == name and len(signature.params) == arity and worker_library(signature.source.file, module_name)
+}
+fn worker_entry(program: CheckedProgram, target: int) -> str {
+    if target < 0 { return "" }
+    let name = tool_short_name(program.signatures[target].declaration_name)
+    let mut module_name = "algorithms"
+    let mut arity = 2
+    if name == "spawn" or name == "_spawn_handle" { module_name = "async" arity = 1 }
+    elif name == "parallel_batch" { arity = 3 }
+    elif name == "parallel_reduce" { arity = 4 }
+    elif name != "parallel_map" and name != "parallel_filter" { return "" }
+    return if worker_signature(program, target, module_name, name, arity) { name } else { "" }
+}
+fn worker_sem_value(context: SemanticContext, value: SemValue) {
+    if value.node < 0 { return }
+    let node = context.nodes[value.node]
+    if node.kind != "callee" or node.target < 0 { return }
+    let function = context.functions[node.target]
+    let name = tool_short_name(function.declaration_name)
+    let module_name = if name == "spawn" or name == "_spawn_handle" { "async" } else { "algorithms" }
+    if (name == "spawn" or name == "_spawn_handle" or name == "parallel_map" or name == "parallel_filter" or name == "parallel_reduce" or name == "parallel_batch") and worker_library(function.source.file, module_name) {
+        worker_effect_error(node.source, node.source, "escaping_worker_entry", "Worker entry points require a direct checked call")
+    }
+}
+fn worker_failure(code: str, source: Token, boundary: Token, message: str, detail: str) {
+    let kind = if code == "W2014" { "worker_transfer" } else { "worker_effect" }
+    let data = "{\"kind\":" + diag_json_quote(kind) + ",\"boundary_file\":" + diag_json_quote(boundary.file) + ",\"boundary_line\":" + str(boundary.line) + ",\"boundary_col\":" + str(boundary.col) + "," + detail + "}"
+    report_error_at_data(code, source, message, data)
+}
+fn worker_effect_error(source: Token, boundary: Token, reason: str, message: str) {
+    worker_failure("W2015", source, boundary, message, "\"reason\":" + diag_json_quote(reason))
+}
+fn worker_transfer(program: CheckedProgram, id: int, path: str, source: Token, boundary: Token, seen: list[int]) {
+    if worker_has(seen, id) { return }
+    let type_ = program.types[id]
+    let kind = type_.kind
+    if kind == "unit" or kind == "none" or kind == "int" or kind == "float" or kind == "bool" or kind == "str" { return }
+    let mut visited = seen
+    visited.append(id)
+    if len(visited) > 256 { worker_effect_error(source, boundary, "type_nesting", "Worker type nesting exceeds 256") }
+    if kind == "list" or kind == "dict" or kind == "optional" or kind == "result" or kind == "ok" or kind == "err" or kind == "tuple" or kind == "error_union" {
+        for i in 0..len(type_.args) {
+            let mut child = str(i)
+            if kind == "list" { child = "item" }
+            elif kind == "dict" { child = if i == 0 { "key" } else { "value" } }
+            elif kind == "optional" { child = "value" }
+            elif kind == "result" { child = if i == 0 { "ok" } else { "error" } }
+            worker_transfer(program, type_.args[i], path + "." + child, source, boundary, visited)
+        }
+        return
+    }
+    if kind == "struct" or kind == "enum" {
+        for record in program.records {
+            if record.type_id == id {
+                for field in record.fields { worker_transfer(program, field.type_id, path + "." + field.name, source, boundary, visited) }
+                for variant in record.variants {
+                    for i in 0..len(variant.payloads) { worker_transfer(program, variant.payloads[i], path + "." + variant.name + "." + str(i), source, boundary, visited) }
+                }
+                return
+            }
+        }
+    }
+    let display = if type_.name != "" { tool_short_name(type_.name) } else { kind }
+    worker_failure("W2014", source, boundary, "Worker transfer rejects " + path + " of type " + display, "\"path\":" + diag_json_quote(path) + ",\"value_type\":" + diag_json_quote(display))
+}
+class WorkerAnalysis {
+    program: CheckedProgram
+    aliases: list[int]
+    effects_seen: list[bool]
+    roots_seen: list[bool]
+    fn init(program: CheckedProgram) {
+        this.program = program
+        let mut aliases: list[int] = []
+        for binding in program.bindings { aliases.append(-1) }
+        this.aliases = aliases
+        let mut effects: list[bool] = []
+        for function in program.functions { effects.append(false) }
+        this.effects_seen = effects
+        let mut roots: list[bool] = []
+        for node in program.nodes { roots.append(false) }
+        this.roots_seen = roots
+        for node in program.nodes {
+            if node.kind == "let" and node.binding >= 0 and not program.bindings[node.binding].mutable { this.aliases[node.binding] = node.children[0] }
+        }
+    }
+}
+fn worker_body(program: CheckedProgram, target: int) -> int {
+    if target < 0 { return -1 }
+    if program.signatures[target].foreign { return -2 }
+    let name = program.signatures[target].name
+    for i in 0..len(program.functions) { if program.functions[i].name == name { return i } }
+    return -1
+}
+fn worker_resolve(state: WorkerAnalysis, root: int) -> int {
+    let mut current = root
+    let mut seen: list[int] = []
+    while current >= 0 {
+        if worker_has(seen, current) { return -1 }
+        seen.append(current)
+        let node = state.program.nodes[current]
+        if node.kind == "closure" { return node.target }
+        if node.kind == "callee" { return worker_body(state.program, node.target) }
+        if node.kind != "binding" or node.binding < 0 or state.program.bindings[node.binding].mutable { return -1 }
+        current = state.aliases[node.binding]
+    }
+    return -1
+}
+fn worker_children(program: CheckedProgram, node: CheckedNode) -> list[int] {
+    let mut children = node.children
+    for id in node.arms {
+        let arm = program.arms[id]
+        if arm.guard >= 0 { children.append(arm.guard) }
+        children.append(arm.body)
+    }
+    return children
+}
+fn worker_pure_builtin(name: str) -> bool {
+    return name == "len" or name == "int" or name == "float" or name == "str" or name == "bytes" or name == "ord" or name == "chr" or name == "slice" or name == "join_strings" or name == "enumerate" or name == "dict_items" or name == "contract_assert" or name == "Some" or name == "Ok" or name == "Err"
+}
+fn worker_global(program: CheckedProgram, binding: int, function: CheckedFunction, source: Token, boundary: Token) {
+    if binding >= 0 and program.bindings[binding].global and not worker_has(function.captures, binding) {
+        let name = program.bindings[binding].name
+        worker_failure("W2015", source, boundary, "Worker callback reads an uncaptured global: " + tool_short_name(name), "\"reason\":\"global_access\",\"symbol\":" + diag_json_quote(name))
+    }
+}
+fn worker_effects(state: WorkerAnalysis, root: int, boundary: Token) {
+    let program = state.program
+    let mut functions: list[int] = [root]
+    while len(functions) > 0 {
+        let index = functions.pop()
+        if index < 0 { worker_effect_error(boundary, boundary, "unverified_call", "Worker callback has an unresolved call") }
+        if state.effects_seen[index] { continue }
+        state.effects_seen[index] = true
+        let function = program.functions[index]
+        if function.is_async { worker_effect_error(function.source, boundary, "external_effect", "Worker callback reaches async code") }
+        let target = checked_function(program, function.name)
+        if worker_signature(program, target, "async", "_take_task_value", 2) { worker_effect_error(function.source, boundary, "scheduler_effect", "Worker callback cannot access the shared task registry") }
+        let mut pending: list[int] = [function.body]
+        let mut seen: list[int] = []
+        while len(pending) > 0 {
+            let id = pending.pop()
+            if worker_has(seen, id) { continue }
+            seen.append(id)
+            let node = program.nodes[id]
+            if program.types[node.type_id].kind != "function" { worker_transfer(program, node.type_id, "local", node.source, boundary, []) }
+            if node.kind == "binding" { worker_global(program, node.binding, function, node.source, boundary) }
+            if node.kind == "await" { worker_effect_error(node.source, boundary, "scheduler_effect", "Worker callback cannot await shared scheduler state") }
+            if node.kind == "closure" {
+                for binding in program.functions[node.target].captures {
+                    worker_transfer(program, program.bindings[binding].type_id, "local." + program.bindings[binding].name, node.source, boundary, [])
+                    worker_global(program, binding, function, node.source, boundary)
+                }
+            }
+            if node.kind == "call" {
+                if worker_entry(program, node.target) != "" { worker_effect_error(node.source, boundary, "scheduler_effect", "Worker callbacks cannot dispatch nested workers") }
+                if node.target >= 0 {
+                    if program.signatures[node.target].foreign { worker_effect_error(node.source, boundary, "external_effect", "Worker callback reaches FFI code") }
+                    let body = worker_body(program, node.target)
+                    if body < 0 { worker_effect_error(node.source, boundary, "unverified_call", "Worker callback has an unverified call") }
+                    functions.append(body)
+                } elif not worker_pure_builtin(node.text) {
+                    worker_failure("W2015", node.source, boundary, "Worker callback calls an effectful function: " + node.text, "\"reason\":\"unverified_call\",\"symbol\":" + diag_json_quote(node.text))
+                }
+            } elif node.kind == "indirect_call" {
+                let body = worker_resolve(state, node.children[0])
+                if body == -2 { worker_effect_error(node.source, boundary, "external_effect", "Worker callback reaches FFI code") }
+                if body < 0 { worker_effect_error(node.source, boundary, "unverified_call", "Worker callback has an unresolved indirect call") }
+                functions.append(body)
+            } elif node.kind == "virtual_call" or node.kind == "new" { worker_effect_error(node.source, boundary, "unverified_call", "Worker callback reaches identity-bearing code") }
+            for child in worker_children(program, node) { pending.append(child) }
+        }
+    }
+}
+fn worker_callback(state: WorkerAnalysis, value: int, boundary: Token) {
+    let program = state.program
+    let node = program.nodes[value]
+    let body = worker_resolve(state, value)
+    if body == -2 { worker_effect_error(node.source, boundary, "external_effect", "Worker callback reaches FFI code") }
+    if body < 0 { worker_effect_error(node.source, boundary, "unresolved_callback", "Worker callback must resolve to a named function or immutable closure") }
+    let signature = program.types[node.type_id]
+    if signature.kind != "function" { worker_effect_error(node.source, boundary, "unresolved_callback", "Worker callback signature is unavailable") }
+    for i in 0..len(signature.args) - 1 { worker_transfer(program, signature.args[i], "argument." + str(i), node.source, boundary, []) }
+    worker_transfer(program, signature.args[len(signature.args) - 1], "result", node.source, boundary, [])
+    for binding in program.functions[body].captures {
+        worker_transfer(program, program.bindings[binding].type_id, "capture." + program.bindings[binding].name, node.source, boundary, [])
+    }
+    worker_effects(state, body, boundary)
+}
+fn worker_check_root(state: WorkerAnalysis, root: int) {
+    let program = state.program
+    let mut pending: list[int] = [root]
+    while len(pending) > 0 {
+        let id = pending.pop()
+        if state.roots_seen[id] { continue }
+        state.roots_seen[id] = true
+        let node = program.nodes[id]
+        if node.kind == "call" {
+            let entry = worker_entry(program, node.target)
+            if entry != "" {
+                let argument = if entry == "spawn" or entry == "_spawn_handle" { 0 } else { if entry == "parallel_batch" or entry == "parallel_reduce" { 2 } else { 1 } }
+                worker_callback(state, node.children[argument], node.source)
+            }
+        } elif node.kind == "callee" and worker_entry(program, node.target) != "" {
+            worker_effect_error(node.source, node.source, "escaping_worker_entry", "Worker entry points require a direct checked call")
+        }
+        for child in worker_children(program, node) { pending.append(child) }
+    }
+}
+fn worker_check(program: CheckedProgram) {
+    let mut needed = false
+    for i in 0..len(program.signatures) { if worker_entry(program, i) != "" { needed = true break } }
+    if not needed { return }
+    if not program.has_nodes { report_error_at("W9999", program.source, "worker checking requires typed nodes") }
+    let state = WorkerAnalysis(program)
+    for function in program.functions {
+        let target = checked_function(program, function.name)
+        if worker_entry(program, target) == "" { worker_check_root(state, function.body) }
+    }
+    for node in program.entry { worker_check_root(state, node) }
+}
