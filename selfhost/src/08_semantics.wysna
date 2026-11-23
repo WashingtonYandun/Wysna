@@ -55,6 +55,7 @@ fn sem_unwrap_expected_payload(context: SemanticContext, expected: int) -> int {
 fn sem_error_type_name(context: SemanticContext, type_id: int) -> str {
     let type_ = context.types[type_id]
     if type_.kind == "int" { return "int" }
+    if type_.kind == "u8" { return "u8" }
     if type_.kind == "float" { return "float" }
     if type_.kind == "bool" { return "bool" }
     if type_.kind == "str" { return "str" }
@@ -431,6 +432,7 @@ fn sem_type(context: SemanticContext) -> int {
             let empty: list[int] = []
             result = sem_intern(context, "typeparam", name, empty)
         } elif name == "int" or name == "int32" or name == "int64" { result = context.integer_type }
+        elif name == "u8" { result = sem_simple(context, "u8") }
         elif name == "float" or name == "double" { result = context.float_type }
         elif name == "bool" { result = context.boolean_type }
         elif name == "str" { result = context.string_type }
@@ -489,7 +491,7 @@ fn sem_key(context: SemanticContext, type_id: int) -> bool {
         if current < 0 {
             active.pop()
             seen.append(-current - 1)
-        } elif current != context.integer_type and current != context.string_type and current != context.boolean_type {
+        } elif current != context.integer_type and current != context.string_type and current != context.boolean_type and sem_kind(context, current) != "u8" {
             let type_ = context.types[current]
             if type_.kind == "tuple" {
                 for elem_id in type_.args {
@@ -778,6 +780,7 @@ fn sem_collect_record(context: SemanticContext, kind: str) {
     context.type_params = previous_type_params
 }
 fn sem_builtin(name: str) -> bool {
+    if name == "u8" { return true }
     return name == "join_strings" or name == "print" or name == "eprint" or name == "len" or name == "int" or name == "float" or name == "str" or name == "ord" or name == "chr" or name == "bytes" or name == "slice" or name == "args" or name == "env" or name == "unix_time" or name == "exit" or name == "enumerate" or name == "dict_items" or name == "read_file" or name == "write_file" or name == "Some" or name == "Ok" or name == "Err" or name == "weak" or name == "upgrade" or name == "contract_assert"
 }
 fn sem_call_builtin(context: SemanticContext, name: str, args: list[int], sources: list[Token], discard: bool) -> int {
@@ -820,8 +823,12 @@ fn sem_call_builtin(context: SemanticContext, name: str, args: list[int], source
         if kind != "list" and kind != "dict" and kind != "tuple" and first != context.string_type { report_error_at("W2001", sem_source_at(context, sources, 0), "len requires a collection or string") }
         return context.integer_type
     }
+    if name == "u8" {
+        sem_require_at(context, first, context.integer_type, "W2001", sem_source_at(context, sources, 0))
+        return sem_wrap(context, "optional", sem_simple(context, "u8"))
+    }
     if name == "int" or name == "float" or name == "str" {
-        if name != "str" and first != context.integer_type and first != context.float_type and first != context.string_type and first != context.boolean_type { report_error_at("W2001", sem_source_at(context, sources, 0), "conversion argument") }
+        if name != "str" and first != context.integer_type and first != context.float_type and first != context.string_type and first != context.boolean_type and kind != "u8" { report_error_at("W2001", sem_source_at(context, sources, 0), "conversion argument") }
         if name == "int" { return context.integer_type }
         if name == "float" { return context.float_type }
         return context.string_type
@@ -1213,13 +1220,34 @@ fn sem_group_is_tuple(context: SemanticContext) -> bool {
 fn sem_prefix(context: SemanticContext, allow_struct: bool, statement: bool) -> SemValue {
     let source = sem_at(context)
     if sem_is(context, "PIPE") { return sem_lambda(context) }
-    if sem_match(context, "INT") { return sem_expr(context, "integer", sem_value(context.integer_type), source, source.val, [], -1, -1) }
+    if sem_match(context, "INT") {
+        let mut type_id = context.integer_type
+        let mut digits = source.val
+        if context.expected_type >= 0 and sem_kind(context, context.expected_type) == "u8" {
+            let mut start = 0
+            while start + 1 < len(digits) and digits[start] == "0" { start = start + 1 }
+            digits = slice(digits, start, len(digits))
+            if len(digits) > 3 or int(digits) > 255 { report_error_at("W0002", source, "u8 literal is outside [0, 255]") }
+            type_id = context.expected_type
+        }
+        return sem_expr(context, "integer", sem_value(type_id), source, digits, [], -1, -1)
+    }
     if sem_match(context, "FLOAT") { return sem_expr(context, "float", sem_value(context.float_type), source, source.val, [], -1, -1) }
     if sem_match(context, "STR") { return sem_expr(context, "string", sem_value(context.string_type), source, source.val, [], -1, -1) }
     if sem_match(context, "TRUE") or sem_match(context, "FALSE") { return sem_expr(context, "boolean", sem_value(context.boolean_type), source, source.kind, [], -1, -1) }
     if sem_match(context, "MINUS") {
         let value_source = sem_at(context)
+        if context.expected_type >= 0 and sem_kind(context, context.expected_type) == "u8" and sem_is(context, "INT") {
+            let digits = sem_take(context).val
+            let mut nonzero = false
+            for i in 0..len(digits) { if digits[i] != "0" { nonzero = true } }
+            if nonzero { report_error_at("W0002", source, "u8 literal is outside [0, 255]") }
+            return sem_expr(context, "integer", sem_value(context.expected_type), source, "0", [], -1, -1)
+        }
+        let saved_expected = context.expected_type
+        context.expected_type = -1
         let value = sem_expression(context, 9, allow_struct)
+        context.expected_type = saved_expected
         if value.type_id != context.integer_type and value.type_id != context.float_type { report_error_at("W2001", value_source, "numeric negation") }
         return sem_expr(context, "unary", sem_value(value.type_id), source, "MINUS", [value.node], -1, -1)
     }
@@ -3040,7 +3068,7 @@ fn sem_validate(context: SemanticContext, tokens: list[Token]) {
             let signature = context.types[context.functions[len(context.functions) - 1].type_id].args
             for i in 0..len(signature) {
                 let kind = sem_kind(context, signature[i])
-                if kind != "int" and kind != "float" and kind != "bool" and kind != "opaque" and not (i == len(signature) - 1 and kind == "unit") { report_error_at("W2001", declaration_source, "FFI accepts only scalars and opaque handles") }
+                if kind != "int" and kind != "u8" and kind != "float" and kind != "bool" and kind != "opaque" and not (i == len(signature) - 1 and kind == "unit") { report_error_at("W2001", declaration_source, "FFI accepts only scalars and opaque handles") }
             }
         }
         elif sem_is(context, "FN") and context.tokens[context.pos + 1].kind == "IDENT" { sem_collect_function(context, "", true, decl_is_async) sem_attach_attributes(context, attributes) }

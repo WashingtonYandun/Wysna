@@ -1,5 +1,5 @@
 """Lower resolved HIR to explicit CFG, physical places and ARC operations."""
-from checker.TypeInterner import TYPE_UNIT, TYPE_INT, TYPE_BOOL, TYPE_NONE, TYPE_STR, TYPE_FLOAT
+from checker.TypeInterner import TYPE_UNIT, TYPE_INT, TYPE_U8, TYPE_BOOL, TYPE_NONE, TYPE_STR, TYPE_FLOAT
 from error.Error import WysnaError
 from hir import HirNodes as H
 from mir.Nodes import (Source, Slot, Projection, Place, Operation, Terminator,
@@ -144,7 +144,7 @@ class Lowering:
 
     def slot(self, type_id, name='', storage='value', ownership='owned', parameter=False, tracked=True):
         if storage == 'value' and ownership != 'global':
-            storage = {TYPE_INT: 'integer', TYPE_FLOAT: 'float', TYPE_BOOL: 'boolean'}.get(type_id, storage)
+            storage = {TYPE_INT: 'integer', TYPE_U8: 'integer', TYPE_FLOAT: 'float', TYPE_BOOL: 'boolean'}.get(type_id, storage)
         slot = Slot(len(self.function.slots), type_id, name, storage, ownership, parameter)
         self.function.slots.append(slot)
         self.slot_by_id[slot.id] = slot
@@ -302,7 +302,7 @@ class Lowering:
             return self.op('construct', self.slot(type_id), data={'kind': kind})
         if self.interner.get_entry(type_id).tag == 'weak':
             return self.runtime('wysna_empty_weak', [], type_id)
-        value = '' if type_id == TYPE_STR else False if type_id == TYPE_BOOL else 0 if type_id == TYPE_INT else 0.0 if self.interner.get_entry(type_id).data == 'float' else None
+        value = '' if type_id == TYPE_STR else False if type_id == TYPE_BOOL else 0 if type_id in (TYPE_INT, TYPE_U8) else 0.0 if self.interner.get_entry(type_id).data == 'float' else None
         result = self.constant(value, type_id)
         self.current.operations[-1].data['default'] = True
         return result

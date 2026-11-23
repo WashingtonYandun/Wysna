@@ -6,7 +6,7 @@ import sys
 from error.Error import WysnaRuntimeError
 from runtime.Values import WysnaInt, WysnaFloat, WysnaBool, WysnaUnit, WysnaPointer
 
-C_TYPES = {'int': ctypes.c_int64, 'int64': ctypes.c_int64, 'int32': ctypes.c_int32,
+C_TYPES = {'int': ctypes.c_int64, 'int64': ctypes.c_int64, 'int32': ctypes.c_int32, 'u8': ctypes.c_uint8,
            'float': ctypes.c_double, 'double': ctypes.c_double, 'bool': ctypes.c_bool,
            'opaque': ctypes.c_void_p, 'unit': None}
 
@@ -58,11 +58,13 @@ def bind_foreign(declaration, libraries=(), execution_context=None):
             value = argument.address if type_ == 'opaque' else argument.value
             if type_ == 'int32' and not -2147483648 <= value <= 2147483647:
                 raise WysnaRuntimeError('int32 FFI argument out of range', code='W4003')
+            if type_ == 'u8' and not 0 <= value <= 255:
+                raise WysnaRuntimeError('u8 FFI argument out of range', code='W4003')
             raw.append(value)
         result = function(*raw)
         if returned == 'unit':
             return WysnaUnit()
-        constructor = {'int': WysnaInt, 'int32': WysnaInt, 'int64': WysnaInt, 'float': WysnaFloat,
+        constructor = {'int': WysnaInt, 'int32': WysnaInt, 'int64': WysnaInt, 'u8': WysnaInt, 'float': WysnaFloat,
                        'double': WysnaFloat, 'bool': WysnaBool, 'opaque': WysnaPointer}[returned]
         if name in ('wysna_host_buffer_new', 'wysna_host_file_open'):
             from runtime.HostAbi import close

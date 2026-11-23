@@ -232,6 +232,14 @@ def create_global_environment(stdout: Optional[TextIO] = None,
             return WysnaInt(value)
         raise WysnaRuntimeError(f"Cannot convert '{type(arg).__name__}' to int")
 
+    def u8_fn(args: List[WysnaValue]) -> WysnaValue:
+        if len(args) != 1 or not isinstance(args[0], WysnaInt):
+            raise WysnaRuntimeError("u8() expects one int", code="W4003")
+        value = args[0]
+        if 0 <= value.value <= 255:
+            return WysnaEnumValue("Option", "Some", [value])
+        return WysnaNone()
+
     def float_fn(args: List[WysnaValue]) -> WysnaValue:
         if len(args) != 1:
             raise WysnaRuntimeError("float() takes exactly 1 argument")
@@ -426,6 +434,7 @@ def create_global_environment(stdout: Optional[TextIO] = None,
     env.declare("enumerate", WysnaNativeFunction("enumerate", enumerate_fn), is_mut=False)
     env.declare("dict_items", WysnaNativeFunction("dict_items", dict_items_fn), is_mut=False)
     env.declare("int", WysnaNativeFunction("int", int_fn), is_mut=False)
+    env.declare("u8", WysnaNativeFunction("u8", u8_fn), is_mut=False)
     env.declare("float", WysnaNativeFunction("float", float_fn), is_mut=False)
     env.declare("str", WysnaNativeFunction("str", str_fn), is_mut=False)
     env.declare("ord", WysnaNativeFunction("ord", ord_fn), is_mut=False)

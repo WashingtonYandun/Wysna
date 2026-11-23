@@ -130,6 +130,21 @@ static inline const char* wysna_conversion_end(const char* end) {
     return end;
 }
 
+static inline WVal wysna_builtin_u8(WVal value) {
+    if (wysna_tag(value) != W_INT) {
+        wysna_runtime_fail("W4003", "u8() expects one int");
+    }
+    int64_t number = wysna_as_int(value);
+    if (number < 0 || number > UINT8_MAX) return wysna_none();
+    return wysna_enum_payload("Option", "Some", wysna_int(number));
+}
+
+static inline uint8_t wysna_consume_u8(WVal value) {
+    uint8_t result = wysna_as_u8(value);
+    wysna_release(value);
+    return result;
+}
+
 static inline WVal wysna_builtin_int(WVal v) {
     WTag tag = wysna_tag(v);
     if (tag == W_BOOL) return wysna_int(wysna_as_bool(v) ? 1 : 0);
@@ -269,9 +284,9 @@ static inline WVal wysna_builtin_slice(WVal s, WVal start, WVal end) {
         WListBuf* b = wysna_as_list(s);
         int64_t st = start_i < 0 ? 0 : start_i;
         int64_t en = end_i > b->len ? b->len : end_i;
-        if (en <= st) return wysna_make_list(0, NULL);
+        if (en <= st) return wysna_list_slice(b, 0, 0);
         if (st == 0 && en == b->len) return wysna_clone(s);
-        return wysna_make_list((int32_t)(en - st), b->data + st);
+        return wysna_list_slice(b, (int32_t)st, (int32_t)(en - st));
     }
     if (st_tag != W_STR) {
         wysna_runtime_fail_unlocated("W4003", "slice() expects str or list");
@@ -308,7 +323,7 @@ static inline WVal wysna_builtin_join_strings(WVal parts, WVal separator) {
     int32_t count = p_list->len;
     if (count == 0) return wysna_sso_from_n("", 0);
     if (count == 1) {
-        WVal first = p_list->data[0];
+        WVal first = wysna_list_load(p_list, 0);
         if (wysna_tag(first) != W_STR) wysna_runtime_fail("W4003", "join_strings requires string elements");
         return wysna_clone(first);
     }
@@ -317,7 +332,7 @@ static inline WVal wysna_builtin_join_strings(WVal parts, WVal separator) {
     const char* sep_data = wysna_str_bytes(separator, sep_buf, &sep_len);
     size_t length = 0;
     for (int32_t i = 0; i < count; i++) {
-        WVal part = p_list->data[i];
+        WVal part = wysna_list_load(p_list, i);
         if (wysna_tag(part) != W_STR) wysna_runtime_fail("W4003", "join_strings requires string elements");
         size_t part_len = wysna_str_len(part);
         size_t extra = i ? sep_len : 0;
@@ -333,7 +348,7 @@ static inline WVal wysna_builtin_join_strings(WVal parts, WVal separator) {
             if (i && sep_len) { memcpy(small + offset, sep_data, sep_len); offset += sep_len; }
             char pbuf[7];
             size_t plen = 0;
-            const char* pdata = wysna_str_bytes(p_list->data[i], pbuf, &plen);
+            const char* pdata = wysna_str_bytes(wysna_list_load(p_list, i), pbuf, &plen);
             if (plen) { memcpy(small + offset, pdata, plen); offset += plen; }
         }
         return wysna_sso_from_n(small, length);
@@ -344,7 +359,7 @@ static inline WVal wysna_builtin_join_strings(WVal parts, WVal separator) {
         if (i && sep_len) { memcpy(data + offset, sep_data, sep_len); offset += sep_len; }
         char pbuf[7];
         size_t plen = 0;
-        const char* pdata = wysna_str_bytes(p_list->data[i], pbuf, &plen);
+        const char* pdata = wysna_str_bytes(wysna_list_load(p_list, i), pbuf, &plen);
         if (plen) { memcpy(data + offset, pdata, plen); offset += plen; }
     }
     data[length] = 0;
@@ -384,7 +399,7 @@ static inline WVal wysna_builtin_enumerate(WVal list_val) {
     b->data = (WVal*)wysna_alloc_safe(sizeof(WVal) * b->cap);
     wysna_mem_on_alloc();
     for (int32_t i = 0; i < src->len; i++) {
-        WVal pair[2] = { wysna_int(i), src->data[i] };
+        WVal pair[2] = { wysna_int(i), wysna_list_load(src, i) };
         b->data[i] = wysna_make_tuple(2, pair);
     }
     return wysna_make_hi_ptr(WVAL_HI_LIST, b);

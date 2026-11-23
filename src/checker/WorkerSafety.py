@@ -9,7 +9,7 @@ from node import NodeType as A
 
 
 PURE_BUILTINS = frozenset(('len', 'int', 'float', 'str', 'bytes', 'ord', 'chr',
-    'slice', 'join_strings', 'enumerate', 'dict_items', 'assert', 'contract_assert',
+    'slice', 'join_strings', 'enumerate', 'dict_items', 'u8', 'assert', 'contract_assert',
     '__wysna_contract_assert', 'Some', 'Ok', 'Err'))
 WORKER_ARGUMENTS = {'parallel_map': 1, 'parallel_filter': 1, 'parallel_batch': 2,
                     'parallel_reduce': 2, 'spawn': 0, '_spawn_handle': 0}
@@ -41,7 +41,7 @@ def nontransferable(type_, path, seen=None):
     seen.add(id(type_))
     children = []
     if isinstance(type_, T.PrimitiveType):
-        return None if type_.name in ('int', 'float', 'bool', 'str', 'unit', 'none') else (path, type_)
+        return None if type_.name in ('int', 'u8', 'float', 'bool', 'str', 'unit', 'none') else (path, type_)
     if isinstance(type_, T.OptionalType):
         children = [('value', type_.inner)]
     elif isinstance(type_, T.ListType):

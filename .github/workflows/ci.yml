@@ -90,6 +90,7 @@ jobs:
           tests/unit/test_worker_safety.py
           tests/unit/test_worker_transfer.py
           tests/unit/test_security_contracts.py
+          tests/unit/test_numeric_widths.py
           tests/unit/test_native_thread_diagnostics.py
           tests/unit/test_native_intrinsic_identity.py
           tests/unit/test_runtime_modular_linking.py

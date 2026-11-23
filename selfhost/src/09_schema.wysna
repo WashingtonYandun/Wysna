@@ -401,6 +401,7 @@ fn schema_json_primitive_type(t: SchemaType, known_defs: list[str]) -> str {
     if t.kind == "named" {
         if t.name == "str" { return "string" }
         if t.name == "int" { return "integer" }
+        if t.name == "u8" { return "integer" }
         if t.name == "float" { return "number" }
         if t.name == "bool" { return "boolean" }
         if t.name == "unit" or t.name == "none" { return "null" }
@@ -414,6 +415,7 @@ fn schema_json_primitive_type(t: SchemaType, known_defs: list[str]) -> str {
 fn schema_type_to_json(t: SchemaType, known_defs: list[str]) -> str {
     if t.kind == "named" {
         if t.name == "int" { return "{\"type\":\"integer\"}" }
+        if t.name == "u8" { return "{\"type\":\"integer\",\"minimum\":0,\"maximum\":255}" }
         if t.name == "float" { return "{\"type\":\"number\"}" }
         if t.name == "bool" { return "{\"type\":\"boolean\"}" }
         if t.name == "str" { return "{\"type\":\"string\"}" }
@@ -1137,6 +1139,7 @@ fn schema_rewrite_req_tokens(toks: list[Token], field_names: list[str]) -> str {
 fn schema_encode_scalar(expr: str, t: SchemaType, known_defs: list[str]) -> str {
     if t.kind != "named" { return "" }
     if t.name == "int" { return "json.from_int(" + expr + ")" }
+    if t.name == "u8" { return "json.from_int(int(" + expr + "))" }
     if t.name == "float" { return "json.from_float(" + expr + ")" }
     if t.name == "bool" { return "json.from_bool(" + expr + ")" }
     if t.name == "str" { return "json.from_str(" + expr + ")" }
@@ -1147,6 +1150,7 @@ fn schema_encode_scalar(expr: str, t: SchemaType, known_defs: list[str]) -> str 
 fn schema_decode_scalar(val_expr: str, t: SchemaType, known_defs: list[str]) -> str {
     if t.kind != "named" { return "" }
     if t.name == "int" { return "json.to_int(" + val_expr + ")?" }
+    if t.name == "u8" { return "(u8(json.to_int(" + val_expr + ")?) else { return Err(json.error(0, \"u8 out of range\")) })" }
     if t.name == "float" { return "json.to_float(" + val_expr + ")?" }
     if t.name == "bool" { return "json.to_bool(" + val_expr + ")?" }
     if t.name == "str" { return "json.to_str(" + val_expr + ")?" }
@@ -1223,7 +1227,8 @@ fn schema_generate_codecs(structs: list[SchemaStruct], enums: list[SchemaEnum], 
                 if schema_is_prim_scalar(f.t) {
                     dec_lines.append("    let _f_" + fn_ + " = json.get_" + f.t.name + "(raw_val, \"" + fn_ + "\")?")
                 } else {
-                    dec_lines.append("    let _f_" + fn_ + " = decode_" + f.t.name + "(json.get_required(raw_val, \"" + fn_ + "\")?)?")
+                    let raw_field = "json.get_required(raw_val, \"" + fn_ + "\")?"
+                    dec_lines.append("    let _f_" + fn_ + " = " + schema_decode_scalar(raw_field, f.t, known_defs))
                 }
                 ctor_fields.append(fn_ + ": _f_" + fn_)
                 continue
@@ -1240,7 +1245,7 @@ fn schema_generate_codecs(structs: list[SchemaStruct], enums: list[SchemaEnum], 
                 if schema_is_prim_scalar(inner) {
                     dec_lines.append("    let _f_" + fn_ + " = json.get_optional_" + inner.name + "(raw_val, \"" + fn_ + "\")?")
                 } else {
-                    dec_lines.append("    let _raw_opt_" + fn_ + " = json.get(raw_val, \"" + fn_ + "\")\n    let _f_" + fn_ + ": " + ft + " = match _raw_opt_" + fn_ + " {\n        None => none,\n        Some(_opt_item) => if json.is_null(_opt_item) {\n            none\n        } else {\n            Some(" + i_dec + ")\n        },\n    }")
+                    dec_lines.append("    let _raw_opt_" + fn_ + " = json.get(raw_val, \"" + fn_ + "\")\n    let _f_" + fn_ + ": " + ft + " = match _raw_opt_" + fn_ + " {\n        Some(_opt_item) => if not json.is_null(_opt_item) {\n            Some(" + i_dec + ")\n        } else {\n            None\n        },\n        None => None,\n    }")
                 }
                 ctor_fields.append(fn_ + ": _f_" + fn_)
                 continue

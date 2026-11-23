@@ -2735,6 +2735,7 @@ fn foreign_native_name(name: str) -> str {
 }
 fn foreign_c_type(name: str, returned: bool, source: Token) -> str {
     if name == "int32" { return "int32_t" }
+    if name == "u8" { return "uint8_t" }
     if name == "int" or name == "int64" { return "int64_t" }
     if name == "float" or name == "double" { return "double" }
     if name == "bool" { return "bool" }
@@ -3136,7 +3137,12 @@ fn checked_verify(program: CheckedProgram) {
         let node = program.nodes[i]
         let leaf_type = if node.kind == "integer" { "int" } elif node.kind == "boolean" { "bool" } elif node.kind == "string" { "str" } else { node.kind }
         if node.kind == "integer" or node.kind == "boolean" or node.kind == "string" or node.kind == "float" or node.kind == "unit" {
-            if program.types[node.type_id].kind != leaf_type { report_error_at("W9999", node.source, "checked literal type mismatch") }
+            let actual = program.types[node.type_id].kind
+            let byte_literal = node.kind == "integer" and actual == "u8"
+            if actual != leaf_type and not byte_literal { report_error_at("W9999", node.source, "checked literal type mismatch") }
+            if byte_literal and (len(node.text) > 3 or int(node.text) < 0 or int(node.text) > 255) {
+                report_error_at("W9999", node.source, "checked u8 literal is outside its range")
+            }
         }
         let count = len(node.children)
         let mut valid = false
@@ -3396,6 +3402,7 @@ fn sem_unwrap_expected_payload(context: SemanticContext, expected: int) -> int {
 fn sem_error_type_name(context: SemanticContext, type_id: int) -> str {
     let type_ = context.types[type_id]
     if type_.kind == "int" { return "int" }
+    if type_.kind == "u8" { return "u8" }
     if type_.kind == "float" { return "float" }
     if type_.kind == "bool" { return "bool" }
     if type_.kind == "str" { return "str" }
@@ -3772,6 +3779,7 @@ fn sem_type(context: SemanticContext) -> int {
             let empty: list[int] = []
             result = sem_intern(context, "typeparam", name, empty)
         } elif name == "int" or name == "int32" or name == "int64" { result = context.integer_type }
+        elif name == "u8" { result = sem_simple(context, "u8") }
         elif name == "float" or name == "double" { result = context.float_type }
         elif name == "bool" { result = context.boolean_type }
         elif name == "str" { result = context.string_type }
@@ -3830,7 +3838,7 @@ fn sem_key(context: SemanticContext, type_id: int) -> bool {
         if current < 0 {
             active.pop()
             seen.append(-current - 1)
-        } elif current != context.integer_type and current != context.string_type and current != context.boolean_type {
+        } elif current != context.integer_type and current != context.string_type and current != context.boolean_type and sem_kind(context, current) != "u8" {
             let type_ = context.types[current]
             if type_.kind == "tuple" {
                 for elem_id in type_.args {
@@ -4119,6 +4127,7 @@ fn sem_collect_record(context: SemanticContext, kind: str) {
     context.type_params = previous_type_params
 }
 fn sem_builtin(name: str) -> bool {
+    if name == "u8" { return true }
     return name == "join_strings" or name == "print" or name == "eprint" or name == "len" or name == "int" or name == "float" or name == "str" or name == "ord" or name == "chr" or name == "bytes" or name == "slice" or name == "args" or name == "env" or name == "unix_time" or name == "exit" or name == "enumerate" or name == "dict_items" or name == "read_file" or name == "write_file" or name == "Some" or name == "Ok" or name == "Err" or name == "weak" or name == "upgrade" or name == "contract_assert"
 }
 fn sem_call_builtin(context: SemanticContext, name: str, args: list[int], sources: list[Token], discard: bool) -> int {
@@ -4161,8 +4170,12 @@ fn sem_call_builtin(context: SemanticContext, name: str, args: list[int], source
         if kind != "list" and kind != "dict" and kind != "tuple" and first != context.string_type { report_error_at("W2001", sem_source_at(context, sources, 0), "len requires a collection or string") }
         return context.integer_type
     }
+    if name == "u8" {
+        sem_require_at(context, first, context.integer_type, "W2001", sem_source_at(context, sources, 0))
+        return sem_wrap(context, "optional", sem_simple(context, "u8"))
+    }
     if name == "int" or name == "float" or name == "str" {
-        if name != "str" and first != context.integer_type and first != context.float_type and first != context.string_type and first != context.boolean_type { report_error_at("W2001", sem_source_at(context, sources, 0), "conversion argument") }
+        if name != "str" and first != context.integer_type and first != context.float_type and first != context.string_type and first != context.boolean_type and kind != "u8" { report_error_at("W2001", sem_source_at(context, sources, 0), "conversion argument") }
         if name == "int" { return context.integer_type }
         if name == "float" { return context.float_type }
         return context.string_type
@@ -4554,13 +4567,34 @@ fn sem_group_is_tuple(context: SemanticContext) -> bool {
 fn sem_prefix(context: SemanticContext, allow_struct: bool, statement: bool) -> SemValue {
     let source = sem_at(context)
     if sem_is(context, "PIPE") { return sem_lambda(context) }
-    if sem_match(context, "INT") { return sem_expr(context, "integer", sem_value(context.integer_type), source, source.val, [], -1, -1) }
+    if sem_match(context, "INT") {
+        let mut type_id = context.integer_type
+        let mut digits = source.val
+        if context.expected_type >= 0 and sem_kind(context, context.expected_type) == "u8" {
+            let mut start = 0
+            while start + 1 < len(digits) and digits[start] == "0" { start = start + 1 }
+            digits = slice(digits, start, len(digits))
+            if len(digits) > 3 or int(digits) > 255 { report_error_at("W0002", source, "u8 literal is outside [0, 255]") }
+            type_id = context.expected_type
+        }
+        return sem_expr(context, "integer", sem_value(type_id), source, digits, [], -1, -1)
+    }
     if sem_match(context, "FLOAT") { return sem_expr(context, "float", sem_value(context.float_type), source, source.val, [], -1, -1) }
     if sem_match(context, "STR") { return sem_expr(context, "string", sem_value(context.string_type), source, source.val, [], -1, -1) }
     if sem_match(context, "TRUE") or sem_match(context, "FALSE") { return sem_expr(context, "boolean", sem_value(context.boolean_type), source, source.kind, [], -1, -1) }
     if sem_match(context, "MINUS") {
         let value_source = sem_at(context)
+        if context.expected_type >= 0 and sem_kind(context, context.expected_type) == "u8" and sem_is(context, "INT") {
+            let digits = sem_take(context).val
+            let mut nonzero = false
+            for i in 0..len(digits) { if digits[i] != "0" { nonzero = true } }
+            if nonzero { report_error_at("W0002", source, "u8 literal is outside [0, 255]") }
+            return sem_expr(context, "integer", sem_value(context.expected_type), source, "0", [], -1, -1)
+        }
+        let saved_expected = context.expected_type
+        context.expected_type = -1
         let value = sem_expression(context, 9, allow_struct)
+        context.expected_type = saved_expected
         if value.type_id != context.integer_type and value.type_id != context.float_type { report_error_at("W2001", value_source, "numeric negation") }
         return sem_expr(context, "unary", sem_value(value.type_id), source, "MINUS", [value.node], -1, -1)
     }
@@ -6381,7 +6415,7 @@ fn sem_validate(context: SemanticContext, tokens: list[Token]) {
             let signature = context.types[context.functions[len(context.functions) - 1].type_id].args
             for i in 0..len(signature) {
                 let kind = sem_kind(context, signature[i])
-                if kind != "int" and kind != "float" and kind != "bool" and kind != "opaque" and not (i == len(signature) - 1 and kind == "unit") { report_error_at("W2001", declaration_source, "FFI accepts only scalars and opaque handles") }
+                if kind != "int" and kind != "u8" and kind != "float" and kind != "bool" and kind != "opaque" and not (i == len(signature) - 1 and kind == "unit") { report_error_at("W2001", declaration_source, "FFI accepts only scalars and opaque handles") }
             }
         }
         elif sem_is(context, "FN") and context.tokens[context.pos + 1].kind == "IDENT" { sem_collect_function(context, "", true, decl_is_async) sem_attach_attributes(context, attributes) }
@@ -7206,7 +7240,7 @@ fn worker_transfer(program: CheckedProgram, id: int, path: str, source: Token, b
     if worker_has(seen, id) { return }
     let type_ = program.types[id]
     let kind = type_.kind
-    if kind == "unit" or kind == "none" or kind == "int" or kind == "float" or kind == "bool" or kind == "str" { return }
+    if kind == "unit" or kind == "none" or kind == "int" or kind == "u8" or kind == "float" or kind == "bool" or kind == "str" { return }
     let mut visited = seen
     visited.append(id)
     if len(visited) > 256 { worker_effect_error(source, boundary, "type_nesting", "Worker type nesting exceeds 256") }
@@ -7287,7 +7321,7 @@ fn worker_children(program: CheckedProgram, node: CheckedNode) -> list[int] {
     return children
 }
 fn worker_pure_builtin(name: str) -> bool {
-    return name == "len" or name == "int" or name == "float" or name == "str" or name == "bytes" or name == "ord" or name == "chr" or name == "slice" or name == "join_strings" or name == "enumerate" or name == "dict_items" or name == "contract_assert" or name == "Some" or name == "Ok" or name == "Err"
+    return name == "len" or name == "int" or name == "u8" or name == "float" or name == "str" or name == "bytes" or name == "ord" or name == "chr" or name == "slice" or name == "join_strings" or name == "enumerate" or name == "dict_items" or name == "contract_assert" or name == "Some" or name == "Ok" or name == "Err"
 }
 fn worker_global(program: CheckedProgram, binding: int, function: CheckedFunction, source: Token, boundary: Token) {
     if binding >= 0 and program.bindings[binding].global and not worker_has(function.captures, binding) {
@@ -7652,7 +7686,7 @@ fn mir_literal_str(value: str) -> MirLiteral {
     return MirLiteral { type_id: 5, integer: 0, floating: 0.0, boolean: false, text: value }
 }
 
-fn mir_value_storage(type_id: int) -> bool { return type_id == 1 or type_id >= 5 }
+fn mir_value_storage(type_id: int) -> bool { return type_id == 1 or (type_id >= 5 and type_id != 7) }
 
 fn mir_unsupported(token: Token, feature: str) {
     report_error_at("W2013", token, "Compiler MIR native-core-v1 does not support " + feature)
@@ -7665,7 +7699,7 @@ fn mir_intern(context: MirBuilder, kind: str, name: str, args_: list[int]) -> in
 }
 fn mir_type(context: MirBuilder, type_id: int, source: Token) -> int {
     let type_ = context.program.types[type_id]
-    let names: list[str] = ["error", "unit", "bool", "int", "float", "str", "none"]
+    let names: list[str] = ["error", "unit", "bool", "int", "float", "str", "none", "u8"]
     for i in 0..len(names) { if type_.kind == names[i] { return i } }
     if type_.kind == "struct" or type_.kind == "enum" or type_.kind == "class" or type_.kind == "interface" {
         if not checked_type_concrete(context.program.types, context.program.templates, type_id) { mir_unsupported(source, "nominal values with unresolved type arguments; add an explicit type context") }
@@ -7883,7 +7917,7 @@ fn mir_ids(ids: list[int], tuple_: bool) -> str {
 fn mir_literal_json(value: MirLiteral) -> str {
     if value.type_id == 1 or value.type_id == 6 { return "null" }
     if value.type_id == 2 { return str(value.boolean) }
-    if value.type_id == 3 { return str(value.integer) }
+    if value.type_id == 3 or value.type_id == 7 { return str(value.integer) }
     if value.type_id == 5 { return mir_quote(value.text) }
     return str(value.floating)
 }
@@ -7955,7 +7989,7 @@ fn mir_function_json(function: MirFunction) -> str {
         let slot = function.slots[i]
         let mut storage = "value"
         if slot.type_id == 2 { storage = if slot.predicate { "predicate" } else { "boolean" } }
-        elif slot.type_id == 3 { storage = if slot.counter { "counter" } else { "integer" } }
+        elif slot.type_id == 3 or slot.type_id == 7 { storage = if slot.counter { "counter" } else { "integer" } }
         elif slot.type_id == 4 { storage = "float" }
         let ownership = if slot.parameter { "borrowed" } else { "owned" }
         slots = slots + "{\"$type\":\"Slot\",\"id\":" + str(i) + ",\"type_id\":" + str(slot.type_id) + ",\"name\":" + mir_quote(slot.name) + ",\"storage\":" + mir_quote(storage) + ",\"ownership\":" + mir_quote(ownership) + ",\"parameter\":" + str(slot.parameter) + "}"
@@ -7989,7 +8023,7 @@ fn mir_dictionary_key(module: MirModule, root: int) -> bool {
         if id < 0 {
             active.pop()
             seen.append(-id - 1)
-        } elif id != 2 and id != 3 and id != 5 {
+        } elif id != 2 and id != 3 and id != 5 and id != 7 {
             if id < 0 or id >= len(module.types) { return false }
             if module.types[id].kind == "tuple" {
                 for elem_id in module.types[id].args { pending.append(elem_id) }
@@ -8026,7 +8060,7 @@ fn mir_arena_json(module: MirModule) -> str {
         let type_ = types[i]
         let mut tag = type_.kind
         let mut data = "null"
-        if (i > 0 and i < 7) or tag == "opaque" { tag = "primitive" data = mir_quote(type_.kind) }
+        if (i > 0 and i <= 7) or tag == "opaque" { tag = "primitive" data = mir_quote(type_.kind) }
         elif tag == "optional" or tag == "weak" or tag == "list" { data = str(type_.args[0]) }
         elif tag == "struct" or tag == "enum" or tag == "class" or tag == "interface" { data = mir_quote(type_.name) }
         elif tag == "function" {
@@ -8036,7 +8070,7 @@ fn mir_arena_json(module: MirModule) -> str {
         }
         elif tag != "error" and tag != "any" { data = mir_ids(type_.args, false) }
         entries = entries + "{\"tag\":" + mir_quote(tag) + ",\"data\":" + data + "}"
-        let retain = str(i == 5 or i >= 7)
+        let retain = str(i == 5 or i > 7)
         let key = str(mir_dictionary_key(module, i))
         let comparable = str(tag != "result" and tag != "error_union" and tag != "function")
         let reference = str(mir_reference_type(types, i))
@@ -8070,7 +8104,7 @@ class MirBuilder {
         this.program = program
         let empty_type_args: list[int] = []
         let mut initial_types: list[MirType] = []
-        let primitive_names: list[str] = ["error", "unit", "bool", "int", "float", "str", "none"]
+        let primitive_names: list[str] = ["error", "unit", "bool", "int", "float", "str", "none", "u8"]
         for name in primitive_names { initial_types.append(MirType { kind: name, name: "", args: empty_type_args }) }
         this.types = initial_types
         let initial_functions: list[MirFunction] = []
@@ -8785,7 +8819,7 @@ fn mir_default(context: MirBuilder, type_id: int, source: Token) -> int {
     if kind == "weak" { return mir_op(context, "runtime", type_id, [], "wysna_empty_weak", mir_literal_unit(), source) }
     if kind == "list" or kind == "dict" { return mir_op(context, "construct", type_id, [], kind, mir_literal_unit(), source) }
     let mut literal = MirLiteral { type_id: 6, integer: 0, floating: 0.0, boolean: false, text: "" }
-    if type_id <= 5 { literal.type_id = type_id }
+    if type_id <= 5 or type_id == 7 { literal.type_id = type_id }
     return mir_op(context, "default", type_id, [], "", literal, source)
 }
 fn mir_new(context: MirBuilder, node: CheckedNode) -> int {
@@ -8941,6 +8975,7 @@ fn mir_c_externs(module: MirModule) -> str {
             let value = "v_" + str(i)
             wrapper = wrapper + "WVal " + value
             if abi == "int32" { call = call + "wysna_ffi_int32(" + value + ")" }
+            elif abi == "u8" { call = call + "wysna_as_u8(" + value + ")" }
             elif abi == "int" or abi == "int64" { call = call + "wysna_as_int(" + value + ")" }
             elif abi == "float" or abi == "double" { call = call + "wysna_as_float(" + value + ")" }
             elif abi == "bool" { call = call + "wysna_as_bool(" + value + ")" }
@@ -8955,7 +8990,7 @@ fn mir_c_externs(module: MirModule) -> str {
             let constructor = if external.native == "wysna_host_buffer_new" or external.native == "wysna_host_file_open" { "wysna_host_owned_pointer" } else { "wysna_pointer" }
             body = "return " + constructor + "(" + call + ");"
         } else {
-            let constructor = if returned == "int" { "wysna_int" } elif returned == "float" { "wysna_float" } else { "wysna_bool" }
+            let constructor = if returned == "int" or returned == "u8" { "wysna_int" } elif returned == "float" { "wysna_float" } else { "wysna_bool" }
             body = "return " + constructor + "(" + call + ");"
         }
         if len(external.native) < 6 or slice(external.native, 0, 6) != "wysna_" {
@@ -8988,7 +9023,7 @@ fn mir_verify_externs(module: MirModule) {
 }
 
 fn mir_foreign_abi(name: str, returned: bool) -> bool {
-    return name == "int" or name == "int32" or name == "int64" or name == "float" or name == "double" or name == "bool" or name == "opaque" or returned and name == "unit"
+    return name == "int" or name == "int32" or name == "int64" or name == "u8" or name == "float" or name == "double" or name == "bool" or name == "opaque" or returned and name == "unit"
 }
 fn mir_identifier(name: str) -> bool {
     if len(name) == 0 { return false }
@@ -9368,7 +9403,7 @@ fn mir_call(context: MirBuilder, node: CheckedNode) -> int {
     }
     if node.text == "weak" { return mir_op(context, "runtime", returned, arguments, "wysna_builtin_weak_owned", mir_literal_unit(), node.source) }
     if node.text == "contract_assert" or node.text == "__wysna_contract_assert" { return mir_op(context, "runtime", returned, arguments, "wysna_builtin_contract_assert_at", mir_literal_unit(), node.source) }
-    let builtins: list[str] = ["upgrade", "print", "eprint", "int", "float", "str", "len", "ord", "chr", "slice", "bytes", "args", "env", "unix_time", "join_strings", "enumerate", "dict_items", "read_file", "write_file"]
+    let builtins: list[str] = ["upgrade", "print", "eprint", "int", "u8", "float", "str", "len", "ord", "chr", "slice", "bytes", "args", "env", "unix_time", "join_strings", "enumerate", "dict_items", "read_file", "write_file"]
     for name in builtins { if node.text == name { return mir_op(context, "runtime", returned, arguments, "wysna_builtin_" + name, mir_literal_unit(), node.source) } }
     mir_unsupported(node.source, "builtin call " + node.text)
     return -1
@@ -9393,7 +9428,14 @@ fn mir_expression(context: MirBuilder, id: int) -> int {
     if context.current < 0 { return -1 }
     let node = context.program.nodes[id]
     let source = node.source
-    if node.kind == "integer" { return mir_integer(context, node.text, false, source) }
+    if node.kind == "integer" {
+        if context.program.types[node.type_id].kind == "u8" {
+            let mut literal = mir_literal_int(int(node.text))
+            literal.type_id = 7
+            return mir_constant(context, literal, 7, source)
+        }
+        return mir_integer(context, node.text, false, source)
+    }
     if node.kind == "float" {
         let number = float(node.text)
         if str(number) == "inf" { report_error_at("W0002", source, "float literal is outside finite binary64 range") }
@@ -9844,7 +9886,7 @@ fn mir_module_json(module: MirModule) -> str {
     let mut enum_count = 0
     for record in module.records { if module.types[record.type_id].kind == "enum" { enum_count = enum_count + 1 } }
     let payload = "{\"$type\":\"Module\",\"file\":" + mir_quote(module.file) + ",\"arena_id\":\"compiler-native-core-v1\",\"functions\":" + functions + "],\"globals\":" + globals + ",\"layouts\":" + mir_layouts_json(module) + ",\"virtual_slots\":" + mir_virtual_slots_json(module) + ",\"externs\":" + mir_externs_json(module) + ",\"exports\":[],\"library_mode\":false,\"enum_count\":" + str(enum_count) + "}"
-    return "{\"format\":\"wysna.mir\",\"schema_version\":1,\"semantic_revision\":\"0.5.0\",\"runtime_abi_version\":3,\"type_arena\":" + mir_arena_json(module) + ",\"module\":" + payload + "}\n"
+    return "{\"format\":\"wysna.mir\",\"schema_version\":1,\"semantic_revision\":\"0.6.0\",\"runtime_abi_version\":3,\"type_arena\":" + mir_arena_json(module) + ",\"module\":" + payload + "}\n"
 }
 
 fn emit_mir_module(src: str, file: str) -> str {
@@ -9936,8 +9978,9 @@ fn mir_verify_runtime(module: MirModule, operation: MirOperation, slots: list[Mi
         if name == "wysna_builtin_chr" { return type_ == 3 and returned == 5 }
         if name == "wysna_neg" { return type_ == returned and (type_ == 3 or type_ == 4) }
         if name == "wysna_not" { return type_ == 2 and returned == 2 }
-        if name == "wysna_builtin_int" { return type_ >= 2 and type_ <= 6 and returned == 3 }
-        if name == "wysna_builtin_float" { return type_ >= 2 and type_ <= 6 and returned == 4 }
+        if name == "wysna_builtin_u8" { return type_ == 3 and mir_is_optional(module.types, returned) and module.types[returned].args[0] == 7 }
+        if name == "wysna_builtin_int" { return ((type_ >= 2 and type_ <= 6) or type_ == 7) and returned == 3 }
+        if name == "wysna_builtin_float" { return ((type_ >= 2 and type_ <= 6) or type_ == 7) and returned == 4 }
         if name == "wysna_str_trim" or name == "wysna_str_to_lower" or name == "wysna_str_to_upper" { return type_ == 5 and returned == 5 }
         if name == "wysna_await" { return true }
         return false
@@ -10034,9 +10077,14 @@ fn mir_verify_shape(module: MirModule, function: MirFunction) {
                 let type_ = function.slots[result].type_id
                 let mut valid = false
                 if operation.opcode == "default" {
-                    valid = len(operation.args) == 0 and (type_ <= 5 and operation.value.type_id == type_ or type_ >= 6 and operation.value.type_id == 6)
+                    valid = len(operation.args) == 0 and (type_ <= 5 and operation.value.type_id == type_ or type_ >= 6 and type_ != 7 and operation.value.type_id == 6 or type_ == 7 and operation.value.type_id == 7 and operation.value.integer == 0)
                 }
-                elif operation.opcode == "const" { valid = len(operation.args) == 0 and (operation.value.type_id == type_ and type_ <= 6 or operation.value.type_id == 6 and mir_is_optional(module.types, type_)) }
+                elif operation.opcode == "const" {
+                    let literal = operation.value
+                    valid = len(operation.args) == 0 and (literal.type_id == type_ and type_ <= 6 or
+                        literal.type_id == 6 and mir_is_optional(module.types, type_) or
+                        literal.type_id == 7 and type_ == 7 and literal.integer >= 0 and literal.integer <= 255)
+                }
                 elif operation.opcode == "clone" or operation.opcode == "store" {
                     valid = len(operation.args) == 1
                     if valid {
@@ -10278,11 +10326,11 @@ fn mir_verify_flow(module: MirModule, function: MirFunction) {
 }
 
 fn mir_verify(module: MirModule) {
-    let primitive_names: list[str] = ["error", "unit", "bool", "int", "float", "str", "none"]
-    if len(module.types) < 7 { report_error_at("W9999", module.source, "incomplete MIR type arena") }
+    let primitive_names: list[str] = ["error", "unit", "bool", "int", "float", "str", "none", "u8"]
+    if len(module.types) < len(primitive_names) { report_error_at("W9999", module.source, "incomplete MIR type arena") }
     for i in 0..len(module.types) {
         let type_ = module.types[i]
-        if i < 7 {
+        if i < len(primitive_names) {
             if type_.kind != primitive_names[i] or type_.name != "" or len(type_.args) != 0 { report_error_at("W9999", module.source, "invalid reserved MIR type") }
         } else {
             let count = len(type_.args)
@@ -10292,7 +10340,7 @@ fn mir_verify(module: MirModule) {
             if not valid or not nominal and type_.name != "" { report_error_at("W9999", module.source, "invalid MIR type shape") }
             for child in type_.args { if child <= 0 or child >= i { report_error_at("W9999", module.source, "invalid or cyclic MIR type reference") } }
             if kind == "weak" and module.types[type_.args[0]].kind != "class" { report_error_at("W9999", module.source, "MIR weak target must be a class") }
-            for j in 7..i { if module.types[j].kind == kind and module.types[j].name == type_.name and module.types[j].args == type_.args { report_error_at("W9999", module.source, "duplicate MIR type") } }
+            for j in len(primitive_names)..i { if module.types[j].kind == kind and module.types[j].name == type_.name and module.types[j].args == type_.args { report_error_at("W9999", module.source, "duplicate MIR type") } }
         }
     }
     mir_verify_externs(module)
@@ -10347,6 +10395,7 @@ fn mir_c_type(type_id: int) -> str {
     if type_id == 2 { return "bool" }
     if type_id == 3 { return "int64_t" }
     if type_id == 4 { return "double" }
+    if type_id == 7 { return "uint8_t" }
     return "WVal"
 }
 fn mir_c_name(id: int) -> str { return "_m" + str(id) }
@@ -10354,16 +10403,19 @@ fn mir_c_box(value: str, type_id: int) -> str {
     if type_id == 2 { return "wysna_bool(" + value + ")" }
     if type_id == 3 { return "wysna_int(" + value + ")" }
     if type_id == 4 { return "wysna_float(" + value + ")" }
+    if type_id == 7 { return "wysna_int(" + value + ")" }
     return value
 }
 fn mir_c_unbox(value: str, type_id: int) -> str {
     if type_id == 2 { return "wysna_as_bool(" + value + ")" }
     if type_id == 3 { return "wysna_as_int(" + value + ")" }
     if type_id == 4 { return "wysna_as_float(" + value + ")" }
+    if type_id == 7 { return "wysna_as_u8(" + value + ")" }
     return value
 }
 fn mir_c_unbox_consume(value: str, type_id: int) -> str {
     if type_id == 3 { return "wysna_consume_int(" + value + ")" }
+    if type_id == 7 { return "wysna_consume_u8(" + value + ")" }
     return mir_c_unbox(value, type_id)
 }
 fn mir_c_value(function: MirFunction, id: int, move: bool) -> str {
@@ -10431,6 +10483,15 @@ fn mir_c_operation(module: MirModule, function: MirFunction, operation: MirOpera
             if not mir_value_storage(function.slots[operation.args[0]].type_id) { return mir_c_write(function, place.root, mir_c_name(operation.args[0]), false) }
             return mir_c_write_consume(function, place.root, arguments[0], true)
         }
+        if len(place.projections) > 0 {
+            let last = place.projections[len(place.projections) - 1]
+            if last.kind == "index" and last.type_id == 7 {
+                let parent = MirPlace { root: place.root, projections: slice(place.projections, 0, len(place.projections) - 1) }
+                let reference = mir_c_place(module, function, parent)
+                let position = escape_c_str(last.source.file) + ", " + str(last.source.line) + ", " + str(last.source.col)
+                return "wysna_index_store_at(" + reference + ", " + mir_c_value(function, last.index, false) + ", " + arguments[0] + ", " + position + ");"
+            }
+        }
         return "wysna_assign(" + mir_c_place(module, function, place) + ", " + arguments[0] + ");"
     }
     if kind == "mutate" {
@@ -10450,6 +10511,9 @@ fn mir_c_operation(module: MirModule, function: MirFunction, operation: MirOpera
     if kind == "set_vtable" { return "wysna_set_vtable(" + arguments[0] + ", &wysna_vtable_" + operation.name + ");" }
     if kind == "const" or kind == "default" {
         let literal = operation.value
+        if function.slots[result].type_id == 7 and kind == "default" {
+            return mir_c_write(function, result, "0", false)
+        }
         let mut value = if literal.type_id == 6 { "wysna_none()" } else { "wysna_unit()" }
         if literal.type_id == 2 {
             if not mir_value_storage(function.slots[result].type_id) {
@@ -10457,7 +10521,7 @@ fn mir_c_operation(module: MirModule, function: MirFunction, operation: MirOpera
             }
             value = "wysna_bool(" + str(literal.boolean) + ")"
         }
-        elif literal.type_id == 3 {
+        elif literal.type_id == 3 or literal.type_id == 7 {
             let integer = if literal.integer == -9223372036854775808 { "(-9223372036854775807LL - 1LL)" } else { str(literal.integer) + "LL" }
             if not mir_value_storage(function.slots[result].type_id) {
                 return mir_c_write(function, result, integer, false)
@@ -10526,7 +10590,9 @@ fn mir_c_operation(module: MirModule, function: MirFunction, operation: MirOpera
     }
     if kind == "construct" {
         let category = operation.name
-        let mut value = "wysna_make_" + category + "(" + str(len(arguments)) + ", " + mir_c_array(arguments) + ")"
+        let packed = category == "list" and module.types[function.slots[result].type_id].args[0] == 7
+        let constructor = if packed { "wysna_make_u8_list" } else { "wysna_make_" + category }
+        let mut value = constructor + "(" + str(len(arguments)) + ", " + mir_c_array(arguments) + ")"
         if category == "struct" or category == "object" {
             let record = mir_find_record(module.records, operation.value.integer, operation.source)
             let keys = if len(record.fields) == 0 { "NULL" } else { "wysna_rec_keys_" + str(record.type_id) }
@@ -10863,11 +10929,14 @@ fn mir_c_function(module: MirModule, function: MirFunction) -> str {
     if parallel_helper != "" and mir_value_storage(function.return_type) {
         let p0 = mir_c_name(function.params[0])
         let p1 = mir_c_name(function.params[1])
+        let mut call = parallel_helper + "(" + p0 + ", " + p1 + ")"
         if parallel_helper == "wysna_parallel_batch" {
             let p1_int = if mir_value_storage(function.slots[function.params[1]].type_id) { "wysna_as_int(" + p1 + ")" } else { p1 }
-            return join_strings(parts, "") + "    return wysna_parallel_batch(" + p0 + ", " + p1_int + ", " + mir_c_name(function.params[2]) + ");\n}\n"
+            call = "wysna_parallel_batch(" + p0 + ", " + p1_int + ", " + mir_c_name(function.params[2]) + ")"
         }
-        return join_strings(parts, "") + "    return " + parallel_helper + "(" + p0 + ", " + p1 + ");\n}\n"
+        let returned = module.types[function.return_type]
+        if returned.kind == "list" and returned.args[0] == 7 { call = "wysna_pack_u8_owned(" + call + ")" }
+        return join_strings(parts, "") + "    return " + call + ";\n}\n"
     }
     let track_frame = len(function.name) > 9 and slice(function.name, 0, 9) == "wysna_fn_"
     for i in 0..len(function.slots) {
@@ -15149,6 +15218,7 @@ fn schema_json_primitive_type(t: SchemaType, known_defs: list[str]) -> str {
     if t.kind == "named" {
         if t.name == "str" { return "string" }
         if t.name == "int" { return "integer" }
+        if t.name == "u8" { return "integer" }
         if t.name == "float" { return "number" }
         if t.name == "bool" { return "boolean" }
         if t.name == "unit" or t.name == "none" { return "null" }
@@ -15162,6 +15232,7 @@ fn schema_json_primitive_type(t: SchemaType, known_defs: list[str]) -> str {
 fn schema_type_to_json(t: SchemaType, known_defs: list[str]) -> str {
     if t.kind == "named" {
         if t.name == "int" { return "{\"type\":\"integer\"}" }
+        if t.name == "u8" { return "{\"type\":\"integer\",\"minimum\":0,\"maximum\":255}" }
         if t.name == "float" { return "{\"type\":\"number\"}" }
         if t.name == "bool" { return "{\"type\":\"boolean\"}" }
         if t.name == "str" { return "{\"type\":\"string\"}" }
@@ -15885,6 +15956,7 @@ fn schema_rewrite_req_tokens(toks: list[Token], field_names: list[str]) -> str {
 fn schema_encode_scalar(expr: str, t: SchemaType, known_defs: list[str]) -> str {
     if t.kind != "named" { return "" }
     if t.name == "int" { return "json.from_int(" + expr + ")" }
+    if t.name == "u8" { return "json.from_int(int(" + expr + "))" }
     if t.name == "float" { return "json.from_float(" + expr + ")" }
     if t.name == "bool" { return "json.from_bool(" + expr + ")" }
     if t.name == "str" { return "json.from_str(" + expr + ")" }
@@ -15895,6 +15967,7 @@ fn schema_encode_scalar(expr: str, t: SchemaType, known_defs: list[str]) -> str 
 fn schema_decode_scalar(val_expr: str, t: SchemaType, known_defs: list[str]) -> str {
     if t.kind != "named" { return "" }
     if t.name == "int" { return "json.to_int(" + val_expr + ")?" }
+    if t.name == "u8" { return "(u8(json.to_int(" + val_expr + ")?) else { return Err(json.error(0, \"u8 out of range\")) })" }
     if t.name == "float" { return "json.to_float(" + val_expr + ")?" }
     if t.name == "bool" { return "json.to_bool(" + val_expr + ")?" }
     if t.name == "str" { return "json.to_str(" + val_expr + ")?" }
@@ -15971,7 +16044,8 @@ fn schema_generate_codecs(structs: list[SchemaStruct], enums: list[SchemaEnum], 
                 if schema_is_prim_scalar(f.t) {
                     dec_lines.append("    let _f_" + fn_ + " = json.get_" + f.t.name + "(raw_val, \"" + fn_ + "\")?")
                 } else {
-                    dec_lines.append("    let _f_" + fn_ + " = decode_" + f.t.name + "(json.get_required(raw_val, \"" + fn_ + "\")?)?")
+                    let raw_field = "json.get_required(raw_val, \"" + fn_ + "\")?"
+                    dec_lines.append("    let _f_" + fn_ + " = " + schema_decode_scalar(raw_field, f.t, known_defs))
                 }
                 ctor_fields.append(fn_ + ": _f_" + fn_)
                 continue
@@ -15988,7 +16062,7 @@ fn schema_generate_codecs(structs: list[SchemaStruct], enums: list[SchemaEnum], 
                 if schema_is_prim_scalar(inner) {
                     dec_lines.append("    let _f_" + fn_ + " = json.get_optional_" + inner.name + "(raw_val, \"" + fn_ + "\")?")
                 } else {
-                    dec_lines.append("    let _raw_opt_" + fn_ + " = json.get(raw_val, \"" + fn_ + "\")\n    let _f_" + fn_ + ": " + ft + " = match _raw_opt_" + fn_ + " {\n        None => none,\n        Some(_opt_item) => if json.is_null(_opt_item) {\n            none\n        } else {\n            Some(" + i_dec + ")\n        },\n    }")
+                    dec_lines.append("    let _raw_opt_" + fn_ + " = json.get(raw_val, \"" + fn_ + "\")\n    let _f_" + fn_ + ": " + ft + " = match _raw_opt_" + fn_ + " {\n        Some(_opt_item) => if not json.is_null(_opt_item) {\n            Some(" + i_dec + ")\n        } else {\n            None\n        },\n        None => None,\n    }")
                 }
                 ctor_fields.append(fn_ + ": _f_" + fn_)
                 continue

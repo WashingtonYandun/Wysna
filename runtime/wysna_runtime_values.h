@@ -150,6 +150,27 @@ static inline double wysna_as_float(WVal v) {
     return d;
 }
 
+static inline uint8_t wysna_as_u8(WVal value) {
+    if (wysna_tag(value) != W_INT) wysna_runtime_fail("W4003", "Expected a u8 value");
+    int64_t number = wysna_as_int(value);
+    if (number < 0 || number > UINT8_MAX) wysna_runtime_fail("W4003", "Value is outside u8 range");
+    return (uint8_t)number;
+}
+
+enum { WYSNA_LIST_PACKED_U8 = 2 };
+
+static inline bool wysna_list_is_u8(const WListBuf* list) {
+    return list->scalar_only == WYSNA_LIST_PACKED_U8;
+}
+
+static inline size_t wysna_list_element_size(const WListBuf* list) {
+    return wysna_list_is_u8(list) ? sizeof(uint8_t) : sizeof(WVal);
+}
+
+static inline WVal wysna_list_load(const WListBuf* list, int32_t index) {
+    return wysna_list_is_u8(list) ? wysna_int_inline(((const uint8_t*)list->data)[index]) : list->data[index];
+}
+
 static inline bool wysna_as_bool(WVal v) {
     return v.bits == WVAL_TRUE_BITS;
 }

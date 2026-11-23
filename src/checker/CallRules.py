@@ -8,6 +8,7 @@ from node.NodeType import NamedType, GenericType, IdentExpr, CallExpr, MemberExp
 from checker.WysnaType import (
     WysnaType,
     IntType,
+    U8Type,
     FloatType,
     BoolType,
     StrType,
@@ -647,7 +648,7 @@ def check_builtin_call(checker: "TypeChecker", expr: CallExpr) -> Optional[Wysna
         if len(expr.args) != 1:
             raise TypeError(message="int() takes exactly 1 argument", line=expr.line, col=expr.col, file=checker.file, code="W2005")
         a_t = checker._check_expr(expr.args[0])
-        if a_t not in (IntType, FloatType, BoolType, StrType):
+        if a_t not in (IntType, U8Type, FloatType, BoolType, StrType):
             raise TypeError(message=f"int() expects int, float, or str, found '{a_t}'", line=expr.line, col=expr.col, file=checker.file, code="W2001")
         return IntType
 
@@ -655,7 +656,7 @@ def check_builtin_call(checker: "TypeChecker", expr: CallExpr) -> Optional[Wysna
         if len(expr.args) != 1:
             raise TypeError(message="float() takes exactly 1 argument", line=expr.line, col=expr.col, file=checker.file, code="W2005")
         a_t = checker._check_expr(expr.args[0])
-        if a_t not in (IntType, FloatType, BoolType, StrType):
+        if a_t not in (IntType, U8Type, FloatType, BoolType, StrType):
             raise TypeError(message=f"float() expects int, float, or str, found '{a_t}'", line=expr.line, col=expr.col, file=checker.file, code="W2001")
         return FloatType
 

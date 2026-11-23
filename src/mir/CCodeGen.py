@@ -1,9 +1,10 @@
 """C99 emission from verified MIR only; no HIR traversal or semantic resolution."""
 import math
-from checker.TypeInterner import TYPE_UNIT, TYPE_INT, TYPE_BOOL, TYPE_FLOAT, TYPE_STR
+from checker.TypeInterner import TYPE_UNIT, TYPE_INT, TYPE_U8, TYPE_BOOL, TYPE_FLOAT, TYPE_STR
 from codegen.CStrings import quote
 from common.Telemetry import CodegenTelemetry
 from mir.AsyncLowering import build_cps_plan
+from mir.Nodes import Place
 from mir.Verifier import Verifier
 from compiler.StdlibIdentity import stdlib_declaration
 
@@ -237,18 +238,20 @@ class CCodeGen:
 
     @staticmethod
     def ctype(type_id):
-        return {TYPE_INT: 'int64_t', TYPE_FLOAT: 'double', TYPE_BOOL: 'bool'}.get(type_id, 'WVal')
+        return {TYPE_INT: 'int64_t', TYPE_U8: 'uint8_t', TYPE_FLOAT: 'double', TYPE_BOOL: 'bool'}.get(type_id, 'WVal')
 
     @staticmethod
     def box_expression(expression, type_id):
-        constructor = {TYPE_INT: 'wysna_int', TYPE_FLOAT: 'wysna_float', TYPE_BOOL: 'wysna_bool'}.get(type_id)
+        constructor = {TYPE_INT: 'wysna_int', TYPE_U8: 'wysna_int', TYPE_FLOAT: 'wysna_float', TYPE_BOOL: 'wysna_bool'}.get(type_id)
         return constructor + '(' + expression + ')' if constructor else expression
 
     @staticmethod
     def unbox_expression(expression, type_id, consume=False):
         if consume and type_id == TYPE_INT:
             return 'wysna_consume_int(' + expression + ')'
-        extractor = {TYPE_INT: 'wysna_as_int', TYPE_FLOAT: 'wysna_as_float', TYPE_BOOL: 'wysna_as_bool'}.get(type_id)
+        if consume and type_id == TYPE_U8:
+            return 'wysna_consume_u8(' + expression + ')'
+        extractor = {TYPE_INT: 'wysna_as_int', TYPE_U8: 'wysna_as_u8', TYPE_FLOAT: 'wysna_as_float', TYPE_BOOL: 'wysna_as_bool'}.get(type_id)
         return extractor + '(' + expression + ')' if extractor else expression
 
     def value(self, index, move=False):
@@ -342,9 +345,12 @@ class CCodeGen:
             p_names = [self.name(index) for index in function.params]
             if parallel_helper == 'wysna_parallel_batch':
                 b_arg = f'wysna_as_int({p_names[1]})' if self.slots[function.params[1]].storage == 'value' else p_names[1]
-                lines.append(f'    return {parallel_helper}({p_names[0]}, {b_arg}, {p_names[2]});')
+                call = f'{parallel_helper}({p_names[0]}, {b_arg}, {p_names[2]})'
             else:
-                lines.append(f'    return {parallel_helper}({p_names[0]}, {p_names[1]});')
+                call = f'{parallel_helper}({p_names[0]}, {p_names[1]})'
+            if self.interner.get_entry(function.return_type).data == TYPE_U8:
+                call = f'wysna_pack_u8_owned({call})'
+            lines.append(f'    return {call};')
             lines.extend(['}', ''])
             return lines
         track_frame = function.name.startswith('wysna_fn_')
@@ -352,6 +358,8 @@ class CCodeGen:
             if slot.parameter:
                 continue
             type_ = {'value': 'WVal', 'predicate': 'bool', 'counter': 'int32_t', 'integer': 'int64_t', 'float': 'double', 'boolean': 'bool'}[slot.storage]
+            if slot.type_id == TYPE_U8 and slot.storage == 'integer':
+                type_ = 'uint8_t'
             initial = 'wysna_unit()' if slot.storage == 'value' else '0'
             lines.append(f'    {type_} {self.name(slot.id)} = {initial};')
         if track_frame:
@@ -582,6 +590,8 @@ class CCodeGen:
             if slot.storage == 'predicate':
                 expression = str(bool(value)).lower()
             elif value is None:
+                if slot.type_id == TYPE_U8:
+                    return [self.write(result, '0', boxed=False)]
                 expression = 'wysna_unit()' if slot.type_id == TYPE_UNIT or data.get('placeholder') else 'wysna_none()'
             elif isinstance(value, bool):
                 if slot.storage == 'boolean':
@@ -718,6 +728,8 @@ class CCodeGen:
                 call = f'wysna_make_{category}_static({quote(layout.name)}, {len(args)}, {keys}, {self.array(args)})'
             elif category == 'dict':
                 call = f'wysna_make_dict({len(args) // 2}, {self.array(args[::2])}, {self.array(args[1::2])})'
+            elif category == 'list' and self.interner.get_entry(self.slots[result].type_id).data == TYPE_U8:
+                call = f'wysna_make_u8_list({len(args)}, {self.array(args)})'
             else:
                 call = f'wysna_make_{category}({len(args)}, {self.array(args)})'
             return [self.write(result, call)]
@@ -739,6 +751,13 @@ class CCodeGen:
                     return [self.write(place.root, self.name(operation.args[0]), boxed=False)]
                 moved_box = 0 in operation.moves
                 return [self.write(place.root, args[0], consume=moved_box)]
+            if place.projections:
+                final = place.projections[-1]
+                if final.kind == 'index' and final.type_id == TYPE_U8:
+                    reference = self.place(Place(place.root, place.projections[:-1]), source)
+                    location = final.source
+                    return [f'wysna_index_store_at({reference}, {self.value(final.index)}, {args[0]}, '
+                            f'{quote(location.file)}, {location.line}, {location.col});']
             return [f'wysna_assign({self.place(place, source)}, {args[0]});']
         if kind == 'mutate':
             place = data['place']

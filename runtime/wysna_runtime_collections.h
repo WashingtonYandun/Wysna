@@ -26,6 +26,41 @@ static inline WVal wysna_make_list(int32_t count, const WVal* elems) {
     return wysna_make_hi_ptr(WVAL_HI_LIST, b);
 }
 
+static inline WListBuf* wysna_new_byte_buffer(int32_t count) {
+    WListBuf* buffer = (WListBuf*)wysna_alloc_safe(sizeof(WListBuf));
+    buffer->refcount = 1;
+    buffer->len = count;
+    buffer->cap = count > 4 ? count : 4;
+    buffer->scalar_only = WYSNA_LIST_PACKED_U8;
+    buffer->data = (WVal*)wysna_alloc_safe((size_t)buffer->cap);
+    wysna_mem_on_alloc();
+    return buffer;
+}
+
+static inline WVal wysna_make_u8_list(int32_t count, const WVal* elements) {
+    WListBuf* buffer = wysna_new_byte_buffer(count);
+    for (int32_t index = 0; index < count; index++) {
+        ((uint8_t*)buffer->data)[index] = wysna_as_u8(elements[index]);
+    }
+    return wysna_make_hi_ptr(WVAL_HI_LIST, buffer);
+}
+
+static inline WVal wysna_pack_u8_owned(WVal value) {
+    WListBuf* list = wysna_as_list(value);
+    if (!list) wysna_runtime_fail("W4003", "Expected list[u8]");
+    if (wysna_list_is_u8(list)) return value;
+    WVal packed = wysna_make_u8_list(list->len, list->data);
+    wysna_release(value);
+    return packed;
+}
+
+static inline WVal wysna_list_slice(const WListBuf* input, int32_t start, int32_t count) {
+    if (!wysna_list_is_u8(input)) return wysna_make_list(count, input->data + start);
+    WListBuf* output = wysna_new_byte_buffer(count);
+    if (count > 0) memcpy(output->data, (const uint8_t*)input->data + start, (size_t)count);
+    return wysna_make_hi_ptr(WVAL_HI_LIST, output);
+}
+
 static inline int32_t wysna_range_count_i64(int64_t s, int64_t e, bool inclusive) {
     if (inclusive) {
         if (e == INT64_MAX) {

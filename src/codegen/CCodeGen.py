@@ -16,7 +16,7 @@ from node.NodeType import (
     ListExpr, DictExpr, TupleExpr, IfExpr, MatchExpr
 )
 from common.Telemetry import CodegenTelemetry
-from checker.WysnaType import DictType
+from checker.WysnaType import DictType, ListType, U8Type
 
 
 class CleanupScope:
@@ -344,7 +344,7 @@ class CCodeGen:
 
     def _default_c_expr_for_type(self, type_ann: TypeNode) -> str:
         if isinstance(type_ann, NamedType):
-            if type_ann.name == "int":
+            if type_ann.name in ("int", "u8"):
                 return "wysna_int(0LL)"
             if type_ann.name == "float":
                 return "wysna_float(0.0)"
@@ -357,6 +357,8 @@ class CCodeGen:
         elif isinstance(type_ann, AstOptionalType):
             return "wysna_none()"
         elif isinstance(type_ann, AstListType):
+            if getattr(type_ann.element_type, 'name', None) == 'u8':
+                return "wysna_make_u8_list(0, NULL)"
             return "wysna_make_list(0, NULL)"
         elif isinstance(type_ann, AstDictType):
             return "wysna_make_dict(0, NULL, NULL)"
@@ -481,7 +483,9 @@ class CCodeGen:
                 gv_name = f"v_{ns}_{stmt.name}" if ns else f"v_{stmt.name}"
                 if isinstance(stmt.initializer, ListExpr) and not stmt.initializer.elements:
                     # A direct global store consumes the fresh constructor immediately.
-                    val_expr = "wysna_make_list(0, NULL)"
+                    list_type = getattr(stmt.initializer, 'inferred_type', None)
+                    packed = isinstance(list_type, ListType) and list_type.element == U8Type
+                    val_expr = "wysna_make_u8_list(0, NULL)" if packed else "wysna_make_list(0, NULL)"
                 else:
                     val_expr = self.emit_expr(stmt.initializer, out_main_stmts)
                 out_main_stmts.append(f"wysna_assign(&{gv_name}, {self._own_expr(val_expr)});")
@@ -511,16 +515,17 @@ class CCodeGen:
             return
         c_name = self.c_fn(stmt.name, ns=ns)
         params_sig = ", ".join([f"WVal v_{p.name}" for p in stmt.params]) if stmt.params else "void"
-        if any(stdlib_declaration(stmt, 'algorithms', name, arity) for name, arity in (('parallel_map', 2), ('parallel_batch', 3), ('parallel_filter', 2))):
-            if stdlib_declaration(stmt, 'algorithms', 'parallel_map', 2):
-                self.fn_Definitions.append(f"static WVal {c_name}({params_sig}) {{\n    return wysna_parallel_map(v_{stmt.params[0].name}, v_{stmt.params[1].name});\n}}")
-                return
-            if stdlib_declaration(stmt, 'algorithms', 'parallel_batch', 3):
-                self.fn_Definitions.append(f"static WVal {c_name}({params_sig}) {{\n    return wysna_parallel_batch(v_{stmt.params[0].name}, wysna_as_int(v_{stmt.params[1].name}), v_{stmt.params[2].name});\n}}")
-                return
-            if stdlib_declaration(stmt, 'algorithms', 'parallel_filter', 2):
-                self.fn_Definitions.append(f"static WVal {c_name}({params_sig}) {{\n    return wysna_parallel_filter(v_{stmt.params[0].name}, v_{stmt.params[1].name});\n}}")
-                return
+        for name, arity in (('parallel_map', 2), ('parallel_batch', 3), ('parallel_filter', 2)):
+            if not stdlib_declaration(stmt, 'algorithms', name, arity):
+                continue
+            parameters = [f'v_{parameter.name}' for parameter in stmt.params]
+            if name == 'parallel_batch':
+                parameters[1] = f'wysna_as_int({parameters[1]})'
+            result = f'wysna_{name}({", ".join(parameters)})'
+            if isinstance(stmt.return_type, AstListType) and getattr(stmt.return_type.element_type, 'name', None) == 'u8':
+                result = f'wysna_pack_u8_owned({result})'
+            self.fn_Definitions.append(f"static WVal {c_name}({params_sig}) {{\n    return {result};\n}}")
+            return
         if stdlib_declaration(stmt, 'async', '_spawn_handle', 1) or stdlib_declaration(stmt, 'async', '_take_task_value', 2):
             if stdlib_declaration(stmt, 'async', '_spawn_handle', 1):
                 self.fn_Definitions.append(f"static WVal {c_name}({params_sig}) {{\n    return wysna_int(wysna_async_spawn_handle(v_{stmt.params[0].name}));\n}}")
@@ -718,7 +723,7 @@ class CCodeGen:
             self._declare_owned_var(iter_tmp, self._own_expr(iter_val), for_outer)
             for_outer.append(f"for (int32_t {idx_tmp} = 0; {idx_tmp} < wysna_list_iteration_length_at({iter_tmp}, {self.escape_c_str(self.file)}, {stmt.line}, {stmt.col}); {idx_tmp}++) {{")
             self._push_scope("loop")
-            loop_inner = [f"WVal {item_tmp} = wysna_as_list({iter_tmp})->data[{idx_tmp}];"]
+            loop_inner = [f"WVal {item_tmp} = wysna_list_load(wysna_as_list({iter_tmp}), {idx_tmp});"]
             self._emit_pattern_bindings(stmt.pattern, item_tmp, loop_inner)
             body_v = self.emit_block_value(stmt.body, loop_inner)
             loop_inner.append(f"(void){body_v};")
