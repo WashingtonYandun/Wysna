@@ -1,6 +1,6 @@
 from typing import Dict, Optional
 from checker.WysnaType import (
-    WysnaType, IntType, FloatType, BoolType, StrType, UnitType, NoneType,
+    WysnaType, IntType, U8Type, FloatType, BoolType, StrType, UnitType, NoneType,
     OptionalType, ListType, DictType, TupleType, StructType, EnumType,
     ResultType, FunctionType, AnyType
 )
@@ -90,6 +90,7 @@ def create_global_scope() -> Scope:
     scope.define_type("int", IntType)
     scope.define_type("int32", IntType)
     scope.define_type("int64", IntType)
+    scope.define_type("u8", U8Type)
     scope.define_type("double", FloatType)
     from checker.WysnaType import OpaqueType
     scope.define_type("opaque", OpaqueType)
@@ -110,6 +111,7 @@ def create_global_scope() -> Scope:
     # conversions & string primitives
     scope.define_symbol(Symbol("float", FunctionType([AnyType()], FloatType), kind="builtin"))
     scope.define_symbol(Symbol("int", FunctionType([AnyType()], IntType), kind="builtin"))
+    scope.define_symbol(Symbol("u8", FunctionType([IntType], OptionalType(U8Type)), kind="builtin"))
     scope.define_symbol(Symbol("str", FunctionType([AnyType()], StrType), kind="builtin"))
     scope.define_symbol(Symbol("bytes", FunctionType([StrType], ListType(IntType)), kind="builtin"))
     scope.define_symbol(Symbol("ord", FunctionType([StrType], IntType), kind="builtin"))

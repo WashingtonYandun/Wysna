@@ -24,7 +24,7 @@ fn mir_default(context: MirBuilder, type_id: int, source: Token) -> int {
     if kind == "weak" { return mir_op(context, "runtime", type_id, [], "wysna_empty_weak", mir_literal_unit(), source) }
     if kind == "list" or kind == "dict" { return mir_op(context, "construct", type_id, [], kind, mir_literal_unit(), source) }
     let mut literal = MirLiteral { type_id: 6, integer: 0, floating: 0.0, boolean: false, text: "" }
-    if type_id <= 5 { literal.type_id = type_id }
+    if type_id <= 5 or type_id == 7 { literal.type_id = type_id }
     return mir_op(context, "default", type_id, [], "", literal, source)
 }
 fn mir_new(context: MirBuilder, node: CheckedNode) -> int {

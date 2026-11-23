@@ -29,6 +29,7 @@ fn mir_c_externs(module: MirModule) -> str {
             let value = "v_" + str(i)
             wrapper = wrapper + "WVal " + value
             if abi == "int32" { call = call + "wysna_ffi_int32(" + value + ")" }
+            elif abi == "u8" { call = call + "wysna_as_u8(" + value + ")" }
             elif abi == "int" or abi == "int64" { call = call + "wysna_as_int(" + value + ")" }
             elif abi == "float" or abi == "double" { call = call + "wysna_as_float(" + value + ")" }
             elif abi == "bool" { call = call + "wysna_as_bool(" + value + ")" }
@@ -43,7 +44,7 @@ fn mir_c_externs(module: MirModule) -> str {
             let constructor = if external.native == "wysna_host_buffer_new" or external.native == "wysna_host_file_open" { "wysna_host_owned_pointer" } else { "wysna_pointer" }
             body = "return " + constructor + "(" + call + ");"
         } else {
-            let constructor = if returned == "int" { "wysna_int" } elif returned == "float" { "wysna_float" } else { "wysna_bool" }
+            let constructor = if returned == "int" or returned == "u8" { "wysna_int" } elif returned == "float" { "wysna_float" } else { "wysna_bool" }
             body = "return " + constructor + "(" + call + ");"
         }
         if len(external.native) < 6 or slice(external.native, 0, 6) != "wysna_" {
@@ -76,7 +77,7 @@ fn mir_verify_externs(module: MirModule) {
 }
 
 fn mir_foreign_abi(name: str, returned: bool) -> bool {
-    return name == "int" or name == "int32" or name == "int64" or name == "float" or name == "double" or name == "bool" or name == "opaque" or returned and name == "unit"
+    return name == "int" or name == "int32" or name == "int64" or name == "u8" or name == "float" or name == "double" or name == "bool" or name == "opaque" or returned and name == "unit"
 }
 fn mir_identifier(name: str) -> bool {
     if len(name) == 0 { return false }

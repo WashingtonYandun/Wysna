@@ -448,7 +448,8 @@ def _http_request_headers(data):
     return headers
 
 
-def _execute_http_transfer(url, method, headers, request_body, timeout_ms, max_response_bytes):
+def _execute_http_transfer(url, method, headers, request_body, timeout_ms, max_response_bytes,
+                           cancelled=None):
     try:
         import pycurl
     except ImportError:
@@ -522,6 +523,9 @@ def _execute_http_transfer(url, method, headers, request_body, timeout_ms, max_r
         curl.setopt(pycurl.TIMEOUT_MS, timeout_ms)
         curl.setopt(pycurl.CONNECTTIMEOUT_MS, min(timeout_ms, _HTTP_CONNECT_TIMEOUT_MS))
         curl.setopt(pycurl.NOSIGNAL, 1)
+        if cancelled is not None:
+            curl.setopt(pycurl.NOPROGRESS, 0)
+            curl.setopt(pycurl.XFERINFOFUNCTION, lambda *_: int(cancelled.is_set()))
         curl.setopt(pycurl.NETRC, pycurl.NETRC_IGNORED)
         curl.setopt(pycurl.PROTOCOLS, pycurl.PROTO_HTTP | pycurl.PROTO_HTTPS)
         curl.setopt(pycurl.HTTP_VERSION, pycurl.CURL_HTTP_VERSION_1_1)
@@ -570,6 +574,7 @@ def _execute_http_transfer(url, method, headers, request_body, timeout_ms, max_r
 
 
 _async_http_transfers = {}
+_async_http_cancellations = {}
 _async_http_next_id = 1
 _TIMER_HANDLE_BASE = 1000000
 _SPAWN_HANDLE_BASE = 2000000
@@ -825,11 +830,13 @@ def http_async_start(url_handle, method_handle, request_headers_handle, request_
     with _host_lock:
         transfer_id = _async_http_next_id
         _async_http_next_id += 1
+        cancelled = threading.Event()
         future = _async_http_executor.submit(
             _execute_http_transfer,
-            url, method, headers, bytes(request_body), timeout_ms, max_response_bytes
+            url, method, headers, bytes(request_body), timeout_ms, max_response_bytes, cancelled
         )
         _async_http_transfers[transfer_id] = future
+        _async_http_cancellations[transfer_id] = cancelled
     return transfer_id
 
 
@@ -925,6 +932,7 @@ def http_multi_poll(timeout_ms):
 def http_async_finish(transfer_id, response_headers_handle, response_body_handle):
     with _host_lock:
         future = _async_http_transfers.pop(transfer_id, None)
+        _async_http_cancellations.pop(transfer_id, None)
     if future is None:
         return _http_failure(_HTTP_INVALID_REQUEST, errno.EINVAL)
     response_headers = find(response_headers_handle, 'buffer')
@@ -945,9 +953,14 @@ def http_async_finish(transfer_id, response_headers_handle, response_body_handle
 def http_async_cancel(transfer_id):
     with _host_lock:
         future = _async_http_transfers.pop(transfer_id, None)
+        cancelled = _async_http_cancellations.pop(transfer_id, None)
     if future is None:
         return 0
-    future.cancel()
+    cancelled.set()
+    if not future.cancel():
+        # The next libcurl progress callback interrupts a running transfer.
+        # Wait outside the registry lock until its curl handle is closed.
+        concurrent.futures.wait([future])
     return 1
 
 

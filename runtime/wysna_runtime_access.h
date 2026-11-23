@@ -14,7 +14,7 @@ static inline WVal wysna_index_get(WVal obj, WVal idx) {
         if (!b || i < 0 || i >= b->len) {
             wysna_runtime_fail("W4002", "List index out of bounds");
         }
-        return b->data[i];
+        return wysna_list_load(b, (int32_t)i);
     }
     if (wysna_tag(obj) == W_STR) {
         size_t off = 0, blen = 0;
@@ -69,6 +69,7 @@ static inline WVal* wysna_index_ref(WVal* obj, WVal idx) {
         if (!b || i < 0 || i >= b->len) {
             wysna_runtime_fail("W4002", "List index out of bounds");
         }
+        if (wysna_list_is_u8(b)) wysna_runtime_fail("W4003", "Packed list elements require a value store");
         WTag existing_tag = wysna_tag(b->data[i]);
         if ((existing_tag != W_INT && existing_tag != W_FLOAT && existing_tag != W_BOOL) ||
             (existing_tag == W_INT && wysna_hi(b->data[i]) == WVAL_HI_EXT)) {
@@ -102,6 +103,23 @@ static inline WVal* wysna_index_ref(WVal* obj, WVal idx) {
 static inline WVal* wysna_index_ref_at(WVal* obj, WVal idx, const char* file, int32_t line, int32_t col) {
     wysna_runtime_set_position(file, line, col);
     return wysna_index_ref(obj, idx);
+}
+
+static inline WVal wysna_index_store_at(WVal* object, WVal index, WVal value,
+                                        const char* file, int32_t line, int32_t col) {
+    wysna_runtime_set_position(file, line, col);
+    WListBuf* list = wysna_as_list(*object);
+    if (list && wysna_list_is_u8(list)) {
+        int64_t offset = wysna_as_int(index);
+        if (offset < 0 || offset >= list->len) wysna_runtime_fail("W4002", "List index out of bounds");
+        uint8_t byte = wysna_as_u8(value);
+        wysna_release(value);
+        wysna_list_detach(object);
+        list = wysna_as_list(*object);
+        ((uint8_t*)list->data)[offset] = byte;
+        return wysna_int_inline(byte);
+    }
+    return wysna_assign(wysna_index_ref(object, index), value);
 }
 
 static inline WVal wysna_member_get(WVal obj, const char* prop) {
@@ -162,7 +180,7 @@ static inline WVal wysna_list_iteration_get_at(WVal value, int32_t index,
     int32_t length = wysna_list_iteration_length_at(value, file, line, col);
     if (index < 0 || index >= length)
         wysna_runtime_fail("W4002", "List index out of bounds");
-    return wysna_as_list(value)->data[index];
+    return wysna_list_load(wysna_as_list(value), index);
 }
 static inline WVal wysna_list_iteration_get_owned_at(WVal value, int32_t index,
                                                     const char* file, int32_t line, int32_t col) {
@@ -177,7 +195,7 @@ static inline int64_t wysna_list_get_int_at(WVal obj, int64_t idx,
     if (!b || idx < 0 || idx >= b->len) {
         wysna_runtime_fail("W4002", "List index out of bounds");
     }
-    return wysna_as_int(b->data[idx]);
+    return wysna_as_int(wysna_list_load(b, (int32_t)idx));
 }
 
 static inline double wysna_list_get_float_at(WVal obj, int64_t idx,
@@ -187,7 +205,7 @@ static inline double wysna_list_get_float_at(WVal obj, int64_t idx,
     if (!b || idx < 0 || idx >= b->len) {
         wysna_runtime_fail("W4002", "List index out of bounds");
     }
-    return wysna_as_float(b->data[idx]);
+    return wysna_as_float(wysna_list_load(b, (int32_t)idx));
 }
 
 static inline bool wysna_list_get_bool_at(WVal obj, int64_t idx,
@@ -197,7 +215,7 @@ static inline bool wysna_list_get_bool_at(WVal obj, int64_t idx,
     if (!b || idx < 0 || idx >= b->len) {
         wysna_runtime_fail("W4002", "List index out of bounds");
     }
-    return wysna_as_bool(b->data[idx]);
+    return wysna_as_bool(wysna_list_load(b, (int32_t)idx));
 }
 
 static inline int64_t wysna_list_iteration_get_int_at(WVal value, int32_t index,
@@ -245,8 +263,13 @@ static inline WVal wysna_list_append(WVal* list_val, WVal item) {
     wysna_list_detach(list_val);
     WListBuf* b = wysna_as_list(*list_val);
     if (b->len >= b->cap) {
+        if (b->cap > INT32_MAX / 2) wysna_runtime_fail("W4003", "List too large");
         b->cap = b->cap > 0 ? b->cap * 2 : 4;
-        b->data = (WVal*)wysna_realloc_safe(b->data, sizeof(WVal) * b->cap);
+        b->data = (WVal*)wysna_realloc_safe(b->data, wysna_list_element_size(b) * b->cap);
+    }
+    if (wysna_list_is_u8(b)) {
+        ((uint8_t*)b->data)[b->len++] = wysna_as_u8(item);
+        return wysna_unit();
     }
     WTag it = wysna_tag(item);
     if ((it != W_INT && it != W_FLOAT && it != W_BOOL) ||
@@ -264,7 +287,8 @@ static inline WVal wysna_list_pop(WVal* list_val) {
     if (b->len == 0) {
         wysna_runtime_fail("W4002", "pop from empty list");
     }
-    return b->data[--b->len];
+    b->len--;
+    return wysna_list_load(b, b->len);
 }
 
 static inline WVal wysna_list_pop_at(WVal* list_val, const char* file, int32_t line, int32_t col) {
@@ -282,7 +306,7 @@ static inline WVal wysna_list_clear(WVal* list_val) {
         }
     }
     b->len = 0;
-    b->scalar_only = true;
+    if (!wysna_list_is_u8(b)) b->scalar_only = true;
     return wysna_unit();
 }
 
@@ -496,7 +520,7 @@ static inline WVal wysna_contains(WVal container, WVal item) {
         WListBuf* b = wysna_as_list(container);
         if (!b || b->len == 0) return wysna_bool(false);
         for (int32_t i = 0; i < b->len; i++) {
-            if (wysna_eq(b->data[i], item)) return wysna_bool(true);
+            if (wysna_eq(wysna_list_load(b, i), item)) return wysna_bool(true);
         }
         return wysna_bool(false);
     }

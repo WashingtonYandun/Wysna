@@ -8,6 +8,7 @@ fn foreign_native_name(name: str) -> str {
 }
 fn foreign_c_type(name: str, returned: bool, source: Token) -> str {
     if name == "int32" { return "int32_t" }
+    if name == "u8" { return "uint8_t" }
     if name == "int" or name == "int64" { return "int64_t" }
     if name == "float" or name == "double" { return "double" }
     if name == "bool" { return "bool" }

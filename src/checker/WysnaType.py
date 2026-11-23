@@ -27,6 +27,7 @@ class PrimitiveType(WysnaType):
 
 
 IntType = PrimitiveType("int")
+U8Type = PrimitiveType("u8")
 FloatType = PrimitiveType("float")
 BoolType = PrimitiveType("bool")
 StrType = PrimitiveType("str")

@@ -79,6 +79,9 @@ static inline WVal wysna_worker_copy_value(WysnaWorkerCopy* memo, WVal value, in
             WVal payload = wysna_worker_copy_value(memo, enumeration->payload, depth + 1);
             copied = wysna_enum_payload(enumeration->enum_name, enumeration->variant, payload);
         } else copied = wysna_enum(enumeration->enum_name, enumeration->variant);
+    } else if (tag == W_LIST && wysna_list_is_u8(wysna_as_list(value))) {
+        WListBuf* list = wysna_as_list(value);
+        copied = wysna_list_slice(list, 0, list->len);
     } else if (tag == W_LIST || tag == W_TUPLE || tag == W_STRUCT || tag == W_DICT) {
         int32_t count = tag == W_LIST ? wysna_as_list(value)->len :
             tag == W_TUPLE ? wysna_as_tuple(value)->len :

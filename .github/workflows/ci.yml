@@ -92,6 +92,7 @@ jobs:
           tests/unit/test_worker_transfer.py
           tests/unit/test_task_group.py
           tests/unit/test_security_contracts.py
+          tests/unit/test_numeric_widths.py
           tests/unit/test_native_thread_diagnostics.py
           tests/unit/test_native_intrinsic_identity.py
           tests/unit/test_runtime_modular_linking.py
@@ -819,6 +820,7 @@ jobs:
           cp -R tests/fixtures/language_combinations dist/native/language_combinations
           cp tools/validate_native_sdk.py dist/native/validate_native_sdk.py
           cp tools/validate_launch_projects.py dist/native/validate_launch_projects.py
+          cp tools/validate_native_wasi.py dist/native/validate_native_wasi.py
           cp selfhost/compiler.wysna dist/native/compiler.wysna
           cp -R examples/wysofia-ops dist/native/wysofia-ops
           cp -R examples/automation dist/native/automation
@@ -831,6 +833,7 @@ jobs:
             dist/native/*.zip
             dist/native/validate_native_sdk.py
             dist/native/validate_launch_projects.py
+            dist/native/validate_native_wasi.py
             dist/native/compiler.wysna
             dist/native/wysofia-ops/
             dist/native/automation/
@@ -878,6 +881,12 @@ jobs:
           python native-artifact/validate_native_sdk.py --sdk installed/wysna-native --archive "$archive" --application native-artifact/wysofia-ops --language-fixtures native-artifact/language_combinations --strict-source --compiler-source native-artifact/compiler.wysna --report native-install-report.json
       - name: Qualify the three launch projects and offline package restore
         run: python native-artifact/validate_launch_projects.py --sdk installed/wysna-native --examples native-artifact --report launch-acceptance-report.json
+      - name: Install the pinned WASI acceptance runner
+        if: runner.os == 'Linux'
+        run: python -m pip install --retries 10 --timeout 30 wasmtime==50.0.1
+      - name: Execute WASI code built by the installed SDK
+        if: runner.os == 'Linux'
+        run: python native-artifact/validate_native_wasi.py --sdk installed/wysna-native
       - uses: actions/upload-artifact@v4
         if: always()
         with:

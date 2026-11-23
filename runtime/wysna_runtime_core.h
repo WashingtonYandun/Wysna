@@ -32,7 +32,7 @@ typedef struct {
     int32_t refcount;
     int32_t len;
     int32_t cap;
-    bool scalar_only;
+    uint8_t scalar_only;
     WVal* data;
 } WListBuf;
 

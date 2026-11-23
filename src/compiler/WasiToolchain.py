@@ -100,9 +100,9 @@ class WasiToolchain:
                            f"-Wl,-z,stack-size={WASI_STACK_SIZE_BYTES}", "-Wl,--stack-first",
                            f"-I{self.repo_root}", str(source_path), "-o", str(candidate)]
             else:
-                command = [str(compiler), "cc", "-target", "wasm32-wasip1",
+                command = [str(compiler), "cc", "-target", "wasm32-wasi",
                            "-std=c99", "-O2",
-                           f"-Wl,-z,stack-size={WASI_STACK_SIZE_BYTES}", "-Wl,--stack-first",
+                           f"-Wl,-z,stack-size={WASI_STACK_SIZE_BYTES}",
                            f"-I{self.repo_root}", str(source_path), "-o", str(candidate)]
             started = time.perf_counter()
             try:

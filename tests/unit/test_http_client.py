@@ -92,6 +92,69 @@ def _run_source(source, selfhost, directory):
     return results
 
 
+def test_http_task_groups_bound_and_close_loopback_work():
+    class GroupHandler(_Handler):
+        arrivals = threading.Barrier(2)
+        lock = threading.Lock()
+        requests = []
+        active = 0
+        peak = 0
+
+        def do_GET(self):
+            cls = type(self)
+            counts = self.path != '/slow' and self.path != '/never'
+            with cls.lock:
+                cls.requests.append(self.path)
+                cls.active += int(counts)
+                cls.peak = max(cls.peak, cls.active)
+            try:
+                if self.path in ('/barrier-a', '/barrier-b'):
+                    cls.arrivals.wait(timeout=10)
+                if self.path == '/slow':
+                    time.sleep(0.6)
+                self._send(200, b'group')
+            finally:
+                with cls.lock:
+                    cls.active -= int(counts)
+
+    server, _, address = _start_server(GroupHandler)
+    try:
+        with tempfile.TemporaryDirectory(prefix='wysna-http-group-') as directory:
+            source = """
+import "std/http"
+from "std/async" use { TaskOutcome }
+fn show(outcomes: list[TaskOutcome[http.Response, http.HttpError]]) {
+    for outcome in outcomes {
+        match outcome {
+            Completed(response) => {
+                print(response.status)
+                response.body.close()
+            },
+            Failed(_) => print("failed"),
+            Cancelled => print("cancelled"),
+            DeadlineExceeded => print("deadline"),
+        }
+    }
+}
+show(http.batch_get_group(["URL/barrier-a", "URL/barrier-b", "URL/queued"], 2, 10000, false) else error { [] })
+show(http.batch_get_group(["URL/never"], 1, 0, false) else error { [] })
+show(http.batch_get_group(["invalid", "URL/never"], 1, -1, true) else error { [] })
+show(http.batch_get_group(["URL/slow", "URL/never"], 1, 80, false) else error { [] })
+""".replace('URL', address)
+            results = _run_source(source, ensure_selfhost_compiler_binary(str(ROOT)), directory)
+            for result in results:
+                assert result.runtime_ok, (result.engine, result.stderr)
+                assert result.stdout == '200\n200\n200\ndeadline\nfailed\ncancelled\ndeadline\ndeadline\n', (
+                    result.engine, result.stdout, result.stderr,
+                )
+            assert GroupHandler.peak == 2
+            assert '/never' not in GroupHandler.requests
+            assert GroupHandler.requests.count('/queued') == 4
+    finally:
+        server.shutdown()
+        server.server_close()
+
+
 def test_http_client_contract_across_four_engines():
     if not shutil.which("curl-config"):
         raise AssertionError("native HTTP conformance requires curl-config")
@@ -390,5 +453,6 @@ def test_automation_fetch_publishes_atomically_and_preserves_prior_batch():
 
 if __name__ == "__main__":
     test_http_client_contract_across_four_engines()
+    test_http_task_groups_bound_and_close_loopback_work()
     test_automation_fetch_publishes_atomically_and_preserves_prior_batch()
     print("HTTP client: loopback contract passed across four engines")

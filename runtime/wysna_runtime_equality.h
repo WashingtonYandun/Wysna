@@ -169,7 +169,8 @@ static bool wysna_eq_graph(WVal a, WVal b) {
                 if (la == lb) break;
                 if (!la || !lb || la->len != lb->len) { equal = false; break; }
                 for (int32_t i = 0; i < la->len; i++) {
-                    wysna_eq_push(&items, &count, &capacity, &heap_items, la->data[i], lb->data[i]);
+                    wysna_eq_push(&items, &count, &capacity, &heap_items,
+                                  wysna_list_load(la, i), wysna_list_load(lb, i));
                 }
                 break;
             }

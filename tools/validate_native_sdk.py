@@ -102,6 +102,17 @@ def validate(sdk, report, strict_source=False, compiler_source=None, application
         generated = project / 'hello.c'
         run('emit-c', ['emit-c', source, '-o', generated], stdout=b'')
         require('#include "runtime/wysna_runtime.h"' in generated.read_text(), 'Missing runtime include')
+        guest = project / 'wasi command'
+        wasi_build = run('build-wasi-command', ['build', '--target=wasi', source, '-o', guest,
+                                                '--output-format=json-v1'])
+        wasi_report = json.loads(wasi_build.stdout)
+        require(wasi_report['target'] == {'profile': 'wasi-command', 'triple': 'wasm32-wasip1'},
+                wasi_report)
+        wasm = Path(wasi_report['artifacts'][0]['path'])
+        require(wasm == guest.with_suffix('.wasm') and wasm.read_bytes()[:8] == b'\0asm\1\0\0\0',
+                wasi_report)
+        run('browser-target-uses-seed', ['build', '--target=browser-library', source], expected=2,
+            error='W2013')
         if os.name != 'nt':
             literal_path = project / r'literal\name.c'
             run('literal-backslash-output', ['emit-c', source, '-o', literal_path], stdout=b'')

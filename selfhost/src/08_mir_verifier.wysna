@@ -84,8 +84,9 @@ fn mir_verify_runtime(module: MirModule, operation: MirOperation, slots: list[Mi
         if name == "wysna_builtin_chr" { return type_ == 3 and returned == 5 }
         if name == "wysna_neg" { return type_ == returned and (type_ == 3 or type_ == 4) }
         if name == "wysna_not" { return type_ == 2 and returned == 2 }
-        if name == "wysna_builtin_int" { return type_ >= 2 and type_ <= 6 and returned == 3 }
-        if name == "wysna_builtin_float" { return type_ >= 2 and type_ <= 6 and returned == 4 }
+        if name == "wysna_builtin_u8" { return type_ == 3 and mir_is_optional(module.types, returned) and module.types[returned].args[0] == 7 }
+        if name == "wysna_builtin_int" { return ((type_ >= 2 and type_ <= 6) or type_ == 7) and returned == 3 }
+        if name == "wysna_builtin_float" { return ((type_ >= 2 and type_ <= 6) or type_ == 7) and returned == 4 }
         if name == "wysna_str_trim" or name == "wysna_str_to_lower" or name == "wysna_str_to_upper" { return type_ == 5 and returned == 5 }
         if name == "wysna_await" { return true }
         return false
@@ -182,9 +183,14 @@ fn mir_verify_shape(module: MirModule, function: MirFunction) {
                 let type_ = function.slots[result].type_id
                 let mut valid = false
                 if operation.opcode == "default" {
-                    valid = len(operation.args) == 0 and (type_ <= 5 and operation.value.type_id == type_ or type_ >= 6 and operation.value.type_id == 6)
+                    valid = len(operation.args) == 0 and (type_ <= 5 and operation.value.type_id == type_ or type_ >= 6 and type_ != 7 and operation.value.type_id == 6 or type_ == 7 and operation.value.type_id == 7 and operation.value.integer == 0)
                 }
-                elif operation.opcode == "const" { valid = len(operation.args) == 0 and (operation.value.type_id == type_ and type_ <= 6 or operation.value.type_id == 6 and mir_is_optional(module.types, type_)) }
+                elif operation.opcode == "const" {
+                    let literal = operation.value
+                    valid = len(operation.args) == 0 and (literal.type_id == type_ and type_ <= 6 or
+                        literal.type_id == 6 and mir_is_optional(module.types, type_) or
+                        literal.type_id == 7 and type_ == 7 and literal.integer >= 0 and literal.integer <= 255)
+                }
                 elif operation.opcode == "clone" or operation.opcode == "store" {
                     valid = len(operation.args) == 1
                     if valid {
@@ -426,11 +432,11 @@ fn mir_verify_flow(module: MirModule, function: MirFunction) {
 }
 
 fn mir_verify(module: MirModule) {
-    let primitive_names: list[str] = ["error", "unit", "bool", "int", "float", "str", "none"]
-    if len(module.types) < 7 { report_error_at("W9999", module.source, "incomplete MIR type arena") }
+    let primitive_names: list[str] = ["error", "unit", "bool", "int", "float", "str", "none", "u8"]
+    if len(module.types) < len(primitive_names) { report_error_at("W9999", module.source, "incomplete MIR type arena") }
     for i in 0..len(module.types) {
         let type_ = module.types[i]
-        if i < 7 {
+        if i < len(primitive_names) {
             if type_.kind != primitive_names[i] or type_.name != "" or len(type_.args) != 0 { report_error_at("W9999", module.source, "invalid reserved MIR type") }
         } else {
             let count = len(type_.args)
@@ -440,7 +446,7 @@ fn mir_verify(module: MirModule) {
             if not valid or not nominal and type_.name != "" { report_error_at("W9999", module.source, "invalid MIR type shape") }
             for child in type_.args { if child <= 0 or child >= i { report_error_at("W9999", module.source, "invalid or cyclic MIR type reference") } }
             if kind == "weak" and module.types[type_.args[0]].kind != "class" { report_error_at("W9999", module.source, "MIR weak target must be a class") }
-            for j in 7..i { if module.types[j].kind == kind and module.types[j].name == type_.name and module.types[j].args == type_.args { report_error_at("W9999", module.source, "duplicate MIR type") } }
+            for j in len(primitive_names)..i { if module.types[j].kind == kind and module.types[j].name == type_.name and module.types[j].args == type_.args { report_error_at("W9999", module.source, "duplicate MIR type") } }
         }
     }
     mir_verify_externs(module)

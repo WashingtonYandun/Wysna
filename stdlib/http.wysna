@@ -2,6 +2,8 @@ import "std/buffer"
 import "std/bytes" as utf8
 import "std/json"
 import "std/text"
+import "std/time"
+from "std/async" use { TaskOutcome, TaskGroupError }
 
 extern "C" fn wysna_host_http_request(
     url: opaque,
@@ -257,6 +259,10 @@ pub struct AsyncRequest {
 }
 
 pub fn get_async(url: str) -> AsyncRequest ! HttpError {
+    return get_async_with_timeout(url, 30000)
+}
+
+fn get_async_with_timeout(url: str, timeout_ms: int) -> AsyncRequest ! HttpError {
     let empty_headers = buffer.Bytes()
     let empty_body = buffer.Bytes()
     let encoded_url = buffer.from_text(url)
@@ -266,7 +272,7 @@ pub fn get_async(url: str) -> AsyncRequest ! HttpError {
         encoded_method.borrow(),
         empty_headers.borrow(),
         empty_body.borrow(),
-        30000,
+        timeout_ms,
         1048576,
     )
     encoded_url.close()
@@ -325,6 +331,74 @@ pub struct BatchItemResult {
     ok: bool,
     response: Response?,
     error: HttpError?,
+}
+
+struct GroupRequest {
+    index: int,
+    transfer: AsyncRequest,
+}
+
+fn group_wait(start: int, deadline_ms: int) -> int {
+    if deadline_ms < 0 { return 30000 }
+    let remaining = deadline_ms - time.elapsed_ms(start)
+    return if remaining > 30000 { 30000 } else { remaining }
+}
+
+pub fn batch_get_group(urls: list[str], max_concurrency: int, deadline_ms: int,
+                        fail_fast: bool) -> list[TaskOutcome[Response, HttpError]] ! TaskGroupError {
+    if max_concurrency < 1 { return Err(TaskGroupError.InvalidConcurrency) }
+    if deadline_ms < -1 { return Err(TaskGroupError.InvalidDeadline) }
+    let limit = if max_concurrency > 4 { 4 } else { max_concurrency }
+    let started = time.monotonic_ms()
+    let cancelled: TaskOutcome[Response, HttpError] = TaskOutcome.Cancelled
+    let expired: TaskOutcome[Response, HttpError] = TaskOutcome.DeadlineExceeded
+    let mut results: list[TaskOutcome[Response, HttpError]] = []
+    for index in 0..len(urls) { results.append(cancelled) }
+    let mut active: list[GroupRequest] = []
+    let mut next = 0
+    let mut abort = false
+    while not abort and (next < len(urls) or len(active) > 0) {
+        while next < len(urls) and len(active) < limit and not abort {
+            let budget = group_wait(started, deadline_ms)
+            if budget <= 0 { break }
+            match get_async_with_timeout(urls[next], budget) {
+                Ok(pending_request) => active.append(GroupRequest { index: next, transfer: pending_request }),
+                Err(error) => {
+                    results[next] = TaskOutcome.Failed[Response, HttpError](error)
+                    abort = fail_fast
+                },
+            }
+            next = next + 1
+        }
+        let budget = group_wait(started, deadline_ms)
+        if abort or budget <= 0 { break }
+        if len(active) > 0 {
+            let _ = wysna_host_http_multi_poll(if budget < 10 { budget } else { 10 })
+            if group_wait(started, deadline_ms) <= 0 { break }
+            let mut remaining: list[GroupRequest] = []
+            for entry in active {
+                if poll(entry.transfer) == 0 {
+                    remaining.append(entry)
+                } else {
+                    match finish(entry.transfer) {
+                        Ok(response) => { results[entry.index] = TaskOutcome.Completed[Response, HttpError](response) },
+                        Err(error) => {
+                            results[entry.index] = TaskOutcome.Failed[Response, HttpError](error)
+                            abort = fail_fast
+                        },
+                    }
+                }
+            }
+            active = remaining
+        }
+    }
+    let stop = if abort { cancelled } else { expired }
+    for entry in active {
+        let _ = cancel(entry.transfer)
+        results[entry.index] = stop
+    }
+    for index in next..len(urls) { results[index] = stop }
+    return results
 }
 
 pub fn batch_get(urls: list[str]) -> list[BatchItemResult] {

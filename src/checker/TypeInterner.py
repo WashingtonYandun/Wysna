@@ -1,7 +1,7 @@
 from itertools import count
 from typing import Any, Dict, List, Optional, Set, Tuple, Union
 from checker.WysnaType import (
-    OpaqueType, WysnaType, PrimitiveType, IntType, FloatType, BoolType, StrType, UnitType, NoneType,
+    OpaqueType, WysnaType, PrimitiveType, IntType, U8Type, FloatType, BoolType, StrType, UnitType, NoneType,
     OptionalType, WeakType, ListType, DictType, TupleType, StructType, EnumType,
     InterfaceType, ClassFieldInfo, ClassMethodInfo, ClassType,
     ResultType, ErrorUnionType, FunctionType, ModuleType, AnyType, TypeParamType
@@ -17,6 +17,7 @@ TYPE_INT: int = 3
 TYPE_FLOAT: int = 4
 TYPE_STR: int = 5
 TYPE_NONE: int = 6
+TYPE_U8: int = 7
 
 
 class TypeCapabilities:
@@ -201,6 +202,13 @@ class TypeInterner:
             TypeEntry("primitive", "none"),
             TypeCapabilities(is_value=True, is_comparable=True, is_valid_dict_key=False),
             NoneType
+        )
+        self._register_fixed(
+            TYPE_U8,
+            ("primitive", "u8"),
+            TypeEntry("primitive", "u8"),
+            TypeCapabilities(is_value=True, is_comparable=True, is_valid_dict_key=True),
+            U8Type
         )
 
     def _register_fixed(
@@ -573,7 +581,7 @@ class TypeInterner:
                 continue
             if current in results:
                 continue
-            if current in (TYPE_INT, TYPE_BOOL, TYPE_STR):
+            if current in (TYPE_INT, TYPE_U8, TYPE_BOOL, TYPE_STR):
                 results[current] = True
                 continue
             if current in active:
@@ -870,6 +878,8 @@ class TypeInterner:
         if isinstance(type_, PrimitiveType):
             if type_.name == "int":
                 return TYPE_INT
+            elif type_.name == "u8":
+                return TYPE_U8
             elif type_.name == "float":
                 return TYPE_FLOAT
             elif type_.name == "bool":
@@ -983,6 +993,8 @@ class TypeInterner:
             pname = entry.data
             if pname == "int":
                 res = IntType
+            elif pname == "u8":
+                res = U8Type
             elif pname == "float":
                 res = FloatType
             elif pname == "bool":
@@ -1111,7 +1123,7 @@ class TypeInterner:
             raise ValueError("Unsupported type arena snapshot version")
         raw_entries = snapshot.get("entries")
         raw_capabilities = snapshot.get("capabilities")
-        if not isinstance(raw_entries, list) or len(raw_entries) < 7:
+        if not isinstance(raw_entries, list) or len(raw_entries) <= TYPE_U8:
             raise ValueError("Invalid type arena entry table")
         if not isinstance(raw_capabilities, list) or len(raw_capabilities) != len(raw_entries):
             raise ValueError("Invalid type arena capability table")
@@ -1175,7 +1187,7 @@ class TypeInterner:
 
         interner = cls()
         fixed = interner._entries
-        for type_id in range(7):
+        for type_id in range(TYPE_U8 + 1):
             if fixed[type_id].tag != normalized[type_id].tag or fixed[type_id].data != normalized[type_id].data:
                 raise ValueError("Type arena snapshot changes reserved primitive TypeIds")
 
@@ -1207,7 +1219,7 @@ class TypeInterner:
         interner._capabilities = capabilities
         interner._key_to_id = {key: type_id for type_id, key in enumerate(keys)}
         interner._type_to_id = {}
-        interner._id_to_type = {type_id: interner._id_to_type[type_id] for type_id in range(7)}
+        interner._id_to_type = {type_id: interner._id_to_type[type_id] for type_id in range(TYPE_U8 + 1)}
 
         def definition_id(name, raw, kind):
             if not isinstance(raw, dict):

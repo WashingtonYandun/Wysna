@@ -53,7 +53,12 @@ fn checked_verify(program: CheckedProgram) {
         let node = program.nodes[i]
         let leaf_type = if node.kind == "integer" { "int" } elif node.kind == "boolean" { "bool" } elif node.kind == "string" { "str" } else { node.kind }
         if node.kind == "integer" or node.kind == "boolean" or node.kind == "string" or node.kind == "float" or node.kind == "unit" {
-            if program.types[node.type_id].kind != leaf_type { report_error_at("W9999", node.source, "checked literal type mismatch") }
+            let actual = program.types[node.type_id].kind
+            let byte_literal = node.kind == "integer" and actual == "u8"
+            if actual != leaf_type and not byte_literal { report_error_at("W9999", node.source, "checked literal type mismatch") }
+            if byte_literal and (len(node.text) > 3 or int(node.text) < 0 or int(node.text) > 255) {
+                report_error_at("W9999", node.source, "checked u8 literal is outside its range")
+            }
         }
         let count = len(node.children)
         let mut valid = false
