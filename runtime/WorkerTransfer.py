@@ -3,6 +3,7 @@ import concurrent.futures
 import copy
 import os
 import threading
+import time
 
 from checker.WorkerSafety import PURE_BUILTINS
 from error.Error import WysnaRuntimeError
@@ -134,13 +135,58 @@ def prepare_spawn(interpreter, function):
     return lambda: context.invoke([])
 
 
-def dispatch(interpreter, function, items):
+_current_group = threading.local()
+
+
+class TaskGroupState:
+    def __init__(self, deadline_ms, fail_fast):
+        self.deadline = None if deadline_ms < 0 else time.monotonic_ns() + deadline_ms * 1_000_000
+        self.fail_fast = fail_fast
+        self.reason = 0
+        self.lock = threading.Lock()
+
+    def status(self):
+        with self.lock:
+            if self.reason == 0 and self.deadline is not None and time.monotonic_ns() >= self.deadline:
+                self.reason = 2
+            return self.reason
+
+    def cancel(self):
+        with self.lock:
+            if self.reason == 0:
+                self.reason = 1
+            return self.reason == 1
+
+    def invoke(self, context, item):
+        result = WysnaNone()
+        status = self.status()
+        if status == 0:
+            value = context.invoke([item])
+            status = self.status()
+            if status == 0:
+                if self.fail_fast and isinstance(value, WysnaErr):
+                    self.cancel()
+                result = WysnaEnumValue('Option', 'Some', [value])
+        return WysnaTuple([WysnaInt(status), result])
+
+
+def group_cancelled():
+    group = getattr(_current_group, 'state', None)
+    return group is not None and group.status() != 0
+
+
+def cancel_group():
+    group = getattr(_current_group, 'state', None)
+    return group is not None and group.status() != 2 and group.cancel()
+
+
+def dispatch(interpreter, function, items, *, limit=4, group=None):
     maximum = 4
     try:
         maximum = max(1, min(4, int(os.environ.get('WYSNA_PARALLEL_THREADS', '4'))))
     except ValueError:
         pass
-    count = min(maximum, len(items)) if items else 1
+    count = min(maximum, max(1, limit), len(items)) if items else 1
     contexts = []
     for index in range(count):
         start = len(items) * index // count
@@ -152,7 +198,14 @@ def dispatch(interpreter, function, items):
 
     def run(partition):
         context, arguments = partition
-        return [context.invoke([item]) for item in arguments]
+        if group is None:
+            return [context.invoke([item]) for item in arguments]
+        previous = getattr(_current_group, 'state', None)
+        _current_group.state = group
+        try:
+            return [group.invoke(context, item) for item in arguments]
+        finally:
+            _current_group.state = previous
 
     if count == 1:
         partitions = [run(contexts[0])]
