@@ -51,12 +51,12 @@ def validate(sdk: Path, examples: Path) -> dict:
             run('project', 'lock', '--manifest', manifest_path, '--offline')
             options = ('--manifest', manifest_path, '--frozen', '--offline')
             run('project', 'check', *options, '--target', target)
-            test = run('project', 'test', *options, '--output-format=json-v1')
-            require(json.loads(test.stdout)['status'] == 'ok', (name, test.stdout))
             binary = products / (name + suffix)
             run('project', 'build', *options, '--target', target, '-o', binary)
             require(binary.is_file(), name)
             binaries[name] = binary
+            test = run('project', 'test', *options, '--output-format=json-v1')
+            require(json.loads(test.stdout)['status'] == 'ok', (name, test.stdout))
 
         request = '[2,-1,3]'
         worker = execute([binaries['agent-worker'], request])
