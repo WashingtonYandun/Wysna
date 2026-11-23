@@ -38,5 +38,19 @@ El orden de la lista es estable. El conjunto de callbacks que alcanzan a
 terminar antes del cierre depende de cuándo se observa el error o el plazo.
 Un trap conserva su semántica fatal. Los callbacks cooperativos mantienen la
 semántica de propiedad aislada, y el perfil Linux aislado puede imponer un
-límite externo a un programa completo. Las tareas de I/O continúan en el
-scheduler cooperativo existente.
+límite externo a un programa completo.
+
+## Grupos HTTP en el scheduler
+
+`std/http.batch_get_group` aplica el mismo contrato de resultados a solicitudes
+GET. Mantiene hasta cuatro transferencias en vuelo, o el límite menor del
+llamador. Un plazo o el primer error en modo `fail_fast` cierra las
+transferencias pendientes y clasifica las entradas que aún estaban en cola.
+Los códigos HTTP recibidos forman parte de una respuesta exitosa; un error de
+transporte o de validación se conserva como `Failed(HttpError)`.
+
+El grupo usa el scheduler HTTP. Al completarse, el cuerpo entregado en
+`Completed(Response)` pertenece al llamador y se libera con `body.close()`.
+La aceptación en loopback comprueba el límite con dos solicitudes bloqueadas
+en una barrera, el orden, el plazo y que una entrada cancelada en la cola
+jamás se envíe. Los timers y las corrutinas conservan la interfaz `Task`.
