@@ -1,0 +1,22 @@
+manifest_version = 1
+
+[package]
+name = "agent-worker"
+version = "0.1.0"
+language = "0.9"
+
+[toolchain]
+compiler = "0.9.0"
+stdlib = "bundled"
+
+[sources]
+root = "src"
+
+[targets.app]
+entry = "src/main.wysna"
+profile = "native-cli"
+
+[[tests]]
+name = "batch-contract"
+entry = "tests/batch_contract.wysna"
+timeout_ms = 30000

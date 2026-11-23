@@ -1,0 +1,15 @@
+import "batch.wysna"
+
+fn main() -> int {
+    let arguments = args()
+    if len(arguments) != 2 {
+        eprint("usage: agent-worker <json-array>")
+        return 2
+    }
+    let output = batch.evaluate(arguments[1]) else error {
+        eprint(error)
+        return 1
+    }
+    print(output)
+    return 0
+}
