@@ -37,7 +37,7 @@
 #ifdef __APPLE__
 #include <mach-o/dyld.h>
 #endif
-#if (defined(__GNUC__) || defined(__clang__)) && !defined(__APPLE__)
+#if (defined(__GNUC__) || defined(__clang__)) && !defined(__APPLE__) && !defined(WYSNA_LINK_PTHREAD)
 #pragma weak pthread_create
 #pragma weak pthread_join
 #endif
@@ -612,7 +612,7 @@ static DWORD WINAPI wysna_spawn_win32_entry(LPVOID arg) {
 static inline bool wysna_spawn_threads_available(void) {
 #if defined(__wasi__) || (!defined(__GNUC__) && !defined(__clang__))
     return false;
-#elif !defined(_WIN32) && (defined(__GNUC__) || defined(__clang__)) && !defined(__APPLE__)
+#elif !defined(_WIN32) && (defined(__GNUC__) || defined(__clang__)) && !defined(__APPLE__) && !defined(WYSNA_LINK_PTHREAD)
     typedef int (*WysnaPthreadCreateFn)(pthread_t*, const pthread_attr_t*, void*(*)(void*), void*);
     typedef int (*WysnaPthreadJoinFn)(pthread_t, void**);
     volatile WysnaPthreadCreateFn p_create = pthread_create;
@@ -2098,17 +2098,7 @@ static inline WVal wysna_parallel_map(WVal values, WVal transform) {
         if (parsed <= 1) max_workers = 1;
         else if (parsed < (long)max_workers) max_workers = (int32_t)parsed;
     }
-#if defined(__wasi__) || (!defined(__GNUC__) && !defined(__clang__))
-    max_workers = 1;
-#elif !defined(_WIN32)
-#if (defined(__GNUC__) || defined(__clang__)) && !defined(__APPLE__)
-    typedef int (*WysnaPthreadCreateFn)(pthread_t*, const pthread_attr_t*, void*(*)(void*), void*);
-    typedef int (*WysnaPthreadJoinFn)(pthread_t, void**);
-    volatile WysnaPthreadCreateFn p_create = pthread_create;
-    volatile WysnaPthreadJoinFn p_join = pthread_join;
-    if (!p_create || !p_join) max_workers = 1;
-#endif
-#endif
+    if (!wysna_spawn_threads_available()) max_workers = 1;
     if (wysna_worker_depth > 0 || wysna_atomic_load_i32(&wysna_parallel_active_depth) > 0) {
         max_workers = 1;
     }
