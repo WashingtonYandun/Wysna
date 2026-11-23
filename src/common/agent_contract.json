@@ -359,7 +359,7 @@
         },
         {
           "profile": "wasi-command",
-          "engine": "wysna-seed",
+          "engine": "wysna-selfhost",
           "backend": "c99",
           "triple": "wasm32-wasip1",
           "artifact_kind": "wasm_module",
@@ -368,13 +368,13 @@
             "arguments",
             "clock",
             "random",
-            "manifest-declared-preopens"
+            "runner-declared-preopens"
           ],
           "build_requirements": [
             {
-              "name": "wasi-sdk",
-              "version": "34",
-              "provided_by": null
+              "name": "zig",
+              "version": "0.15.2",
+              "provided_by": "Native SDK"
             }
           ],
           "run_requirements": [
@@ -423,6 +423,7 @@
       "limitations": [
         "native-cli capabilities describe host access and are not a sandbox",
         "WASI Preview 1 does not provide networking, child processes, or native FFI",
+        "The Native SDK builds standalone WASI commands; use Seed for WASI projects and execution",
         "browser-library exposes only generated scalar and UTF-8 exports; WVal and pointers remain internal",
         "dependencies use local paths or SHA-256-pinned offline USTAR archives; no remote version resolution or public registry",
         "project lockfiles do not claim bit-for-bit binary reproducibility",

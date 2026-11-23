@@ -818,7 +818,9 @@ static int wysna_aead_tag(const uint8_t otk[32], const uint8_t* aad, size_t aad_
                           const uint8_t* ciphertext, size_t ct_len, uint8_t tag[16]) {
     size_t aad_padded = (aad_len + 15) & ~(size_t)15;
     size_t ct_padded = (ct_len + 15) & ~(size_t)15;
-    if (aad_len > ((size_t)1 << 40) || ct_len > ((size_t)1 << 40)) return -1;
+#if SIZE_MAX > (UINT64_C(1) << 40)
+    if (aad_len > (UINT64_C(1) << 40) || ct_len > (UINT64_C(1) << 40)) return -1;
+#endif
     size_t total = aad_padded + ct_padded + 16;
     uint8_t* data = (uint8_t*)calloc(total, 1);
     if (!data) return -1;
@@ -851,7 +853,7 @@ static inline int64_t wysna_host_crypto_chacha20_poly1305_seal(void* key_handle,
     WysnaHostEntry* plain = wysna_host_find(plain_handle, 1);
     WysnaHostEntry* output = wysna_host_find(output_handle, 1);
     if (!key || !nonce || !aad || !plain || !output || key->length != 32 || nonce->length != 12) return -1;
-    if (plain->length > ((size_t)1 << 32) - 64) return -1;
+    if (plain->length > (UINT64_C(1) << 32) - 64) return -1;
     uint8_t block[64], otk[32], tag[16];
     wysna_chacha20_block((const uint8_t*)key->data, 0, (const uint8_t*)nonce->data, block);
     memcpy(otk, block, 32);
@@ -879,7 +881,7 @@ static inline int64_t wysna_host_crypto_chacha20_poly1305_open(void* key_handle,
     WysnaHostEntry* sealed = wysna_host_find(sealed_handle, 1);
     WysnaHostEntry* output = wysna_host_find(output_handle, 1);
     if (!key || !nonce || !aad || !sealed || !output || key->length != 32 || nonce->length != 12) return -1;
-    if (sealed->length < 16 || sealed->length - 16 > ((size_t)1 << 32) - 64) return -1;
+    if (sealed->length < 16 || sealed->length - 16 > (UINT64_C(1) << 32) - 64) return -1;
     size_t length = sealed->length - 16;
     uint8_t block[64], otk[32], tag[16];
     wysna_chacha20_block((const uint8_t*)key->data, 0, (const uint8_t*)nonce->data, block);

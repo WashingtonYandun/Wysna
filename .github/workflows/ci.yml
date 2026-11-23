@@ -814,6 +814,7 @@ jobs:
           python tools/package_native.py --output dist/native/wysna-native --archive --source-commit "$GITHUB_SHA" > dist/native/package-report.json
           cp -R tests/fixtures/language_combinations dist/native/language_combinations
           cp tools/validate_native_sdk.py dist/native/validate_native_sdk.py
+          cp tools/validate_native_wasi.py dist/native/validate_native_wasi.py
           cp selfhost/compiler.wysna dist/native/compiler.wysna
           cp -R examples/wysofia-ops dist/native/wysofia-ops
       - uses: actions/upload-artifact@v4
@@ -823,6 +824,7 @@ jobs:
             dist/native/*.tar.gz
             dist/native/*.zip
             dist/native/validate_native_sdk.py
+            dist/native/validate_native_wasi.py
             dist/native/compiler.wysna
             dist/native/wysofia-ops/
             dist/native/language_combinations/
@@ -866,6 +868,12 @@ jobs:
         run: |
           archive="$(cat native-archive.txt)"
           python native-artifact/validate_native_sdk.py --sdk installed/wysna-native --archive "$archive" --application native-artifact/wysofia-ops --language-fixtures native-artifact/language_combinations --strict-source --compiler-source native-artifact/compiler.wysna --report native-install-report.json
+      - name: Install the pinned WASI acceptance runner
+        if: runner.os == 'Linux'
+        run: python -m pip install --retries 10 --timeout 30 wasmtime==50.0.1
+      - name: Execute WASI code built by the installed SDK
+        if: runner.os == 'Linux'
+        run: python native-artifact/validate_native_wasi.py --sdk installed/wysna-native
       - uses: actions/upload-artifact@v4
         if: always()
         with:

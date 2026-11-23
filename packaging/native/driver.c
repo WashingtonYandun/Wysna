@@ -41,7 +41,7 @@ typedef struct {
     const char *project_subcmd, *project_src_root, *unsupported_target;
     const char *allow_caps, *deny_caps;
     int arguments, include_count, link_count, library_count, library_dir_count, dep_count;
-    int profile_set, timeout_set, project_json_v1, test_diagnostics, sandbox, json_v1;
+    int profile_set, timeout_set, project_json_v1, test_diagnostics, sandbox, json_v1, target_set, wasi;
     const char *includes[SDK_LINK_LIMIT], *links[SDK_LINK_LIMIT], *libraries[SDK_LINK_LIMIT], *library_dirs[SDK_LINK_LIMIT];
     const char *dep_aliases[SDK_LINK_LIMIT], *dep_roots[SDK_LINK_LIMIT];
     int64_t timeout, test_deadline;
@@ -92,6 +92,7 @@ static void sdk_help(void) {
          "       wysna mcp [--root DIR]\n"
          "       wysna lsp\n"
          "Build and run accept --include-dir DIR, --link FILE, --library-dir DIR and --library NAME.\n"
+         "Build accepts --target=wasi for a standalone WASI preview 1 command.\n"
          "This SDK compiles through verified MIR without Python. See native-sdk.json for its profile.");
 }
 static int sdk_has_json_v1(int argc, char** argv) {
@@ -106,6 +107,19 @@ static int sdk_is_wasm_target(const char* target) {
            strcmp(target, "wasm32-wasi") == 0 || strcmp(target, "wasm32-wasip1") == 0 ||
            strcmp(target, "web") == 0 || strcmp(target, "browser-library") == 0 ||
            strcmp(target, "wasm32-unknown-emscripten") == 0;
+}
+static int sdk_parse_target(SdkOptions* options, const char* target) {
+    if (options->target_set++) return 0;
+    if (strcmp(target, "native") == 0 || strcmp(target, "native-cli") == 0) return 1;
+    if (!sdk_is_wasm_target(target)) return 0;
+    if (strcmp(options->command, "build") == 0 &&
+        (strcmp(target, "wasi") == 0 || strcmp(target, "wasi-command") == 0 ||
+         strcmp(target, "wasm32-wasi") == 0 || strcmp(target, "wasm32-wasip1") == 0)) {
+        options->wasi = 1;
+    } else {
+        options->unsupported_target = target;
+    }
+    return 1;
 }
 static int sdk_is_agent_passthrough(const char* cmd) {
     return strcmp(cmd, "graph") == 0 || strcmp(cmd, "inspect") == 0 ||
@@ -239,10 +253,9 @@ static int sdk_parse(SdkOptions* options, int argc, char** argv) {
             continue;
         }
         if (strncmp(value, "--target=", 9) == 0) {
-            const char* target = value + 9;
-            if (sdk_is_wasm_target(target)) { options->unsupported_target = target; return 1; }
-            if (strcmp(target, "native") == 0 || strcmp(target, "native-cli") == 0) continue;
-            return 0;
+            if (!sdk_parse_target(options, value + 9)) return 0;
+            if (options->unsupported_target) return 1;
+            continue;
         }
         if ((strcmp(value, "--write") == 0 || strcmp(value, "-w") == 0) && strcmp(options->command, "fmt") == 0) continue;
         if (++index == argc) return 0;
@@ -251,8 +264,8 @@ static int sdk_parse(SdkOptions* options, int argc, char** argv) {
         else if (strcmp(value, "--allow") == 0) { if (options->allow_caps) return 0; options->allow_caps = argument; }
         else if (strcmp(value, "--deny") == 0) { if (options->deny_caps) return 0; options->deny_caps = argument; }
         else if (strcmp(value, "--target") == 0) {
-            if (sdk_is_wasm_target(argument)) { options->unsupported_target = argument; return 1; }
-            if (strcmp(argument, "native") != 0 && strcmp(argument, "native-cli") != 0) return 0;
+            if (!sdk_parse_target(options, argument)) return 0;
+            if (options->unsupported_target) return 1;
         }
         else if (strcmp(value, "--output-format") == 0 &&
                  (strcmp(options->command, "check") == 0 || strcmp(options->command, "fmt") == 0 ||
@@ -277,6 +290,12 @@ static int sdk_parse(SdkOptions* options, int argc, char** argv) {
     int allows_sandbox = strcmp(options->command, "build") == 0 || strcmp(options->command, "run") == 0 || strcmp(options->command, "emit-c") == 0;
     if (!compiles && (options->include_count || options->link_count || options->library_count || options->library_dir_count || options->profile_set)) return 0;
     if (options->allow_caps && options->deny_caps) return 0;
+    if (options->wasi) {
+        if (options->allow_caps || options->deny_caps || options->include_count || options->link_count ||
+            options->library_count || options->library_dir_count) return 0;
+        options->sandbox = 1;
+        options->deny_caps = "network,processes,process-control,native-ffi";
+    }
     if (options->sandbox || options->allow_caps || options->deny_caps) {
         if (!allows_sandbox) return 0;
         if (options->include_count || options->link_count || options->library_count || options->library_dir_count) return 0;
@@ -380,13 +399,20 @@ static int sdk_build(SdkInvocation* invocation, const SdkOptions* options) {
     if (!sdk_is_file(invocation->zig)) return sdk_error("W5001", "Missing bundled C toolchain; reinstall the SDK", invocation->zig);
     if (!sdk_prepare_cache(invocation)) return sdk_error("W5001", "Cannot configure a writable compiler cache", NULL);
     const char* arguments[SDK_ARGUMENT_LIMIT]; int count = 0;
-    arguments[count++] = "cc"; arguments[count++] = "-target"; arguments[count++] = WYSNA_NATIVE_TARGET; arguments[count++] = "-std=c99"; arguments[count++] = "-mcpu=baseline";
+    arguments[count++] = "cc";
+    arguments[count++] = "-target";
+    arguments[count++] = options->wasi ? "wasm32-wasi" : WYSNA_NATIVE_TARGET;
+    arguments[count++] = "-std=c99";
+    if (options->wasi) arguments[count++] = "-Wl,-z,stack-size=1048576";
+    else arguments[count++] = "-mcpu=baseline";
     if (strcmp(options->profile, "dev") == 0) { arguments[count++] = "-O0"; arguments[count++] = "-g"; }
     else arguments[count++] = strcmp(options->profile, "size") == 0 ? "-Os" : "-O2";
 #ifdef __linux__
     /* Weak references alone cannot pull pthread into the SDK's static musl programs. */
-    arguments[count++] = "-pthread";
-    arguments[count++] = "-DWYSNA_LINK_PTHREAD";
+    if (!options->wasi) {
+        arguments[count++] = "-pthread";
+        arguments[count++] = "-DWYSNA_LINK_PTHREAD";
+    }
 #endif
     arguments[count++] = sdk_owned(invocation, "-I", invocation->root);
     for (int index = 0; index < options->include_count; index++) {
@@ -404,7 +430,7 @@ static int sdk_build(SdkInvocation* invocation, const SdkOptions* options) {
     }
     for (int index = 0; index < options->library_count; index++) arguments[count++] = sdk_owned(invocation, "-l", options->libraries[index]);
 #ifdef _WIN32
-    arguments[count++] = WYSNA_NATIVE_STACK_LINK_ARGUMENT;
+    if (!options->wasi) arguments[count++] = WYSNA_NATIVE_STACK_LINK_ARGUMENT;
 #endif
     arguments[count++] = "-lc"; arguments[count++] = "-lm"; arguments[count++] = "-o"; arguments[count++] = invocation->product;
     int status = sdk_child(invocation->zig, count, arguments, sdk_compile_timeout(options));
@@ -893,8 +919,15 @@ static int sdk_execute(SdkInvocation* invocation, const SdkOptions* options, int
             target = invocation->scratch;
         }
         if (!sdk_absolute(invocation->output, target, 0)) return sdk_error("W5002", "Invalid output path", target);
+        if (options->wasi) {
+            size_t length = strlen(invocation->output);
+            if (length < 5 || strcmp(invocation->output + length - 5, ".wasm") != 0) {
+                if (length + 5 >= SDK_PATH_CAP) return sdk_error("W5002", "Output path is too long", NULL);
+                memcpy(invocation->output + length, ".wasm", 6);
+            }
+        }
 #ifdef _WIN32
-        if (build) {
+        if (build && !options->wasi) {
             size_t size = strlen(invocation->output);
             if (size < 4 || _stricmp(invocation->output + size - 4, ".exe") != 0) {
                 if (size + 4 >= SDK_PATH_CAP) return sdk_error("W5002", "Output path is too long", NULL);
@@ -922,11 +955,12 @@ static int sdk_execute(SdkInvocation* invocation, const SdkOptions* options, int
         if (!sdk_publish(build ? invocation->product : invocation->generated, invocation->output)) return sdk_error("W5001", "Cannot publish the completed output", invocation->output);
     }
     if (options->json_v1 && (build || strcmp(options->command, "emit-c") == 0)) {
-        const char* kind = build ? "native_executable" : "c99_source";
-        const char* media = build ? "application/octet-stream" : "text/x-c";
+        const char* kind = options->wasi ? "wasm_module" : build ? "native_executable" : "c99_source";
+        const char* media = options->wasi ? "application/wasm" : build ? "application/octet-stream" : "text/x-c";
         printf("{\"schema_version\":\"wysna.tool-result/1\",\"command\":");
         sdk_print_json_quoted(options->command);
-        printf(",\"status\":\"ok\",\"invocation_id\":\"native\",\"tool_exit_code\":0,\"process_exit_code\":0,\"execution\":null,\"toolchain\":{\"compiler\":\"" WYSNA_NATIVE_VERSION "\"},\"target\":{\"profile\":\"native-cli\",\"triple\":null},\"diagnostics\":[],\"artifacts\":");
+        printf(",\"status\":\"ok\",\"invocation_id\":\"native\",\"tool_exit_code\":0,\"process_exit_code\":0,\"execution\":null,\"toolchain\":{\"compiler\":\"" WYSNA_NATIVE_VERSION "\"},\"target\":{\"profile\":\"%s\",\"triple\":%s},\"diagnostics\":[],\"artifacts\":",
+               options->wasi ? "wasi-command" : "native-cli", options->wasi ? "\"wasm32-wasip1\"" : "null");
         if (invocation->output[0]) {
             printf("[{\"kind\":");
             sdk_print_json_quoted(kind);
@@ -956,7 +990,7 @@ int main(int argc, char** argv) {
     if (options.unsupported_target) {
         char message[512];
         snprintf(message, sizeof(message),
-                 "Target '%s' is not available in the Native SDK yet; use the Seed distribution for WebAssembly/WASI builds (tracked post-v1.0 via bundled zig)",
+                 "Target '%s' is unavailable for this command in the Native SDK. Use wysna build --target=wasi for a WASI artifact, or Seed for browser builds and WASI project execution.",
                  options.unsupported_target);
         if (sdk_has_json_v1(argc, argv)) {
             printf("{\"schema_version\":\"wysna.tool-result/1\",\"command\":");
