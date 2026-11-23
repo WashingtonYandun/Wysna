@@ -43,7 +43,7 @@ The `dev`, `release` and `size` profiles select `-O0 -g`, `-O2` and `-Os`. All p
 
 The native pipeline covers scalars, UTF-8 strings and paths, globals, collections, CoW mutation, direct ranges and nested tuple loop bindings, optional and Result channels, closed error unions, structs/enums, classes/inheritance/interfaces, pattern matching with guards, closures by snapshot, function values, concrete generic functions/structs/enums and the scalar/opaque C ABI. The profile and independent-verifier contracts are described in [MIR design](MIR_DESIGN.md).
 
-Parameterized classes and interfaces (including constrained type parameters, independent generic methods `Box[T].transform[R]`, and parameterized class inheritance) as well as stackless CPS `async fn` coroutines and `from ... use` imports are supported in the native profile. `std/environment.arguments()`, `std/environment.get(name)` and `std/time.unix_seconds()` remain supported; C99 builds generated via Seed `wysna build --sandbox` (with optional `--allow`/`--deny`) enforce `WYSNA_DENY_CAP_*` capability sandbox guards (`W5006`) at runtime host boundaries. The native SDK includes `fmt`, `test`, `graph`, `inspect`, `patch`, `explain`, `schema` (`--emit-codecs`), `fix` (`--apply`, `--include-maybe`), `skills`, `capabilities`, `api` (`wysna.api-index/1`, stdlib and `--manifest`), `project new|lock|check|build|run|test` (`wysna.toml` v1, native C FFI flags `--include-dir`/`--link`/`--library`), `wysna mcp` (11 static tools over newline-delimited JSON-RPC 2.0 stdio with `--root` confinement), and `wysna lsp` (Stage-3 native LSP) without Python; library-mode exports and WebAssembly targets stay in Seed. Native profile exclusions report `W2013`; unsupported commands report `W5002`.
+Parameterized classes and interfaces (including constrained type parameters, independent generic methods `Box[T].transform[R]`, and parameterized class inheritance) as well as stackless CPS `async fn` coroutines and `from ... use` imports are supported in the native profile. `std/environment.arguments()`, `std/environment.get(name)` and `std/time.unix_seconds()` remain supported; C99 builds generated via Seed `wysna build --sandbox` (with optional `--allow`/`--deny`) enforce `WYSNA_DENY_CAP_*` capability sandbox guards (`W5006`) at runtime host boundaries. The native SDK includes `fmt`, `test`, `graph`, `inspect`, `patch`, `explain`, `schema` (`--emit-codecs`), `fix` (`--apply`, `--include-maybe`), `skills`, `capabilities`, `api` (`wysna.api-index/1`, stdlib and `--manifest`), `project new|lock|check|build|run|test` (`wysna.toml` v1, native C FFI flags `--include-dir`/`--link`/`--library`), `wysna mcp` (11 static tools over newline-delimited JSON-RPC 2.0 stdio with `--root` confinement), and `wysna lsp` (Stage-3 native LSP) without Python; library-mode exports and browser-library builds stay in Seed. Native profile exclusions report `W2013`; unsupported commands report `W5002`.
 
 For a small CLI, read user arguments and environment configuration through the standard module:
 
@@ -115,6 +115,22 @@ de empaquetado oficial todavía usa el arranque y los validadores de Seed.
 Tanto en proyectos sin dependencias como en proyectos con dependencias de
 paquetes locales, `project lock` genera el mismo lockfile que Seed y `--frozen`
 comprueba el manifiesto, las versiones y las huellas SHA-256 de sus entradas.
+
+## Comandos WASI con Zig empaquetado
+
+```sh
+wysna build --target=wasi main.wysna -o main.wasm --output-format=json-v1
+```
+
+El SDK construye un módulo WASI Preview 1 y devuelve el perfil
+`wasi-command`, el triple `wasm32-wasip1` y el artefacto `wasm_module`.
+La compilación usa Zig empaquetado y reserva 1 MiB de pila del huésped.
+El perfil comprueba capacidades y rechaza red, procesos y FFI nativa.
+
+Ejecuta el artefacto con un runner WASI y declara los recursos que puede
+recibir el huésped. Seed ofrece la ejecución y los manifiestos de proyecto
+WASI. CI construye un módulo con el SDK instalado de cada sistema y lo
+ejecuta con Wasmtime en Linux.
 
 ## Pruebas de proyecto por agentes
 

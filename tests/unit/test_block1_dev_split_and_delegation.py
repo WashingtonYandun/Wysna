@@ -1,4 +1,4 @@
-"""Block 1 contracts: <5 s per-unit Selfhost dev builds, SIMP-R01 delegation, and actionable WASI stub."""
+"""Block 1 contracts: <5 s per-unit Selfhost dev builds, SIMP-R01 delegation, and actionable target diagnostics."""
 import json
 import os
 from pathlib import Path
@@ -76,21 +76,21 @@ def test_per_unit_emission_is_bounded_and_selectively_cached(dev_sdk):
         assert cached_meta["total_s"] < 1.0
 
 
-@pytest.mark.parametrize("target_args", [
-    ["--target=wasi"],
-    ["--target", "wasi"],
-    ["--target=wasi-command"],
-    ["--target=wasm32-wasip1"],
-    ["--target=web"],
-    ["--target=browser-library"],
+@pytest.mark.parametrize(("command", "target_args"), [
+    ("run", ["--target=wasi"]),
+    ("run", ["--target", "wasi"]),
+    ("run", ["--target=wasi-command"]),
+    ("run", ["--target=wasm32-wasip1"]),
+    ("build", ["--target=web"]),
+    ("build", ["--target=browser-library"]),
 ])
-def test_driver_wasi_and_web_stubs_emit_actionable_w2013(dev_sdk, tmp_path, target_args):
+def test_driver_unsupported_commands_emit_actionable_w2013(dev_sdk, tmp_path, command, target_args):
     src = tmp_path / "hello.wysna"
     src.write_text('print("hi")\n', encoding="utf-8")
     driver = dev_sdk["driver"]
 
     text_res = subprocess.run(
-        [driver, "build", str(src), *target_args],
+        [driver, command, str(src), *target_args],
         cwd=str(tmp_path), capture_output=True, text=True, timeout=30,
     )
     assert text_res.returncode == 2
@@ -98,7 +98,7 @@ def test_driver_wasi_and_web_stubs_emit_actionable_w2013(dev_sdk, tmp_path, targ
     assert "Seed distribution" in text_res.stderr
 
     json_res = subprocess.run(
-        [driver, "build", str(src), *target_args, "--output-format=json-v1"],
+        [driver, command, str(src), *target_args, "--output-format=json-v1"],
         cwd=str(tmp_path), capture_output=True, text=True, timeout=30,
     )
     assert json_res.returncode == 2, json_res.stderr + json_res.stdout

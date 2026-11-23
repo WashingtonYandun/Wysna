@@ -2238,6 +2238,8 @@ static inline WVal wysna_parallel_map_configured(WVal values, WVal transform,
             CloseHandle(handles[w]);
         }
     }
+#else
+    wysna_parallel_run_slice(&tasks[0]);
 #endif
 
     wysna_atomic_dec_i32(&wysna_parallel_active_depth);
