@@ -6,7 +6,7 @@ struct CheckedRecord { type_id: int, fields: list[CheckedField], variants: list[
 struct CheckedArm { pattern: int, guard: int, body: int, source: Token }
 struct CheckedNode { pattern: int, arms: list[int], total: bool, labels: list[str], kind: str, type_id: int, source: Token, text: str, children: list[int], binding: int, target: int, discard: bool }
 struct CheckedBinding { name: str, type_id: int, mutable: bool, global: bool, source: Token }
-struct CheckedFunction { captures: list[int], closure: bool, name: str, type_id: int, params: list[int], body: int, source: Token, is_async: bool, async_return_type: int }
+struct CheckedFunction { declaration_name: str, captures: list[int], closure: bool, name: str, type_id: int, params: list[int], body: int, source: Token, is_async: bool, async_return_type: int }
 struct CheckedSignature { attributes: list[StaticAttribute], abi_params: list[str], abi_return: str, native: str, name: str, params: list[str], type_params: list[str], type_id: int, foreign: bool, abstract: bool }
 struct CheckedProgram {
     templates: list[SemGenericType], obligations: list[SemObligation], has_nodes: bool, file: str, source: Token, records: list[CheckedRecord], types: list[SemType], signatures: list[CheckedSignature],

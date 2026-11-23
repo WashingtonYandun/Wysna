@@ -98,6 +98,7 @@ def _compute_interface_and_nominals(program, is_entry=False):
                     '$node': 'FnSig',
                     'name': stmt.name,
                     'is_async': bool(getattr(stmt, 'is_async', False)),
+                    'attributes': [attribute.metadata() for attribute in getattr(stmt, 'attributes', [])],
                     'params': _syntax_digest_payload(stmt.params),
                     'return_type': _syntax_digest_payload(stmt.return_type),
                     'error_type': _syntax_digest_payload(getattr(stmt, 'error_type', None)),

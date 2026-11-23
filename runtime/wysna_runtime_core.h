@@ -179,13 +179,6 @@ typedef struct WysnaRuntimeContext {
 #ifdef W_STRING_METRICS
     uint64_t string_scan_steps;
 #endif
-    const char* source_file;
-    int32_t source_line;
-    int32_t source_col;
-    const char* call_stack_fn[64];
-    const char* call_stack_file[64];
-    int32_t call_stack_line[64];
-    int32_t call_depth;
     int64_t alloc_count;
     int64_t free_count;
     int64_t retain_count;
@@ -221,6 +214,32 @@ static inline int64_t wysna_collect_cycles(void);
 extern WysnaRuntimeContext wysna_runtime_context;
 #else
 static WysnaRuntimeContext wysna_runtime_context = {0};
+#endif
+/* Diagnostics belong to the executing thread; allocation quotas remain program-wide. */
+#if defined(__wasi__) && !defined(__wasm_threads__)
+#define WYSNA_THREAD_LOCAL
+#elif defined(_MSC_VER)
+#define WYSNA_THREAD_LOCAL __declspec(thread)
+#elif defined(__GNUC__) || defined(__clang__)
+#define WYSNA_THREAD_LOCAL __thread
+#elif defined(__STDC_VERSION__) && __STDC_VERSION__ >= 201112L
+#define WYSNA_THREAD_LOCAL _Thread_local
+#else
+#error "Wysna native workers require compiler thread-local storage support"
+#endif
+typedef struct WysnaThreadDiagnostics {
+    const char* source_file;
+    int32_t source_line;
+    int32_t source_col;
+    const char* call_stack_fn[64];
+    const char* call_stack_file[64];
+    int32_t call_stack_line[64];
+    int32_t call_depth;
+} WysnaThreadDiagnostics;
+#ifdef WYSNA_SHARED_RUNTIME
+extern WYSNA_THREAD_LOCAL WysnaThreadDiagnostics wysna_thread_diagnostics;
+#else
+static WYSNA_THREAD_LOCAL WysnaThreadDiagnostics wysna_thread_diagnostics = {0};
 #endif
 #define wysna_g_string_literals (wysna_runtime_context.string_literals)
 #ifdef W_STRING_METRICS
@@ -281,9 +300,9 @@ typedef WVal WVal64;
 typedef WVal (*WInvoke)(WVal environment, int32_t argc, const WVal* argv);
 
 /* Native runtime failures retain the source operation that last entered Wysna. */
-#define wysna_g_source_file (wysna_runtime_context.source_file)
-#define wysna_g_source_line (wysna_runtime_context.source_line)
-#define wysna_g_source_col (wysna_runtime_context.source_col)
+#define wysna_g_source_file (wysna_thread_diagnostics.source_file)
+#define wysna_g_source_line (wysna_thread_diagnostics.source_line)
+#define wysna_g_source_col (wysna_thread_diagnostics.source_col)
 
 static inline void wysna_runtime_set_position(const char* file, int32_t line, int32_t col) {
     wysna_g_source_file = file;
@@ -292,18 +311,18 @@ static inline void wysna_runtime_set_position(const char* file, int32_t line, in
 }
 
 static inline void wysna_runtime_push_frame(const char* fn_name, const char* file, int32_t line) {
-    int32_t d = wysna_runtime_context.call_depth;
+    int32_t d = wysna_thread_diagnostics.call_depth;
     if (d >= 0 && d < 64) {
-        wysna_runtime_context.call_stack_fn[d] = fn_name;
-        wysna_runtime_context.call_stack_file[d] = file;
-        wysna_runtime_context.call_stack_line[d] = line;
+        wysna_thread_diagnostics.call_stack_fn[d] = fn_name;
+        wysna_thread_diagnostics.call_stack_file[d] = file;
+        wysna_thread_diagnostics.call_stack_line[d] = line;
     }
-    wysna_runtime_context.call_depth = d + 1;
+    wysna_thread_diagnostics.call_depth = d + 1;
 }
 
 static inline void wysna_runtime_pop_frame(void) {
-    if (wysna_runtime_context.call_depth > 0) {
-        wysna_runtime_context.call_depth--;
+    if (wysna_thread_diagnostics.call_depth > 0) {
+        wysna_thread_diagnostics.call_depth--;
     }
 }
 
@@ -350,12 +369,12 @@ static inline WYSNA_NORETURN void wysna_runtime_fail(const char* code, const cha
     vfprintf(stderr, format, args);
     va_end(args);
     fputc('\n', stderr);
-    if (wysna_runtime_context.call_depth > 1) {
-        int32_t top = wysna_runtime_context.call_depth < 64 ? wysna_runtime_context.call_depth : 64;
+    if (wysna_thread_diagnostics.call_depth > 1) {
+        int32_t top = wysna_thread_diagnostics.call_depth < 64 ? wysna_thread_diagnostics.call_depth : 64;
         for (int32_t i = top - 1; i >= 0; i--) {
-            const char* fn_name = wysna_runtime_context.call_stack_fn[i];
-            const char* f_file = wysna_runtime_context.call_stack_file[i];
-            int32_t f_line = wysna_runtime_context.call_stack_line[i];
+            const char* fn_name = wysna_thread_diagnostics.call_stack_fn[i];
+            const char* f_file = wysna_thread_diagnostics.call_stack_file[i];
+            int32_t f_line = wysna_thread_diagnostics.call_stack_line[i];
             if (fn_name && fn_name[0] != '\0') {
                 fprintf(stderr, "  at %s (%s:%" PRId32 ")\n",
                         fn_name, (f_file && f_file[0] != '\0') ? f_file : "<unknown>", f_line);

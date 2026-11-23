@@ -369,7 +369,7 @@ fn setup_server(port_str: str) -> unit ! str {
 
 ---
 
-### Atributos estáticos cerrados
+### Atributos estáticos y anotaciones propias
 
 ```wysna
 @deprecated("usa current")
@@ -380,7 +380,7 @@ let value = old() # W6004; result retained
 old()            # W6004 and W6005
 ```
 
-Solo se aceptan `@deprecated("mensaje no vacío")` y `@must_use`, antes de funciones
+Los atributos integrados son `@deprecated("mensaje no vacío")` y `@must_use`, antes de funciones
 de nivel superior (`pub`, genéricas o `async` incluidas). No son decoradores
 ejecutables ni macros. `@must_use` exige un resultado distinto de `unit` en
 funciones síncronas, también al especializar genéricos; en `async` protege la
@@ -388,6 +388,27 @@ tarea. Las llamadas indirectas mediante callbacks no heredan los atributos.
 Los imports y el formatter conservan las anotaciones. Los argumentos o destinos
 inválidos producen `W0006`; los duplicados, `W1002`. CLI y LSP exponen `W6004`
 y `W6005` como advertencias; no alteran el comportamiento del programa.
+
+Los esquemas propios reutilizan `struct` no genéricos. Los argumentos son campos
+nombrados con literales `str`, `bool` o `int`, sin expresiones ni evaluación:
+
+```wysna
+struct AgentTool { name: str, read_only: bool }
+struct Sensitive {}
+@AgentTool(read_only: true, name: "lookup")
+@Sensitive
+pub fn lookup(id: int) -> int { id }
+```
+
+Se exige exactamente el conjunto de campos y sus tipos (`W2001`). Los esquemas
+respetan la visibilidad de imports; `@metadata.AgentTool(...)` es válido. Solo se
+anotan funciones de nivel superior. `inspect`, `api` y `schema` devuelven sus
+metadatos en `attributes`; no conceden permisos ni ejecutan contratos del struct.
+
+Un `match` incompleto incluye `data.uncovered_pattern_families` en el diagnóstico
+JSON W2003. Por ejemplo `Some(_)` señala una familia con payloads pendientes; no
+afirma que todos sus valores estén descubiertos. Las ramas con guardas no cierran
+la cobertura de esa familia.
 
 ## 7. Tipos de Datos Algebraicos y Pattern Matching
 

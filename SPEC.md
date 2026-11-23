@@ -299,8 +299,8 @@ Equality is partitioned cleanly along the value vs reference boundary:
 
 ### Atributos estáticos de funciones
 
-El conjunto cerrado admite `@deprecated("mensaje")` y `@must_use` antes de una
-función de nivel superior, incluyendo `pub`, genéricos y `async`. No admite
+Los atributos integrados son `@deprecated("mensaje")` y `@must_use`. Se aplican
+antes de una función de nivel superior, incluyendo `pub`, genéricos y `async`. No se admiten
 macros, expresiones como argumentos ni ejecución durante la compilación.
 
 ```wysna
@@ -322,6 +322,27 @@ Ambos atributos se conservan al formatear y al importar funciones. Los nombres
 desconocidos, argumentos inválidos y destinos distintos de funciones superiores
 se rechazan con `W0006`; repetir un atributo produce `W1002`. Son advertencias
 no bloqueantes, disponibles en CLI JSON y LSP nativo.
+
+Los usuarios pueden declarar esquemas con `struct` no genéricos y aplicarlos como
+metadatos tipados, sin construir un objeto en ejecución:
+
+```wysna
+pub struct AgentTool { name: str, read_only: bool }
+@AgentTool(name: "lookup", read_only: true)
+@must_use
+pub fn lookup(id: int) -> int { id }
+```
+
+Los campos de anotaciones requieren literales `str`, `bool` o `int` (Int64).
+Los argumentos se nombran, pueden reordenarse y deben cubrir exactamente el esquema;
+un esquema vacío admite `@Marker`. No se admiten defaults, valores calculados ni
+esquemas genéricos. Un campo ausente, extra o de tipo incorrecto produce `W2001`;
+repetir campos o anotaciones produce `W1002`. Los esquemas respetan imports y
+visibilidad, incluido `@module.AgentTool(...)`; un nombre sin esquema válido produce
+`W0006`. El uso como metadatos comprueba tipos de campos, sin ejecutar los contratos
+de construcción de instancias del struct. Las anotaciones no conceden capacidades,
+no afirman pureza ni cambian permisos. `api`, `inspect` y `schema` las exponen como
+`attributes: [{name, arguments}]`; su modificación invalida la interfaz pública.
 
 ## 6. Control Flow & Pattern Matching
 
@@ -514,8 +535,8 @@ Optional/Option and fallible/Result spellings share canonical type identity. Opt
    # a is still [[1], [2]]
    # b is [[1, 99], [2]]
    ```
-2. **Deterministic Single-Threaded Reference Counting + CoW:**
-   - Backing buffers use lightweight single-threaded reference counting (`int32_t refcount`) without atomic synchronization overhead.
+2. **Atomic Reference Counting + CoW:**
+   - Backing buffers use atomic reference counts (`int32_t refcount`) on supported native toolchains. This protects lifetime bookkeeping; concurrent mutation of object fields still requires a separate safety contract.
    - Buffers are shared on assignment or parameter passing by incrementing `refcount`.
    - When a mutating operation occurs (`append`, `pop`, `clear`, indexed assignment, or field assignment on a `struct`), any buffer along the access path with `refcount > 1` is detached (`wysna_cow_detach`) before applying the mutation.
 3. **Reference Types (`class`):**
@@ -548,7 +569,9 @@ back-references or explicit edge clearing; runtime trial-deletion collection
 (`wysna_collect_cycles()`) runs under heap quota pressure or when `WYSNA_COLLECT_CYCLES=1`
 at cleanup. The native control block outlives object destruction
 until the last weak handle is released, and invalidates the object before field
-cleanup. This runtime is single-threaded.
+cleanup. Native spawn and parallel pools use OS threads; diagnostic source position
+and call stacks are thread-local. ARC atomics do not establish general race freedom
+for classes, host handles, globals or arbitrary FFI.
 
 ## 9. Module System
 

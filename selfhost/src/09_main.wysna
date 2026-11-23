@@ -25,7 +25,7 @@ fn run_compiler() -> unit ! IoError {
     let cmd = clean[0]
     if cmd == "--version" or cmd == "-v" {
         if len(clean) != 1 { eprint("[W5002] Usage: Wysna Compiler --version") exit(2) }
-        print("wysna 0.8.0")
+        print(("wysna " + tool_compiler_version()))
         return
     }
     if cmd == "graph" {

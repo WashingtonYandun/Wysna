@@ -6,7 +6,7 @@ struct MirPlace { root: int, projections: list[MirProjection] }
 struct MirOperation { owner_type: int, labels: list[str], place: MirPlace, opcode: str, result: int, args: list[int], name: str, value: MirLiteral, source: Token }
 struct MirTerminator { kind: str, targets: list[int], value: int, source: Token }
 struct MirBlock { operations: list[MirOperation], terminator: MirTerminator }
-struct MirFunction { name: str, return_type: int, slots: list[MirSlot], blocks: list[MirBlock], params: list[int], source: Token, is_async: bool, async_return_type: int }
+struct MirFunction { declaration_name: str, name: str, return_type: int, slots: list[MirSlot], blocks: list[MirBlock], params: list[int], source: Token, is_async: bool, async_return_type: int }
 struct MirExtern { name: str, native: str, params: list[int], return_type: int, abi_params: list[str], abi_return: str }
 struct MirVirtualSlot { name: str, arity: int }
 struct MirGlobal { symbol: int, type_id: int, name: str }
@@ -208,14 +208,14 @@ fn mir_return(context: MirBuilder, value: int, source: Token) {
     mir_terminate(context, "return", targets, escaped, source)
 }
 
-fn mir_finish(context: MirBuilder, name: str, source: Token) {
+fn mir_finish(context: MirBuilder, name: str, source: Token, declaration_name: str) {
     let targets: list[int] = []
     for i in 0..len(context.blocks) {
         if context.blocks[i].terminator.kind == "" {
             context.blocks[i].terminator = MirTerminator { kind: "unreachable", targets: targets, value: -1, source: source }
         }
     }
-    context.functions.append(MirFunction { name: name, return_type: context.return_type, slots: context.slots, blocks: context.blocks, params: context.params, source: source, is_async: context.is_async, async_return_type: if context.is_async { context.async_return_type } else { 0 } })
+    context.functions.append(MirFunction { declaration_name: declaration_name, name: name, return_type: context.return_type, slots: context.slots, blocks: context.blocks, params: context.params, source: source, is_async: context.is_async, async_return_type: if context.is_async { context.async_return_type } else { 0 } })
 }
 
 fn mir_integer(context: MirBuilder, text: str, negative: bool, source: Token) -> int {

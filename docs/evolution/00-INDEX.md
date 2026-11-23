@@ -7,16 +7,22 @@
 
 ---
 
-## Estado vigente del candidato híbrido
+## Estado vigente de la arquitectura y el runtime
 
-El ciclo del 2026-11-22 está implementado en PR #176 y pendiente de integración;
-`main`/`develop` siguen en `8d2f95c`. Consultar primero
+PR #176 está integrado en `main`/`develop` en `4ad7c5e`; el CI del merge terminó
+correctamente. Consultar primero
 [ADR-05](ADR-05-arquitectura-hibrida-tooling-selfhost.md) y el
-[candidato y su evidencia](12-SIGUIENTE-CICLO-LENGUAJE.md#candidato-híbrido-del-2026-11-22).
+[ciclo y su evidencia](12-SIGUIENTE-CICLO-LENGUAJE.md#arquitectura-híbrida-integrada-y-siguiente-ciclo).
 `SIMP-R01` ya tiene una decisión implementada: lenguaje con oráculo de cuatro
 motores y tooling en Selfhost, con paquetes exclusivamente nativos. Los bloques
 1–4 tienen código y regresiones; CI e integración se verifican por separado.
 Las mediciones con modelos continúan aplazadas por decisión del mantenedor.
+
+El siguiente trabajo está en [13-RUNTIME-AGENT-FIRST.md](13-RUNTIME-AGENT-FIRST.md)
+y [ADR-06](ADR-06-metadatos-tipados-y-runtime-agentes.md): metadatos propios tipados,
+introspección y reparación de patrones, seguidos de transferencia segura entre
+workers, grupos estructurados, tipos de ancho explícito y portabilidad comprobada.
+La rama implementa R0; R1–R4 siguen pendientes y tienen criterios de cierre.
 
 ## Estado histórico de cierre y siguiente ciclo
 

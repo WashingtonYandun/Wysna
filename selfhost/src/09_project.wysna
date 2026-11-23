@@ -891,12 +891,12 @@ fn proj_parse_manifest_at(abs_manifest_path: str, visit_stack: list[str]) -> Pro
     if not proj_valid_semver(m.version) {
         return proj_fail(m, "W5002", "package.version must be an exact semantic version")
     }
-    if m.language_version != "0.8" {
-        return proj_fail(m, "W5002", "package.language must be exactly '0.8' for this compiler")
+    if m.language_version != (tool_language_version()) {
+        return proj_fail(m, "W5002", ("package.language must be exactly '" + tool_language_version() + "' for this compiler"))
     }
     if not m.has_tc_table { return proj_fail(m, "W5002", "toolchain must be a table") }
-    if m.compiler_version != "0.8.0" {
-        return proj_fail(m, "W5002", "toolchain.compiler must exactly match this compiler (0.8.0)")
+    if m.compiler_version != (tool_compiler_version()) {
+        return proj_fail(m, "W5002", ("toolchain.compiler must exactly match this compiler (" + tool_compiler_version() + ")"))
     }
     if m.stdlib != "bundled" {
         return proj_fail(m, "W5002", "toolchain.stdlib must be 'bundled'")
@@ -1013,7 +1013,7 @@ fn proj_check_envelope_json(command: str, status: str, exit_code: int, diagnosti
     parts.append(",\"tool_exit_code\":" + str(exit_code))
     parts.append(",\"process_exit_code\":" + str(exit_code))
     parts.append(",\"execution\":null")
-    parts.append(",\"toolchain\":{\"compiler\":\"0.8.0\"}")
+    parts.append((",\"toolchain\":{\"compiler\":\"" + tool_compiler_version() + "\"}"))
     parts.append(",\"target\":" + target_json)
     parts.append(",\"diagnostics\":" + diagnostics_json)
     parts.append(",\"artifacts\":" + artifacts_json)
@@ -1098,8 +1098,8 @@ fn proj_scaffold(args: list[str], json_mode_in: bool) -> unit {
     }
     let dirs = [root + "/src", root + "/tests"]
     let paths = [root + "/src/main.wysna", root + "/tests/example.wysna", root + "/wysna.toml"]
-    let manifest = "manifest_version = 1\n\n[package]\nname = \"" + name + "\"\nversion = \"0.1.0\"\nlanguage = \"0.8\"\n\n" +
-        "[toolchain]\ncompiler = \"0.8.0\"\nstdlib = \"bundled\"\n\n[sources]\nroot = \"src\"\n\n" +
+    let manifest = "manifest_version = 1\n\n[package]\nname = \"" + name + ("\"\nversion = \"0.1.0\"\nlanguage = \"" + tool_language_version() + "\"\n\n") +
+        ("[toolchain]\ncompiler = \"" + tool_compiler_version() + "\"\nstdlib = \"bundled\"\n\n[sources]\nroot = \"src\"\n\n") +
         "[targets.app]\nentry = \"src/main.wysna\"\nprofile = \"native-cli\"\n\n" +
         "[[tests]]\nname = \"example\"\nentry = \"tests/example.wysna\"\ntimeout_ms = 10000\n"
     let contents = [

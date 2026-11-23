@@ -19,7 +19,7 @@ def error_pattern_name(type_):
     return getattr(type_, "name", str(type_))
 
 
-def pattern_matrix_exhaustive(types, rows, interner=None):
+def pattern_matrix_exhaustive(types, rows, interner=None, *, missing_families=None):
     def recurse(next_types, next_rows):
         return pattern_matrix_exhaustive(next_types, next_rows, interner)
     # Disjunctions are rows in the same pattern matrix, including nested payloads.
@@ -31,7 +31,7 @@ def pattern_matrix_exhaustive(types, rows, interner=None):
         rows = expanded
     if not types:
         return bool(rows)
-    if not rows:
+    if not rows and missing_families is None:
         return False
     from hir.HirNodes import (
         HirWildcardPattern, HirBindingPattern, HirLiteralPattern, HirEnumPattern, HirErrorTypePattern, HirTuplePattern
@@ -125,5 +125,9 @@ def pattern_matrix_exhaustive(types, rows, interner=None):
             ):
                 specialized.append(row[1:])
         if not recurse(payload + types[1:], specialized):
-            return False
-    return True
+            if missing_families is None:
+                return False
+            fields = ', '.join('_' for _ in payload)
+            family = '(' + fields + ')' if name == 'tuple' else name + ('(' + fields + ')' if payload else '')
+            missing_families.append(family)
+    return not missing_families

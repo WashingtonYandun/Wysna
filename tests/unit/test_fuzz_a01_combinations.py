@@ -48,7 +48,7 @@ def _run_cli(cwd: Path, *args: str) -> subprocess.CompletedProcess[str]:
 
 class TestFuzzA01Combinations(unittest.TestCase):
     def test_fuzz_a01_multifile_differential_campaign(self):
-        """Seeded multi-file positive + all 12 negative classes agree across all 4 engines with zero W9999."""
+        """Seeded multi-file positives and every rejection class agree across all four engines."""
         summary = run_multifile_fuzz_campaign(
             positive_count=6,
             negative_count=len(NEGATIVE_KINDS),

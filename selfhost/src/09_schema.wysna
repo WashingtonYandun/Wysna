@@ -1036,8 +1036,10 @@ fn schema_tool_json(f: SchemaFn, lines: list[str], known_defs: list[str], graph:
     let mut effs: list[str] = []
     let mut caps: list[str] = []
     let mut complete = false
+    let mut attributes: list[StaticAttribute] = []
     for n in graph.nodes {
         if n.kind == "fn" and n.file == graph.entry_file and n.name == f.name {
+            attributes = n.attributes
             effs = n.effects
             caps = n.capabilities
             complete = true
@@ -1085,6 +1087,7 @@ fn schema_tool_json(f: SchemaFn, lines: list[str], known_defs: list[str], graph:
     obj.append("\"name\":" + diag_json_quote(f.name))
     obj.append(",\"visibility\":" + diag_json_quote(vis))
     obj.append(",\"signature\":" + diag_json_quote(signature))
+    obj.append(",\"attributes\":" + tool_attributes_json(attributes))
     obj.append(",\"description\":" + desc_j)
     obj.append(",\"input_schema\":" + in_schema)
     obj.append(",\"output_schema\":" + out_json)
@@ -1406,7 +1409,7 @@ fn tool_handle_schema(args: list[str], json_mode_in: bool) -> unit {
 
     let codecs_src = if emit_codecs { schema_generate_codecs(structs, enums, known_defs) } else { "" }
     let codecs_field = if emit_codecs { ",\"codecs_source\":" + diag_json_quote(codecs_src) } else { "" }
-    let payload_json = "{\"schema_version\":\"wysna.schema/1\",\"compiler_version\":\"0.8.0\",\"$schema\":\"https://json-schema.org/draft/2020-12/schema\",\"$defs\":" + join_strings(defs_parts, "") + ",\"tools\":" + join_strings(tools_parts, "") + codecs_field + "}"
+    let payload_json = ("{\"schema_version\":\"wysna.schema/1\",\"compiler_version\":\"" + tool_compiler_version() + "\",\"$schema\":\"https://json-schema.org/draft/2020-12/schema\",\"$defs\":") + join_strings(defs_parts, "") + ",\"tools\":" + join_strings(tools_parts, "") + codecs_field + "}"
 
     if out_path != "" {
         let out_content = if emit_codecs and not json_mode { codecs_src } else { payload_json + "\n" }

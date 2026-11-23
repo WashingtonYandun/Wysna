@@ -5,6 +5,12 @@
 
 ## 1. Hallazgo principal: el runtime ya tiene primitivos atómicos parciales, pero el contexto global NO es thread-safe
 
+Actualización 2026-11-22: la rama `feat/v0.9-agent-contracts-annotations-patterns`
+mueve ubicación y pila de diagnóstico a TLS, con una regresión que falla antes de
+la corrección. Los demás puntos conservan su estado pendiente de reauditoría y
+corrección; este cambio no cierra la seguridad multihilo completa. La secuencia
+vigente está en [R1–R4](../13-RUNTIME-AGENT-FIRST.md).
+
 Contrario a la suposición inicial de [`06-BRECHAS.md`](../06-BRECHAS.md) (`int rc` no atómico), la inspección directa del runtime C99 demuestra dos mitades asimétricas:
 
 ### Lo que SÍ es atómico / sincronizado hoy

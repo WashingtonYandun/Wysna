@@ -531,11 +531,14 @@ fn module_expand(context: ModuleLoader, src: str, path: str, entry: bool) -> int
     position = 0
     let mut braces = 0
     let mut parentheses = 0
+    let mut in_attribute = false
     while position < len(body) {
         let token = body[position]
+        if token.kind == "AT" { in_attribute = true }
+        if token.kind == "FN" { in_attribute = false }
 
         let mut consumed = false
-        if token.kind == "IDENT" and not (position > 0 and body[position - 1].kind == "AT") {
+        if token.kind == "IDENT" and not (position > 0 and body[position - 1].kind == "AT" and (token.val == "deprecated" or token.val == "must_use")) {
             for i in 0..len(aliases) {
                 if token.val == aliases[i] and position + 2 < len(body) and body[position + 1].kind == "DOT" {
                     let member = body[position + 2]
@@ -563,6 +566,7 @@ fn module_expand(context: ModuleLoader, src: str, path: str, entry: bool) -> int
             }
             if not consumed {
                 let mut field = false
+                if in_attribute and position + 1 < len(body) and body[position + 1].kind == "COLON" { field = true }
                 if position > 0 and body[position - 1].kind == "DOT" { field = true }
                 if position + 1 < len(body) and body[position + 1].kind == "COLON" and parentheses == 0 {
                     field = true

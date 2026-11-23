@@ -487,6 +487,7 @@ def build_semantic_graph(checked, *, effects_report=None) -> dict:
                     'is_async': bool(getattr(stmt, 'is_async', False)),
                     'signature': _format_fn_signature(stmt, short),
                     'requires_count': len(getattr(stmt, 'requires', ()) or ()),
+                    'attributes': [attribute.metadata() for attribute in getattr(stmt, 'attributes', [])],
                     'ensures_count': len(getattr(stmt, 'ensures', ()) or ()),
                     'calls': [],
                     'called_by': [],

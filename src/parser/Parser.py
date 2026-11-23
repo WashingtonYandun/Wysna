@@ -599,15 +599,16 @@ class Parser:
         attributes, names = [], set()
         while self.match(TokenType.AT):
             token = self.expect(TokenType.IDENTIFIER, code='W0006', msg='Expected static attribute name')
-            if token.value not in ('deprecated', 'must_use'):
-                raise ParserError('Unknown static attribute; supported attributes are @deprecated and @must_use',
-                                  file=self.file, line=token.line, col=token.col, code='W0006')
-            if token.value in names:
-                raise ParserError('Duplicate static attribute: ' + token.value, file=self.file,
+            name = token.value
+            while self.match(TokenType.DOT):
+                name += '.' + self.expect(TokenType.IDENTIFIER, code='W0006', msg='Expected annotation type').value
+            if name in names:
+                raise ParserError('Duplicate static attribute: ' + name, file=self.file,
                                   line=token.line, col=token.col, code='W1002')
-            names.add(token.value)
+            names.add(name)
             message = ''
-            if token.value == 'deprecated':
+            arguments = {}
+            if name == 'deprecated':
                 self.expect(TokenType.LPAREN, code='W0006', msg='@deprecated requires one non-empty string literal')
                 literal = self.expect(TokenType.STR, code='W0006', msg='@deprecated requires one non-empty string literal')
                 if not literal.value.strip(' \t\r\n'):
@@ -615,10 +616,39 @@ class Parser:
                                       line=literal.line, col=literal.col, code='W0006')
                 message = literal.value
                 self.expect(TokenType.RPAREN, code='W0006', msg='@deprecated requires exactly one string literal')
-            elif self.check(TokenType.LPAREN):
+            elif name == 'must_use' and self.check(TokenType.LPAREN):
                 raise ParserError('@must_use does not accept arguments', file=self.file,
                                   line=token.line, col=token.col, code='W0006')
-            attributes.append(StaticAttribute(token.value, message, start.line, start.col))
+            elif name != 'must_use' and self.match(TokenType.LPAREN):
+                while not self.check(TokenType.RPAREN):
+                    field = self.expect(TokenType.IDENTIFIER, code='W0006', msg='Expected annotation field')
+                    self.expect(TokenType.COLON, code='W0006', msg='Annotation arguments require field: literal')
+                    if field.value in arguments:
+                        raise ParserError('Duplicate annotation field: ' + field.value, file=self.file,
+                                          line=field.line, col=field.col, code='W1002')
+                    negative = self.match(TokenType.MINUS)
+                    literal = self.at()
+                    if self.match(TokenType.INT):
+                        value = int(literal.value) * (-1 if negative else 1)
+                        if not -(2**63) <= value < 2**63:
+                            raise ParserError('Annotation integer exceeds Int64', file=self.file,
+                                              line=literal.line, col=literal.col, code='W0002')
+                    elif self.match(TokenType.STR) and not negative:
+                        value = literal.value
+                    elif self.match(TokenType.TRUE) and not negative:
+                        value = True
+                    elif self.match(TokenType.FALSE) and not negative:
+                        value = False
+                    else:
+                        raise ParserError('Annotation values must be str, bool, or Int64 literals', file=self.file,
+                                          line=literal.line, col=literal.col, code='W0006')
+                    arguments[field.value] = value
+                    if not self.match(TokenType.COMMA):
+                        break
+                self.expect(TokenType.RPAREN, code='W0006', msg='Expected annotation closing parenthesis')
+            attribute = StaticAttribute(name, message, start.line, start.col)
+            attribute.arguments = arguments
+            attributes.append(attribute)
             self._skip_statement_separators()
             start = self.at()
         declaration = self.parse_stmt(allow_top_level=True)

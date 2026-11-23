@@ -290,11 +290,20 @@ pub fn make_str_err(code: int, msg: str) -> DomainErr[str] {
         ])
 
     main_lines.extend([
+        '    print("patterns:", dom.classify[int](dom.Boxed[int] { tag: "meta", item: a }, b))',
         "}",
         "main()",
         "",
     ])
 
+    domain_lines.extend([
+        'pub struct AgentTool { name: str, read_only: bool }',
+        '@AgentTool(name: "classify", read_only: true)',
+        '@must_use',
+        'pub fn classify[T](box: Boxed[T], n: int) -> int {',
+        '    match box { Boxed { item: _, .. } => match n { -5..=0 | 1..=5 => 1, _ => 2 } }',
+        '}',
+    ])
     files = {
         "errors.wysna": errors_src,
         "domain.wysna": "\n".join(domain_lines) + "\n",
@@ -317,6 +326,9 @@ NEGATIVE_KINDS = [
     "cross_module_immutable_struct_field_assign",
     "generic_constraint_violation_cross_module",
     "spread_type_mismatch_cross_module",
+    "annotation_type_mismatch_cross_module",
+    "pattern_or_binding_mismatch",
+    "range_empty_cross_module",
 ]
 
 
@@ -324,6 +336,22 @@ def generate_multifile_negative(seed: int, kind: str | None = None) -> MultiFile
     """Generate multi-file invalid programs whose rejection must agree across Seed and Selfhost without W9999."""
     rng = random.Random(seed)
     chosen = kind or rng.choice(NEGATIVE_KINDS)
+
+    if chosen == 'annotation_type_mismatch_cross_module':
+        return MultiFileCase(seed, {
+            'meta.wysna': 'pub struct AgentTool { read_only: bool }\n',
+            'main.wysna': 'import "meta.wysna" as m\n@m.AgentTool(read_only: 1)\nfn f() {}\n',
+        }, 'main.wysna', 'W2001')
+    if chosen == 'pattern_or_binding_mismatch':
+        return MultiFileCase(seed, {
+            'domain.wysna': 'pub enum Item { A(int), B(int) }\n',
+            'main.wysna': 'import "domain.wysna" as d\nfn f(x:d.Item)->int { match x { d.Item.A(a) | d.Item.B(b) => 1 } }\n',
+        }, 'main.wysna', 'W2001')
+    if chosen == 'range_empty_cross_module':
+        return MultiFileCase(seed, {
+            'domain.wysna': 'pub fn number()->int{42}\n',
+            'main.wysna': 'import "domain.wysna" as d\nprint(match d.number() { 5..5 => 1, _ => 0 })\n',
+        }, 'main.wysna', 'W2001')
 
     if chosen == "non_exhaustive_imported_generic_err":
         files = {

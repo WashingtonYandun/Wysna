@@ -37,6 +37,11 @@ All contributors and participants are expected to adhere to our [Code of Conduct
   ```
   Run `python3 tools/bundle_selfhost.py` and full 3-stage bootstrap verification before opening a PR.
 
+- **Contrato para agentes:** edita `src/common/agent_contract.json` para cambiar
+  versión, comandos o guías. `python3 tools/bundle_selfhost.py` regenera constantes
+  nativas y `Version.py`; `--check` rechaza salidas obsoletas. Las anotaciones propias
+  son metadatos de esquemas `struct`, comprobados sin ejecutar código al compilar.
+
 The Wysna toolchain consists of two primary compiler engines and a unified C99 runtime.
 Seed's batch CLI and LSP share `compiler/CompilerService.py`, which returns a
 session-bound `CheckedProgram`. Consumers get isolated syntax trees; linking and lowering

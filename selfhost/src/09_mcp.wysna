@@ -438,7 +438,7 @@ fn mcp_handle_message(state: McpServerState, msg: LspJson) -> str {
     let params = lsp_json_get(msg, "params")
     if method == "initialize" {
         let pv = lsp_json_str(params, "protocolVersion", "2025-06-18")
-        return mcp_rpc_result(id_raw, "{\"protocolVersion\":" + diag_json_quote(pv) + ",\"capabilities\":{\"tools\":{}},\"serverInfo\":{\"name\":\"wysna\",\"version\":\"0.8.0\"}}")
+        return mcp_rpc_result(id_raw, "{\"protocolVersion\":" + diag_json_quote(pv) + (",\"capabilities\":{\"tools\":{}},\"serverInfo\":{\"name\":\"wysna\",\"version\":\"" + tool_compiler_version() + "\"}}"))
     }
     if method == "ping" {
         return mcp_rpc_result(id_raw, "{}")

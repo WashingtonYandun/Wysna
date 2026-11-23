@@ -135,9 +135,16 @@ class Formatter:
             rendered = indent + "pub " + rendered[len(indent):]
         attributes = getattr(stmt, 'attributes', [])
         if attributes:
-            lines = [self._indent(level) + '@' + attribute.name +
-                     ('(' + self._escape_str(attribute.message) + ')' if attribute.name == 'deprecated' else '')
-                     for attribute in attributes]
+            lines = []
+            for attribute in attributes:
+                args = ''
+                if attribute.name == 'deprecated':
+                    args = '(' + self._escape_str(attribute.message) + ')'
+                elif attribute.arguments:
+                    values = [(name + ': ' + (self._escape_str(value) if isinstance(value, str)
+                              else str(value).lower())) for name, value in attribute.arguments.items()]
+                    args = '(' + ', '.join(values) + ')'
+                lines.append(self._indent(level) + '@' + attribute.name + args)
             rendered = '\n'.join(lines) + '\n' + rendered
         return rendered
 

@@ -1,10 +1,11 @@
 # Siguiente ciclo: tipos, errores y garantías del lenguaje
 
-## Candidato híbrido del 2026-11-22
+## Arquitectura híbrida integrada y siguiente ciclo
 
-`main`/`develop` parten de `8d2f95c` (PR #175). El trabajo nuevo vive en
-[PR #176](https://github.com/WashingtonYandun/Wysna/pull/176), rama
-`feat/selfhost-tooling-split-and-delegation`; todavía no está integrado.
+[PR #176](https://github.com/WashingtonYandun/Wysna/pull/176) está integrado en
+`main` y `develop` en `4ad7c5e`. El [CI del merge](https://github.com/WashingtonYandun/Wysna/actions/runs/45073946830)
+terminó correctamente. El siguiente trabajo vive en `feat/v0.9-agent-contracts-annotations-patterns`;
+su secuencia está en [Runtime agent-first](13-RUNTIME-AGENT-FIRST.md) y [ADR-06](ADR-06-metadatos-tipados-y-runtime-agentes.md).
 La decisión vigente es [ADR-05](ADR-05-arquitectura-hibrida-tooling-selfhost.md):
 el lenguaje conserva el oráculo diferencial de cuatro motores y el tooling se
 implementa en Selfhost; `packages` es exclusivamente nativo.

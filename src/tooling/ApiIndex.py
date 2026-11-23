@@ -11,6 +11,7 @@ import sys
 from common.Paths import get_repo_root
 from common.Platform import compiler_command
 from common.Version import WYSNA_VERSION
+from common.AgentContract import capabilities
 from compiler.CompilerService import CompilerService
 from error.Error import WysnaError
 from node.NodeType import (
@@ -113,6 +114,7 @@ def _function_record(node, module_id, owner, lines, *, public=True, kind="functi
         "signature": signature,
         "type_parameters": type_parameters,
         "parameters": params,
+        "attributes": [attribute.metadata() for attribute in getattr(node, 'attributes', [])],
         "return_type": return_type,
         "error_channel": error_type,
         "effects": "unknown",
@@ -364,41 +366,10 @@ def run_capabilities_command(argv):
                 "build_requirements": [asdict(requirement) for requirement in spec.build_requirements],
                 "run_requirements": [asdict(requirement) for requirement in spec.run_requirements],
             })
-        payload = {
-            "schema_version": "wysna.capabilities/1",
-            "compiler_version": WYSNA_VERSION,
-            "commands": ["run", "check", "fmt", "ast", "mir", "tokens", "emit-c", "build",
-                         "project.new", "project.lock", "project.check", "project.build", "project.run", "project.test",
-                         "api", "capabilities", "explain", "graph", "inspect", "patch", "skills",
-                         "fix", "schema", "mcp", "lsp", "repl"],
-            "machine_output": {"format": "json-v1", "commands": ["check", "fmt", "emit-c", "build",
-                                                                          "project.new", "project.lock", "project.check", "project.build", "project.test",
-                                                                          "api", "capabilities", "explain",
-                                                                          "graph", "inspect", "patch", "skills",
-                                                                          "fix", "schema"]},
-            "profiles": ["native-cli", "wasi-command", "browser-library", "c99-source"],
-            "targets": ["native", "wasm32-wasip1", "wasm32-unknown-emscripten"],
-            "runtimes": {"wasi-command": "wasmtime-python==50.0.1",
-                         "browser-library": "browser or Node.js"},
-            "capabilities": {
-                profile: list(spec.capabilities) for profile, spec in TARGET_SPECS.items()
-            },
-            "target_profiles": target_profiles,
-            "requirements": {
-                "std/http": {
-                    "interpreter": "install wysna[http] with libcurl 8.3.0 or newer",
-                    "native": "install libcurl 8.3.0 or newer development files and expose curl-config on PATH",
-                    "wasi-command": "unavailable",
-                    "browser-library": "unavailable",
-                },
-            },
-            "limitations": ["native-cli capabilities describe host access and are not a sandbox",
-                            "WASI Preview 1 does not provide networking, child processes, or native FFI",
-                            "browser-library exposes only generated scalar and UTF-8 exports; WVal and pointers remain internal",
-                            "project dependencies are local paths only",
-                            "project lockfiles do not claim bit-for-bit binary reproducibility"],
-            "host_dependencies": _probe_host_dependencies(),
-        }
+        payload = capabilities('seed')
+        payload['target_profiles'] = target_profiles
+        payload['capabilities'] = {profile: list(spec.capabilities) for profile, spec in TARGET_SPECS.items()}
+        payload['host_dependencies'] = _probe_host_dependencies()
         root = _STDLIB_ROOT.parent
         if (root / 'installation.json').is_file() and (root / 'wysna_entry.py').is_file():
             payload['commands'].append('doctor')

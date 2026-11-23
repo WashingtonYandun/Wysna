@@ -86,7 +86,7 @@ fn proj_test_plan(m: ProjectManifest, discover: bool, filter: str, has_filter: b
             ",\"entry\":" + diag_json_quote(tc.entry) + ",\"entry_sha256\":" + diag_json_quote(sha) + ",\"timeout_ms\":" + str(tc.timeout_ms) + "}")
     }
     let snapshot = "\"manifest_sha256\":" + diag_json_quote(m.manifest_sha256) + ",\"lock_sha256\":" +
-        (if lock_sha == "" { "null" } else { diag_json_quote(lock_sha) }) + ",\"toolchain\":\"0.8.0\",\"cases\":[" + join_strings(rows, ",") + "]"
+        (if lock_sha == "" { "null" } else { diag_json_quote(lock_sha) }) + (",\"toolchain\":\"" + tool_compiler_version() + "\",\"cases\":[") + join_strings(rows, ",") + "]"
     let hash = diag_sha256_hex("{" + snapshot + "}")
     let payload = "{\"schema_version\":\"wysna.project-test-plan/1\",\"project\":" + diag_json_quote(m.name) + "," + snapshot +
         ",\"selected\":" + str(len(selected)) + ",\"plan_hash\":" + diag_json_quote(hash) + "}"
