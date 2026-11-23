@@ -123,3 +123,7 @@ con planes, selección exacta, descubrimiento explícito, precondición SHA-256,
 JSON/JUnit, fixtures y captura limitada. El timeout de cada caso incluye sus
 fases de compilación y ejecución. `wysna test PATH` conserva su contrato separado
 de fixtures del compilador y archivos `.expected`.
+
+El [perfil Linux aislado](ISOLATED_SDK.md) ejecuta el SDK instalado dentro de un
+contenedor sin red, con directorio de proyecto de solo lectura, cuotas de CPU y
+memoria y resultados JSON para el agente.

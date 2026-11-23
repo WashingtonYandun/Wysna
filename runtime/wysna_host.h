@@ -2038,28 +2038,101 @@ static inline WVal wysna_await(WVal val) {
     return val;
 }
 
+enum {
+    WYSNA_GROUP_RUNNING = 0,
+    WYSNA_GROUP_CANCELLED = 1,
+    WYSNA_GROUP_DEADLINE = 2
+};
+
+typedef struct WysnaTaskGroupState {
+    int32_t reason;
+    volatile int lock;
+    int64_t deadline;
+    bool fail_fast;
+} WysnaTaskGroupState;
+
+static WYSNA_THREAD_LOCAL WysnaTaskGroupState* wysna_current_group = NULL;
+
+static inline int32_t wysna_group_stop(WysnaTaskGroupState* group, int32_t reason) {
+    wysna_spinlock_acquire(&group->lock);
+    int32_t stopped = wysna_atomic_load_i32(&group->reason);
+    if (stopped == WYSNA_GROUP_RUNNING) {
+        wysna_atomic_store_i32(&group->reason, reason);
+        stopped = reason;
+    }
+    wysna_spinlock_release(&group->lock);
+    return stopped;
+}
+
+static inline int32_t wysna_group_status(WysnaTaskGroupState* group) {
+    int32_t reason = wysna_atomic_load_i32(&group->reason);
+    if (reason == WYSNA_GROUP_RUNNING && group->deadline != INT64_MAX &&
+        wysna_host_monotonic_ms_internal() >= group->deadline) {
+        return wysna_group_stop(group, WYSNA_GROUP_DEADLINE);
+    }
+    return reason;
+}
+
+static inline bool wysna_group_cancelled(void) {
+    return wysna_current_group && wysna_group_status(wysna_current_group) != WYSNA_GROUP_RUNNING;
+}
+
+static inline bool wysna_cancel_group(void) {
+    WysnaTaskGroupState* group = wysna_current_group;
+    return group && wysna_group_status(group) != WYSNA_GROUP_DEADLINE &&
+        wysna_group_stop(group, WYSNA_GROUP_CANCELLED) == WYSNA_GROUP_CANCELLED;
+}
+
+static inline WVal wysna_group_call(WysnaTaskGroupState* group, WVal function, WVal* input) {
+    int32_t status = wysna_group_status(group);
+    WVal result = wysna_none();
+    if (status == WYSNA_GROUP_RUNNING) {
+        WVal output = wysna_call(function, 1, input);
+        status = wysna_group_status(group);
+        if (status == WYSNA_GROUP_RUNNING) {
+            if (group->fail_fast && wysna_is_err(output)) {
+                wysna_group_stop(group, WYSNA_GROUP_CANCELLED);
+            }
+            result = wysna_enum_payload("Option", "Some", wysna_worker_snapshot(output));
+        }
+        wysna_release(output);
+    }
+    WVal fields[] = {wysna_int(status), result};
+    WVal pair = wysna_make_tuple(2, fields);
+    wysna_release(result);
+    return pair;
+}
+
 typedef struct WysnaParallelWork {
     WVal* inputs;
     WVal* outputs;
     WVal fn;
     int32_t start;
     int32_t end;
+    WysnaTaskGroupState* group;
 } WysnaParallelWork;
 
 static int32_t wysna_parallel_active_depth = 0;
 
 static inline void wysna_parallel_run_slice(WysnaParallelWork* work) {
+    WysnaTaskGroupState* previous_group = wysna_current_group;
+    wysna_current_group = work->group;
     wysna_worker_depth++;
     for (int32_t i = work->start; i < work->end; i++) {
-        WVal out = wysna_call(work->fn, 1, &work->inputs[i]);
-        work->outputs[i] = wysna_worker_snapshot(out);
-        wysna_release(out);
+        if (work->group) {
+            work->outputs[i] = wysna_group_call(work->group, work->fn, &work->inputs[i]);
+        } else {
+            WVal out = wysna_call(work->fn, 1, &work->inputs[i]);
+            work->outputs[i] = wysna_worker_snapshot(out);
+            wysna_release(out);
+        }
         wysna_release(work->inputs[i]);
         work->inputs[i] = wysna_unit();
     }
     wysna_release(work->fn);
     work->fn = wysna_unit();
     wysna_worker_depth--;
+    wysna_current_group = previous_group;
     wysna_atomic_sub_i64(&wysna_runtime_context.active_workers, 1);
 }
 
@@ -2075,7 +2148,8 @@ static DWORD WINAPI wysna_parallel_win32_entry(LPVOID raw) {
 }
 #endif
 
-static inline WVal wysna_parallel_map(WVal values, WVal transform) {
+static inline WVal wysna_parallel_map_configured(WVal values, WVal transform,
+                                                int64_t limit, WysnaTaskGroupState* group) {
     wysna_step_tick();
     WListBuf* list = wysna_as_list(values);
     if (!list) {
@@ -2092,6 +2166,7 @@ static inline WVal wysna_parallel_map(WVal values, WVal transform) {
     }
 
     int32_t max_workers = 4;
+    if (limit < max_workers) max_workers = limit > 0 ? (int32_t)limit : 1;
     const char* threads_env = getenv("WYSNA_PARALLEL_THREADS");
     if (threads_env && threads_env[0] != '\0') {
         long parsed = strtol(threads_env, NULL, 10);
@@ -2126,6 +2201,7 @@ static inline WVal wysna_parallel_map(WVal values, WVal transform) {
         wysna_worker_copy_clear(&memo);
         tasks[w].start = cursor;
         tasks[w].end = cursor + span;
+        tasks[w].group = group;
         cursor += span;
     }
 
@@ -2170,6 +2246,19 @@ static inline WVal wysna_parallel_map(WVal values, WVal transform) {
     free(inputs);
     free(outputs);
     return result;
+}
+
+static inline WVal wysna_parallel_map(WVal values, WVal transform) {
+    return wysna_parallel_map_configured(values, transform, 4, NULL);
+}
+
+static inline WVal wysna_run_task_group(WVal values, int64_t limit, int64_t deadline_ms,
+                                        bool fail_fast, WVal transform) {
+    int64_t now = wysna_host_monotonic_ms_internal();
+    int64_t deadline = INT64_MAX;
+    if (deadline_ms >= 0 && deadline_ms < INT64_MAX - now) deadline = now + deadline_ms;
+    WysnaTaskGroupState group = {WYSNA_GROUP_RUNNING, 0, deadline, fail_fast};
+    return wysna_parallel_map_configured(values, transform, limit, &group);
 }
 
 static inline WVal wysna_parallel_batch(WVal values, int64_t batch_size, WVal transform) {

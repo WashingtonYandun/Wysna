@@ -40,12 +40,52 @@ print(u8(256) == None)
 @pytest.mark.parametrize('engine', ENGINES)
 @pytest.mark.parametrize('source,code', [
     ('let limit: u8 = 256', 'W0002'),
+    ('let limit: u8 = -1', 'W0002'),
+    ('let limit: u8 = 0x100', 'W0002'),
     ('let input = 1\nlet limit: u8 = input', 'W2001'),
 ])
 def test_narrowing_never_happens_implicitly(engine, source, code, tmp_path, native_worker_compiler):
     result = run_engine(engine, source, 'byte-rejection', native_worker_compiler, tmp_path)
     assert not result.compile_ok
     assert result.diag_code == code, result.stderr
+
+
+@pytest.mark.parametrize('engine', ENGINES)
+def test_bytes_support_prefixed_literals_loops_dicts_and_membership(engine, tmp_path, native_worker_compiler):
+    source = """
+let high: u8 = 0xff
+let mask: u8 = 0b10101010
+let bytes: list[u8] = [0, mask, high]
+let mut total = 0
+for item in bytes {
+    total += int(item)
+}
+let labels: dict[u8, str] = {0: "zero", 255: "max"}
+print(total, labels[high], mask in bytes, bytes.contains(0))
+"""
+    result = run_engine(engine, source, 'byte-collections', native_worker_compiler, tmp_path)
+    assert result.runtime_ok, result.stderr
+    assert result.stdout == '425 max true true\n'
+
+
+@pytest.mark.parametrize('engine', ENGINES)
+def test_task_group_processes_packed_byte_list(engine, tmp_path, native_worker_compiler):
+    source = """
+import "std/async" as tasks
+
+fn double_checked(value: u8) -> int ! str {
+    let n = int(value)
+    if n > 200 { return Err("too high") }
+    return n * 2
+}
+
+let payload: list[u8] = [1, 255, 42]
+let outcomes = tasks.run_group(payload, 2, -1, false, double_checked) else error { [] }
+print(outcomes)
+"""
+    result = run_engine(engine, source, 'byte-task-group', native_worker_compiler, tmp_path)
+    assert result.runtime_ok, result.stderr
+    assert result.stdout == '[TaskOutcome.Completed(2), TaskOutcome.Failed("too high"), TaskOutcome.Completed(84)]\n'
 
 
 def test_million_u8_payload_is_one_megabyte(tmp_path: Path):
@@ -85,6 +125,8 @@ def test_byte_schema_codecs_validate_external_values(producer, tmp_path, native_
 fn accepted() -> unit ! json.JsonError {
     let decoded = from_json_Sample("{\\"scalar\\":255,\\"bytes\\":[0,42],\\"optional\\":17}")?
     print(decoded.scalar, decoded.bytes, decoded.optional)
+    let absent = from_json_Sample("{\\"scalar\\":0,\\"bytes\\":[1],\\"optional\\":null}")?
+    print(absent.scalar, absent.bytes, absent.optional)
 }
 let _ = accepted() else err { print(err.message) }
 fn rejected() {
@@ -98,7 +140,7 @@ rejected()
     engine = 'hir' if producer == 'seed' else 'selfhost'
     result = run_engine(engine, program, 'byte-json-schema', native_worker_compiler, tmp_path)
     assert result.runtime_ok, result.stderr
-    assert result.stdout == '255 [0, 42] Some(17)\nu8 out of range\n'
+    assert result.stdout == '255 [0, 42] Some(17)\n0 [1] None\nu8 out of range\n'
 
 
 @pytest.mark.parametrize('engine', ENGINES)

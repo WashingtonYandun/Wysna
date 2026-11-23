@@ -520,6 +520,16 @@ fn mir_c_display_fn_name(name: str) -> str {
 fn mir_c_function(module: MirModule, function: MirFunction) -> str {
     if function.is_async { return mir_c_async_function(module, function) }
     let mut parts: list[str] = [mir_c_signature(function) + " {\n"]
+    for name in ["group_cancelled", "cancel_group"] {
+        if mir_c_stdlib_function(function, "async", name, 0) {
+            return join_strings(parts, "") + "    return wysna_" + name + "();\n}\n"
+        }
+    }
+    if mir_c_stdlib_function(function, "async", "_run_task_group", 5) {
+        let mut names: list[str] = []
+        for parameter in function.params { names.append(mir_c_name(parameter)) }
+        return join_strings(parts, "") + "    return wysna_run_task_group(" + join_strings(names, ", ") + ");\n}\n"
+    }
     let async_helper = mir_c_async_helper(function)
     if async_helper == "wysna_async_spawn_handle" and len(function.params) == 1 {
         let p0 = mir_c_name(function.params[0])

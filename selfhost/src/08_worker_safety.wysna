@@ -29,6 +29,7 @@ fn worker_entry(program: CheckedProgram, target: int) -> str {
     let mut module_name = "algorithms"
     let mut arity = 2
     if name == "spawn" or name == "_spawn_handle" { module_name = "async" arity = 1 }
+    elif name == "run_group" or name == "_run_task_group" { module_name = "async" arity = 5 }
     elif name == "parallel_batch" { arity = 3 }
     elif name == "parallel_reduce" { arity = 4 }
     elif name != "parallel_map" and name != "parallel_filter" { return "" }
@@ -40,8 +41,9 @@ fn worker_sem_value(context: SemanticContext, value: SemValue) {
     if node.kind != "callee" or node.target < 0 { return }
     let function = context.functions[node.target]
     let name = tool_short_name(function.declaration_name)
-    let module_name = if name == "spawn" or name == "_spawn_handle" { "async" } else { "algorithms" }
-    if (name == "spawn" or name == "_spawn_handle" or name == "parallel_map" or name == "parallel_filter" or name == "parallel_reduce" or name == "parallel_batch") and worker_library(function.source.file, module_name) {
+    let async_entry = name == "spawn" or name == "_spawn_handle" or name == "run_group" or name == "_run_task_group"
+    let module_name = if async_entry { "async" } else { "algorithms" }
+    if (async_entry or name == "parallel_map" or name == "parallel_filter" or name == "parallel_reduce" or name == "parallel_batch") and worker_library(function.source.file, module_name) {
         worker_effect_error(node.source, node.source, "escaping_worker_entry", "Worker entry points require a direct checked call")
     }
 }
@@ -220,7 +222,10 @@ fn worker_check_root(state: WorkerAnalysis, root: int) {
         if node.kind == "call" {
             let entry = worker_entry(program, node.target)
             if entry != "" {
-                let argument = if entry == "spawn" or entry == "_spawn_handle" { 0 } else { if entry == "parallel_batch" or entry == "parallel_reduce" { 2 } else { 1 } }
+                let mut argument = 1
+                if entry == "spawn" or entry == "_spawn_handle" { argument = 0 }
+                elif entry == "run_group" or entry == "_run_task_group" { argument = 4 }
+                elif entry == "parallel_batch" or entry == "parallel_reduce" { argument = 2 }
                 worker_callback(state, node.children[argument], node.source)
             }
         } elif node.kind == "callee" and worker_entry(program, node.target) != "" {

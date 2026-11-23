@@ -321,6 +321,12 @@ class CCodeGen:
         self.slots.update({slot.id: slot for slot in function.slots})
         params = ', '.join(self.ctype(function.slots[index].type_id) + ' ' + self.name(index) for index in function.params) or 'void'
         lines = [f'static {self.ctype(function.return_type)} {function.name}({params}) {{']
+        for name in ('group_cancelled', 'cancel_group'):
+            if stdlib_declaration(function, 'async', name, 0):
+                return lines + [f'    return wysna_{name}();', '}', '']
+        if stdlib_declaration(function, 'async', '_run_task_group', 5):
+            arguments = ', '.join(self.name(index) for index in function.params)
+            return lines + [f'    return wysna_run_task_group({arguments});', '}', '']
         async_helper = self._async_runtime_helper(function)
         if async_helper is not None:
             p_names = [self.name(index) for index in function.params]

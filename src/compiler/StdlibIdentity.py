@@ -18,6 +18,7 @@ _WORKER_INTRINSICS = {
     'parallel_map': ('algorithms', 2), 'parallel_filter': ('algorithms', 2),
     'parallel_batch': ('algorithms', 3), 'parallel_reduce': ('algorithms', 4),
     '_spawn_handle': ('async', 1), '_take_task_value': ('async', 2),
+    '_run_task_group': ('async', 5), 'group_cancelled': ('async', 0), 'cancel_group': ('async', 0),
 }
 
 

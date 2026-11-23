@@ -1287,7 +1287,7 @@ fn tool_skills_topic_content(topic: str) -> str {
     if topic == "project-tests" { return "# Pruebas de proyecto para agentes\n1. Lista sin ejecutar: `wysna project test --discover --list --frozen --output-format=json-v1`.\n2. Usa los IDs exactos de result.cases: `--case test:example`; --filter conserva selección por subcadena.\n3. Ejecuta con `--expect-plan-hash <result.plan_hash> --output-format=json-v1 --report-json tests.json --report-junit tests.xml`.\n4. Lee result.cases[].failure_kind, diagnostics y los hashes de stdout/stderr; no interpretes texto de terminal.\n5. W5005 indica plan obsoleto: vuelve a listar. Una suite vacía devuelve 2; una cancelación devuelve 130.\n6. std/test ofrece igualdad genérica, tolerancia flotante, opcionales y fixture_directory(); los fixtures se eliminan después del caso.\nEl hash cubre manifiesto, lock, versión y entradas seleccionadas, no todos los imports. El SDK native-core-v1 ejecuta estos comandos sin Python.\n7. Dependencias: `wysna packages pack --manifest dependency/wysna.toml -o dependency.tar`; adquiere con `packages fetch --manifest wysna.toml --archive dependency.tar --sha256 <pin> --cache <cache>`, agrega con `packages add alias --path vendor/<pin>` y ejecuta `project lock`.\n8. Restaura con `packages restore --cache <cache>` y verifica con `project test --frozen`; todas las operaciones admiten `--output-format=json-v1`, sin hooks ni registro remoto.\n" }
     if topic == "stdlib" { return "# Standard Library (18 Modules)\n- Data & Text: `std/math`, `std/text`, `std/bytes`, `std/regex`, `std/collections`, `std/json`, `std/csv`, `std/parse`.\n- Systems & I/O: `std/fs`, `std/files`, `std/buffer`, `std/env`, `std/path`, `std/process`, `std/time`.\n- Network, Concurrency & Security: `std/http`, `std/async`, `std/algorithms` (`parallel_map`), `std/crypto`." }
     if topic == "syntax" { return "# Wysna Canonical Syntax Quick Reference\n- Bindings: `let x = 1` (immutable), `let mut y = 2` (mutable).\n- Functions: `fn add(a: int, b: int) -> int { return a + b }`\n- Cooperative Async: `async fn fetch_id() -> int { ... }`, `let v = await task`.\n- Optionals & Errors: `T?`, `T ! E`, unwrap `?`, recover `expr else err { fallback }`.\n- OOP & Contracts: `interface Drawable { fn draw() -> str }`, `class Rect implements Drawable { fn draw() -> str { ... } }`.\n- Lambdas: `|n: int| => n * n` (capture outer variables by immutable snapshot by design; return updated values for mutable state; classes cannot cross worker boundaries).\n- Canonical forms: `Class(...)`, `None`, `_ =>`, parenthesized tuple patterns.\n- Match patterns: alternatives `1 | 2`, Int64 ranges `0..=10`, nested `Point { x, .. }`; W6003 reports unreachable arms.\n- Static attributes on top-level functions: `@deprecated(\"message\")` (W6004), `@must_use` (W6005); custom typed metadata: `struct AgentTool { name: str }`, `@AgentTool(name: \"lookup\")`; literal str/bool/int fields, no macros or evaluation.\n- Ranges & Loops: `for i in 0..10 { ... }`, inclusive `0..=10`.\n- Non-exhaustive match W2003 includes data.uncovered_pattern_families for checked repairs." }
-    if topic == "workers" { return "# Workers con propiedad aislada\n- `std/algorithms.parallel_map`, `parallel_filter`, `parallel_batch` y el mapper de `parallel_reduce`, además de `std/async.spawn`, exigen callbacks comprobables.\n- Usa funciones nombradas o lambdas y alias inmutables. Solo escalares, strings y compuestos de valores transferibles; W2014 rechaza clases, interfaces, Weak, handles y datos función.\n- W2015 rechaza globals no capturados, efectos transitivos, FFI, scheduler, callbacks sin resolver y workers anidados. Captura valores explícitamente o pásalos como parámetros.\n- Entradas, capturas y resultados se copian como grafos privados. CoW dentro de cada worker; profundidad máxima de snapshot 256.\n- `parallel_reduce` mapea en paralelo y combina mediante fold izquierdo secuencial. El orden de resultados no promete orden de efectos.\n- I/O cooperativo permanece en el scheduler. TaskGroup, cancelación pública y backpressure siguen pendientes." }
+    if topic == "workers" { return "# Workers con propiedad aislada\n- `std/algorithms.parallel_map`, `parallel_filter`, `parallel_batch` y el mapper de `parallel_reduce`, además de `std/async.spawn` y `run_group`, exigen callbacks comprobables.\n- Usa funciones nombradas o lambdas y alias inmutables. Solo escalares, strings y compuestos de valores transferibles; W2014 rechaza clases, interfaces, Weak, handles y datos función.\n- W2015 rechaza globals no capturados, efectos transitivos, FFI, scheduler, callbacks sin resolver y workers anidados. Captura valores explícitamente o pásalos como parámetros.\n- Entradas, capturas y resultados se copian como grafos privados. CoW dentro de cada worker; profundidad máxima de snapshot 256.\n- `parallel_reduce` mapea en paralelo y combina mediante fold izquierdo secuencial. El orden de resultados no promete orden de efectos.\n- `run_group` acota trabajo de CPU y devuelve resultados por índice. Usa `group_cancelled()` en callbacks largos. I/O cooperativo permanece en el scheduler." }
     return ""
 }
 fn tool_skills_payload_json(topic: str) -> str {
@@ -5229,7 +5229,27 @@ fn sem_expression(context: SemanticContext, minimum: int, allow_struct: bool) ->
                 }
             }
         } elif sem_match(context, "LBRACKET") {
-            if left.root == "#method" and context.last_method_template >= 0 {
+            let constructor = context.types[left.type_id]
+            if constructor.kind == "enum_ctor" and len(constructor.args) > 0 {
+                let owner = context.types[constructor.args[0]].name
+                let declaration = sem_generic_type(context, owner)
+                if declaration < 0 { report_error_at("W2001", call_token, "enum constructor is not generic") }
+                let mut explicit_args: list[int] = []
+                while not sem_is(context, "RBRACKET") {
+                    explicit_args.append(sem_type(context))
+                    if not sem_match(context, "COMMA") { break }
+                }
+                sem_expect(context, "RBRACKET")
+                if len(explicit_args) != len(context.generic_types[declaration].params) {
+                    report_error_at("W2001", call_token, "generic enum type arity")
+                }
+                sem_check_nominal_constraints(context, owner, explicit_args, call_token)
+                let mut parts = constructor.args
+                parts[0] = sem_intern(context, "enum", owner, explicit_args)
+                left.type_id = sem_intern(context, "enum_ctor", constructor.name, parts)
+                if context.capture_nodes and left.node >= 0 { context.nodes[left.node].type_id = left.type_id }
+                if not sem_is(context, "LPAREN") { report_error_at("W2001", call_token, "generic enum specialization must be called") }
+            } elif left.root == "#method" and context.last_method_template >= 0 {
                 let method = context.functions[context.last_method_template]
                 let owner_args = context.types[context.last_method_owner].args
                 let mut explicit_args: list[int] = []
@@ -7212,6 +7232,7 @@ fn worker_entry(program: CheckedProgram, target: int) -> str {
     let mut module_name = "algorithms"
     let mut arity = 2
     if name == "spawn" or name == "_spawn_handle" { module_name = "async" arity = 1 }
+    elif name == "run_group" or name == "_run_task_group" { module_name = "async" arity = 5 }
     elif name == "parallel_batch" { arity = 3 }
     elif name == "parallel_reduce" { arity = 4 }
     elif name != "parallel_map" and name != "parallel_filter" { return "" }
@@ -7223,8 +7244,9 @@ fn worker_sem_value(context: SemanticContext, value: SemValue) {
     if node.kind != "callee" or node.target < 0 { return }
     let function = context.functions[node.target]
     let name = tool_short_name(function.declaration_name)
-    let module_name = if name == "spawn" or name == "_spawn_handle" { "async" } else { "algorithms" }
-    if (name == "spawn" or name == "_spawn_handle" or name == "parallel_map" or name == "parallel_filter" or name == "parallel_reduce" or name == "parallel_batch") and worker_library(function.source.file, module_name) {
+    let async_entry = name == "spawn" or name == "_spawn_handle" or name == "run_group" or name == "_run_task_group"
+    let module_name = if async_entry { "async" } else { "algorithms" }
+    if (async_entry or name == "parallel_map" or name == "parallel_filter" or name == "parallel_reduce" or name == "parallel_batch") and worker_library(function.source.file, module_name) {
         worker_effect_error(node.source, node.source, "escaping_worker_entry", "Worker entry points require a direct checked call")
     }
 }
@@ -7403,7 +7425,10 @@ fn worker_check_root(state: WorkerAnalysis, root: int) {
         if node.kind == "call" {
             let entry = worker_entry(program, node.target)
             if entry != "" {
-                let argument = if entry == "spawn" or entry == "_spawn_handle" { 0 } else { if entry == "parallel_batch" or entry == "parallel_reduce" { 2 } else { 1 } }
+                let mut argument = 1
+                if entry == "spawn" or entry == "_spawn_handle" { argument = 0 }
+                elif entry == "run_group" or entry == "_run_task_group" { argument = 4 }
+                elif entry == "parallel_batch" or entry == "parallel_reduce" { argument = 2 }
                 worker_callback(state, node.children[argument], node.source)
             }
         } elif node.kind == "callee" and worker_entry(program, node.target) != "" {
@@ -10912,6 +10937,16 @@ fn mir_c_display_fn_name(name: str) -> str {
 fn mir_c_function(module: MirModule, function: MirFunction) -> str {
     if function.is_async { return mir_c_async_function(module, function) }
     let mut parts: list[str] = [mir_c_signature(function) + " {\n"]
+    for name in ["group_cancelled", "cancel_group"] {
+        if mir_c_stdlib_function(function, "async", name, 0) {
+            return join_strings(parts, "") + "    return wysna_" + name + "();\n}\n"
+        }
+    }
+    if mir_c_stdlib_function(function, "async", "_run_task_group", 5) {
+        let mut names: list[str] = []
+        for parameter in function.params { names.append(mir_c_name(parameter)) }
+        return join_strings(parts, "") + "    return wysna_run_task_group(" + join_strings(names, ", ") + ");\n}\n"
+    }
     let async_helper = mir_c_async_helper(function)
     if async_helper == "wysna_async_spawn_handle" and len(function.params) == 1 {
         let p0 = mir_c_name(function.params[0])

@@ -1882,7 +1882,27 @@ fn sem_expression(context: SemanticContext, minimum: int, allow_struct: bool) ->
                 }
             }
         } elif sem_match(context, "LBRACKET") {
-            if left.root == "#method" and context.last_method_template >= 0 {
+            let constructor = context.types[left.type_id]
+            if constructor.kind == "enum_ctor" and len(constructor.args) > 0 {
+                let owner = context.types[constructor.args[0]].name
+                let declaration = sem_generic_type(context, owner)
+                if declaration < 0 { report_error_at("W2001", call_token, "enum constructor is not generic") }
+                let mut explicit_args: list[int] = []
+                while not sem_is(context, "RBRACKET") {
+                    explicit_args.append(sem_type(context))
+                    if not sem_match(context, "COMMA") { break }
+                }
+                sem_expect(context, "RBRACKET")
+                if len(explicit_args) != len(context.generic_types[declaration].params) {
+                    report_error_at("W2001", call_token, "generic enum type arity")
+                }
+                sem_check_nominal_constraints(context, owner, explicit_args, call_token)
+                let mut parts = constructor.args
+                parts[0] = sem_intern(context, "enum", owner, explicit_args)
+                left.type_id = sem_intern(context, "enum_ctor", constructor.name, parts)
+                if context.capture_nodes and left.node >= 0 { context.nodes[left.node].type_id = left.type_id }
+                if not sem_is(context, "LPAREN") { report_error_at("W2001", call_token, "generic enum specialization must be called") }
+            } elif left.root == "#method" and context.last_method_template >= 0 {
                 let method = context.functions[context.last_method_template]
                 let owner_args = context.types[context.last_method_owner].args
                 let mut explicit_args: list[int] = []

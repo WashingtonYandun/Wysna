@@ -12,7 +12,9 @@ PURE_BUILTINS = frozenset(('len', 'int', 'float', 'str', 'bytes', 'ord', 'chr',
     'slice', 'join_strings', 'enumerate', 'dict_items', 'u8', 'assert', 'contract_assert',
     '__wysna_contract_assert', 'Some', 'Ok', 'Err'))
 WORKER_ARGUMENTS = {'parallel_map': 1, 'parallel_filter': 1, 'parallel_batch': 2,
-                    'parallel_reduce': 2, 'spawn': 0, '_spawn_handle': 0}
+                    'parallel_reduce': 2, 'spawn': 0, '_spawn_handle': 0,
+                    'run_group': 4, '_run_task_group': 4}
+ASYNC_WORKER_ENTRIES = frozenset(('spawn', '_spawn_handle', 'run_group', '_run_task_group'))
 
 
 def syntax_children(node):
@@ -108,7 +110,7 @@ class WorkerSafety:
         if function is None:
             return None
         name = getattr(function, 'source_name', None) or function.name
-        module = 'async' if name in ('spawn', '_spawn_handle') else 'algorithms'
+        module = 'async' if name in ASYNC_WORKER_ENTRIES else 'algorithms'
         if name not in WORKER_ARGUMENTS:
             return None
         path = Path(getattr(function, 'source_file', '')).resolve()
