@@ -71,7 +71,8 @@ cuando un destino requiere Seed; no se introduce soporte móvil implícito.
 
 ## Prueba de migración
 
-`tests/fixtures/migration/v08-project` conserva un manifiesto y un lock generados
+`tests/fixtures/language_combinations/migration_v08` conserva un manifiesto y un lock generados
 por el SDK 0.8 y probados con `project test --frozen`. La regresión de 0.9 verifica
-en Seed y nativo el rechazo sin mutaciones, la regeneración del lock y la ejecución
-congelada del proyecto migrado. No se usan modelos ni servicios de IA para medirlo.
+en Seed y nativo el rechazo sin mutaciones y la regeneración del lock con entradas
+LF y CRLF. La aceptación instalada del SDK ejecuta obligatoriamente el proyecto
+migrado en los tres OS con Zig empaquetado. No se usan modelos ni servicios de IA para medirlo.
