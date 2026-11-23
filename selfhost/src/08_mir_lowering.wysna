@@ -337,7 +337,7 @@ fn mir_lower_function(context: MirBuilder, function: CheckedFunction) {
     }
     let value = mir_block(context, function.body)
     if context.current >= 0 { mir_return(context, if inner_returned == 1 { mir_constant(context, mir_literal_unit(), 1, function.source) } else { value }, function.source) }
-    mir_finish(context, if function.closure { "wysna_" + function.name } else { mir_abi_name(function.name) }, function.source)
+    mir_finish(context, if function.closure { "wysna_" + function.name } else { mir_abi_name(function.name) }, function.source, function.declaration_name)
 }
 
 fn mir_optimize_function_param_reads(fn_: MirFunction) -> MirFunction {
@@ -427,7 +427,7 @@ fn mir_optimize_function_param_reads(fn_: MirFunction) -> MirFunction {
         }
         new_blocks.append(MirBlock { operations: new_ops, terminator: block.terminator })
     }
-    return MirFunction { name: fn_.name, return_type: fn_.return_type, slots: fn_.slots, blocks: new_blocks, params: fn_.params, source: fn_.source, is_async: fn_.is_async, async_return_type: fn_.async_return_type }
+    return MirFunction { declaration_name: fn_.declaration_name, name: fn_.name, return_type: fn_.return_type, slots: fn_.slots, blocks: new_blocks, params: fn_.params, source: fn_.source, is_async: fn_.is_async, async_return_type: fn_.async_return_type }
 }
 
 fn mir_optimize_parameter_reads(module: MirModule) -> MirModule {
@@ -474,7 +474,7 @@ fn mir_build(program: CheckedProgram) -> MirModule {
         else { value = mir_constant(context, mir_literal_unit(), 1, source) }
         mir_return(context, value, source)
     }
-    mir_finish(context, "wysna_program", source)
+    mir_finish(context, "wysna_program", source, "")
     let raw_module = MirModule { file: program.file, functions: context.functions, globals: context.globals, records: context.records, virtual_slots: context.virtual_slots, externs: context.externs, types: context.types, source: source }
     return mir_optimize_parameter_reads(raw_module)
 }

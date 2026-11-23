@@ -6,6 +6,7 @@ from pathlib import Path
 import sys
 
 from common.Version import WYSNA_VERSION
+from common.AgentContract import skill_topics
 from compiler.CompilerService import CompilerService
 from compiler.SemanticGraph import (
     build_semantic_graph,
@@ -428,81 +429,7 @@ def run_patch_command(argv) -> int:
         return _handle_cli_error('patch', error, None, json_output)
 
 
-_SKILLS_TOPICS = {
-    'project-tests': (
-        '# Pruebas de proyecto para agentes\n'
-        '1. Lista sin ejecutar: `wysna project test --discover --list --frozen --output-format=json-v1`.\n'
-        '2. Usa los IDs exactos de result.cases: `--case test:example`; --filter conserva selección por subcadena.\n'
-        '3. Ejecuta con `--expect-plan-hash <result.plan_hash> --output-format=json-v1 --report-json tests.json --report-junit tests.xml`.\n'
-        '4. Lee result.cases[].failure_kind, diagnostics y los hashes de stdout/stderr; no interpretes texto de terminal.\n'
-        '5. W5005 indica plan obsoleto: vuelve a listar. Una suite vacía devuelve 2; una cancelación devuelve 130.\n'
-        '6. std/test ofrece igualdad genérica, tolerancia flotante, opcionales y fixture_directory(); los fixtures se eliminan después del caso.\n'
-        'El hash cubre manifiesto, lock, versión y entradas seleccionadas, no todos los imports. El SDK native-core-v1 ejecuta estos comandos sin Python.\n'
-        '7. Dependencias: `wysna packages pack --manifest dependency/wysna.toml -o dependency.tar`; adquiere con `packages fetch --manifest wysna.toml --archive dependency.tar --sha256 <pin> --cache <cache>`, agrega con `packages add alias --path vendor/<pin>` y ejecuta `project lock`.\n'
-        '8. Restaura con `packages restore --cache <cache>` y verifica con `project test --frozen`; todas las operaciones admiten `--output-format=json-v1`, sin hooks ni registro remoto.\n'
-    ),
-    'overview': (
-        f'# Wysna v{WYSNA_VERSION} — Agent-First Native Language & Toolchain\n'
-        '- Default workflow uses checked static inspection before execution.\n'
-        '- Memory model: Single-threaded ARC + Copy-on-Write (`Weak[C]` breaks strong cycles).\n'
-        '- Error channel: Typed values `T ! E`, unwrap with `?` or `else err { fallback }`.\n'
-        '- Core agent loop: `wysna skills` -> `wysna graph` -> `wysna inspect` -> '
-        '`wysna patch` -> `wysna fix` -> `wysna check`.\n'
-        '- Topics available: overview, agent-loop, syntax, graph, patch, project-tests, contracts, stdlib.'
-    ),
-    'agent-loop': (
-        '# Agent Coding Loop (Token-Efficient, Hash-Guarded)\n'
-        '1. Discover relationships: `wysna graph <file.wysna> --output-format=json-v1`\n'
-        '2. Inspect one symbol instead of reading whole files: '
-        '`wysna inspect <file.wysna> --symbol <name> --with-deps --output-format=json-v1`\n'
-        '3. Submit checked edits guarded by graph hash: '
-        '`wysna patch <file.wysna> --symbol <name> --expect-graph-hash <hash> --with <code > --apply`\n'
-        '4. Auto-repair mechanical diagnostics: `wysna fix --apply --output-format=json-v1 <file.wysna>`\n'
-        '5. Decode any Wxxxx error: `wysna explain --code W2001 --output-format=json-v1`\n'
-        '6. Verify & bound runtime: `wysna run --max-steps=100000 --max-heap-mb=64 <file.wysna>`'
-    ),
-    'syntax': (
-        '# Wysna Canonical Syntax Quick Reference\n'
-        '- Bindings: `let x = 1` (immutable), `let mut y = 2` (mutable).\n'
-        '- Functions: `fn add(a: int, b: int) -> int { return a + b }`\n'
-        '- Cooperative Async: `async fn fetch_id() -> int { ... }`, `let v = await task`.\n'
-        '- Optionals & Errors: `T?`, `T ! E`, unwrap `?`, recover `expr else err { fallback }`.\n'
-        '- OOP & Contracts: `interface Drawable { fn draw() -> str }`, `class Rect implements Drawable { fn draw() -> str { ... } }`.\n'
-        '- Lambdas: `|n: int| => n * n` (capture outer variables by immutable snapshot by design; use a `class` or return updated values for mutable state).\n'
-        '- Canonical forms: `Class(...)`, `None`, `_ =>`, parenthesized tuple patterns.\n'
-        '- Match patterns: alternatives `1 | 2`, Int64 ranges `0..=10`, nested `Point { x, .. }`; W6003 reports unreachable arms.\n'
-        '- Static attributes on top-level functions: `@deprecated("message")` (W6004), `@must_use` (W6005); no macros or evaluation.\n'
-        '- Ranges & Loops: `for i in 0..10 { ... }`, inclusive `0..=10`.'
-    ),
-    'graph': (
-        '# Semantic Relationship Graph (`wysna graph`)\n'
-        '- `wysna graph <file> --output-format=json-v1`: full nodes, edges, and `graph_hash`.\n'
-        '- `--symbol <name> --rel implements`: find all classes implementing an interface (or vice-versa).\n'
-        '- `--symbol <name> --rel usages`: find every class, function, field, and param using the type.\n'
-        '- `--symbol <name> --rel callers|callees`: traverse the resolved call graph.\n'
-        '- `--symbol <name> --rel impact`: compute transitive blast radius before refactoring.'
-    ),
-    'patch': (
-        '# Checked Semantic Patching (`wysna patch`)\n'
-        '- Dry-run check in memory (default): validates syntax, types, and interface contracts before disk writes.\n'
-        '- Optimistic locking: pass `--expect-graph-hash graph:...`; stale hashes fail with `[W5005]`.\n'
-        '- Target classes, interfaces, structs, enums, functions, or `ClassName.method`.'
-    ),
-    'contracts': (
-        '# Contracts, Schemas, Quotas & Trace Replay\n'
-        '- Pre/postconditions: `fn f(x: int) -> int requires x > 0 ensures result >= 0 { ... }` (runtime `[W4005]`).\n'
-        '- Tool Schema export: `wysna schema --emit-codecs --output-format=json-v1 <file.wysna>`.\n'
-        '- Deterministic quotas: `--max-steps=<N>`, `--max-heap-mb=<N>` (fail-stop `[W4004]`).\n'
-        '- Offline effect cassettes: `--record-trace <path>`, `--replay-trace <path>`.'
-    ),
-    'stdlib': (
-        '# Standard Library (18 Modules)\n'
-        '- Data & Text: `std/math`, `std/text`, `std/bytes`, `std/regex`, `std/collections`, `std/json`, `std/csv`, `std/parse`.\n'
-        '- Systems & I/O: `std/fs`, `std/files`, `std/buffer`, `std/env`, `std/path`, `std/process`, `std/time`.\n'
-        '- Network, Concurrency & Security: `std/http`, `std/async`, `std/algorithms` (`parallel_map`), `std/crypto`.'
-    ),
-}
-
+_SKILLS_TOPICS = skill_topics()
 
 def get_skill_topic(topic: str = 'overview') -> dict:
     """Return version-matched agent guidance for the requested skill topic."""

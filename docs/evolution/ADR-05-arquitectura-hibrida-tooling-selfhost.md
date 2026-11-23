@@ -1,7 +1,7 @@
 # ADR-05 · Arquitectura Híbrida (Compilador Dual como Oráculo; Tooling en Selfhost)
 
 - **Fecha:** 2026-11-22
-- **Estado:** Implementado en PR #176; integración pendiente
+- **Estado:** Integrado en main/develop mediante PR #176 (`4ad7c5e`)
 - **Alcance:** `SIMP-R01`, frontera del Native SDK y secuencia pre-medición
 
 ## Regla en una línea
@@ -26,7 +26,9 @@
    3. **Bloque 3 (Cierre Native SDK):** `--sandbox` + `W6001`/`W6002` en Selfhost + `PKG-A01` (solo Selfhost, conservando los 19 tests de seguridad USTAR v1) + `OPS-A01`.
    4. **Bloque 4 (Pulido del lenguaje pre-`v1.0`):** limpieza sintáctica (`1A`), cierre formal de closures por snapshot inmutable (`2A` + hint `W3001`), mejoras de `match` (`|`, `..`/`..=`, struct patterns, ramas inalcanzables) y `@atributos` estáticos cerrados.
 
-## Contrato cerrado de atributos (Bloque 4D)
+## Contrato original de atributos (Bloque 4D)
+
+La extensión posterior con metadatos propios se registra en [ADR-06](ADR-06-metadatos-tipados-y-runtime-agentes.md). Este apartado conserva el alcance original de PR #176.
 
 Se implementan `@deprecated("mensaje")` y `@must_use` en funciones de nivel superior,
 incluidas funciones públicas, genéricas y async. Producen `W6004` y `W6005` en CLI

@@ -29,6 +29,7 @@ class ApiVariant {
 }
 
 class ApiSymbol {
+    attributes: list[StaticAttribute]
     identity: str
     name: str
     kind: str
@@ -48,6 +49,8 @@ class ApiSymbol {
 
     fn init(identity: str, name: str, kind: str, signature: str, module_id: str, package_id: str) {
         this.identity = identity
+        let metadata: list[StaticAttribute] = []
+        this.attributes = metadata
         this.name = name
         this.kind = kind
         this.signature = signature
@@ -284,9 +287,18 @@ fn api_extract_module(src: str, file_path: str, module_id: str, package_id: str)
     let mut depth = 0
     let mut is_pub = false
     let mut is_extern = false
+    let mut attributes: list[StaticAttribute] = []
     while schema_cur_kind(c) != "EOF" {
         let k = schema_cur_kind(c)
         let v = schema_cur_val(c)
+        if depth == 0 and k == "AT" {
+            let metadata = SemanticContext(false)
+            metadata.tokens = tokens
+            metadata.pos = c.pos
+            attributes = sem_static_attributes(metadata)
+            c.pos = metadata.pos
+            continue
+        }
         if depth > 0 {
             if k == "LBRACE" { depth = depth + 1 }
             elif k == "RBRACE" { depth = depth - 1 }
@@ -493,8 +505,11 @@ fn api_extract_module(src: str, file_path: str, module_id: str, package_id: str)
                 if schema_cur_kind(c) == "LBRACE" { schema_skip_brace_block(c) }
             } else {
                 let fn_sym = api_parse_fn_symbol(c, lines, module_id, "function", module_id, package_id, true)
+                fn_sym.attributes = attributes
                 rec.symbols.append(fn_sym)
             }
+            let empty_metadata: list[StaticAttribute] = []
+            attributes = empty_metadata
             is_pub = false
             is_extern = false
             continue
@@ -566,6 +581,7 @@ fn api_symbol_json(s: ApiSymbol) -> str {
     parts.append(",\"visibility\":\"public\"")
     parts.append(",\"signature\":" + diag_json_quote(s.signature))
     if s.kind == "function" or s.kind == "method" {
+        parts.append(",\"attributes\":" + tool_attributes_json(s.attributes))
         parts.append(",\"type_parameters\":" + api_str_list_json(s.type_parameters))
         let mut p_parts: list[str] = ["["]
         for i in 0..len(s.parameters) {
@@ -626,7 +642,7 @@ fn api_collect_stdlib_file(acc: ApiIndexCollector, resolved_path: str, module_id
     if tool_str_contains(acc.visited, canon) { return }
     acc.visited.append(canon)
     let src = read_file(canon) else err { return }
-    let rec = api_extract_module(src, canon, module_id, "wysna-stdlib@0.8.0")
+    let rec = api_extract_module(src, canon, module_id, ("wysna-stdlib@" + tool_compiler_version()))
     acc.modules.append(rec)
     if not recurse { return }
     for imp in rec.imports {
@@ -732,7 +748,7 @@ fn tool_handle_api(args: list[str], _json_mode: bool) -> unit {
             if module_is_confined_under(mod_path, stdlib_root) {
                 let srel = api_strip_ext_rel(mod_path, stdlib_root)
                 mid = "std/" + srel
-                owner = "wysna-stdlib@0.8.0"
+                owner = ("wysna-stdlib@" + tool_compiler_version())
             } else {
                 let mut found_owner = m.name + "@" + m.version
                 let mut found_src_root = m.source_root_abs
@@ -756,7 +772,7 @@ fn tool_handle_api(args: list[str], _json_mode: bool) -> unit {
         }
         mparts.append("]")
         let proj_obj = "{\"name\":" + diag_json_quote(m.name) + ",\"version\":" + diag_json_quote(m.version) + "}"
-        let payload = "{\"schema_version\":\"wysna.api-index/1\",\"compiler_version\":\"0.8.0\",\"stdlib_version\":\"0.8.0\",\"project\":" + proj_obj + ",\"modules\":" + join_strings(mparts, "") + "}"
+        let payload = ("{\"schema_version\":\"wysna.api-index/1\",\"compiler_version\":\"" + tool_compiler_version() + "\",\"stdlib_version\":\"" + tool_compiler_version() + "\",\"project\":") + proj_obj + ",\"modules\":" + join_strings(mparts, "") + "}"
         diag_write_output(diag_tool_envelope_json("api", "ok", 0, "[]", "result", payload, "[]"))
         exit(0)
     }
@@ -787,7 +803,7 @@ fn tool_handle_api(args: list[str], _json_mode: bool) -> unit {
         mparts.append(api_module_json(sorted_mods[k]))
     }
     mparts.append("]")
-    let payload = "{\"schema_version\":\"wysna.api-index/1\",\"compiler_version\":\"0.8.0\",\"stdlib_version\":\"0.8.0\",\"modules\":" + join_strings(mparts, "") + "}"
+    let payload = ("{\"schema_version\":\"wysna.api-index/1\",\"compiler_version\":\"" + tool_compiler_version() + "\",\"stdlib_version\":\"" + tool_compiler_version() + "\",\"modules\":") + join_strings(mparts, "") + "}"
     diag_write_output(diag_tool_envelope_json("api", "ok", 0, "[]", "result", payload, "[]"))
     exit(0)
 }

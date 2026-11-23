@@ -27,6 +27,8 @@ from common.Platform import compiler_command, executable_name, native_stack_link
 from common.Version import WYSNA_VERSION
 from compiler.Bootstrap import ensure_selfhost_compiler_binary
 from tools.bundle_selfhost import MODULE_ORDER
+from tools.generate_agent_contract import generate
+generate(check=True)
 
 DEV_UNITS_DIR = ROOT / ".wysna_cache/dev-units"
 DEV_SDK_DIR = ROOT / ".wysna_cache/dev-sdk"
@@ -36,6 +38,7 @@ _COMMON_HEAD = [
     "selfhost/src/01_diagnostics.wysna",
     "selfhost/src/01_paths.wysna",
     "selfhost/src/01_tool_common.wysna",
+    "selfhost/src/01_agent_contract.wysna",
 ]
 
 UNIT_SOURCES = {

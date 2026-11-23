@@ -10,8 +10,9 @@ struct Token {
 struct SemType { kind: str, name: str, args: list[int] }
 struct SemGenericType { name: str, kind: str, params: list[str], constraints: list[str] }
 struct SemVar { name: str, type_id: int, mutable: bool, depth: int, binding: int }
-struct StaticAttribute { name: str, message: str, source: Token }
-struct SemFunction { attributes: list[StaticAttribute], abi_params: list[str], abi_return: str, name: str, params: list[str], type_params: list[str], constraints: list[str], type_id: int, body: int, end: int, owner: str, visible: bool, contract_start: int, is_async: bool }
+struct AttributeArgument { name: str, kind: str, value: str }
+struct StaticAttribute { name: str, message: str, arguments: list[AttributeArgument], source: Token }
+struct SemFunction { declaration_name: str, attributes: list[StaticAttribute], abi_params: list[str], abi_return: str, name: str, params: list[str], type_params: list[str], constraints: list[str], type_id: int, body: int, end: int, owner: str, visible: bool, contract_start: int, is_async: bool }
 struct SemField { owner: str, name: str, type_id: int, visible: bool }
 struct SemInterfaceRef { name: str, args: list[int] }
 struct SemClass { name: str, parent: str, parent_args: list[int], interfaces: list[SemInterfaceRef] }
@@ -204,8 +205,12 @@ fn diag_primary_span_json(file: str, line: int, col: int, src: str) -> str {
 }
 
 fn diag_record_json(code: str, stage: str, severity: str, msg: str, file: str, line: int, col: int, src: str) -> str {
-    let span_json = diag_primary_span_json(file, line, col, src)
     let data_json = if stage == "type" { fix_mismatch_data_json(msg) } else { "{}" }
+    return diag_record_json_data(code, stage, severity, msg, file, line, col, src, data_json)
+}
+
+fn diag_record_json_data(code: str, stage: str, severity: str, msg: str, file: str, line: int, col: int, src: str, data_json: str) -> str {
+    let span_json = diag_primary_span_json(file, line, col, src)
     let fixes_json = if span_json != "null" { fix_diagnostic_edits_json(code, msg, file, src, line, col) } else { "[]" }
     return "{\"code\":" + diag_json_quote(code) + ",\"severity\":" + diag_json_quote(severity) + ",\"stage\":" + diag_json_quote(stage) + ",\"message\":" + diag_json_quote(msg) + ",\"primary_span\":" + span_json + ",\"related\":[],\"data\":" + data_json + ",\"fixes\":" + fixes_json + "}"
 }
@@ -218,7 +223,7 @@ fn diag_tool_envelope_json(command: str, status: str, exit_code: int, diagnostic
     parts.append(",\"tool_exit_code\":" + str(exit_code))
     parts.append(",\"process_exit_code\":" + str(exit_code))
     parts.append(",\"execution\":null")
-    parts.append(",\"toolchain\":{\"compiler\":\"0.8.0\"}")
+    parts.append((",\"toolchain\":{\"compiler\":\"" + tool_compiler_version() + "\"}"))
     parts.append(",\"target\":{\"profile\":\"native-cli\",\"triple\":null}")
     parts.append(",\"diagnostics\":" + diagnostics_json)
     parts.append(",\"artifacts\":" + artifacts_json)
@@ -361,6 +366,10 @@ fn diag_render_source_excerpt(src: str, target_line: int, target_col: int) -> st
 }
 
 fn diag_emit_and_exit(file: str, code: str, line: int, col: int, msg: str) -> unit {
+    diag_emit_and_exit_data(file, code, line, col, msg, "")
+}
+
+fn diag_emit_and_exit_data(file: str, code: str, line: int, col: int, msg: str, data: str) -> unit {
     let mode = diag_cli_json_mode()
     let mut src = ""
     if file != "" and file != "<stdin>" and file != "<unknown>" and file != "<cli>" {
@@ -373,10 +382,10 @@ fn diag_emit_and_exit(file: str, code: str, line: int, col: int, msg: str) -> un
         exit(1)
     }
     let stage = diag_stage_for_code(code)
-    let diag_json = diag_record_json(code, stage, "error", msg, file, line, col, src)
+    let diag_json = if data == "" { diag_record_json(code, stage, "error", msg, file, line, col, src) } else { diag_record_json_data(code, stage, "error", msg, file, line, col, src, data) }
     if mode == "array" { diag_write_output("[" + diag_json + "]"); exit(1) }
     if mode == "check-json" {
-        diag_write_output("{\"schema_version\":\"wysna.cli.result/1\",\"compiler_version\":\"0.8.0\",\"command\":\"check\",\"ok\":false,\"exit_code\":1,\"diagnostics\":[" + diag_json + "],\"data\":null}")
+        diag_write_output(("{\"schema_version\":\"wysna.cli.result/1\",\"compiler_version\":\"" + tool_compiler_version() + "\",\"command\":\"check\",\"ok\":false,\"exit_code\":1,\"diagnostics\":[") + diag_json + "],\"data\":null}")
         exit(1)
     }
     let cmd = diag_cli_command()
@@ -393,6 +402,10 @@ fn report_error(file: str, code: str, line: int, col: int, msg: str) -> unit {
 
 fn report_error_at(code: str, token: Token, msg: str) -> unit {
     report_error(token.file, code, token.line, token.col, msg)
+}
+
+fn report_error_at_data(code: str, token: Token, msg: str, data: str) -> unit {
+    diag_emit_and_exit_data(token.file, code, token.line, token.col, msg, data)
 }
 
 fn report_error_at_location(code: str, file: str, line: int, col: int, msg: str) -> unit {
@@ -1250,56 +1263,37 @@ fn fix_extract_json_object_field(raw: str, field_key: str) -> str {
     return fix_extract_json_delimited_field(raw, field_key, "{", "}", "")
 }
 
+fn tool_short_name(raw: str) -> str {
+    let prefix = "__wysna_module_"
+    if len(raw) > len(prefix) and slice(raw, 0, len(prefix)) == prefix {
+        for i in len(prefix)..len(raw) - 1 {
+            if slice(raw, i, i + 2) == "__" {
+                return slice(raw, i + 2, len(raw))
+            }
+        }
+    }
+    return raw
+}
+# Generated by tools/generate_agent_contract.py; edit src/common/agent_contract.json.
+fn tool_compiler_version() -> str { return "0.8.0" }
+fn tool_language_version() -> str { return "0.8" }
+fn tool_skills_available_topics() -> str { return "agent-loop, contracts, graph, overview, patch, project-tests, stdlib, syntax" }
 fn tool_skills_topic_content(topic: str) -> str {
-    if topic == "overview" {
-        return "# Wysna v0.8.0 — Agent-First Native Language & Toolchain\n- Default workflow uses checked static inspection before execution.\n- Memory model: Single-threaded ARC + Copy-on-Write (`Weak[C]` breaks strong cycles).\n- Error channel: Typed values `T ! E`, unwrap with `?` or `else err { fallback }`.\n- Core agent loop: `wysna skills` -> `wysna graph` -> `wysna inspect` -> `wysna patch` -> `wysna fix` -> `wysna check`.\n- Topics available: overview, agent-loop, syntax, graph, patch, project-tests, contracts, stdlib."
-    }
-    if topic == "agent-loop" {
-        return "# Agent Coding Loop (Token-Efficient, Hash-Guarded)\n1. Discover relationships: `wysna graph <file.wysna> --output-format=json-v1`\n2. Inspect one symbol instead of reading whole files: `wysna inspect <file.wysna> --symbol <name> --with-deps --output-format=json-v1`\n3. Submit checked edits guarded by graph hash: `wysna patch <file.wysna> --symbol <name> --expect-graph-hash <hash> --with <code> --apply`\n4. Auto-repair mechanical diagnostics: `wysna fix --apply --output-format=json-v1 <file.wysna>`\n5. Decode any Wxxxx error: `wysna explain --code W2001 --output-format=json-v1`\n6. Verify & bound runtime: `wysna run --max-steps=100000 --max-heap-mb=64 <file.wysna>`"
-    }
+    if topic == "agent-loop" { return "# Agent Coding Loop (Token-Efficient, Hash-Guarded)\n1. Discover relationships: `wysna graph <file.wysna> --output-format=json-v1`\n2. Inspect one symbol instead of reading whole files: `wysna inspect <file.wysna> --symbol <name> --with-deps --output-format=json-v1`\n3. Submit checked edits guarded by graph hash: `wysna patch <file.wysna> --symbol <name> --expect-graph-hash <hash> --with <code> --apply`\n4. Auto-repair mechanical diagnostics: `wysna fix --apply --output-format=json-v1 <file.wysna>`\n5. Decode any Wxxxx error: `wysna explain --code W2001 --output-format=json-v1`\n6. Verify & bound runtime: `wysna run --max-steps=100000 --max-heap-mb=64 <file.wysna>`" }
+    if topic == "contracts" { return "# Contracts, Schemas, Quotas & Trace Replay\n- Pre/postconditions: `fn f(x: int) -> int requires x > 0 ensures result >= 0 { ... }` (runtime `[W4005]`).\n- Tool Schema export: `wysna schema --emit-codecs --output-format=json-v1 <file.wysna>`.\n- Deterministic quotas: `--max-steps=<N>`, `--max-heap-mb=<N>` (fail-stop `[W4004]`).\n- Offline effect cassettes: `--record-trace <path>`, `--replay-trace <path>`." }
+    if topic == "graph" { return "# Semantic Relationship Graph (`wysna graph`)\n- `wysna graph <file> --output-format=json-v1`: full nodes, edges, and `graph_hash`.\n- `--symbol <name> --rel implements`: find all classes implementing an interface (or vice-versa).\n- `--symbol <name> --rel usages`: find every class, function, field, and param using the type.\n- `--symbol <name> --rel callers|callees`: traverse the resolved call graph.\n- `--symbol <name> --rel impact`: compute transitive blast radius before refactoring." }
+    if topic == "overview" { return "# Wysna v0.8.0 — Agent-First Native Language & Toolchain\n- Default workflow uses checked static inspection before execution.\n- Memory model: Atomic ARC + Copy-on-Write (`Weak[C]` breaks strong cycles); shared mutable objects are not statically thread-safe.\n- Error channel: Typed values `T ! E`, unwrap with `?` or `else err { fallback }`.\n- Core agent loop: `wysna skills` -> `wysna graph` -> `wysna inspect` -> `wysna patch` -> `wysna fix` -> `wysna check`.\n- Topics available: overview, agent-loop, syntax, graph, patch, project-tests, contracts, stdlib." }
+    if topic == "patch" { return "# Checked Semantic Patching (`wysna patch`)\n- Dry-run check in memory (default): validates syntax, types, and interface contracts before disk writes.\n- Optimistic locking: pass `--expect-graph-hash graph:...`; stale hashes fail with `[W5005]`.\n- Target classes, interfaces, structs, enums, functions, or `ClassName.method`." }
     if topic == "project-tests" { return "# Pruebas de proyecto para agentes\n1. Lista sin ejecutar: `wysna project test --discover --list --frozen --output-format=json-v1`.\n2. Usa los IDs exactos de result.cases: `--case test:example`; --filter conserva selección por subcadena.\n3. Ejecuta con `--expect-plan-hash <result.plan_hash> --output-format=json-v1 --report-json tests.json --report-junit tests.xml`.\n4. Lee result.cases[].failure_kind, diagnostics y los hashes de stdout/stderr; no interpretes texto de terminal.\n5. W5005 indica plan obsoleto: vuelve a listar. Una suite vacía devuelve 2; una cancelación devuelve 130.\n6. std/test ofrece igualdad genérica, tolerancia flotante, opcionales y fixture_directory(); los fixtures se eliminan después del caso.\nEl hash cubre manifiesto, lock, versión y entradas seleccionadas, no todos los imports. El SDK native-core-v1 ejecuta estos comandos sin Python.\n7. Dependencias: `wysna packages pack --manifest dependency/wysna.toml -o dependency.tar`; adquiere con `packages fetch --manifest wysna.toml --archive dependency.tar --sha256 <pin> --cache <cache>`, agrega con `packages add alias --path vendor/<pin>` y ejecuta `project lock`.\n8. Restaura con `packages restore --cache <cache>` y verifica con `project test --frozen`; todas las operaciones admiten `--output-format=json-v1`, sin hooks ni registro remoto.\n" }
-    if topic == "syntax" {
-        return "# Wysna Canonical Syntax Quick Reference\n- Bindings: `let x = 1` (immutable), `let mut y = 2` (mutable).\n- Functions: `fn add(a: int, b: int) -> int { return a + b }`\n- Cooperative Async: `async fn fetch_id() -> int { ... }`, `let v = await task`.\n- Optionals & Errors: `T?`, `T ! E`, unwrap `?`, recover `expr else err { fallback }`.\n- OOP & Contracts: `interface Drawable { fn draw() -> str }`, `class Rect implements Drawable { fn draw() -> str { ... } }`.\n- Lambdas: `|n: int| => n * n` (capture outer variables by immutable snapshot by design; use a `class` or return updated values for mutable state).\n- Canonical forms: `Class(...)`, `None`, `_ =>`, parenthesized tuple patterns.\n- Match patterns: alternatives `1 | 2`, Int64 ranges `0..=10`, nested `Point { x, .. }`; W6003 reports unreachable arms.\n- Static attributes on top-level functions: `@deprecated(\"message\")` (W6004), `@must_use` (W6005); no macros or evaluation.\n- Ranges & Loops: `for i in 0..10 { ... }`, inclusive `0..=10`."
-    }
-    if topic == "graph" {
-        return "# Semantic Relationship Graph (`wysna graph`)\n- `wysna graph <file> --output-format=json-v1`: full nodes, edges, and `graph_hash`.\n- `--symbol <name> --rel implements`: find all classes implementing an interface (or vice-versa).\n- `--symbol <name> --rel usages`: find every class, function, field, and param using the type.\n- `--symbol <name> --rel callers|callees`: traverse the resolved call graph.\n- `--symbol <name> --rel impact`: compute transitive blast radius before refactoring."
-    }
-    if topic == "patch" {
-        return "# Checked Semantic Patching (`wysna patch`)\n- Dry-run check in memory (default): validates syntax, types, and interface contracts before disk writes.\n- Optimistic locking: pass `--expect-graph-hash graph:...`; stale hashes fail with `[W5005]`.\n- Target classes, interfaces, structs, enums, functions, or `ClassName.method`."
-    }
-    if topic == "contracts" {
-        return "# Contracts, Schemas, Quotas & Trace Replay\n- Pre/postconditions: `fn f(x: int) -> int requires x > 0 ensures result >= 0 { ... }` (runtime `[W4005]`).\n- Tool Schema export: `wysna schema --emit-codecs --output-format=json-v1 <file.wysna>`.\n- Deterministic quotas: `--max-steps=<N>`, `--max-heap-mb=<N>` (fail-stop `[W4004]`).\n- Offline effect cassettes: `--record-trace <path>`, `--replay-trace <path>`."
-    }
-    if topic == "stdlib" {
-        return "# Standard Library (18 Modules)\n- Data & Text: `std/math`, `std/text`, `std/bytes`, `std/regex`, `std/collections`, `std/json`, `std/csv`, `std/parse`.\n- Systems & I/O: `std/fs`, `std/files`, `std/buffer`, `std/env`, `std/path`, `std/process`, `std/time`.\n- Network, Concurrency & Security: `std/http`, `std/async`, `std/algorithms` (`parallel_map`), `std/crypto`."
-    }
+    if topic == "stdlib" { return "# Standard Library (18 Modules)\n- Data & Text: `std/math`, `std/text`, `std/bytes`, `std/regex`, `std/collections`, `std/json`, `std/csv`, `std/parse`.\n- Systems & I/O: `std/fs`, `std/files`, `std/buffer`, `std/env`, `std/path`, `std/process`, `std/time`.\n- Network, Concurrency & Security: `std/http`, `std/async`, `std/algorithms` (`parallel_map`), `std/crypto`." }
+    if topic == "syntax" { return "# Wysna Canonical Syntax Quick Reference\n- Bindings: `let x = 1` (immutable), `let mut y = 2` (mutable).\n- Functions: `fn add(a: int, b: int) -> int { return a + b }`\n- Cooperative Async: `async fn fetch_id() -> int { ... }`, `let v = await task`.\n- Optionals & Errors: `T?`, `T ! E`, unwrap `?`, recover `expr else err { fallback }`.\n- OOP & Contracts: `interface Drawable { fn draw() -> str }`, `class Rect implements Drawable { fn draw() -> str { ... } }`.\n- Lambdas: `|n: int| => n * n` (capture outer variables by immutable snapshot by design; use a `class` or return updated values for mutable state).\n- Canonical forms: `Class(...)`, `None`, `_ =>`, parenthesized tuple patterns.\n- Match patterns: alternatives `1 | 2`, Int64 ranges `0..=10`, nested `Point { x, .. }`; W6003 reports unreachable arms.\n- Static attributes on top-level functions: `@deprecated(\"message\")` (W6004), `@must_use` (W6005); custom typed metadata: `struct AgentTool { name: str }`, `@AgentTool(name: \"lookup\")`; literal str/bool/int fields, no macros or evaluation.\n- Ranges & Loops: `for i in 0..10 { ... }`, inclusive `0..=10`.\n- Non-exhaustive match W2003 includes data.uncovered_pattern_families for checked repairs." }
     return ""
 }
-
 fn tool_skills_payload_json(topic: str) -> str {
-    let content = tool_skills_topic_content(topic)
-    if content == "" { return "" }
-    let topics_json = "[\"agent-loop\",\"contracts\",\"graph\",\"overview\",\"patch\",\"project-tests\",\"stdlib\",\"syntax\"]"
-    return "{\"schema_version\":\"wysna.skills/1\",\"compiler_version\":\"0.8.0\",\"topic\":" + diag_json_quote(topic) + ",\"available_topics\":" + topics_json + ",\"content\":" + diag_json_quote(content) + "}"
+    return "{\"schema_version\":\"wysna.skills/1\",\"compiler_version\":\"0.8.0\",\"available_topics\":[\"agent-loop\",\"contracts\",\"graph\",\"overview\",\"patch\",\"project-tests\",\"stdlib\",\"syntax\"],\"topic\":" + diag_json_quote(topic) + ",\"content\":" + diag_json_quote(tool_skills_topic_content(topic)) + "}"
 }
-
 fn tool_capabilities_payload_json() -> str {
-    let cmds = "[\"run\",\"check\",\"fmt\",\"ast\",\"mir\",\"tokens\",\"emit-c\",\"emit-mir\",\"build\",\"test\",\"project.new\",\"project.lock\",\"project.check\",\"project.build\",\"project.run\",\"project.test\",\"packages.pack\",\"packages.fetch\",\"packages.add\",\"packages.remove\",\"packages.restore\",\"api\",\"capabilities\",\"explain\",\"graph\",\"inspect\",\"patch\",\"skills\",\"fix\",\"schema\",\"mcp\",\"lsp\"]"
-    let mcmds = "[\"check\",\"fmt\",\"project.new\",\"project.lock\",\"project.check\",\"project.test\",\"packages.pack\",\"packages.fetch\",\"packages.add\",\"packages.remove\",\"packages.restore\",\"api\",\"capabilities\",\"explain\",\"graph\",\"inspect\",\"patch\",\"skills\",\"fix\",\"schema\"]"
-    let profs = "[\"native-cli\",\"wasi-command\",\"browser-library\",\"c99-source\"]"
-    let targs = "[\"native\",\"wasm32-wasip1\",\"wasm32-unknown-emscripten\"]"
-    let runtimes = "{\"wasi-command\":\"wasmtime-python==50.0.1\",\"browser-library\":\"browser or Node.js\"}"
-    let native_caps = "[\"stdio\",\"filesystem\",\"environment\",\"processes\",\"network\",\"native-ffi\"]"
-    let wasi_caps = "[\"stdio\",\"arguments\",\"clock\",\"random\",\"manifest-declared-preopens\"]"
-    let browser_caps = "[\"linear-memory\",\"generated-utf8-abi\",\"bigint-int64\"]"
-    let caps = "{\"native-cli\":" + native_caps + ",\"wasi-command\":" + wasi_caps + ",\"browser-library\":" + browser_caps + "}"
-    let p_native = "{\"profile\":\"native-cli\",\"engine\":\"wysna-selfhost\",\"backend\":\"c99\",\"triple\":null,\"artifact_kind\":\"native_executable\",\"capabilities\":" + native_caps + ",\"build_requirements\":[{\"name\":\"c99-compiler\",\"version\":null,\"provided_by\":\"Host C99 toolchain\"}],\"run_requirements\":[{\"name\":\"host-operating-system\",\"version\":null,\"provided_by\":null}]}"
-    let p_wasi = "{\"profile\":\"wasi-command\",\"engine\":\"wysna-seed\",\"backend\":\"c99\",\"triple\":\"wasm32-wasip1\",\"artifact_kind\":\"wasm_module\",\"capabilities\":" + wasi_caps + ",\"build_requirements\":[{\"name\":\"wasi-sdk\",\"version\":\"34\",\"provided_by\":null}],\"run_requirements\":[{\"name\":\"wasmtime-python\",\"version\":\"50.0.1\",\"provided_by\":null}]}"
-    let p_browser = "{\"profile\":\"browser-library\",\"engine\":\"wysna-seed\",\"backend\":\"c99\",\"triple\":\"wasm32-unknown-emscripten\",\"artifact_kind\":\"wasm_module\",\"capabilities\":" + browser_caps + ",\"build_requirements\":[{\"name\":\"emscripten\",\"version\":\"5.0.1\",\"provided_by\":null}],\"run_requirements\":[{\"name\":\"browser-or-nodejs\",\"version\":null,\"provided_by\":null}]}"
-    let tprofiles = "[" + p_native + "," + p_wasi + "," + p_browser + "]"
-    let reqs = "{\"std/http\":{\"interpreter\":\"install wysna[http] with libcurl 8.3.0 or newer\",\"native\":\"install libcurl 8.3.0 or newer development files and expose curl-config on PATH\",\"wasi-command\":\"unavailable\",\"browser-library\":\"unavailable\"}}"
-    let limits = "[\"native-cli capabilities describe host access and are not a sandbox\",\"WASI Preview 1 does not provide networking, child processes, or native FFI\",\"browser-library exposes only generated scalar and UTF-8 exports; WVal and pointers remain internal\",\"dependencies use local paths or SHA-256-pinned offline USTAR archives; no remote version resolution or public registry\",\"project lockfiles do not claim bit-for-bit binary reproducibility\"]"
-    return "{\"schema_version\":\"wysna.capabilities/1\",\"compiler_version\":\"0.8.0\",\"commands\":" + cmds + ",\"machine_output\":{\"format\":\"json-v1\",\"commands\":" + mcmds + "},\"profiles\":" + profs + ",\"targets\":" + targs + ",\"runtimes\":" + runtimes + ",\"capabilities\":" + caps + ",\"target_profiles\":" + tprofiles + ",\"requirements\":" + reqs + ",\"limitations\":" + limits + "}"
+    return "{\"schema_version\":\"wysna.capabilities/1\",\"compiler_version\":\"0.8.0\",\"commands\":[\"run\",\"check\",\"fmt\",\"ast\",\"mir\",\"tokens\",\"emit-c\",\"emit-mir\",\"build\",\"test\",\"project.new\",\"project.lock\",\"project.check\",\"project.build\",\"project.run\",\"project.test\",\"packages.pack\",\"packages.fetch\",\"packages.add\",\"packages.remove\",\"packages.restore\",\"api\",\"capabilities\",\"explain\",\"graph\",\"inspect\",\"patch\",\"skills\",\"fix\",\"schema\",\"mcp\",\"lsp\"],\"machine_output\":{\"format\":\"json-v1\",\"commands\":[\"check\",\"fmt\",\"project.new\",\"project.lock\",\"project.check\",\"project.test\",\"packages.pack\",\"packages.fetch\",\"packages.add\",\"packages.remove\",\"packages.restore\",\"api\",\"capabilities\",\"explain\",\"graph\",\"inspect\",\"patch\",\"skills\",\"fix\",\"schema\"]},\"profiles\":[\"native-cli\",\"wasi-command\",\"browser-library\",\"c99-source\"],\"targets\":[\"native\",\"wasm32-wasip1\",\"wasm32-unknown-emscripten\"],\"runtimes\":{\"wasi-command\":\"wasmtime-python==50.0.1\",\"browser-library\":\"browser or Node.js\"},\"capabilities\":{\"native-cli\":[\"stdio\",\"filesystem\",\"environment\",\"processes\",\"network\",\"native-ffi\"],\"wasi-command\":[\"stdio\",\"arguments\",\"clock\",\"random\",\"manifest-declared-preopens\"],\"browser-library\":[\"linear-memory\",\"generated-utf8-abi\",\"bigint-int64\"]},\"target_profiles\":[{\"profile\":\"native-cli\",\"engine\":\"wysna-selfhost\",\"backend\":\"c99\",\"triple\":null,\"artifact_kind\":\"native_executable\",\"capabilities\":[\"stdio\",\"filesystem\",\"environment\",\"processes\",\"network\",\"native-ffi\"],\"build_requirements\":[{\"name\":\"c99-compiler\",\"version\":null,\"provided_by\":\"Host C99 toolchain\"}],\"run_requirements\":[{\"name\":\"host-operating-system\",\"version\":null,\"provided_by\":null}]},{\"profile\":\"wasi-command\",\"engine\":\"wysna-seed\",\"backend\":\"c99\",\"triple\":\"wasm32-wasip1\",\"artifact_kind\":\"wasm_module\",\"capabilities\":[\"stdio\",\"arguments\",\"clock\",\"random\",\"manifest-declared-preopens\"],\"build_requirements\":[{\"name\":\"wasi-sdk\",\"version\":\"34\",\"provided_by\":null}],\"run_requirements\":[{\"name\":\"wasmtime-python\",\"version\":\"50.0.1\",\"provided_by\":null}]},{\"profile\":\"browser-library\",\"engine\":\"wysna-seed\",\"backend\":\"c99\",\"triple\":\"wasm32-unknown-emscripten\",\"artifact_kind\":\"wasm_module\",\"capabilities\":[\"linear-memory\",\"generated-utf8-abi\",\"bigint-int64\"],\"build_requirements\":[{\"name\":\"emscripten\",\"version\":\"5.0.1\",\"provided_by\":null}],\"run_requirements\":[{\"name\":\"browser-or-nodejs\",\"version\":null,\"provided_by\":null}]}],\"requirements\":{\"std/http\":{\"interpreter\":\"install wysna[http] with libcurl 8.3.0 or newer\",\"native\":\"install libcurl 8.3.0 or newer development files and expose curl-config on PATH\",\"wasi-command\":\"unavailable\",\"browser-library\":\"unavailable\"}},\"limitations\":[\"native-cli capabilities describe host access and are not a sandbox\",\"WASI Preview 1 does not provide networking, child processes, or native FFI\",\"browser-library exposes only generated scalar and UTF-8 exports; WVal and pointers remain internal\",\"dependencies use local paths or SHA-256-pinned offline USTAR archives; no remote version resolution or public registry\",\"project lockfiles do not claim bit-for-bit binary reproducibility\"]}"
 }
 fn line_terminates_statement(kind: str) -> bool {
     return kind == "INT" or kind == "FLOAT" or kind == "STR" or kind == "TRUE" or kind == "FALSE" or kind == "IDENT" or kind == "THIS" or kind == "SUPER" or kind == "RPAREN" or kind == "RBRACKET" or kind == "RBRACE" or kind == "QUESTION" or kind == "BREAK" or kind == "CONTINUE"
@@ -2633,11 +2627,14 @@ fn module_expand(context: ModuleLoader, src: str, path: str, entry: bool) -> int
     position = 0
     let mut braces = 0
     let mut parentheses = 0
+    let mut in_attribute = false
     while position < len(body) {
         let token = body[position]
+        if token.kind == "AT" { in_attribute = true }
+        if token.kind == "FN" { in_attribute = false }
 
         let mut consumed = false
-        if token.kind == "IDENT" and not (position > 0 and body[position - 1].kind == "AT") {
+        if token.kind == "IDENT" and not (position > 0 and body[position - 1].kind == "AT" and (token.val == "deprecated" or token.val == "must_use") and not (position + 1 < len(body) and body[position + 1].kind == "DOT")) {
             for i in 0..len(aliases) {
                 if token.val == aliases[i] and position + 2 < len(body) and body[position + 1].kind == "DOT" {
                     let member = body[position + 2]
@@ -2665,6 +2662,7 @@ fn module_expand(context: ModuleLoader, src: str, path: str, entry: bool) -> int
             }
             if not consumed {
                 let mut field = false
+                if in_attribute and position + 1 < len(body) and body[position + 1].kind == "COLON" { field = true }
                 if position > 0 and body[position - 1].kind == "DOT" { field = true }
                 if position + 1 < len(body) and body[position + 1].kind == "COLON" and parentheses == 0 {
                     field = true
@@ -2757,7 +2755,7 @@ struct CheckedRecord { type_id: int, fields: list[CheckedField], variants: list[
 struct CheckedArm { pattern: int, guard: int, body: int, source: Token }
 struct CheckedNode { pattern: int, arms: list[int], total: bool, labels: list[str], kind: str, type_id: int, source: Token, text: str, children: list[int], binding: int, target: int, discard: bool }
 struct CheckedBinding { name: str, type_id: int, mutable: bool, global: bool, source: Token }
-struct CheckedFunction { captures: list[int], closure: bool, name: str, type_id: int, params: list[int], body: int, source: Token, is_async: bool, async_return_type: int }
+struct CheckedFunction { declaration_name: str, captures: list[int], closure: bool, name: str, type_id: int, params: list[int], body: int, source: Token, is_async: bool, async_return_type: int }
 struct CheckedSignature { attributes: list[StaticAttribute], abi_params: list[str], abi_return: str, native: str, name: str, params: list[str], type_params: list[str], type_id: int, foreign: bool, abstract: bool }
 struct CheckedProgram {
     templates: list[SemGenericType], obligations: list[SemObligation], has_nodes: bool, file: str, source: Token, records: list[CheckedRecord], types: list[SemType], signatures: list[CheckedSignature],
@@ -3982,7 +3980,7 @@ fn sem_collect_function(context: SemanticContext, owner: str, visible: bool, is_
     let mut end = context.pos
     if sem_is(context, "LBRACE") { body = context.pos end = sem_skip_block(context) }
     context.type_params = previous_type_params
-    context.functions.append(SemFunction { attributes: [], abi_params: abi_params, abi_return: abi_return, name: name, params: params, type_params: type_params, constraints: constraints, type_id: signature, body: body, end: end, owner: owner, visible: visible, contract_start: contract_start, is_async: is_async })
+    context.functions.append(SemFunction { declaration_name: local, attributes: [], abi_params: abi_params, abi_return: abi_return, name: name, params: params, type_params: type_params, constraints: constraints, type_id: signature, body: body, end: end, owner: owner, visible: visible, contract_start: contract_start, is_async: is_async })
 }
 fn sem_collect_record(context: SemanticContext, kind: str) {
     sem_take(context)
@@ -5523,6 +5521,52 @@ fn sem_constructors(context: SemanticContext, subject: int) -> list[SemConstruct
     }
     return constructors
 }
+fn sem_pattern_constructor_rows(context: SemanticContext, constructor: SemConstructor, rows: list[list[int]]) -> list[list[int]] {
+    let mut expanded: list[list[int]] = []
+    let mut has_or = false
+    for row in rows {
+        if context.patterns[row[0]].name == "or" {
+            has_or = true
+            for child in context.patterns[row[0]].children {
+                let mut next = [child]
+                for item in slice(row, 1, len(row)) { next.append(item) }
+                expanded.append(next)
+            }
+        } else { expanded.append(row) }
+    }
+    if has_or { return sem_pattern_constructor_rows(context, constructor, expanded) }
+        let mut specialized: list[list[int]] = []
+        for row in rows {
+            let pattern = context.patterns[row[0]]
+            let mut children: list[int] = []
+            let mut matches = false
+            if pattern.name == "*" {
+                for payload in constructor.payloads { sem_leaf_pattern(context, "*") children.append(context.last_pattern) }
+                matches = true
+            } elif pattern.name == constructor.name { children = pattern.children matches = true }
+            if matches {
+                for element in slice(row, 1, len(row)) { children.append(element) }
+                specialized.append(children)
+            }
+        }
+    return specialized
+}
+fn sem_pattern_missing_families(context: SemanticContext, subject: int, rows: list[list[int]]) -> list[str] {
+    let mut missing: list[str] = []
+    for constructor in sem_constructors(context, subject) {
+        let specialized = sem_pattern_constructor_rows(context, constructor, rows)
+        if not sem_pattern_matrix(context, constructor.payloads, specialized) {
+            let mut fields: list[str] = []
+            for payload in constructor.payloads { fields.append("_") }
+            let mut family = constructor.name
+            if len(family) > 8 and slice(family, 0, 8) == "literal:" { family = slice(family, 8, len(family)) }
+            if family == "tuple" { family = "(" + join_strings(fields, ", ") + ")" }
+            elif len(fields) > 0 { family = family + "(" + join_strings(fields, ", ") + ")" }
+            missing.append(family)
+        }
+    }
+    return tool_sort_strings(missing)
+}
 fn sem_pattern_matrix(context: SemanticContext, types: list[int], rows: list[list[int]]) -> bool {
     if len(types) == 0 { return len(rows) > 0 }
     if len(rows) == 0 { return false }
@@ -5547,20 +5591,7 @@ fn sem_pattern_matrix(context: SemanticContext, types: list[int], rows: list[lis
     let constructors = sem_constructors(context, types[0])
     if len(constructors) == 0 { return false }
     for constructor in constructors {
-        let mut specialized: list[list[int]] = []
-        for row in rows {
-            let pattern = context.patterns[row[0]]
-            let mut children: list[int] = []
-            let mut matches = false
-            if pattern.name == "*" {
-                for payload in constructor.payloads { sem_leaf_pattern(context, "*") children.append(context.last_pattern) }
-                matches = true
-            } elif pattern.name == constructor.name { children = pattern.children matches = true }
-            if matches {
-                for element in slice(row, 1, len(row)) { children.append(element) }
-                specialized.append(children)
-            }
-        }
+        let specialized = sem_pattern_constructor_rows(context, constructor, rows)
         let mut next_types = constructor.payloads
         for type_id in tail { next_types.append(type_id) }
         if not sem_pattern_matrix(context, next_types, specialized) { return false }
@@ -5782,7 +5813,10 @@ fn sem_match_expression(context: SemanticContext, statement_context: bool) -> Se
     let kind = sem_kind(context, subject)
     let closed = kind == "enum" or kind == "optional" or kind == "result" or kind == "error_union" or kind == "bool" or kind == "tuple"
     let exhaustive = sem_pattern_matrix(context, [subject], covered)
-    if closed and not exhaustive { report_error_at("W2003", source, "non-exhaustive match") }
+    if closed and not exhaustive {
+        let missing = sem_pattern_missing_families(context, subject, covered)
+        report_error_at_data("W2003", source, "Non-exhaustive match; add cases for: " + join_strings(missing, ", "), "{\"uncovered_pattern_families\":" + tool_str_list_json(missing) + "}")
+    }
     if not closed and not exhaustive {
         if common >= 0 and common != context.unit_type { report_error_at("W2003", source, "value match requires exhaustive patterns") }
         if not statement and context.expected_type >= 0 and context.expected_type != context.unit_type { report_error_at("W2003", source, "value match requires exhaustive patterns") }
@@ -6176,7 +6210,7 @@ fn sem_check_function(context: SemanticContext, function: SemFunction) {
         let raw_type_id = if function.is_async { sem_external_async_signature(context, function.type_id) } else { function.type_id }
         let type_id = if context.owner == "" { raw_type_id } else { checked_receiver_signature(context, sem_function_owner_type(context, function), raw_type_id) }
         let captures: list[int] = []
-        context.checked_functions.append(CheckedFunction { captures: captures, closure: false, name: function.name, type_id: type_id, params: parameters, body: flow.node, source: context.tokens[function.body], is_async: function.is_async, async_return_type: context.return_type })
+        context.checked_functions.append(CheckedFunction { declaration_name: function.declaration_name, captures: captures, closure: false, name: function.name, type_id: type_id, params: parameters, body: flow.node, source: context.tokens[function.body], is_async: function.is_async, async_return_type: context.return_type })
     }
     context.pos = previous_position
     sem_leave_scope(context, scope)
@@ -6334,6 +6368,7 @@ fn sem_validate(context: SemanticContext, tokens: list[Token]) {
         else { sem_take(context) }
     }
     context.collecting_declarations = false
+    sem_validate_attributes(context)
     sem_validate_inheritance(context)
     sem_validate_layout_cycles(context)
     for i in 0..len(context.pending_key_types) {
@@ -6483,7 +6518,7 @@ fn sem_lambda(context: SemanticContext) -> SemValue {
         }
         let id = len(context.checked_functions)
         let sig_args = context.types[signature].args
-        context.checked_functions.append(CheckedFunction { captures: capture_bindings, closure: true, name: "closure_" + str(id), type_id: signature, params: parameter_bindings, body: body, source: token, is_async: false, async_return_type: sig_args[len(sig_args) - 1] })
+        context.checked_functions.append(CheckedFunction { declaration_name: "", captures: capture_bindings, closure: true, name: "closure_" + str(id), type_id: signature, params: parameter_bindings, body: body, source: token, is_async: false, async_return_type: sig_args[len(sig_args) - 1] })
         return sem_expr(context, "closure", sem_value(signature), token, "", [], -1, id)
     }
     return sem_value(signature)
@@ -6733,8 +6768,10 @@ fn sem_struct_pattern(context: SemanticContext, subject: int, source: Token) -> 
         if sem_is(context, "RBRACE") { break }
         if sem_match(context, "DOT_DOT") { rest = true sem_match(context, "COMMA") sem_skip_separators(context) break }
         let field_source = sem_expect(context, "IDENT")
-        if module_contains(names, field_source.val) { report_error_at("W1002", field_source, "duplicate struct pattern field") }
-        let index = sem_field(context, type_.name, field_source.val)
+        # Namespace rewriting preserves the binding identity of shorthand fields.
+        let field_name = tool_short_name(field_source.val)
+        if module_contains(names, field_name) { report_error_at("W1002", field_source, "duplicate struct pattern field") }
+        let index = sem_field(context, type_.name, field_name)
         if index < 0 { report_error_at("W2001", field_source, "unknown struct pattern field") }
         let mut field_type = context.fields[index].type_id
         let generic = sem_generic_type(context, type_.name)
@@ -6746,7 +6783,7 @@ fn sem_struct_pattern(context: SemanticContext, subject: int, source: Token) -> 
             context.patterns[context.last_pattern].type_id = field_type
             context.patterns[context.last_pattern].source = field_source
         }
-        names.append(field_source.val)
+        names.append(field_name)
         children.append(context.last_pattern)
         sem_skip_separators(context)
         if not sem_match(context, "COMMA") { break }
@@ -6820,19 +6857,19 @@ fn sem_integer_pattern_matrix(context: SemanticContext, tail: list[int], rows: l
     }
     return false
 }
-# Closed annotation grammar: no expressions, evaluation, macros, or plugins.
+# Static metadata grammar: no expressions, evaluation, macros, or plugins.
 fn sem_static_attributes(context: SemanticContext) -> list[StaticAttribute] {
     let mut attributes: list[StaticAttribute] = []
     while sem_match(context, "AT") {
         let source = sem_expect(context, "IDENT")
-        if source.val != "deprecated" and source.val != "must_use" {
-            report_error_at("W0006", source, "unknown static attribute; supported attributes are @deprecated and @must_use")
-        }
+        let mut name = source.val
+        while sem_match(context, "DOT") { name = name + "." + sem_expect(context, "IDENT").val }
         for previous in attributes {
-            if previous.name == source.val { report_error_at("W1002", source, "duplicate static attribute") }
+            if previous.name == name { report_error_at("W1002", source, "duplicate static attribute") }
         }
         let mut message = ""
-        if source.val == "deprecated" {
+        let mut arguments: list[AttributeArgument] = []
+        if name == "deprecated" {
             sem_expect(context, "LPAREN")
             message = sem_expect(context, "STR").val
             let mut meaningful = false
@@ -6842,13 +6879,66 @@ fn sem_static_attributes(context: SemanticContext) -> list[StaticAttribute] {
             }
             if not meaningful { report_error_at("W0006", source, "@deprecated requires a non-empty string literal") }
             sem_expect(context, "RPAREN")
-        } elif sem_is(context, "LPAREN") {
+        } elif name == "must_use" and sem_is(context, "LPAREN") {
             report_error_at("W0006", source, "@must_use does not accept arguments")
+        } elif name != "must_use" and sem_match(context, "LPAREN") {
+            while not sem_is(context, "RPAREN") {
+                let field = sem_expect(context, "IDENT")
+                for previous in arguments {
+                    if previous.name == field.val { report_error_at("W1002", field, "duplicate annotation field") }
+                }
+                sem_expect(context, "COLON")
+                let negative = sem_match(context, "MINUS")
+                let literal = sem_take(context)
+                let mut kind = ""
+                let mut value = literal.val
+                if literal.kind == "INT" {
+                    kind = "int"
+                    sem_pattern_int_text(context, negative, literal)
+                    if negative { value = "-" + value }
+                } elif literal.kind == "STR" and not negative { kind = "str" }
+                elif (literal.kind == "TRUE" or literal.kind == "FALSE") and not negative { kind = "bool" }
+                else { report_error_at("W0006", literal, "annotation values must be str, bool, or Int64 literals") }
+                arguments.append(AttributeArgument { name: field.val, kind: kind, value: value })
+                if not sem_match(context, "COMMA") { break }
+            }
+            sem_expect(context, "RPAREN")
         }
-        attributes.append(StaticAttribute { name: source.val, message: message, source: source })
+        attributes.append(StaticAttribute { name: name, message: message, arguments: arguments, source: source })
         sem_skip_separators(context)
     }
     return attributes
+}
+
+fn sem_validate_attributes(context: SemanticContext) {
+    for function in context.functions {
+        for attribute in function.attributes {
+            if attribute.name == "deprecated" or attribute.name == "must_use" { continue }
+            let mut schema = -1
+            for i in 0..len(context.types) {
+                if context.types[i].name == attribute.name and context.types[i].kind == "struct" { schema = i }
+            }
+            if schema < 0 or sem_generic_type(context, attribute.name) >= 0 {
+                report_error_at("W0006", attribute.source, "annotation requires a non-generic struct schema: " + attribute.name)
+            }
+            let mut count = 0
+            for field in context.fields {
+                if field.owner != attribute.name { continue }
+                count = count + 1
+                let mut found = false
+                for argument in attribute.arguments {
+                    if argument.name == field.name {
+                        found = true
+                        if argument.kind != sem_kind(context, field.type_id) {
+                            report_error_at("W2001", attribute.source, "annotation field type mismatch: " + field.name)
+                        }
+                    }
+                }
+                if not found { report_error_at("W2001", attribute.source, "missing annotation field: " + field.name) }
+            }
+            if count != len(attribute.arguments) { report_error_at("W2001", attribute.source, "annotation fields must match schema") }
+        }
+    }
 }
 
 fn sem_attach_attributes(context: SemanticContext, attributes: list[StaticAttribute]) {
@@ -6861,6 +6951,20 @@ fn sem_attach_attributes(context: SemanticContext, attributes: list[StaticAttrib
         }
     }
     context.functions[index].attributes = attributes
+}
+
+fn tool_attributes_json(attributes: list[StaticAttribute]) -> str {
+    let mut items: list[str] = []
+    for attribute in attributes {
+        let mut arguments: list[str] = []
+        if attribute.name == "deprecated" { arguments.append("\"message\":" + diag_json_quote(attribute.message)) }
+        for argument in attribute.arguments {
+            let value = if argument.kind == "str" { diag_json_quote(argument.value) } elif argument.kind == "int" { str(int(argument.value)) } else { argument.value }
+            arguments.append(diag_json_quote(argument.name) + ":" + value)
+        }
+        items.append("{\"name\":" + diag_json_quote(attribute.name) + ",\"arguments\":{" + join_strings(arguments, ",") + "}}")
+    }
+    return "[" + join_strings(items, ",") + "]"
 }
 # Symbolic definition obligations are discharged by checking each concrete body.
 fn sem_symbolic(context: SemanticContext, type_id: int) -> bool {
@@ -6954,7 +7058,7 @@ fn sem_specialize_arguments(context: SemanticContext, template_id: int, argument
         name = sem_nominal_specialization_name(owner, arguments) + "." + slice(template.name, len(template.owner), len(template.name))
     }
     if sem_function(context, name) >= 0 { report_error_at("W1002", source, "reserved specialization identity collision") }
-    context.functions.append(SemFunction { attributes: template.attributes, abi_params: template.abi_params, abi_return: template.abi_return, name: name, params: template.params, type_params: empty, constraints: empty, type_id: sem_intern(context, "function", "", parts), body: template.body, end: template.end, owner: template.owner, visible: false, contract_start: template.contract_start, is_async: template.is_async })
+    context.functions.append(SemFunction { declaration_name: template.declaration_name, attributes: template.attributes, abi_params: template.abi_params, abi_return: template.abi_return, name: name, params: template.params, type_params: empty, constraints: empty, type_id: sem_intern(context, "function", "", parts), body: template.body, end: template.end, owner: template.owner, visible: false, contract_start: template.contract_start, is_async: template.is_async })
     let mut ancestry = context.specialization_ancestry
     ancestry.append(len(context.specializations))
     context.specializations.append(SemSpecialization { template: template_id, arguments: arguments, function: id, ancestry: ancestry })
@@ -7094,7 +7198,7 @@ struct MirPlace { root: int, projections: list[MirProjection] }
 struct MirOperation { owner_type: int, labels: list[str], place: MirPlace, opcode: str, result: int, args: list[int], name: str, value: MirLiteral, source: Token }
 struct MirTerminator { kind: str, targets: list[int], value: int, source: Token }
 struct MirBlock { operations: list[MirOperation], terminator: MirTerminator }
-struct MirFunction { name: str, return_type: int, slots: list[MirSlot], blocks: list[MirBlock], params: list[int], source: Token, is_async: bool, async_return_type: int }
+struct MirFunction { declaration_name: str, name: str, return_type: int, slots: list[MirSlot], blocks: list[MirBlock], params: list[int], source: Token, is_async: bool, async_return_type: int }
 struct MirExtern { name: str, native: str, params: list[int], return_type: int, abi_params: list[str], abi_return: str }
 struct MirVirtualSlot { name: str, arity: int }
 struct MirGlobal { symbol: int, type_id: int, name: str }
@@ -7296,14 +7400,14 @@ fn mir_return(context: MirBuilder, value: int, source: Token) {
     mir_terminate(context, "return", targets, escaped, source)
 }
 
-fn mir_finish(context: MirBuilder, name: str, source: Token) {
+fn mir_finish(context: MirBuilder, name: str, source: Token, declaration_name: str) {
     let targets: list[int] = []
     for i in 0..len(context.blocks) {
         if context.blocks[i].terminator.kind == "" {
             context.blocks[i].terminator = MirTerminator { kind: "unreachable", targets: targets, value: -1, source: source }
         }
     }
-    context.functions.append(MirFunction { name: name, return_type: context.return_type, slots: context.slots, blocks: context.blocks, params: context.params, source: source, is_async: context.is_async, async_return_type: if context.is_async { context.async_return_type } else { 0 } })
+    context.functions.append(MirFunction { declaration_name: declaration_name, name: name, return_type: context.return_type, slots: context.slots, blocks: context.blocks, params: context.params, source: source, is_async: context.is_async, async_return_type: if context.is_async { context.async_return_type } else { 0 } })
 }
 
 fn mir_integer(context: MirBuilder, text: str, negative: bool, source: Token) -> int {
@@ -9122,7 +9226,7 @@ fn mir_lower_function(context: MirBuilder, function: CheckedFunction) {
     }
     let value = mir_block(context, function.body)
     if context.current >= 0 { mir_return(context, if inner_returned == 1 { mir_constant(context, mir_literal_unit(), 1, function.source) } else { value }, function.source) }
-    mir_finish(context, if function.closure { "wysna_" + function.name } else { mir_abi_name(function.name) }, function.source)
+    mir_finish(context, if function.closure { "wysna_" + function.name } else { mir_abi_name(function.name) }, function.source, function.declaration_name)
 }
 
 fn mir_optimize_function_param_reads(fn_: MirFunction) -> MirFunction {
@@ -9212,7 +9316,7 @@ fn mir_optimize_function_param_reads(fn_: MirFunction) -> MirFunction {
         }
         new_blocks.append(MirBlock { operations: new_ops, terminator: block.terminator })
     }
-    return MirFunction { name: fn_.name, return_type: fn_.return_type, slots: fn_.slots, blocks: new_blocks, params: fn_.params, source: fn_.source, is_async: fn_.is_async, async_return_type: fn_.async_return_type }
+    return MirFunction { declaration_name: fn_.declaration_name, name: fn_.name, return_type: fn_.return_type, slots: fn_.slots, blocks: new_blocks, params: fn_.params, source: fn_.source, is_async: fn_.is_async, async_return_type: fn_.async_return_type }
 }
 
 fn mir_optimize_parameter_reads(module: MirModule) -> MirModule {
@@ -9259,7 +9363,7 @@ fn mir_build(program: CheckedProgram) -> MirModule {
         else { value = mir_constant(context, mir_literal_unit(), 1, source) }
         mir_return(context, value, source)
     }
-    mir_finish(context, "wysna_program", source)
+    mir_finish(context, "wysna_program", source, "")
     let raw_module = MirModule { file: program.file, functions: context.functions, globals: context.globals, records: context.records, virtual_slots: context.virtual_slots, externs: context.externs, types: context.types, source: source }
     return mir_optimize_parameter_reads(raw_module)
 }
@@ -10105,25 +10209,22 @@ fn mir_c_operation(module: MirModule, function: MirFunction, operation: MirOpera
     report_error_at("W9999", operation.source, "verified MIR operation missing during C99 emission")
     return ""
 }
+# Intrinsics use declaration identity, never source line numbers or file basenames.
+fn mir_c_stdlib_function(function: MirFunction, module_name: str, name: str, arity: int) -> bool {
+    let configured = lsp_stdlib_root_arg()
+    let root = if configured == "" { "stdlib" } else { configured }
+    if module_canonical(function.source.file) != module_canonical(root + "/" + module_name + ".wysna") { return false }
+    return tool_short_name(function.declaration_name) == name and len(function.params) == arity
+}
 fn mir_c_algorithms_parallel_helper(function: MirFunction) -> str {
-    let file = function.source.file
-    let flen = len(file)
-    if flen < 17 { return "" }
-    let tail = slice(file, flen - 17, flen)
-    if tail != "/algorithms.wysna" and tail != "\\algorithms.wysna" { return "" }
-    if function.source.line == 113 and len(function.params) == 2 { return "wysna_parallel_map" }
-    if function.source.line == 158 and len(function.params) == 3 { return "wysna_parallel_batch" }
-    if function.source.line == 174 and len(function.params) == 2 { return "wysna_parallel_filter" }
+    if mir_c_stdlib_function(function, "algorithms", "parallel_map", 2) { return "wysna_parallel_map" }
+    if mir_c_stdlib_function(function, "algorithms", "parallel_batch", 3) { return "wysna_parallel_batch" }
+    if mir_c_stdlib_function(function, "algorithms", "parallel_filter", 2) { return "wysna_parallel_filter" }
     return ""
 }
 fn mir_c_async_helper(function: MirFunction) -> str {
-    let file = function.source.file
-    let flen = len(file)
-    if flen < 12 { return "" }
-    let tail = slice(file, flen - 12, flen)
-    if tail != "/async.wysna" and tail != "\\async.wysna" { return "" }
-    if function.source.line == 58 and len(function.params) == 1 { return "wysna_async_spawn_handle" }
-    if function.source.line == 62 and len(function.params) == 2 { return "wysna_spawn_take_option" }
+    if mir_c_stdlib_function(function, "async", "_spawn_handle", 1) { return "wysna_async_spawn_handle" }
+    if mir_c_stdlib_function(function, "async", "_take_task_value", 2) { return "wysna_spawn_take_option" }
     return ""
 }
 fn mir_c_coro_assign(function: MirFunction, dest_id: int, wval_var: str, indent: str) -> str {
@@ -10936,6 +11037,7 @@ fn lint_pattern_subsumed(program: CheckedProgram, previous: list[int], id: int) 
 # Shared host externs live in 01_tool_common.wysna.
 
 class ToolGraphNode {
+    attributes: list[StaticAttribute]
     id: str
     name: str
     qualified_name: str
@@ -10970,6 +11072,8 @@ class ToolGraphNode {
 
     fn init(id: str, name: str, qualified_name: str, kind: str, module_name: str, file: str, line: int, col: int, end_line: int, start_byte: int, end_byte: int, start_char: int, end_char: int, visibility: str, is_async: bool, signature: str, owner: str) {
         this.id = id
+        let metadata: list[StaticAttribute] = []
+        this.attributes = metadata
         this.name = name
         this.qualified_name = qualified_name
         this.kind = kind
@@ -11071,18 +11175,6 @@ class ToolGraph {
 }
 
 # tool_str_contains, tool_str_gt, tool_sort_strings, tool_str_list_json live in 01_tool_common.wysna.
-
-fn tool_short_name(raw: str) -> str {
-    let prefix = "__wysna_module_"
-    if len(raw) > len(prefix) and slice(raw, 0, len(prefix)) == prefix {
-        for i in len(prefix)..len(raw) - 1 {
-            if slice(raw, i, i + 2) == "__" {
-                return slice(raw, i + 2, len(raw))
-            }
-        }
-    }
-    return raw
-}
 
 fn tool_module_tag(raw: str) -> str {
     let prefix = "__wysna_module_"
@@ -11374,9 +11466,18 @@ fn tool_scan_decl_nodes(graph: ToolGraph, program: CheckedProgram, src: str, fil
     let mut current_owner_kind = ""
     let mut is_public = false
     let mut is_async = false
+    let mut attributes: list[StaticAttribute] = []
     let mut i = 0
     while i < len(tokens) - 1 {
         let tok = tokens[i]
+        if depth == 0 and tok.kind == "AT" {
+            let metadata = SemanticContext(false)
+            metadata.tokens = tokens
+            metadata.pos = i
+            attributes = sem_static_attributes(metadata)
+            i = metadata.pos
+            continue
+        }
         if tok.kind == "PUB" or (tok.kind == "IDENT" and tok.val == "pub") or tok.kind == "PUBLIC" {
             is_public = true
             i = i + 1
@@ -11448,6 +11549,9 @@ fn tool_scan_decl_nodes(graph: ToolGraph, program: CheckedProgram, src: str, fil
                     }
                 }
                 let node = ToolGraphNode(nid, name, qname, decl_kind, mod_label, file, span.start_line, tok.col, span.end_line, span.start_byte, span.end_byte, span.start_char, span.end_char, vis, is_async, sig_str, "")
+                node.attributes = attributes
+                let empty_metadata: list[StaticAttribute] = []
+                attributes = empty_metadata
                 if is_extern {
                     node.effects.append("ffi.native")
                     node.capabilities.append("native-ffi")
@@ -11703,6 +11807,7 @@ fn tool_node_json(n: ToolGraphNode) -> str {
     p.append(",\"visibility\":" + diag_json_quote(n.visibility))
     p.append(",\"is_async\":" + (if n.is_async { "true" } else { "false" }))
     p.append(",\"signature\":" + diag_json_quote(n.signature))
+    if n.kind == "fn" { p.append(",\"attributes\":" + tool_attributes_json(n.attributes)) }
     p.append(",\"super_class\":" + (if n.super_class == "" { "null" } else { diag_json_quote(n.super_class) }))
     p.append(",\"implements\":" + tool_str_list_json(n.implements_list))
     p.append(",\"implemented_by\":" + tool_str_list_json(n.implemented_by))
@@ -12231,7 +12336,7 @@ fn tool_handle_check_v1(file: str, legacy_json: bool, json_v1: bool) -> unit {
     if json_v1 {
         diag_write_output(diag_tool_envelope_json("check", "ok", 0, warnings_json, "", "", "[]"))
     } elif legacy_json {
-        diag_write_output("{\"schema_version\":\"wysna.cli.result/1\",\"compiler_version\":\"0.8.0\",\"command\":\"check\",\"ok\":true,\"exit_code\":0,\"diagnostics\":" + warnings_json + ",\"data\":{\"file\":" + diag_json_quote(file) + ",\"functions\":" + fn_count + "}}")
+        diag_write_output(("{\"schema_version\":\"wysna.cli.result/1\",\"compiler_version\":\"" + tool_compiler_version() + "\",\"command\":\"check\",\"ok\":true,\"exit_code\":0,\"diagnostics\":") + warnings_json + ",\"data\":{\"file\":" + diag_json_quote(file) + ",\"functions\":" + fn_count + "}}")
     } else {
         lint_print_warnings_stderr(warnings)
         print("[Wysna Compiler] Checked " + file + " (" + fn_count + " functions, MIR verified)")
@@ -12936,7 +13041,7 @@ fn tool_handle_skills(args: list[str], json_mode: bool) -> unit {
     }
     let content = tool_skills_topic_content(topic)
     if content == "" {
-        let msg = "Unknown skill topic '" + topic + "'. Available topics: agent-loop, contracts, graph, overview, patch, stdlib, syntax"
+        let msg = "Unknown skill topic '" + topic + "'. Available topics: " + tool_skills_available_topics()
         if json_mode {
             let diag = diag_record_json("W5002", "usage", "error", msg, "<cli>", 1, 1, "")
             diag_write_output(diag_tool_envelope_json("skills", "usage_error", 2, "[" + diag + "]", "", "", "[]"))
@@ -12972,7 +13077,7 @@ fn tool_handle_capabilities(args: list[str], json_mode: bool) -> unit {
     if json_mode {
         diag_write_output(diag_tool_envelope_json("capabilities", "ok", 0, "[]", "result", payload, "[]"))
     } else {
-        print("Wysna 0.8.0 capabilities: native-cli, wasi-command, browser-library")
+        print(("Wysna " + tool_compiler_version() + " capabilities: native-cli, wasi-command, browser-library"))
         print("Machine-readable tools: check, fmt, project.new, project.lock, project.check, project.test, packages.pack, packages.fetch, packages.add, packages.remove, packages.restore, api, capabilities, explain, graph, inspect, patch, skills, fix, schema, mcp, lsp")
     }
     exit(0)
@@ -14062,7 +14167,7 @@ fn lsp_dispatch_message(state: LspServerState, msg: LspJson) -> bool {
         state.workspace_roots = roots
         let legend = "\"tokenTypes\":[\"keyword\",\"type\",\"class\",\"interface\",\"enum\",\"struct\",\"function\",\"method\",\"property\",\"variable\",\"parameter\",\"string\",\"number\",\"operator\",\"comment\"],\"tokenModifiers\":[]"
         let caps = "\"positionEncoding\":\"utf-16\",\"textDocumentSync\":{\"openClose\":true,\"change\":2},\"definitionProvider\":true,\"implementationProvider\":true,\"hoverProvider\":true,\"referencesProvider\":true,\"documentFormattingProvider\":true,\"completionProvider\":{\"triggerCharacters\":[\".\"]},\"codeActionProvider\":{\"codeActionKinds\":[\"quickfix\"]},\"renameProvider\":true,\"signatureHelpProvider\":{\"triggerCharacters\":[\"(\",\",\"]},\"semanticTokensProvider\":{\"legend\":{" + legend + "},\"full\":true,\"range\":false}"
-        let res = "{\"capabilities\":{" + caps + "},\"serverInfo\":{\"name\":\"wysna-native\",\"version\":\"0.8.0\"}}"
+        let res = "{\"capabilities\":{" + caps + ("},\"serverInfo\":{\"name\":\"wysna-native\",\"version\":\"" + tool_compiler_version() + "\"}}")
         if has_id { lsp_send_message("{\"jsonrpc\":\"2.0\",\"id\":" + req_id_raw + ",\"result\":" + res + "}") }
         return true
     }
@@ -15218,8 +15323,10 @@ fn schema_tool_json(f: SchemaFn, lines: list[str], known_defs: list[str], graph:
     let mut effs: list[str] = []
     let mut caps: list[str] = []
     let mut complete = false
+    let mut attributes: list[StaticAttribute] = []
     for n in graph.nodes {
         if n.kind == "fn" and n.file == graph.entry_file and n.name == f.name {
+            attributes = n.attributes
             effs = n.effects
             caps = n.capabilities
             complete = true
@@ -15267,6 +15374,7 @@ fn schema_tool_json(f: SchemaFn, lines: list[str], known_defs: list[str], graph:
     obj.append("\"name\":" + diag_json_quote(f.name))
     obj.append(",\"visibility\":" + diag_json_quote(vis))
     obj.append(",\"signature\":" + diag_json_quote(signature))
+    obj.append(",\"attributes\":" + tool_attributes_json(attributes))
     obj.append(",\"description\":" + desc_j)
     obj.append(",\"input_schema\":" + in_schema)
     obj.append(",\"output_schema\":" + out_json)
@@ -15588,7 +15696,7 @@ fn tool_handle_schema(args: list[str], json_mode_in: bool) -> unit {
 
     let codecs_src = if emit_codecs { schema_generate_codecs(structs, enums, known_defs) } else { "" }
     let codecs_field = if emit_codecs { ",\"codecs_source\":" + diag_json_quote(codecs_src) } else { "" }
-    let payload_json = "{\"schema_version\":\"wysna.schema/1\",\"compiler_version\":\"0.8.0\",\"$schema\":\"https://json-schema.org/draft/2020-12/schema\",\"$defs\":" + join_strings(defs_parts, "") + ",\"tools\":" + join_strings(tools_parts, "") + codecs_field + "}"
+    let payload_json = ("{\"schema_version\":\"wysna.schema/1\",\"compiler_version\":\"" + tool_compiler_version() + "\",\"$schema\":\"https://json-schema.org/draft/2020-12/schema\",\"$defs\":") + join_strings(defs_parts, "") + ",\"tools\":" + join_strings(tools_parts, "") + codecs_field + "}"
 
     if out_path != "" {
         let out_content = if emit_codecs and not json_mode { codecs_src } else { payload_json + "\n" }
@@ -17240,12 +17348,12 @@ fn proj_parse_manifest_at(abs_manifest_path: str, visit_stack: list[str]) -> Pro
     if not proj_valid_semver(m.version) {
         return proj_fail(m, "W5002", "package.version must be an exact semantic version")
     }
-    if m.language_version != "0.8" {
-        return proj_fail(m, "W5002", "package.language must be exactly '0.8' for this compiler")
+    if m.language_version != (tool_language_version()) {
+        return proj_fail(m, "W5002", ("package.language must be exactly '" + tool_language_version() + "' for this compiler"))
     }
     if not m.has_tc_table { return proj_fail(m, "W5002", "toolchain must be a table") }
-    if m.compiler_version != "0.8.0" {
-        return proj_fail(m, "W5002", "toolchain.compiler must exactly match this compiler (0.8.0)")
+    if m.compiler_version != (tool_compiler_version()) {
+        return proj_fail(m, "W5002", ("toolchain.compiler must exactly match this compiler (" + tool_compiler_version() + ")"))
     }
     if m.stdlib != "bundled" {
         return proj_fail(m, "W5002", "toolchain.stdlib must be 'bundled'")
@@ -17362,7 +17470,7 @@ fn proj_check_envelope_json(command: str, status: str, exit_code: int, diagnosti
     parts.append(",\"tool_exit_code\":" + str(exit_code))
     parts.append(",\"process_exit_code\":" + str(exit_code))
     parts.append(",\"execution\":null")
-    parts.append(",\"toolchain\":{\"compiler\":\"0.8.0\"}")
+    parts.append((",\"toolchain\":{\"compiler\":\"" + tool_compiler_version() + "\"}"))
     parts.append(",\"target\":" + target_json)
     parts.append(",\"diagnostics\":" + diagnostics_json)
     parts.append(",\"artifacts\":" + artifacts_json)
@@ -17447,8 +17555,8 @@ fn proj_scaffold(args: list[str], json_mode_in: bool) -> unit {
     }
     let dirs = [root + "/src", root + "/tests"]
     let paths = [root + "/src/main.wysna", root + "/tests/example.wysna", root + "/wysna.toml"]
-    let manifest = "manifest_version = 1\n\n[package]\nname = \"" + name + "\"\nversion = \"0.1.0\"\nlanguage = \"0.8\"\n\n" +
-        "[toolchain]\ncompiler = \"0.8.0\"\nstdlib = \"bundled\"\n\n[sources]\nroot = \"src\"\n\n" +
+    let manifest = "manifest_version = 1\n\n[package]\nname = \"" + name + ("\"\nversion = \"0.1.0\"\nlanguage = \"" + tool_language_version() + "\"\n\n") +
+        ("[toolchain]\ncompiler = \"" + tool_compiler_version() + "\"\nstdlib = \"bundled\"\n\n[sources]\nroot = \"src\"\n\n") +
         "[targets.app]\nentry = \"src/main.wysna\"\nprofile = \"native-cli\"\n\n" +
         "[[tests]]\nname = \"example\"\nentry = \"tests/example.wysna\"\ntimeout_ms = 10000\n"
     let contents = [
@@ -18072,7 +18180,7 @@ fn proj_test_plan(m: ProjectManifest, discover: bool, filter: str, has_filter: b
             ",\"entry\":" + diag_json_quote(tc.entry) + ",\"entry_sha256\":" + diag_json_quote(sha) + ",\"timeout_ms\":" + str(tc.timeout_ms) + "}")
     }
     let snapshot = "\"manifest_sha256\":" + diag_json_quote(m.manifest_sha256) + ",\"lock_sha256\":" +
-        (if lock_sha == "" { "null" } else { diag_json_quote(lock_sha) }) + ",\"toolchain\":\"0.8.0\",\"cases\":[" + join_strings(rows, ",") + "]"
+        (if lock_sha == "" { "null" } else { diag_json_quote(lock_sha) }) + (",\"toolchain\":\"" + tool_compiler_version() + "\",\"cases\":[") + join_strings(rows, ",") + "]"
     let hash = diag_sha256_hex("{" + snapshot + "}")
     let payload = "{\"schema_version\":\"wysna.project-test-plan/1\",\"project\":" + diag_json_quote(m.name) + "," + snapshot +
         ",\"selected\":" + str(len(selected)) + ",\"plan_hash\":" + diag_json_quote(hash) + "}"
@@ -19255,6 +19363,7 @@ class ApiVariant {
 }
 
 class ApiSymbol {
+    attributes: list[StaticAttribute]
     identity: str
     name: str
     kind: str
@@ -19274,6 +19383,8 @@ class ApiSymbol {
 
     fn init(identity: str, name: str, kind: str, signature: str, module_id: str, package_id: str) {
         this.identity = identity
+        let metadata: list[StaticAttribute] = []
+        this.attributes = metadata
         this.name = name
         this.kind = kind
         this.signature = signature
@@ -19510,9 +19621,18 @@ fn api_extract_module(src: str, file_path: str, module_id: str, package_id: str)
     let mut depth = 0
     let mut is_pub = false
     let mut is_extern = false
+    let mut attributes: list[StaticAttribute] = []
     while schema_cur_kind(c) != "EOF" {
         let k = schema_cur_kind(c)
         let v = schema_cur_val(c)
+        if depth == 0 and k == "AT" {
+            let metadata = SemanticContext(false)
+            metadata.tokens = tokens
+            metadata.pos = c.pos
+            attributes = sem_static_attributes(metadata)
+            c.pos = metadata.pos
+            continue
+        }
         if depth > 0 {
             if k == "LBRACE" { depth = depth + 1 }
             elif k == "RBRACE" { depth = depth - 1 }
@@ -19719,8 +19839,11 @@ fn api_extract_module(src: str, file_path: str, module_id: str, package_id: str)
                 if schema_cur_kind(c) == "LBRACE" { schema_skip_brace_block(c) }
             } else {
                 let fn_sym = api_parse_fn_symbol(c, lines, module_id, "function", module_id, package_id, true)
+                fn_sym.attributes = attributes
                 rec.symbols.append(fn_sym)
             }
+            let empty_metadata: list[StaticAttribute] = []
+            attributes = empty_metadata
             is_pub = false
             is_extern = false
             continue
@@ -19792,6 +19915,7 @@ fn api_symbol_json(s: ApiSymbol) -> str {
     parts.append(",\"visibility\":\"public\"")
     parts.append(",\"signature\":" + diag_json_quote(s.signature))
     if s.kind == "function" or s.kind == "method" {
+        parts.append(",\"attributes\":" + tool_attributes_json(s.attributes))
         parts.append(",\"type_parameters\":" + api_str_list_json(s.type_parameters))
         let mut p_parts: list[str] = ["["]
         for i in 0..len(s.parameters) {
@@ -19852,7 +19976,7 @@ fn api_collect_stdlib_file(acc: ApiIndexCollector, resolved_path: str, module_id
     if tool_str_contains(acc.visited, canon) { return }
     acc.visited.append(canon)
     let src = read_file(canon) else err { return }
-    let rec = api_extract_module(src, canon, module_id, "wysna-stdlib@0.8.0")
+    let rec = api_extract_module(src, canon, module_id, ("wysna-stdlib@" + tool_compiler_version()))
     acc.modules.append(rec)
     if not recurse { return }
     for imp in rec.imports {
@@ -19958,7 +20082,7 @@ fn tool_handle_api(args: list[str], _json_mode: bool) -> unit {
             if module_is_confined_under(mod_path, stdlib_root) {
                 let srel = api_strip_ext_rel(mod_path, stdlib_root)
                 mid = "std/" + srel
-                owner = "wysna-stdlib@0.8.0"
+                owner = ("wysna-stdlib@" + tool_compiler_version())
             } else {
                 let mut found_owner = m.name + "@" + m.version
                 let mut found_src_root = m.source_root_abs
@@ -19982,7 +20106,7 @@ fn tool_handle_api(args: list[str], _json_mode: bool) -> unit {
         }
         mparts.append("]")
         let proj_obj = "{\"name\":" + diag_json_quote(m.name) + ",\"version\":" + diag_json_quote(m.version) + "}"
-        let payload = "{\"schema_version\":\"wysna.api-index/1\",\"compiler_version\":\"0.8.0\",\"stdlib_version\":\"0.8.0\",\"project\":" + proj_obj + ",\"modules\":" + join_strings(mparts, "") + "}"
+        let payload = ("{\"schema_version\":\"wysna.api-index/1\",\"compiler_version\":\"" + tool_compiler_version() + "\",\"stdlib_version\":\"" + tool_compiler_version() + "\",\"project\":") + proj_obj + ",\"modules\":" + join_strings(mparts, "") + "}"
         diag_write_output(diag_tool_envelope_json("api", "ok", 0, "[]", "result", payload, "[]"))
         exit(0)
     }
@@ -20013,7 +20137,7 @@ fn tool_handle_api(args: list[str], _json_mode: bool) -> unit {
         mparts.append(api_module_json(sorted_mods[k]))
     }
     mparts.append("]")
-    let payload = "{\"schema_version\":\"wysna.api-index/1\",\"compiler_version\":\"0.8.0\",\"stdlib_version\":\"0.8.0\",\"modules\":" + join_strings(mparts, "") + "}"
+    let payload = ("{\"schema_version\":\"wysna.api-index/1\",\"compiler_version\":\"" + tool_compiler_version() + "\",\"stdlib_version\":\"" + tool_compiler_version() + "\",\"modules\":") + join_strings(mparts, "") + "}"
     diag_write_output(diag_tool_envelope_json("api", "ok", 0, "[]", "result", payload, "[]"))
     exit(0)
 }
@@ -20457,7 +20581,7 @@ fn mcp_handle_message(state: McpServerState, msg: LspJson) -> str {
     let params = lsp_json_get(msg, "params")
     if method == "initialize" {
         let pv = lsp_json_str(params, "protocolVersion", "2025-06-18")
-        return mcp_rpc_result(id_raw, "{\"protocolVersion\":" + diag_json_quote(pv) + ",\"capabilities\":{\"tools\":{}},\"serverInfo\":{\"name\":\"wysna\",\"version\":\"0.8.0\"}}")
+        return mcp_rpc_result(id_raw, "{\"protocolVersion\":" + diag_json_quote(pv) + (",\"capabilities\":{\"tools\":{}},\"serverInfo\":{\"name\":\"wysna\",\"version\":\"" + tool_compiler_version() + "\"}}"))
     }
     if method == "ping" {
         return mcp_rpc_result(id_raw, "{}")
@@ -20536,7 +20660,7 @@ fn run_compiler() -> unit ! IoError {
     let cmd = clean[0]
     if cmd == "--version" or cmd == "-v" {
         if len(clean) != 1 { eprint("[W5002] Usage: Wysna Compiler --version") exit(2) }
-        print("wysna 0.8.0")
+        print(("wysna " + tool_compiler_version()))
         return
     }
     if cmd == "graph" {

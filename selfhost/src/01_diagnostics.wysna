@@ -175,8 +175,12 @@ fn diag_primary_span_json(file: str, line: int, col: int, src: str) -> str {
 }
 
 fn diag_record_json(code: str, stage: str, severity: str, msg: str, file: str, line: int, col: int, src: str) -> str {
-    let span_json = diag_primary_span_json(file, line, col, src)
     let data_json = if stage == "type" { fix_mismatch_data_json(msg) } else { "{}" }
+    return diag_record_json_data(code, stage, severity, msg, file, line, col, src, data_json)
+}
+
+fn diag_record_json_data(code: str, stage: str, severity: str, msg: str, file: str, line: int, col: int, src: str, data_json: str) -> str {
+    let span_json = diag_primary_span_json(file, line, col, src)
     let fixes_json = if span_json != "null" { fix_diagnostic_edits_json(code, msg, file, src, line, col) } else { "[]" }
     return "{\"code\":" + diag_json_quote(code) + ",\"severity\":" + diag_json_quote(severity) + ",\"stage\":" + diag_json_quote(stage) + ",\"message\":" + diag_json_quote(msg) + ",\"primary_span\":" + span_json + ",\"related\":[],\"data\":" + data_json + ",\"fixes\":" + fixes_json + "}"
 }
@@ -189,7 +193,7 @@ fn diag_tool_envelope_json(command: str, status: str, exit_code: int, diagnostic
     parts.append(",\"tool_exit_code\":" + str(exit_code))
     parts.append(",\"process_exit_code\":" + str(exit_code))
     parts.append(",\"execution\":null")
-    parts.append(",\"toolchain\":{\"compiler\":\"0.8.0\"}")
+    parts.append((",\"toolchain\":{\"compiler\":\"" + tool_compiler_version() + "\"}"))
     parts.append(",\"target\":{\"profile\":\"native-cli\",\"triple\":null}")
     parts.append(",\"diagnostics\":" + diagnostics_json)
     parts.append(",\"artifacts\":" + artifacts_json)
@@ -332,6 +336,10 @@ fn diag_render_source_excerpt(src: str, target_line: int, target_col: int) -> st
 }
 
 fn diag_emit_and_exit(file: str, code: str, line: int, col: int, msg: str) -> unit {
+    diag_emit_and_exit_data(file, code, line, col, msg, "")
+}
+
+fn diag_emit_and_exit_data(file: str, code: str, line: int, col: int, msg: str, data: str) -> unit {
     let mode = diag_cli_json_mode()
     let mut src = ""
     if file != "" and file != "<stdin>" and file != "<unknown>" and file != "<cli>" {
@@ -344,10 +352,10 @@ fn diag_emit_and_exit(file: str, code: str, line: int, col: int, msg: str) -> un
         exit(1)
     }
     let stage = diag_stage_for_code(code)
-    let diag_json = diag_record_json(code, stage, "error", msg, file, line, col, src)
+    let diag_json = if data == "" { diag_record_json(code, stage, "error", msg, file, line, col, src) } else { diag_record_json_data(code, stage, "error", msg, file, line, col, src, data) }
     if mode == "array" { diag_write_output("[" + diag_json + "]"); exit(1) }
     if mode == "check-json" {
-        diag_write_output("{\"schema_version\":\"wysna.cli.result/1\",\"compiler_version\":\"0.8.0\",\"command\":\"check\",\"ok\":false,\"exit_code\":1,\"diagnostics\":[" + diag_json + "],\"data\":null}")
+        diag_write_output(("{\"schema_version\":\"wysna.cli.result/1\",\"compiler_version\":\"" + tool_compiler_version() + "\",\"command\":\"check\",\"ok\":false,\"exit_code\":1,\"diagnostics\":[") + diag_json + "],\"data\":null}")
         exit(1)
     }
     let cmd = diag_cli_command()

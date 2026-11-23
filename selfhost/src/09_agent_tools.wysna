@@ -2,6 +2,7 @@
 # Shared host externs live in 01_tool_common.wysna.
 
 class ToolGraphNode {
+    attributes: list[StaticAttribute]
     id: str
     name: str
     qualified_name: str
@@ -36,6 +37,8 @@ class ToolGraphNode {
 
     fn init(id: str, name: str, qualified_name: str, kind: str, module_name: str, file: str, line: int, col: int, end_line: int, start_byte: int, end_byte: int, start_char: int, end_char: int, visibility: str, is_async: bool, signature: str, owner: str) {
         this.id = id
+        let metadata: list[StaticAttribute] = []
+        this.attributes = metadata
         this.name = name
         this.qualified_name = qualified_name
         this.kind = kind
@@ -137,18 +140,6 @@ class ToolGraph {
 }
 
 # tool_str_contains, tool_str_gt, tool_sort_strings, tool_str_list_json live in 01_tool_common.wysna.
-
-fn tool_short_name(raw: str) -> str {
-    let prefix = "__wysna_module_"
-    if len(raw) > len(prefix) and slice(raw, 0, len(prefix)) == prefix {
-        for i in len(prefix)..len(raw) - 1 {
-            if slice(raw, i, i + 2) == "__" {
-                return slice(raw, i + 2, len(raw))
-            }
-        }
-    }
-    return raw
-}
 
 fn tool_module_tag(raw: str) -> str {
     let prefix = "__wysna_module_"
@@ -440,9 +431,18 @@ fn tool_scan_decl_nodes(graph: ToolGraph, program: CheckedProgram, src: str, fil
     let mut current_owner_kind = ""
     let mut is_public = false
     let mut is_async = false
+    let mut attributes: list[StaticAttribute] = []
     let mut i = 0
     while i < len(tokens) - 1 {
         let tok = tokens[i]
+        if depth == 0 and tok.kind == "AT" {
+            let metadata = SemanticContext(false)
+            metadata.tokens = tokens
+            metadata.pos = i
+            attributes = sem_static_attributes(metadata)
+            i = metadata.pos
+            continue
+        }
         if tok.kind == "PUB" or (tok.kind == "IDENT" and tok.val == "pub") or tok.kind == "PUBLIC" {
             is_public = true
             i = i + 1
@@ -514,6 +514,9 @@ fn tool_scan_decl_nodes(graph: ToolGraph, program: CheckedProgram, src: str, fil
                     }
                 }
                 let node = ToolGraphNode(nid, name, qname, decl_kind, mod_label, file, span.start_line, tok.col, span.end_line, span.start_byte, span.end_byte, span.start_char, span.end_char, vis, is_async, sig_str, "")
+                node.attributes = attributes
+                let empty_metadata: list[StaticAttribute] = []
+                attributes = empty_metadata
                 if is_extern {
                     node.effects.append("ffi.native")
                     node.capabilities.append("native-ffi")
@@ -769,6 +772,7 @@ fn tool_node_json(n: ToolGraphNode) -> str {
     p.append(",\"visibility\":" + diag_json_quote(n.visibility))
     p.append(",\"is_async\":" + (if n.is_async { "true" } else { "false" }))
     p.append(",\"signature\":" + diag_json_quote(n.signature))
+    if n.kind == "fn" { p.append(",\"attributes\":" + tool_attributes_json(n.attributes)) }
     p.append(",\"super_class\":" + (if n.super_class == "" { "null" } else { diag_json_quote(n.super_class) }))
     p.append(",\"implements\":" + tool_str_list_json(n.implements_list))
     p.append(",\"implemented_by\":" + tool_str_list_json(n.implemented_by))
@@ -1297,7 +1301,7 @@ fn tool_handle_check_v1(file: str, legacy_json: bool, json_v1: bool) -> unit {
     if json_v1 {
         diag_write_output(diag_tool_envelope_json("check", "ok", 0, warnings_json, "", "", "[]"))
     } elif legacy_json {
-        diag_write_output("{\"schema_version\":\"wysna.cli.result/1\",\"compiler_version\":\"0.8.0\",\"command\":\"check\",\"ok\":true,\"exit_code\":0,\"diagnostics\":" + warnings_json + ",\"data\":{\"file\":" + diag_json_quote(file) + ",\"functions\":" + fn_count + "}}")
+        diag_write_output(("{\"schema_version\":\"wysna.cli.result/1\",\"compiler_version\":\"" + tool_compiler_version() + "\",\"command\":\"check\",\"ok\":true,\"exit_code\":0,\"diagnostics\":") + warnings_json + ",\"data\":{\"file\":" + diag_json_quote(file) + ",\"functions\":" + fn_count + "}}")
     } else {
         lint_print_warnings_stderr(warnings)
         print("[Wysna Compiler] Checked " + file + " (" + fn_count + " functions, MIR verified)")
@@ -2002,7 +2006,7 @@ fn tool_handle_skills(args: list[str], json_mode: bool) -> unit {
     }
     let content = tool_skills_topic_content(topic)
     if content == "" {
-        let msg = "Unknown skill topic '" + topic + "'. Available topics: agent-loop, contracts, graph, overview, patch, stdlib, syntax"
+        let msg = "Unknown skill topic '" + topic + "'. Available topics: " + tool_skills_available_topics()
         if json_mode {
             let diag = diag_record_json("W5002", "usage", "error", msg, "<cli>", 1, 1, "")
             diag_write_output(diag_tool_envelope_json("skills", "usage_error", 2, "[" + diag + "]", "", "", "[]"))
@@ -2038,7 +2042,7 @@ fn tool_handle_capabilities(args: list[str], json_mode: bool) -> unit {
     if json_mode {
         diag_write_output(diag_tool_envelope_json("capabilities", "ok", 0, "[]", "result", payload, "[]"))
     } else {
-        print("Wysna 0.8.0 capabilities: native-cli, wasi-command, browser-library")
+        print(("Wysna " + tool_compiler_version() + " capabilities: native-cli, wasi-command, browser-library"))
         print("Machine-readable tools: check, fmt, project.new, project.lock, project.check, project.test, packages.pack, packages.fetch, packages.add, packages.remove, packages.restore, api, capabilities, explain, graph, inspect, patch, skills, fix, schema, mcp, lsp")
     }
     exit(0)

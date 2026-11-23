@@ -361,6 +361,7 @@ def _tool_definition(fn_decl, lines, known_defs, effect_row):
         "name": fn_decl.name,
         "visibility": "public" if getattr(fn_decl, "is_exported", False) else "private",
         "signature": signature,
+        "attributes": [attribute.metadata() for attribute in getattr(fn_decl, 'attributes', [])],
         "description": _leading_documentation(lines, fn_decl.line),
         "input_schema": input_schema,
         "output_schema": output_schema,

@@ -10,7 +10,12 @@ def pattern_names(pattern):
         return {pattern.name} - {'None', 'none'}
     if isinstance(pattern, A.ErrorTypePattern):
         return pattern_names(pattern.binding)
-    children = getattr(pattern, 'elements', getattr(pattern, 'args', []))
+    if isinstance(pattern, A.OrPattern):
+        children = pattern.alternatives[:1]
+    elif isinstance(pattern, A.StructPattern):
+        children = [field.pattern for field in pattern.fields]
+    else:
+        children = getattr(pattern, 'elements', getattr(pattern, 'args', []))
     return set().union(*(pattern_names(child) for child in children)) if children else set()
 
 
@@ -68,6 +73,9 @@ class ModuleNames:
         if isinstance(node, (A.NamedType, A.GenericType)) and node.name not in types:
             node.name = self.names.get(node.name, node.name)
         if isinstance(node, (A.FnDecl, A.MethodDecl, A.LambdaExpr)):
+            for attribute in getattr(node, 'attributes', []):
+                if attribute.name not in ('deprecated', 'must_use'):
+                    attribute.schema_name = self.names.get(attribute.name, attribute.name)
             type_scope = types | {parameter.name for parameter in getattr(node, 'type_params', [])}
             for parameter in getattr(node, 'type_params', []):
                 self.visit(parameter.constraint, values, type_scope)
@@ -82,6 +90,8 @@ class ModuleNames:
             node.superclass = self.names.get(node.superclass, node.superclass) if isinstance(node.superclass, str) else self.visit(node.superclass, values, types)
             node.interfaces = [self.names.get(name, name) if isinstance(name, str) else self.visit(name, values, types) for name in node.interfaces]
         if isinstance(node, A.StructInitExpr):
+            node.struct_name = self.names.get(node.struct_name, node.struct_name)
+        if isinstance(node, A.StructPattern):
             node.struct_name = self.names.get(node.struct_name, node.struct_name)
         if isinstance(node, A.NewExpr):
             node.class_name = self.names.get(node.class_name, node.class_name)

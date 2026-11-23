@@ -212,8 +212,10 @@ def validate(sdk, report, strict_source=False, compiler_source=None, application
         run('generic-class-methods', ['run', generic_methods], stdout=b'42 hello\n7 world\n')
         annotations = project / 'static-attributes.wysna'
         annotations.write_text('struct Box { value: int, label: str }\n'
+                              'struct AgentTool { name: str, read_only: bool }\n'
+                              '@AgentTool(name: "old", read_only: true)\n'
                                '@deprecated("use current")\n@must_use\n'
-                               'fn old(box: Box) -> int { match box {\n'
+                               'pub fn old(box: Box) -> int { match box {\n'
                                'Box { value: 0 | 1, .. } => 7,\n'
                                'Box { value: 2..=9, .. } => 42, _ => 0 } }\n'
                                'let box = Box { value: 3, label: "SDK" }\n'
@@ -222,6 +224,20 @@ def validate(sdk, report, strict_source=False, compiler_source=None, application
         annotated = run('static-attribute-json-warnings', ['check', annotations, '--output-format=json-v1'])
         codes = [item['code'] for item in json.loads(annotated.stdout)['diagnostics']]
         require(codes.count('W6004') == 2 and codes.count('W6005') == 1, ('attribute diagnostics', codes))
+        expected_attributes = [
+            {'name': 'AgentTool', 'arguments': {'name': 'old', 'read_only': True}},
+            {'name': 'deprecated', 'arguments': {'message': 'use current'}},
+            {'name': 'must_use', 'arguments': {}},
+        ]
+        inspected = run('custom-metadata-inspect', ['inspect', annotations, '--symbol', 'old', '--output-format=json-v1'])
+        require(json.loads(inspected.stdout)['result']['node']['attributes'] == expected_attributes, inspected.stdout)
+        schema = run('custom-metadata-schema', ['schema', annotations, '--output-format=json-v1'])
+        require(json.loads(schema.stdout)['result']['tools'][0]['attributes'] == expected_attributes, schema.stdout)
+        missing = project / 'missing-pattern.wysna'
+        missing.write_text('enum E { A, B(int) }\nfn f(x:E)->int{match x{A=>0}}\n', encoding='utf-8')
+        rejected = run('missing-pattern-families', ['check', missing, '--output-format=json-v1'], expected=1)
+        diagnostic = json.loads(rejected.stdout)['diagnostics'][0]
+        require(diagnostic['code'] == 'W2003' and diagnostic['data']['uncovered_pattern_families'] == ['B(_)'], diagnostic)
         if language_fixtures:
             programs = project / 'language combinations'
             shutil.copytree(language_fixtures, programs)
@@ -421,7 +437,8 @@ def validate(sdk, report, strict_source=False, compiler_source=None, application
         (proj_dir / 'tests').mkdir(parents=True)
         (proj_dir / 'wysna.toml').write_text(
             'manifest_version = 1\n\n[package]\nname = "native-smoke"\nversion = "0.1.0"\n'
-            'language = "0.8"\n\n[toolchain]\ncompiler = "0.8.0"\nstdlib = "bundled"\n\n'
+            f'language = "{".".join(manifest["version"].split(".")[:2])}"\n\n[toolchain]\n'
+            f'compiler = "{manifest["version"]}"\nstdlib = "bundled"\n\n'
             '[sources]\nroot = "src"\n\n[targets.app]\nentry = "src/main.wysna"\nprofile = "native-cli"\n\n'
             '[[tests]]\nname = "unit-smoke"\nentry = "tests/smoke_test.wysna"\ntimeout_ms = 10000\n',
             encoding='utf-8',

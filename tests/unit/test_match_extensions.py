@@ -42,6 +42,26 @@ fn nested(value: (int?, int)) -> int {
 print(text(Value.Other("payload")), nested((Some(2), 9)), nested((None, 2)))
 ''', 'payload 9 -1\n')
 
+    def test_missing_pattern_families_are_structured_for_agents(self):
+        cases = [
+            ('enum E { A, B(int), C }\nfn f(x:E)->int{match x{A=>0}}', ['B(_)', 'C']),
+            ('fn f(x:bool)->int{match x{true=>1}}', ['false']),
+            ('fn f(x:int?)->int{match x{Some(1 | 2)=>1}}', ['Some(_)', 'None']),
+            ('fn f(x:bool)->int{match x{true if false=>1,false=>0}}', ['true']),
+            ('fn f(x:(bool,bool))->int{match x{(true,_)=>1}}', ['(_, _)']),
+        ]
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / 'missing.wysna'
+            for source, families in cases:
+                path.write_text(source + '\n')
+                for command in ([sys.executable, str(ROOT / 'main.py')], [str(self.compiler)]):
+                    result = subprocess.run([*command, 'check', str(path), '--output-format=json-v1'],
+                        cwd=ROOT, capture_output=True, text=True, timeout=60)
+                    self.assertEqual(result.returncode, 1, result.stdout + result.stderr)
+                    diagnostic = json.loads(result.stdout)['diagnostics'][0]
+                    self.assertEqual(diagnostic['code'], 'W2003', diagnostic)
+                    self.assertEqual(diagnostic['data']['uncovered_pattern_families'], sorted(families), diagnostic)
+
     def test_struct_patterns_support_rest_nested_fields_and_generics(self):
         self.check_engines('''struct Box[T] { value: T, label: str }
 struct Point { x: int, y: int }
@@ -70,6 +90,31 @@ print(score(Box[Point] { value: Point { x: 2, y: 42 }, label: "ok" }))
             for result in run_multifile_case(case, self.compiler, Path(directory)):
                 self.assertTrue(result.compile_ok and result.runtime_ok, vars(result))
                 self.assertEqual(result.stdout, '42\n', vars(result))
+
+    def test_generic_template_struct_pattern_is_qualified_in_dependency(self):
+        from tests.fuzz.multifile_fuzzer import MultiFileCase, run_multifile_case
+        case = MultiFileCase(seed=4903, files={
+            'types.wysna': 'pub struct Box[T] { value:T }\n'
+                'pub fn extract[T](box:Box[T])->T{match box{Box {value}=>value}}\n',
+            'main.wysna': 'import "types.wysna" as t\nprint(t.extract(t.Box[int]{value:42}))\n'}, entry='main.wysna')
+        with tempfile.TemporaryDirectory() as directory:
+            for result in run_multifile_case(case, self.compiler, Path(directory)):
+                self.assertTrue(result.compile_ok and result.runtime_ok, vars(result))
+                self.assertEqual(result.stdout, '42\n', vars(result))
+
+    def test_dependency_pattern_bindings_shadow_globals(self):
+        from tests.fuzz.multifile_fuzzer import MultiFileCase, run_multifile_case
+        case = MultiFileCase(seed=4908, files={
+            'types.wysna': 'let value=99\npub struct Box {value:int}\n'
+                'pub enum E {A(int),B(int)}\n'
+                'pub fn extract(box:Box)->int{match box{Box {value}=>value}}\n'
+                'pub fn alternative(x:E)->int{match x{E.A(value)|E.B(value)=>value}}\n',
+            'main.wysna': 'import "types.wysna" as t\n'
+                'print(t.extract(t.Box{value:42}),t.alternative(t.E.B(7)))\n'}, entry='main.wysna')
+        with tempfile.TemporaryDirectory() as directory:
+            for result in run_multifile_case(case, self.compiler, Path(directory)):
+                self.assertTrue(result.compile_ok and result.runtime_ok, vars(result))
+                self.assertEqual(result.stdout, '42 7\n', vars(result))
 
     def test_range_boundaries_and_complete_int64_coverage(self):
         self.check_engines('''fn classify(x: int) -> int {

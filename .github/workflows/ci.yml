@@ -86,6 +86,10 @@ jobs:
           tests/unit/test_native_sandbox_and_lints.py
           tests/unit/test_match_extensions.py
           tests/unit/test_static_attributes.py
+          tests/unit/test_agent_contract.py
+          tests/unit/test_native_thread_diagnostics.py
+          tests/unit/test_native_intrinsic_identity.py
+          tests/unit/test_runtime_modular_linking.py
           tests/unit/test_native_delegation_profiles.py
           tests/unit/test_project_packages.py
           tests/unit/test_ops_a01_workflow.py

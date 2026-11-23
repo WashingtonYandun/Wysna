@@ -371,10 +371,15 @@ class StaticAttribute(Node):
     def __init__(self, name: str, message: str = "", line: int = 1, col: int = 1):
         super().__init__(line, col)
         self.name, self.message = name, message
+        self.arguments = {}
+
+    def metadata(self):
+        arguments = {'message': self.message} if self.name == 'deprecated' else dict(self.arguments)
+        return {'name': self.name, 'arguments': arguments}
 
     def to_dict(self):
         return {"kind": "StaticAttribute", "name": self.name, "message": self.message,
-                "line": self.line, "col": self.col}
+                "arguments": self.arguments, "line": self.line, "col": self.col}
 
 
 class FnDecl(Stmt):

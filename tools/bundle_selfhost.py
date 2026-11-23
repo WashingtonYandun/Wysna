@@ -14,6 +14,7 @@ MODULE_ORDER = [
     "01_diagnostics.wysna",
     "01_paths.wysna",
     "01_tool_common.wysna",
+    "01_agent_contract.wysna",
     "02_lexer.wysna",
     "03_syntax.wysna",
     "03_modules.wysna",
@@ -72,6 +73,8 @@ def main() -> int:
     src_dir = os.path.join(repo_root, "selfhost", "src")
     target_path = os.path.join(repo_root, "selfhost", "compiler.wysna")
 
+    from generate_agent_contract import generate
+    generate(check="--check" in sys.argv)
     bundled_code = bundle(src_dir)
 
     if "--check" in sys.argv:

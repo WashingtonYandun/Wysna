@@ -183,8 +183,13 @@ def check_match_expr(checker: "TypeChecker", expr: MatchExpr, is_statement_conte
     if expected_variants is not None or subject_t == BoolType or isinstance(subject_t, TupleType):
         rows = [[arm.pattern] for arm in expr.arms if arm.guard is None]
         if not checker._pattern_matrix_exhaustive([subject_t], rows):
-            raise TypeError("Non-exhaustive match: missing variant or payload cases",
-                            line=expr.line, col=expr.col, file=checker.file, code="W2003")
+            from checker.PatternCoverage import pattern_matrix_exhaustive
+            families = []
+            pattern_matrix_exhaustive([subject_t], rows, missing_families=families)
+            families.sort()
+            raise TypeError("Non-exhaustive match; add cases for: " + ', '.join(families),
+                            line=expr.line, col=expr.col, file=checker.file, code="W2003").with_data(
+                                uncovered_pattern_families=families)
     else:
         # The subject domain is open (int, str, struct, ...), so the pattern
         # matrix can never be closed. The match is still only well defined when

@@ -16,7 +16,8 @@ from compiler.CompilerService import CompilerService
 
 
 ROOT = Path(get_repo_root())
-SELFHOST_BOOTSTRAP_INPUTS = ("selfhost/compiler.wysna", "tools/bundle_selfhost.py") + tuple(sorted(
+SELFHOST_BOOTSTRAP_INPUTS = ("selfhost/compiler.wysna", "tools/bundle_selfhost.py",
+                            "src/common/agent_contract.json", "tools/generate_agent_contract.py") + tuple(sorted(
     str(path.relative_to(ROOT))
     for package in ("lexer", "parser", "node", "checker", "compiler", "codegen", "common",
                     "error", "hir", "mir", "tokens", "runtime", "selfhost/src")

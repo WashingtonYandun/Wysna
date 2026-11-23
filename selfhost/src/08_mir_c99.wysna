@@ -324,25 +324,22 @@ fn mir_c_operation(module: MirModule, function: MirFunction, operation: MirOpera
     report_error_at("W9999", operation.source, "verified MIR operation missing during C99 emission")
     return ""
 }
+# Intrinsics use declaration identity, never source line numbers or file basenames.
+fn mir_c_stdlib_function(function: MirFunction, module_name: str, name: str, arity: int) -> bool {
+    let configured = lsp_stdlib_root_arg()
+    let root = if configured == "" { "stdlib" } else { configured }
+    if module_canonical(function.source.file) != module_canonical(root + "/" + module_name + ".wysna") { return false }
+    return tool_short_name(function.declaration_name) == name and len(function.params) == arity
+}
 fn mir_c_algorithms_parallel_helper(function: MirFunction) -> str {
-    let file = function.source.file
-    let flen = len(file)
-    if flen < 17 { return "" }
-    let tail = slice(file, flen - 17, flen)
-    if tail != "/algorithms.wysna" and tail != "\\algorithms.wysna" { return "" }
-    if function.source.line == 113 and len(function.params) == 2 { return "wysna_parallel_map" }
-    if function.source.line == 158 and len(function.params) == 3 { return "wysna_parallel_batch" }
-    if function.source.line == 174 and len(function.params) == 2 { return "wysna_parallel_filter" }
+    if mir_c_stdlib_function(function, "algorithms", "parallel_map", 2) { return "wysna_parallel_map" }
+    if mir_c_stdlib_function(function, "algorithms", "parallel_batch", 3) { return "wysna_parallel_batch" }
+    if mir_c_stdlib_function(function, "algorithms", "parallel_filter", 2) { return "wysna_parallel_filter" }
     return ""
 }
 fn mir_c_async_helper(function: MirFunction) -> str {
-    let file = function.source.file
-    let flen = len(file)
-    if flen < 12 { return "" }
-    let tail = slice(file, flen - 12, flen)
-    if tail != "/async.wysna" and tail != "\\async.wysna" { return "" }
-    if function.source.line == 58 and len(function.params) == 1 { return "wysna_async_spawn_handle" }
-    if function.source.line == 62 and len(function.params) == 2 { return "wysna_spawn_take_option" }
+    if mir_c_stdlib_function(function, "async", "_spawn_handle", 1) { return "wysna_async_spawn_handle" }
+    if mir_c_stdlib_function(function, "async", "_take_task_value", 2) { return "wysna_spawn_take_option" }
     return ""
 }
 fn mir_c_coro_assign(function: MirFunction, dest_id: int, wval_var: str, indent: str) -> str {

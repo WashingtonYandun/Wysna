@@ -18,16 +18,13 @@ if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
 from common.Version import WYSNA_VERSION
+from common.AgentContract import native_sdk_commands
 from common.Platform import WINDOWS_NATIVE_STACK_BYTES, native_stack_link_args
 from compiler.Bootstrap import bootstrap_fingerprint, ensure_selfhost_compiler_binary
 from tools.package_components import download, extract, sha256
 
 COMPONENTS = json.loads((ROOT / "packaging/native/components.json").read_text(encoding="utf-8"))
-COMMANDS = [
-    "check", "emit-c", "emit-mir", "build", "run", "test", "fmt",
-    "graph", "inspect", "patch", "explain", "schema", "fix",
-    "skills", "capabilities", "api", "project", "packages", "mcp", "lsp",
-]
+COMMANDS = native_sdk_commands()
 # Cold release compilation of the compiler itself needs the SDK build budget.
 SDK_COMPONENT_BUILD_TIMEOUT_SECONDS = 600
 

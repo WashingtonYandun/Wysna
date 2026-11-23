@@ -47,8 +47,8 @@ if mode == "builders" {
     let other = mir_constant(b, mir_literal_int(8), 3, first.source)
     mir_return(a, value, first.source)
     mir_return(b, other, first.source)
-    mir_finish(a, "wysna_program", first.source)
-    mir_finish(b, "wysna_program", first.source)
+    mir_finish(a, "wysna_program", first.source, "")
+    mir_finish(b, "wysna_program", first.source, "")
     let module_a = MirModule { file: "a", source: first.source, functions: a.functions, globals: a.globals, records: a.records, virtual_slots: a.virtual_slots, externs: a.externs, types: a.types }
     let module_b = MirModule { file: "b", source: first.source, functions: b.functions, globals: b.globals, records: b.records, virtual_slots: b.virtual_slots, externs: b.externs, types: b.types }
     let before = mir_module_json(module_a)

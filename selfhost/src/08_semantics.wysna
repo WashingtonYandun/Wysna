@@ -649,7 +649,7 @@ fn sem_collect_function(context: SemanticContext, owner: str, visible: bool, is_
     let mut end = context.pos
     if sem_is(context, "LBRACE") { body = context.pos end = sem_skip_block(context) }
     context.type_params = previous_type_params
-    context.functions.append(SemFunction { attributes: [], abi_params: abi_params, abi_return: abi_return, name: name, params: params, type_params: type_params, constraints: constraints, type_id: signature, body: body, end: end, owner: owner, visible: visible, contract_start: contract_start, is_async: is_async })
+    context.functions.append(SemFunction { declaration_name: local, attributes: [], abi_params: abi_params, abi_return: abi_return, name: name, params: params, type_params: type_params, constraints: constraints, type_id: signature, body: body, end: end, owner: owner, visible: visible, contract_start: contract_start, is_async: is_async })
 }
 fn sem_collect_record(context: SemanticContext, kind: str) {
     sem_take(context)
@@ -2190,6 +2190,52 @@ fn sem_constructors(context: SemanticContext, subject: int) -> list[SemConstruct
     }
     return constructors
 }
+fn sem_pattern_constructor_rows(context: SemanticContext, constructor: SemConstructor, rows: list[list[int]]) -> list[list[int]] {
+    let mut expanded: list[list[int]] = []
+    let mut has_or = false
+    for row in rows {
+        if context.patterns[row[0]].name == "or" {
+            has_or = true
+            for child in context.patterns[row[0]].children {
+                let mut next = [child]
+                for item in slice(row, 1, len(row)) { next.append(item) }
+                expanded.append(next)
+            }
+        } else { expanded.append(row) }
+    }
+    if has_or { return sem_pattern_constructor_rows(context, constructor, expanded) }
+        let mut specialized: list[list[int]] = []
+        for row in rows {
+            let pattern = context.patterns[row[0]]
+            let mut children: list[int] = []
+            let mut matches = false
+            if pattern.name == "*" {
+                for payload in constructor.payloads { sem_leaf_pattern(context, "*") children.append(context.last_pattern) }
+                matches = true
+            } elif pattern.name == constructor.name { children = pattern.children matches = true }
+            if matches {
+                for element in slice(row, 1, len(row)) { children.append(element) }
+                specialized.append(children)
+            }
+        }
+    return specialized
+}
+fn sem_pattern_missing_families(context: SemanticContext, subject: int, rows: list[list[int]]) -> list[str] {
+    let mut missing: list[str] = []
+    for constructor in sem_constructors(context, subject) {
+        let specialized = sem_pattern_constructor_rows(context, constructor, rows)
+        if not sem_pattern_matrix(context, constructor.payloads, specialized) {
+            let mut fields: list[str] = []
+            for payload in constructor.payloads { fields.append("_") }
+            let mut family = constructor.name
+            if len(family) > 8 and slice(family, 0, 8) == "literal:" { family = slice(family, 8, len(family)) }
+            if family == "tuple" { family = "(" + join_strings(fields, ", ") + ")" }
+            elif len(fields) > 0 { family = family + "(" + join_strings(fields, ", ") + ")" }
+            missing.append(family)
+        }
+    }
+    return tool_sort_strings(missing)
+}
 fn sem_pattern_matrix(context: SemanticContext, types: list[int], rows: list[list[int]]) -> bool {
     if len(types) == 0 { return len(rows) > 0 }
     if len(rows) == 0 { return false }
@@ -2214,20 +2260,7 @@ fn sem_pattern_matrix(context: SemanticContext, types: list[int], rows: list[lis
     let constructors = sem_constructors(context, types[0])
     if len(constructors) == 0 { return false }
     for constructor in constructors {
-        let mut specialized: list[list[int]] = []
-        for row in rows {
-            let pattern = context.patterns[row[0]]
-            let mut children: list[int] = []
-            let mut matches = false
-            if pattern.name == "*" {
-                for payload in constructor.payloads { sem_leaf_pattern(context, "*") children.append(context.last_pattern) }
-                matches = true
-            } elif pattern.name == constructor.name { children = pattern.children matches = true }
-            if matches {
-                for element in slice(row, 1, len(row)) { children.append(element) }
-                specialized.append(children)
-            }
-        }
+        let specialized = sem_pattern_constructor_rows(context, constructor, rows)
         let mut next_types = constructor.payloads
         for type_id in tail { next_types.append(type_id) }
         if not sem_pattern_matrix(context, next_types, specialized) { return false }
@@ -2449,7 +2482,10 @@ fn sem_match_expression(context: SemanticContext, statement_context: bool) -> Se
     let kind = sem_kind(context, subject)
     let closed = kind == "enum" or kind == "optional" or kind == "result" or kind == "error_union" or kind == "bool" or kind == "tuple"
     let exhaustive = sem_pattern_matrix(context, [subject], covered)
-    if closed and not exhaustive { report_error_at("W2003", source, "non-exhaustive match") }
+    if closed and not exhaustive {
+        let missing = sem_pattern_missing_families(context, subject, covered)
+        report_error_at_data("W2003", source, "Non-exhaustive match; add cases for: " + join_strings(missing, ", "), "{\"uncovered_pattern_families\":" + tool_str_list_json(missing) + "}")
+    }
     if not closed and not exhaustive {
         if common >= 0 and common != context.unit_type { report_error_at("W2003", source, "value match requires exhaustive patterns") }
         if not statement and context.expected_type >= 0 and context.expected_type != context.unit_type { report_error_at("W2003", source, "value match requires exhaustive patterns") }
@@ -2843,7 +2879,7 @@ fn sem_check_function(context: SemanticContext, function: SemFunction) {
         let raw_type_id = if function.is_async { sem_external_async_signature(context, function.type_id) } else { function.type_id }
         let type_id = if context.owner == "" { raw_type_id } else { checked_receiver_signature(context, sem_function_owner_type(context, function), raw_type_id) }
         let captures: list[int] = []
-        context.checked_functions.append(CheckedFunction { captures: captures, closure: false, name: function.name, type_id: type_id, params: parameters, body: flow.node, source: context.tokens[function.body], is_async: function.is_async, async_return_type: context.return_type })
+        context.checked_functions.append(CheckedFunction { declaration_name: function.declaration_name, captures: captures, closure: false, name: function.name, type_id: type_id, params: parameters, body: flow.node, source: context.tokens[function.body], is_async: function.is_async, async_return_type: context.return_type })
     }
     context.pos = previous_position
     sem_leave_scope(context, scope)
@@ -3001,6 +3037,7 @@ fn sem_validate(context: SemanticContext, tokens: list[Token]) {
         else { sem_take(context) }
     }
     context.collecting_declarations = false
+    sem_validate_attributes(context)
     sem_validate_inheritance(context)
     sem_validate_layout_cycles(context)
     for i in 0..len(context.pending_key_types) {
@@ -3150,7 +3187,7 @@ fn sem_lambda(context: SemanticContext) -> SemValue {
         }
         let id = len(context.checked_functions)
         let sig_args = context.types[signature].args
-        context.checked_functions.append(CheckedFunction { captures: capture_bindings, closure: true, name: "closure_" + str(id), type_id: signature, params: parameter_bindings, body: body, source: token, is_async: false, async_return_type: sig_args[len(sig_args) - 1] })
+        context.checked_functions.append(CheckedFunction { declaration_name: "", captures: capture_bindings, closure: true, name: "closure_" + str(id), type_id: signature, params: parameter_bindings, body: body, source: token, is_async: false, async_return_type: sig_args[len(sig_args) - 1] })
         return sem_expr(context, "closure", sem_value(signature), token, "", [], -1, id)
     }
     return sem_value(signature)

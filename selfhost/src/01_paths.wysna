@@ -9,6 +9,10 @@ fn report_error_at(code: str, token: Token, msg: str) -> unit {
     report_error(token.file, code, token.line, token.col, msg)
 }
 
+fn report_error_at_data(code: str, token: Token, msg: str, data: str) -> unit {
+    diag_emit_and_exit_data(token.file, code, token.line, token.col, msg, data)
+}
+
 fn report_error_at_location(code: str, file: str, line: int, col: int, msg: str) -> unit {
     report_error(file, code, line, col, msg)
 }

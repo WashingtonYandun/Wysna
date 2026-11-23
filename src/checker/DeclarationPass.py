@@ -44,6 +44,35 @@ def collect_declarations(checker: "TypeChecker", program: Program) -> None:
     register_nominal_shells(checker, program)
     class_decls = resolve_declaration_signatures(checker, program)
     validate_class_contracts(checker, class_decls)
+    validate_static_attributes(checker, program)
+
+
+def validate_static_attributes(checker, program):
+    """Resolve metadata schemas after all nominal field types are available."""
+    for declaration in program.body:
+        schemas = set()
+        for attribute in getattr(declaration, 'attributes', []):
+            if attribute.name in ('deprecated', 'must_use'):
+                continue
+            schema = checker._lookup_type_name(getattr(attribute, 'schema_name', attribute.name))
+            if not isinstance(schema, StructType):
+                root = checker.current_scope.lookup_symbol(attribute.name.split('.')[0])
+                missing_member = schema is None and '.' in attribute.name and root and isinstance(root.type, ModuleType)
+                code = 'W1001' if missing_member else 'W0006'
+                raise TypeError('Annotation requires a non-generic struct schema: ' + attribute.name,
+                                file=checker.file, line=attribute.line, col=attribute.col, code=code)
+            if schema.name in schemas:
+                raise TypeError('Duplicate annotation schema: ' + attribute.name, file=checker.file,
+                                line=attribute.line, col=attribute.col, code='W1002')
+            schemas.add(schema.name)
+            if set(attribute.arguments) != set(schema.fields):
+                raise TypeError('Annotation fields must match schema ' + attribute.name,
+                                file=checker.file, line=attribute.line, col=attribute.col, code='W2001')
+            for name, field_type in schema.fields.items():
+                expected = {'int': int, 'str': str, 'bool': bool}.get(str(field_type))
+                if expected is None or type(attribute.arguments[name]) is not expected:
+                    raise TypeError('Annotation field ' + name + ' requires a ' + str(field_type) + ' literal',
+                                    file=checker.file, line=attribute.line, col=attribute.col, code='W2001')
 
 
 def validate_declaration_names(checker: "TypeChecker", program: Program) -> None:
