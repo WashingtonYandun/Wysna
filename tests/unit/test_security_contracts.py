@@ -181,3 +181,34 @@ def test_schema_reports_partial_contract_projection(engine, tmp_path, native_wor
     assert 'minimum' not in properties['balance'] and 'exclusiveMinimum' not in properties['balance']
     assert [''.join(predicate.split()) for predicate in tool['requires']] == ['amount>0', 'balance>=amount']
     assert [''.join(predicate.split()) for predicate in tool['ensures']] == ['result==balance-amount']
+
+
+@pytest.mark.parametrize('engine', ENGINES)
+def test_postcondition_reads_parameters_and_globals_in_declaration_scope(engine, tmp_path, native_worker_compiler):
+    source = """let limit = 5
+fn f(input: int) -> int ensures result == input and result < limit {
+    if true {
+        let input = 2
+        let limit = -1
+        return 1
+    }
+    1
+}
+print(f(1))
+"""
+    result = run_engine(engine, source, 'postcondition-declaration-scope', native_worker_compiler, tmp_path)
+    valid, reason = compare([result], '1\n')
+    assert valid, reason
+
+
+@pytest.mark.parametrize('engine', ENGINES)
+def test_method_postcondition_traps_on_invalid_result(engine, tmp_path, native_worker_compiler):
+    source = """class Box {
+    fn init() {}
+    public fn value(input: int) -> int ensures result > input { input }
+}
+print(Box().value(1))
+"""
+    result = run_engine(engine, source, 'method-postcondition', native_worker_compiler, tmp_path)
+    valid, reason = compare([result], '# RUNTIME_PANIC: W4005\n')
+    assert valid, reason

@@ -52,7 +52,7 @@ class CCodeGen:
         self.fallible_fns: Dict[str, bool] = {}
         self.fn_err_types: Dict[str, str] = {}
         self.current_fn_fallible: bool = False
-        self.current_fn_ensures = ()
+        self.current_fn_postcondition = None
         self.current_fn_err_type: str = ""
         self.current_ns: str = ""
         self.imported_modules: Set[str] = set()
@@ -278,26 +278,43 @@ class CCodeGen:
             text = self.emit_value(StringLiteral(message, requirement.line, requirement.col), out)
             out.append(self._source_call('wysna_builtin_contract_assert_at', f'{condition}, {text}', requirement) + ';')
 
-    def _emit_postconditions(self, value, out):
-        if not self.current_fn_ensures:
-            return
-        statements = []
-        self._push_scope('block')
+    def _prepare_postcondition(self, declaration, c_name, parameter_names, body):
+        requirements = getattr(declaration, 'ensures', ())
+        if not requirements:
+            return None
+        name = 'wysna_ensure_' + c_name
+        previous_scopes = self.scope_stack
+        self.scope_stack = []
+        statements = ['{']
+        self._push_scope('fn')
         if self.current_fn_fallible:
-            wrapped = self._bind_call(f'wysna_wrap_result(wysna_clone({value}), "{self.current_fn_err_type}")', statements)
+            wrapped = self._bind_call(f'wysna_wrap_result(wysna_clone(returned), "{self.current_fn_err_type}")', statements)
             statements.append(f'if (wysna_tag({wrapped}) != W_ERR) {{')
             self._push_scope('block')
             self._declare_owned_var('v_result', f'wysna_clone(wysna_as_box({wrapped})->val)', statements)
         else:
-            self._declare_owned_var('v_result', f'wysna_clone({value})', statements)
-        self._emit_contract_predicates(self.current_fn_ensures, 'Function ensures clause failed', statements)
+            self._declare_owned_var('v_result', 'wysna_clone(returned)', statements)
+        self._emit_contract_predicates(requirements, 'Function ensures clause failed', statements)
         self._pop_scope(statements)
         if self.current_fn_fallible:
             statements.append('}')
             self._pop_scope(statements)
-        out.append('{')
-        out.extend('    ' + statement for statement in statements)
-        out.append('}')
+        statements.append('}')
+        self.scope_stack = previous_scopes
+        signature = ', '.join(['WVal returned', *['WVal ' + param for param in parameter_names]])
+        self.fn_Definitions.append(f'static void {name}({signature}) {{\n' +
+            '\n'.join('    ' + statement for statement in statements) + '\n}')
+        aliases = []
+        for parameter in parameter_names:
+            alias = self.new_aux('_ensure_arg')
+            body.append(f'WVal {alias} = {parameter};')
+            aliases.append(alias)
+        return name, aliases
+
+    def _emit_postconditions(self, value, out):
+        if self.current_fn_postcondition is not None:
+            function, arguments = self.current_fn_postcondition
+            out.append(f"{function}({', '.join([value, *arguments])});")
 
     def _find_class_method(self, class_name: str, method_name: str) -> Optional[Tuple[str, MethodDecl]]:
         curr: Optional[str] = class_name
@@ -373,6 +390,7 @@ class CCodeGen:
                 params = ["WVal v_self"] + [f"WVal v_{p.name}" for p in m.params]
                 prev_fallible = self.current_fn_fallible
                 prev_err_type = self.current_fn_err_type
+                previous_postcondition = self.current_fn_postcondition
                 self.current_fn_fallible = isinstance(m.return_type, ResultType)
                 if self.current_fn_fallible and isinstance(m.return_type, ResultType) and isinstance(m.return_type.err_type, NamedType):
                     self.current_fn_err_type = m.return_type.err_type.name
@@ -381,6 +399,9 @@ class CCodeGen:
 
                 body_stmts: List[str] = []
                 self._push_scope("fn")
+                self.current_fn_postcondition = self._prepare_postcondition(
+                    m, c_name, ['v_self', *['v_' + param.name for param in m.params]], body_stmts)
+                self._emit_contract_predicates(getattr(m, 'requires', ()), 'Method requires clause failed', body_stmts)
                 ret_expr = self.emit_block_value(m.body, body_stmts)
                 if m.return_type is None or isinstance(m.return_type, NamedType) and m.return_type.name == 'unit':
                     ret_expr = 'wysna_unit()'
@@ -389,6 +410,7 @@ class CCodeGen:
                 if isinstance(m.return_type, ResultType) and isinstance(m.return_type.ok_type, NamedType) and m.return_type.ok_type.name == 'unit':
                     owned_return = f"wysna_discard_result_value({owned_return})"
                 body_stmts.append(f"WVal {ret_hold} = {owned_return};")
+                self._emit_postconditions(ret_hold, body_stmts)
                 self._pop_scope(body_stmts)
                 if self.current_fn_fallible:
                     body_stmts.append(f'return wysna_wrap_result({ret_hold}, "{self.current_fn_err_type}");')
@@ -402,6 +424,7 @@ class CCodeGen:
                 self.fn_Definitions.append("\n".join(fn_lines))
                 self.current_fn_fallible = prev_fallible
                 self.current_fn_err_type = prev_err_type
+                self.current_fn_postcondition = previous_postcondition
 
             # Emit constructor helper wysna_new_<ClassName>
             all_fields = self._collect_class_fields(stmt.name)
@@ -507,13 +530,14 @@ class CCodeGen:
                 return
         prev_fallible = self.current_fn_fallible
         prev_err_type = self.current_fn_err_type
-        previous_ensures = self.current_fn_ensures
-        self.current_fn_ensures = getattr(stmt, 'ensures', ())
+        previous_postcondition = self.current_fn_postcondition
         self.current_fn_fallible = isinstance(stmt.return_type, ResultType)
         self.current_fn_err_type = self.fn_err_types.get(c_name, "")
 
         body_stmts: List[str] = []
         self._push_scope("fn")
+        self.current_fn_postcondition = self._prepare_postcondition(
+            stmt, c_name, ['v_' + param.name for param in stmt.params], body_stmts)
         self._emit_contract_predicates(getattr(stmt, 'requires', ()), 'Function requires clause failed', body_stmts)
         ret_expr = self.emit_block_value(stmt.body, body_stmts)
         if stmt.return_type is None or isinstance(stmt.return_type, NamedType) and stmt.return_type.name == 'unit':
@@ -572,7 +596,7 @@ class CCodeGen:
             self.fn_Definitions.append("\n".join(fn_lines))
         self.current_fn_fallible = prev_fallible
         self.current_fn_err_type = prev_err_type
-        self.current_fn_ensures = previous_ensures
+        self.current_fn_postcondition = previous_postcondition
 
     # ==========================================
     # Statement Emission
