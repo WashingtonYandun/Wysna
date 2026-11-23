@@ -29,13 +29,13 @@ static inline WVal wysna_make_list(int32_t count, const WVal* elems) {
 static inline int32_t wysna_range_count_i64(int64_t s, int64_t e, bool inclusive) {
     if (inclusive) {
         if (e == INT64_MAX) {
-            wysna_runtime_fail("W4003", "Range bound overflow at INT64_MAX");
+            wysna_runtime_fail_unlocated("W4003", "Range bound overflow at INT64_MAX");
         }
         e++;
     }
     uint64_t diff = e > s ? (uint64_t)e - (uint64_t)s : 0;
     if (diff > 100000000ULL) {
-        wysna_runtime_fail("W4003", "Range length %" PRIu64 " exceeds maximum list capacity", diff);
+        wysna_runtime_fail_unlocated("W4003", "Range length %" PRIu64 " exceeds maximum list capacity", diff);
     }
     return (int32_t)diff;
 }
@@ -76,7 +76,7 @@ static inline WVal wysna_make_tuple(int32_t count, const WVal* elems) {
 }
 
 static inline WVal wysna_make_dict(int32_t count, const WVal* keys, const WVal* vals) {
-    if (count < 0 || count > INT32_MAX / 4) { wysna_runtime_fail("W4003", "Dictionary too large"); }
+    if (count < 0 || count > INT32_MAX / 4) { wysna_runtime_fail_unlocated("W4003", "Dictionary too large"); }
     WDictBuf* d = (WDictBuf*)wysna_alloc_safe(sizeof(WDictBuf));
     d->refcount = 1;
     d->len = 0;
@@ -86,7 +86,7 @@ static inline WVal wysna_make_dict(int32_t count, const WVal* keys, const WVal* 
     d->buckets = NULL;
     int32_t buckets = 8;
     while (buckets < d->cap) {
-        if (buckets > INT32_MAX / 2) { wysna_runtime_fail("W4003", "Dictionary too large"); }
+        if (buckets > INT32_MAX / 2) { wysna_runtime_fail_unlocated("W4003", "Dictionary too large"); }
         buckets *= 2;
     }
     wysna_dict_reindex(d, buckets);
@@ -97,7 +97,7 @@ static inline WVal wysna_make_dict(int32_t count, const WVal* keys, const WVal* 
         if (index >= 0) { wysna_release(d->vals[index]); d->vals[index] = wysna_clone(vals[i]); }
         else {
             if ((int64_t)(d->len + 1) * 2 >= d->bucket_count) {
-                if (d->bucket_count > INT32_MAX / 2) { wysna_runtime_fail("W4003", "Dictionary too large"); }
+                if (d->bucket_count > INT32_MAX / 2) { wysna_runtime_fail_unlocated("W4003", "Dictionary too large"); }
                 wysna_dict_reindex(d, d->bucket_count * 2);
             }
             index = d->len++;
@@ -226,7 +226,7 @@ static inline WVal wysna_empty_weak(void) {
 static inline WVal wysna_builtin_weak(WVal object) {
     WStructBuf* st = wysna_hi(object) == WVAL_HI_OBJECT ? wysna_as_struct(object) : NULL;
     if (!st || !st->control) {
-        wysna_runtime_fail("W4003", "weak expects a class object");
+        wysna_runtime_fail_unlocated("W4003", "weak expects a class object");
     }
     WWeakControl* control = st->control;
     wysna_check_retain_count(control->weak, "retain/weak");
@@ -245,7 +245,7 @@ static inline WVal wysna_builtin_weak_owned(WVal object) {
 static inline WVal wysna_builtin_upgrade(WVal weak) {
     WWeakControl* control = wysna_as_weak(weak);
     if (!control) {
-        wysna_runtime_fail("W4003", "upgrade expects a weak reference");
+        wysna_runtime_fail_unlocated("W4003", "upgrade expects a weak reference");
     }
     if (control->strong == 0 || control->object == NULL) return wysna_none();
     return wysna_clone(wysna_make_hi_ptr(WVAL_HI_OBJECT, control->object));

@@ -1,5 +1,6 @@
 import threading
 import weakref
+from compiler.StdlibIdentity import worker_intrinsic
 from typing import Any, Dict, List, Optional
 
 def nominal_display_name(name):
@@ -539,6 +540,7 @@ class WysnaFunction(WysnaValue):
     def __init__(self, decl: Any, closure_env: Any):
         self.decl = decl
         self.closure_env = closure_env
+        self.worker_intrinsic = worker_intrinsic(decl)
 
     def __str__(self) -> str:
         return f"<fn {self.decl.name}>"

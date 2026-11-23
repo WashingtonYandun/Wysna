@@ -160,7 +160,8 @@ class LlvmBackendTests(unittest.TestCase):
                              (reference.returncode, reference.stdout, reference.stderr))
 
     def test_runtime_faults_match_c99_including_source_locations(self):
-        for expression in ('4 / 0', '4 % 0', '4.0 / -0.0', 'chr(1 / 1 + 1114112)'):
+        for expression in ('4 / 0', '4 % 0', '4.0 / -0.0', 'chr(1 / 1 + 1114112)',
+                           'int(float("nan"))', 'int(float("inf"))', 'int(9223372036854775808.0)'):
             service, checked = self.checked('fn fail() -> unit { print(' + expression + ') }\nfail()\n')
             reference = self.c99(service, checked)
             self.assertNotEqual(reference.returncode, 0)

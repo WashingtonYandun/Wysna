@@ -42,7 +42,7 @@ static inline WVal wysna_index_get(WVal obj, WVal idx) {
         }
         return d->vals[index];
     }
-    wysna_runtime_fail("W4003", "Cannot index object of tag %d", wysna_tag(obj));
+    wysna_runtime_fail_unlocated("W4003", "Cannot index object of tag %d", wysna_tag(obj));
 }
 
 static inline WVal wysna_index_get_owned(WVal object, WVal index) {
@@ -82,7 +82,7 @@ static inline WVal* wysna_index_ref(WVal* obj, WVal idx) {
         int32_t found = wysna_dict_find(d, idx);
         if (found >= 0) return &d->vals[found];
         if (d->cap > INT32_MAX / 2 || d->bucket_count > INT32_MAX / 2) {
-            wysna_runtime_fail("W4003", "Dictionary too large");
+            wysna_runtime_fail_unlocated("W4003", "Dictionary too large");
         }
         if ((int64_t)(d->len + 1) * 2 >= d->bucket_count) wysna_dict_reindex(d, d->bucket_count * 2);
         if (d->len >= d->cap) {
@@ -96,7 +96,7 @@ static inline WVal* wysna_index_ref(WVal* obj, WVal idx) {
         wysna_dict_index_entry(d, d->len - 1);
         return &d->vals[d->len - 1];
     }
-    wysna_runtime_fail("W4003", "Cannot index-assign non-collection");
+    wysna_runtime_fail_unlocated("W4003", "Cannot index-assign non-collection");
 }
 
 static inline WVal* wysna_index_ref_at(WVal* obj, WVal idx, const char* file, int32_t line, int32_t col) {
@@ -134,7 +134,7 @@ static inline WVal* wysna_member_ref(WVal* obj, const char* prop) {
             }
         }
     }
-    wysna_runtime_fail("W4003", "Invalid field '%s'", prop);
+    wysna_runtime_fail_unlocated("W4003", "Invalid field '%s'", prop);
 }
 
 /* Static types do not authorize dereferencing an uninitialized default value. */

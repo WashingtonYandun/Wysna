@@ -257,18 +257,18 @@ static inline WVal wysna_virtual_call(WVal receiver, int32_t slot, int32_t argc,
     WStructBuf* st = wysna_hi(receiver) == WVAL_HI_OBJECT ? wysna_as_struct(receiver) : NULL;
     const WClassVTable* table = st ? st->vtable : NULL;
     if (!table || slot < 0 || slot >= table->count || !table->methods[slot]) {
-        wysna_runtime_fail("W4003", "Invalid virtual method dispatch");
+        wysna_runtime_fail_unlocated("W4003", "Invalid virtual method dispatch");
     }
     return table->methods[slot](receiver, argc, argv);
 }
 
 static inline int32_t wysna_ffi_int32(WVal value) {
     if (wysna_tag(value) != W_INT) {
-        wysna_runtime_fail("W4003", "int32 FFI argument out of range");
+        wysna_runtime_fail_unlocated("W4003", "int32 FFI argument out of range");
     }
     int64_t i = wysna_as_int(value);
     if (i < INT32_MIN || i > INT32_MAX) {
-        wysna_runtime_fail("W4003", "int32 FFI argument out of range");
+        wysna_runtime_fail_unlocated("W4003", "int32 FFI argument out of range");
     }
     return (int32_t)i;
 }

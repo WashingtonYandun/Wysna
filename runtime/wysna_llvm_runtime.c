@@ -74,7 +74,9 @@ void wysna_llvm_push_frame(const char* name, const char* file, int32_t line) {
 }
 void wysna_llvm_pop_frame(void) { wysna_runtime_pop_frame(); }
 void wysna_llvm_fail(const char* code, const char* message, const char* file, int32_t line, int32_t col) {
-    wysna_runtime_set_position(file, line, col); wysna_runtime_fail(code, message);
+    if (!file) wysna_runtime_fail_unlocated(code, "%s", message);
+    wysna_runtime_set_position(file, line, col);
+    wysna_runtime_fail(code, "%s", message);
 }
 void wysna_llvm_exit(int64_t status) { wysna_builtin_exit(wysna_borrow_int(status)); }
 

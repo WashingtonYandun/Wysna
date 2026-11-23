@@ -2,7 +2,6 @@
 from typing import TYPE_CHECKING
 
 from error.Error import WysnaRuntimeError
-from compiler.StdlibIdentity import stdlib_declaration
 from node.NodeType import (
     LambdaExpr,
     IntLiteral,
@@ -389,7 +388,7 @@ def evaluate_assignment_expr(interpreter: "Interpreter", expr: AssignmentExpr, e
             return val
         if isinstance(obj, WysnaStructInstance):
             obj.set_field(target.property, val)
-            interpreter.check_struct_contracts(obj.struct_name, obj.storage.data, env, expr)
+            interpreter.check_struct_contracts(obj, expr)
             return val
         raise WysnaRuntimeError(f"Cannot assign to property of '{type(obj).__name__}'", line=target.line, col=target.col, file=interpreter.file)
 
@@ -478,13 +477,7 @@ def evaluate_call_expr(interpreter: "Interpreter", expr: CallExpr, env: Environm
     if isinstance(callee, WysnaNativeFunction):
         return callee.call_fn(args)
     if isinstance(callee, WysnaFunction):
-        base_fn_name = None
-        for module, candidate, arity in (('algorithms', 'parallel_batch', 3), ('algorithms', 'parallel_map', 2),
-                ('algorithms', 'parallel_filter', 2), ('algorithms', 'parallel_reduce', 4),
-                ('async', '_spawn_handle', 1), ('async', '_take_task_value', 2)):
-            if stdlib_declaration(callee.decl, module, candidate, arity):
-                base_fn_name = candidate
-                break
+        base_fn_name = callee.worker_intrinsic
         if base_fn_name == "_spawn_handle" and len(args) == 1 and isinstance(args[0], WysnaFunction):
             from runtime.HostAbi import spawn_async_task
             from runtime.WorkerTransfer import prepare_spawn
@@ -546,8 +539,9 @@ def evaluate_struct_init_expr(interpreter: "Interpreter", expr: StructInitExpr, 
     definition = getattr(expr, "inferred_type", None)
     field_order = getattr(definition, "fields", field_dict)
     ordered = {name: field_dict[name] for name in field_order}
-    interpreter.check_struct_contracts(expr.struct_name, ordered, env, expr)
-    return WysnaStructInstance(expr.struct_name, fields=ordered)
+    result = WysnaStructInstance(expr.struct_name, fields=ordered)
+    interpreter.check_struct_contracts(result, expr)
+    return result
 
 
 def evaluate_list_expr(interpreter: "Interpreter", expr: ListExpr, env: Environment) -> WysnaValue:

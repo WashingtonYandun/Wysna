@@ -129,20 +129,20 @@ class Interpreter:
         elif isinstance(expr, BinaryExpr) and isinstance(value, WysnaStr):
             self._charge_heap_bytes(len(value.value.encode("utf-8")) + 24, expr)
 
-    def check_struct_contracts(self, struct_name: str, fields_map: Dict[str, WysnaValue], env: Environment, fallback_node: Any = None) -> None:
-        decl = self.struct_decls.get(struct_name)
-        if decl is None:
+    def check_struct_contracts(self, record: WysnaStructInstance, fallback_node: Any = None) -> None:
+        decl = self.struct_decls.get(record.struct_name)
+        if decl is None or not any(field.requires for field in decl.fields):
             return
         check_env = Environment(parent=self.global_env)
-        check_env.declare('self', WysnaStructInstance(struct_name, fields=fields_map), is_mut=False)
-        for fname, fval in fields_map.items():
+        check_env.declare('self', record, is_mut=False)
+        for fname, fval in record.storage.data.items():
             check_env.declare(fname, fval, is_mut=False)
         for sf in decl.fields:
             for req_expr in getattr(sf, "requires", ()):
                 req_val = self.eval_expr(req_expr, check_env)
                 if not isinstance(req_val, WysnaBool) or not req_val.value:
                     raise WysnaRuntimeError(
-                        message=f"Contract violation: field '{struct_name}.{sf.name}' requires clause failed",
+                        message=f"Contract violation: field '{record.struct_name}.{sf.name}' requires clause failed",
                         line=getattr(req_expr, "line", getattr(fallback_node, "line", None)),
                         col=getattr(req_expr, "col", getattr(fallback_node, "col", None)),
                         file=getattr(req_expr, 'source_file', None) or self.file,

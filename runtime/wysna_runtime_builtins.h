@@ -122,7 +122,7 @@ static inline WVal wysna_builtin_str(WVal v) {
 }
 
 static inline void wysna_conversion_error(const char* kind) {
-    wysna_runtime_fail("W4003", "Invalid %s conversion", kind);
+    wysna_runtime_fail_unlocated("W4003", "Invalid %s conversion", kind);
 }
 
 static inline const char* wysna_conversion_end(const char* end) {
@@ -214,13 +214,13 @@ static inline WVal wysna_builtin_float(WVal v) {
 
 static inline WVal wysna_builtin_ord(WVal v) {
     if (wysna_tag(v) != W_STR) {
-        wysna_runtime_fail("W4003", "ord() expects non-empty str");
+        wysna_runtime_fail_unlocated("W4003", "ord() expects non-empty str");
     }
     char scratch[7];
     size_t slen = 0;
     const char* sdata = wysna_str_bytes(v, scratch, &slen);
     if (slen == 0) {
-        wysna_runtime_fail("W4003", "ord() expects non-empty str");
+        wysna_runtime_fail_unlocated("W4003", "ord() expects non-empty str");
     }
     size_t cplen = 0;
     int64_t cp = 0;
@@ -232,11 +232,11 @@ static inline WVal wysna_builtin_ord(WVal v) {
 
 static inline WVal wysna_builtin_chr(WVal v) {
     if (wysna_tag(v) != W_INT) {
-        wysna_runtime_fail("W4003", "chr() expects int");
+        wysna_runtime_fail_unlocated("W4003", "chr() expects int");
     }
     int64_t cp = wysna_as_int(v);
     if (cp < 0 || cp > 0x10FFFF || (cp >= 0xD800 && cp <= 0xDFFF)) {
-        wysna_runtime_fail("W4003", "chr() arg not in valid Unicode scalar range: %" PRId64 "", cp);
+        wysna_runtime_fail_unlocated("W4003", "chr() arg not in valid Unicode scalar range: %" PRId64 "", cp);
     }
     if (cp < 0x80) return wysna_ascii_string((uint8_t)cp);
     char small[4];
@@ -274,7 +274,7 @@ static inline WVal wysna_builtin_slice(WVal s, WVal start, WVal end) {
         return wysna_make_list((int32_t)(en - st), b->data + st);
     }
     if (st_tag != W_STR) {
-        wysna_runtime_fail("W4003", "slice() expects str or list");
+        wysna_runtime_fail_unlocated("W4003", "slice() expects str or list");
     }
     char scratch[7];
     size_t slen = 0;
@@ -353,7 +353,7 @@ static inline WVal wysna_builtin_join_strings(WVal parts, WVal separator) {
 
 static inline WVal wysna_builtin_bytes(WVal s) {
     if (wysna_tag(s) != W_STR) {
-        wysna_runtime_fail("W4003", "bytes() expects str");
+        wysna_runtime_fail_unlocated("W4003", "bytes() expects str");
     }
     char scratch[7];
     size_t slen = 0;
@@ -373,7 +373,7 @@ static inline WVal wysna_builtin_bytes(WVal s) {
 
 static inline WVal wysna_builtin_enumerate(WVal list_val) {
     if (wysna_tag(list_val) != W_LIST) {
-        wysna_runtime_fail("W4003", "enumerate() expects list");
+        wysna_runtime_fail_unlocated("W4003", "enumerate() expects list");
     }
     WListBuf* src = wysna_as_list(list_val);
     WListBuf* b = (WListBuf*)wysna_alloc_safe(sizeof(WListBuf));
@@ -392,7 +392,7 @@ static inline WVal wysna_builtin_enumerate(WVal list_val) {
 
 static inline WVal wysna_builtin_dict_items(WVal dict_val) {
     if (wysna_tag(dict_val) != W_DICT) {
-        wysna_runtime_fail("W4003", "dict_items() expects dict");
+        wysna_runtime_fail_unlocated("W4003", "dict_items() expects dict");
     }
     WDictBuf* d = wysna_as_dict(dict_val);
     WListBuf* b = (WListBuf*)wysna_alloc_safe(sizeof(WListBuf));
