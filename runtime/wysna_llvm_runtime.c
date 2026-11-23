@@ -168,6 +168,17 @@ int64_t wysna_llvm_async_spawn(const void* fn) {
 void wysna_llvm_async_take_option(void* out, int64_t handle, const void* fallback) {
     wysna_assign(out, wysna_spawn_take_option(wysna_borrow_int(handle), *(const WVal*)fallback));
 }
+int32_t wysna_llvm_group_cancelled(void) {
+    return wysna_group_cancelled() ? 1 : 0;
+}
+int32_t wysna_llvm_cancel_group(void) {
+    return wysna_cancel_group() ? 1 : 0;
+}
+void wysna_llvm_run_task_group(void* out, const void* values, int64_t limit,
+                              int64_t deadline_ms, int32_t fail_fast, const void* transform) {
+    wysna_assign(out, wysna_run_task_group(*(const WVal*)values, limit, deadline_ms,
+                                          fail_fast != 0, *(const WVal*)transform));
+}
 void wysna_llvm_coro_spawn(void* out, void* step_fn, int64_t slot_count, int64_t param_count, const int64_t* param_indices, const void* param_vals) {
     wysna_assign(out, wysna_coro_spawn_out((WysnaCoroStepOutFn)step_fn, slot_count, param_count, param_indices, (const WVal*)param_vals));
 }

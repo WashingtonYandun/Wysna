@@ -89,6 +89,7 @@ jobs:
           tests/unit/test_agent_contract.py
           tests/unit/test_worker_safety.py
           tests/unit/test_worker_transfer.py
+          tests/unit/test_task_group.py
           tests/unit/test_security_contracts.py
           tests/unit/test_native_thread_diagnostics.py
           tests/unit/test_native_intrinsic_identity.py
@@ -527,11 +528,13 @@ jobs:
         run: |
           clang -std=c99 -O1 -g -pthread -I. -fsanitize=address,undefined -fno-omit-frame-pointer tests/runtime/worker_transfer.c -o worker-transfer-asan
           WYSNA_MEM_CHECK=1 ./worker-transfer-asan
+          WYSNA_MEM_CHECK=1 WYSNA_PARALLEL_THREADS=4 ./worker-transfer-asan task-group
       - name: Verify worker graph races with ThreadSanitizer on macOS
         if: runner.os == 'macOS'
         run: |
           clang -std=c99 -O1 -g -pthread -I. -fsanitize=thread tests/runtime/worker_transfer.c -o worker-transfer-tsan
           WYSNA_MEM_CHECK=1 ./worker-transfer-tsan
+          WYSNA_MEM_CHECK=1 WYSNA_PARALLEL_THREADS=4 ./worker-transfer-tsan task-group
       - name: Verify targeted ownership, telemetry and isolated strong-cycle evidence
         run: |
           WYSNA_SANITIZE=1 python3 -m tests.unit.test_audit_remediation

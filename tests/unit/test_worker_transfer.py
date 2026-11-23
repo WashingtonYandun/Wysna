@@ -55,6 +55,14 @@ def test_main_trap_does_not_wait_for_active_workers(worker_probe):
     assert '[W4003]' in result.stderr and 'main trap does not wait for workers' in result.stderr
 
 
+def test_task_group_reaches_two_workers_and_joins_both(worker_probe):
+    environment = dict(os.environ, WYSNA_MEM_CHECK='1', WYSNA_PARALLEL_THREADS='4')
+    result = subprocess.run([str(worker_probe), 'task-group'], env=environment,
+                            capture_output=True, text=True, timeout=10)
+    assert result.returncode == 0, result.stderr
+    assert result.stdout == 'task group bounded and joined\n'
+
+
 @pytest.mark.parametrize('mode,message', [('simultaneous-traps', 'one complete worker diagnostic'),
                                         ('simultaneous-conversions', 'Invalid int conversion')])
 def test_simultaneous_worker_traps_report_one_complete_diagnostic(worker_probe, mode, message):

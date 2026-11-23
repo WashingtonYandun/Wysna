@@ -192,7 +192,8 @@ class LlvmCodeGen:
 
     @staticmethod
     def _async_runtime_helper(function):
-        for name, arity in (('_spawn_handle', 1), ('_take_task_value', 2)):
+        for name, arity in (('_spawn_handle', 1), ('_take_task_value', 2),
+                            ('group_cancelled', 0), ('cancel_group', 0), ('_run_task_group', 5)):
             if stdlib_declaration(function, 'async', name, arity):
                 return name
         return None
@@ -230,6 +231,20 @@ class LlvmCodeGen:
         async_helper = self._async_runtime_helper(function)
         if async_helper is not None:
             loc = self.debug.location(function.source, self.scope, self.scope_file)
+            if async_helper in ('group_cancelled', 'cancel_group'):
+                self.lines.append('  %poll = call i32 @wysna_llvm_' + async_helper + '()' + loc)
+                self.lines.append('  %cancelled = icmp ne i32 %poll, 0' + loc)
+                self.lines.append('  ret i1 %cancelled' + loc)
+                return self.lines + ['}', '']
+            if async_helper == '_run_task_group':
+                inputs, limit, deadline, fail_fast, work = (f'%arg{index}' for index in function.params)
+                self.lines.append(f'  %failfast = zext i1 {fail_fast} to i32' + loc)
+                self.lines.append(
+                    f'  call void @wysna_llvm_run_task_group(ptr %out, ptr {inputs}, i64 {limit}, '
+                    f'i64 {deadline}, i32 %failfast, ptr {work})' + loc
+                )
+                self.lines.append('  ret void' + loc)
+                return self.lines + ['}', '']
             if async_helper == '_spawn_handle' and returned == 'i64' and self.slots[function.params[0]].storage == 'value':
                 self.lines.append('  %r0 = call i64 @wysna_llvm_async_spawn(ptr %arg' + str(function.params[0]) + ')' + loc)
                 self.lines.append('  ret i64 %r0' + loc)

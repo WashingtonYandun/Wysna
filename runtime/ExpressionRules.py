@@ -477,6 +477,18 @@ def evaluate_call_expr(interpreter: "Interpreter", expr: CallExpr, env: Environm
         return callee.call_fn(args)
     if isinstance(callee, WysnaFunction):
         base_fn_name = callee.worker_intrinsic
+        if base_fn_name == "group_cancelled":
+            from runtime.WorkerTransfer import group_cancelled
+            return WysnaBool(group_cancelled())
+        if base_fn_name == "cancel_group":
+            from runtime.WorkerTransfer import cancel_group
+            return WysnaBool(cancel_group())
+        if base_fn_name == "_run_task_group":
+            from runtime.WorkerTransfer import TaskGroupState, dispatch
+            values, limit, deadline, fail_fast, work = args
+            group = TaskGroupState(deadline.value, fail_fast.value)
+            return WysnaList(elements=dispatch(interpreter, work, values.storage.data,
+                                               limit=limit.value, group=group))
         if base_fn_name == "_spawn_handle" and len(args) == 1 and isinstance(args[0], WysnaFunction):
             from runtime.HostAbi import spawn_async_task
             from runtime.WorkerTransfer import prepare_spawn
