@@ -4,10 +4,12 @@ from pathlib import Path
 import re
 
 from common._vendor import tomli
+from common.Version import WYSNA_VERSION
 from compiler.CompilerService import CompilerService
 from project.Manifest import ProjectManifest
 
 ROOT = Path(__file__).resolve().parents[2]
+LANGUAGE_VERSION = '.'.join(WYSNA_VERSION.split('.')[:2])
 
 _FRAGMENT_MARKERS = (
     "app.domain",
@@ -61,8 +63,8 @@ def test_projects_doc_manifest_targets_current_version(tmp_path):
     assert match, "expected a TOML manifest block in docs/PROJECTS.md"
     raw = match.group(1)
     parsed = tomli.loads(raw)
-    assert parsed["package"]["language"] == "0.8"
-    assert parsed["toolchain"]["compiler"] == "0.8.0"
+    assert parsed["package"]["language"] == LANGUAGE_VERSION
+    assert parsed["toolchain"]["compiler"] == WYSNA_VERSION
     (tmp_path / "src").mkdir()
     (tmp_path / "src/main.wysna").write_text("fn main() -> unit {}\n", encoding="utf-8")
     (tmp_path / "src/library.wysna").write_text("pub fn ping() -> int { return 1 }\n", encoding="utf-8")
@@ -72,8 +74,8 @@ def test_projects_doc_manifest_targets_current_version(tmp_path):
     (tmp_path / "tests/valid_input.wysna").write_text("fn main() -> unit {}\n", encoding="utf-8")
     (tmp_path / "wysna.toml").write_text(raw, encoding="utf-8")
     manifest = ProjectManifest.load(tmp_path / "wysna.toml")
-    assert manifest.language_version == "0.8"
-    assert manifest.compiler_version == "0.8.0"
+    assert manifest.language_version == LANGUAGE_VERSION
+    assert manifest.compiler_version == WYSNA_VERSION
 
 
 def test_stdlib_doc_signatures_match_api_contracts():

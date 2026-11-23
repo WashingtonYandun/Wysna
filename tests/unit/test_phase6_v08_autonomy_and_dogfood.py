@@ -20,6 +20,7 @@ from common.Platform import compiler_command, executable_name, native_stack_link
 from common.Version import WYSNA_VERSION
 from compiler.Bootstrap import ensure_selfhost_compiler_binary
 from tests.unit.test_phase5_native_agent_autonomy import McpLineClient
+LANGUAGE_VERSION = '.'.join(WYSNA_VERSION.split('.')[:2])
 
 
 _ZIG_SHIM_C = r'''
@@ -224,9 +225,9 @@ class Phase6V08AutonomyAndDogfoodTests(unittest.TestCase):
                 '[package]\n'
                 'name = "util"\n'
                 'version = "0.1.0"\n'
-                'language = "0.8"\n\n'
+                f'language = "{LANGUAGE_VERSION}"\n\n'
                 '[toolchain]\n'
-                'compiler = "0.8.0"\n'
+                f'compiler = "{WYSNA_VERSION}"\n'
                 'stdlib = "bundled"\n\n'
                 '[sources]\n'
                 'root = "src"\n\n'
@@ -303,13 +304,13 @@ class Phase6V08AutonomyAndDogfoodTests(unittest.TestCase):
             sources = project / "src"
             sources.mkdir()
             manifest = project / "wysna.toml"
-            manifest.write_text('''manifest_version = 1
+            manifest.write_text(f'''manifest_version = 1
 [package]
 name = "callbacks"
 version = "0.1.0"
-language = "0.8"
+language = "{LANGUAGE_VERSION}"
 [toolchain]
-compiler = "0.8.0"
+compiler = "{WYSNA_VERSION}"
 stdlib = "bundled"
 [sources]
 root = "src"

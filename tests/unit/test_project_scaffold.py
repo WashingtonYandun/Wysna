@@ -7,6 +7,7 @@ import subprocess
 import sys
 
 import pytest
+from common.Version import WYSNA_VERSION
 
 from project.Manifest import ManifestIOError
 from project.Resolver import ProjectResolver
@@ -14,6 +15,7 @@ from project.Scaffold import ScaffoldError, create_project
 from tooling.ProjectCLI import run_project_command
 
 ROOT = Path(__file__).resolve().parents[2]
+LANGUAGE_VERSION = '.'.join(WYSNA_VERSION.split('.')[:2])
 
 
 def run_cli(cwd, *args):
@@ -198,8 +200,8 @@ def test_sole_non_app_target_is_auto_selected(tmp_path):
     (pkg / "src").mkdir(parents=True)
     (pkg / "src/library.wysna").write_text("pub fn add(a: int, b: int) -> int { return a + b }\n", encoding="utf-8")
     (pkg / "wysna.toml").write_text(
-        'manifest_version = 1\n\n[package]\nname = "web-only"\nversion = "0.1.0"\nlanguage = "0.8"\n\n'
-        '[toolchain]\ncompiler = "0.8.0"\nstdlib = "bundled"\n\n[sources]\nroot = "src"\n\n'
+        f'manifest_version = 1\n\n[package]\nname = "web-only"\nversion = "0.1.0"\nlanguage = "{LANGUAGE_VERSION}"\n\n'
+        f'[toolchain]\ncompiler = "{WYSNA_VERSION}"\nstdlib = "bundled"\n\n[sources]\nroot = "src"\n\n'
         '[targets.web]\nentry = "src/library.wysna"\nprofile = "browser-library"\n',
         encoding="utf-8",
     )

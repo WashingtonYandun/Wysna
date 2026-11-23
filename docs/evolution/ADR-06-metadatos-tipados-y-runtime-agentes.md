@@ -1,7 +1,7 @@
 # ADR-06 · Metadatos tipados y evolución segura del runtime
 
 - Fecha: 2026-11-22.
-- Estado: implementación R0 en rama; R1–R4 definidos, pendientes.
+- Estado: R0 integrado en main/develop mediante PR #177 (`ba0953e`); R1–R4 definidos, pendientes.
 - Sustituye: restricción de extensibilidad del apartado de atributos de ADR-05.
 - Autorización: el mantenedor eligió atributos propios como metadatos tipados y
   solicitó concurrencia, seguridad, portabilidad y evolución de tipos para agentes.

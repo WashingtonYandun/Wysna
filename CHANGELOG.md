@@ -1,6 +1,6 @@
 # Changelog
 
-## Sin publicar
+## 0.9.0 — 2026-11-22
 
 ### Arquitectura híbrida y tooling nativo
 
@@ -13,7 +13,10 @@
 - Retira `new Class(...)`, el opcional vacío `none` y los comodines `* =>`/`else =>`: usar `Class(...)`, `None` y `_ =>`. Los patrones de tupla requieren paréntesis.
 - Formaliza capturas de closures como snapshots inmutables con diagnóstico accionable `W3001` al intentar mutarlas.
 - Añade patrones alternativos `|`, rangos Int64 `..`/`..=`, patrones de struct anidados y advertencia de ramas inalcanzables `W6003`.
-- Añade `@deprecated("mensaje")` y `@must_use` en funciones superiores, con advertencias `W6004`/`W6005` en CLI JSON y LSP. Son atributos cerrados y no ejecutan código durante la compilación.
+- Añade `@deprecated("mensaje")` y `@must_use` en funciones superiores, con advertencias `W6004`/`W6005` en CLI JSON y LSP. Los esquemas `struct` permiten anotaciones propias como metadatos tipados, sin ejecutar código durante la compilación.
+- Expone los atributos en `api`, `inspect` y `schema`; W2003 informa familias pendientes de patrones como datos JSON. Corrige calificación de patrones genéricos y bindings de patrones que ocultan globals.
+- Centraliza versión, comandos y guías de agentes; aísla diagnósticos por hilo y elimina intrínsecos basados en números de línea.
+- [Documenta y verifica la migración 0.8 → 0.9](docs/MIGRATING_0_8_TO_0_9.md), con rechazo de locks obsoletos y regeneración explícita.
 
 ## 0.8.0 — 2026-11-20
 

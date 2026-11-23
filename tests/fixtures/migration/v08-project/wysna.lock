@@ -1,0 +1,13 @@
+{
+  "aliases": [],
+  "compiler_version": "0.8.0",
+  "dependencies": [],
+  "language_version": "0.8",
+  "lock_version": 1,
+  "root": {
+    "manifest_sha256": "4662a523ad924c49fedf8e3f849c27ef15fd4303d6125c0da651a123ead6e6f8",
+    "name": "v08-project",
+    "version": "0.1.0"
+  },
+  "stdlib": "bundled"
+}
