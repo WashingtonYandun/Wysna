@@ -10,7 +10,12 @@ def pattern_names(pattern):
         return {pattern.name} - {'None', 'none'}
     if isinstance(pattern, A.ErrorTypePattern):
         return pattern_names(pattern.binding)
-    children = getattr(pattern, 'elements', getattr(pattern, 'args', []))
+    if isinstance(pattern, A.OrPattern):
+        children = pattern.alternatives[:1]
+    elif isinstance(pattern, A.StructPattern):
+        children = [field.pattern for field in pattern.fields]
+    else:
+        children = getattr(pattern, 'elements', getattr(pattern, 'args', []))
     return set().union(*(pattern_names(child) for child in children)) if children else set()
 
 

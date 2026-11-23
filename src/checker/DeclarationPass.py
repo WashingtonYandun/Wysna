@@ -50,15 +50,21 @@ def collect_declarations(checker: "TypeChecker", program: Program) -> None:
 def validate_static_attributes(checker, program):
     """Resolve metadata schemas after all nominal field types are available."""
     for declaration in program.body:
+        schemas = set()
         for attribute in getattr(declaration, 'attributes', []):
             if attribute.name in ('deprecated', 'must_use'):
                 continue
             schema = checker._lookup_type_name(getattr(attribute, 'schema_name', attribute.name))
             if not isinstance(schema, StructType):
                 root = checker.current_scope.lookup_symbol(attribute.name.split('.')[0])
-                code = 'W1001' if schema is None and '.' in attribute.name and root and isinstance(root.type, ModuleType) else 'W0006'
+                missing_member = schema is None and '.' in attribute.name and root and isinstance(root.type, ModuleType)
+                code = 'W1001' if missing_member else 'W0006'
                 raise TypeError('Annotation requires a non-generic struct schema: ' + attribute.name,
                                 file=checker.file, line=attribute.line, col=attribute.col, code=code)
+            if schema.name in schemas:
+                raise TypeError('Duplicate annotation schema: ' + attribute.name, file=checker.file,
+                                line=attribute.line, col=attribute.col, code='W1002')
+            schemas.add(schema.name)
             if set(attribute.arguments) != set(schema.fields):
                 raise TypeError('Annotation fields must match schema ' + attribute.name,
                                 file=checker.file, line=attribute.line, col=attribute.col, code='W2001')

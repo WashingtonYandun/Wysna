@@ -117,6 +117,12 @@ pub fn current(x:int)->int{x}
             MultiFileCase(4905, {'meta.wysna': 'pub struct Meta { enabled:bool }\n',
                 'main.wysna': 'from "meta.wysna" use {Meta as Tool}\n@Tool(enabled:true)\n'
                 'fn f()->int{42}\nprint(f())\n'}, 'main.wysna'),
+            MultiFileCase(4906, {'meta.wysna': 'pub struct Meta {}\n',
+                'main.wysna': 'import "meta.wysna" as m\nfrom "meta.wysna" use {Meta as Alias}\n'
+                '@m.Meta\n@Alias\nfn f(){}\n'}, 'main.wysna', 'W1002'),
+            MultiFileCase(4907, {'meta.wysna': 'pub struct Meta {}\n',
+                'main.wysna': 'import "meta.wysna" as deprecated\n@deprecated.Meta\n'
+                'fn f()->int{42}\nprint(f())\n'}, 'main.wysna'),
         ]
         with tempfile.TemporaryDirectory() as directory:
             for case in cases:

@@ -102,6 +102,20 @@ print(score(Box[Point] { value: Point { x: 2, y: 42 }, label: "ok" }))
                 self.assertTrue(result.compile_ok and result.runtime_ok, vars(result))
                 self.assertEqual(result.stdout, '42\n', vars(result))
 
+    def test_dependency_pattern_bindings_shadow_globals(self):
+        from tests.fuzz.multifile_fuzzer import MultiFileCase, run_multifile_case
+        case = MultiFileCase(seed=4908, files={
+            'types.wysna': 'let value=99\npub struct Box {value:int}\n'
+                'pub enum E {A(int),B(int)}\n'
+                'pub fn extract(box:Box)->int{match box{Box {value}=>value}}\n'
+                'pub fn alternative(x:E)->int{match x{E.A(value)|E.B(value)=>value}}\n',
+            'main.wysna': 'import "types.wysna" as t\n'
+                'print(t.extract(t.Box{value:42}),t.alternative(t.E.B(7)))\n'}, entry='main.wysna')
+        with tempfile.TemporaryDirectory() as directory:
+            for result in run_multifile_case(case, self.compiler, Path(directory)):
+                self.assertTrue(result.compile_ok and result.runtime_ok, vars(result))
+                self.assertEqual(result.stdout, '42 7\n', vars(result))
+
     def test_range_boundaries_and_complete_int64_coverage(self):
         self.check_engines('''fn classify(x: int) -> int {
     match x {

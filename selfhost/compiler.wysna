@@ -2634,7 +2634,7 @@ fn module_expand(context: ModuleLoader, src: str, path: str, entry: bool) -> int
         if token.kind == "FN" { in_attribute = false }
 
         let mut consumed = false
-        if token.kind == "IDENT" and not (position > 0 and body[position - 1].kind == "AT" and (token.val == "deprecated" or token.val == "must_use")) {
+        if token.kind == "IDENT" and not (position > 0 and body[position - 1].kind == "AT" and (token.val == "deprecated" or token.val == "must_use") and not (position + 1 < len(body) and body[position + 1].kind == "DOT")) {
             for i in 0..len(aliases) {
                 if token.val == aliases[i] and position + 2 < len(body) and body[position + 1].kind == "DOT" {
                     let member = body[position + 2]
@@ -6768,8 +6768,10 @@ fn sem_struct_pattern(context: SemanticContext, subject: int, source: Token) -> 
         if sem_is(context, "RBRACE") { break }
         if sem_match(context, "DOT_DOT") { rest = true sem_match(context, "COMMA") sem_skip_separators(context) break }
         let field_source = sem_expect(context, "IDENT")
-        if module_contains(names, field_source.val) { report_error_at("W1002", field_source, "duplicate struct pattern field") }
-        let index = sem_field(context, type_.name, field_source.val)
+        # Namespace rewriting preserves the binding identity of shorthand fields.
+        let field_name = tool_short_name(field_source.val)
+        if module_contains(names, field_name) { report_error_at("W1002", field_source, "duplicate struct pattern field") }
+        let index = sem_field(context, type_.name, field_name)
         if index < 0 { report_error_at("W2001", field_source, "unknown struct pattern field") }
         let mut field_type = context.fields[index].type_id
         let generic = sem_generic_type(context, type_.name)
@@ -6781,7 +6783,7 @@ fn sem_struct_pattern(context: SemanticContext, subject: int, source: Token) -> 
             context.patterns[context.last_pattern].type_id = field_type
             context.patterns[context.last_pattern].source = field_source
         }
-        names.append(field_source.val)
+        names.append(field_name)
         children.append(context.last_pattern)
         sem_skip_separators(context)
         if not sem_match(context, "COMMA") { break }
