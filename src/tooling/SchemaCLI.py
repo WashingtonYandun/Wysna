@@ -367,6 +367,7 @@ def _tool_definition(fn_decl, lines, known_defs, effect_row):
         "output_schema": output_schema,
         "error_schema": error_schema,
         "fallible": fallible,
+        "contract_projection": "representable_subset" if fn_reqs or fn_ens else "none",
         "requires": _format_contracts(fn_reqs),
         "ensures": _format_contracts(fn_ens),
         "effects": effects,

@@ -1093,6 +1093,8 @@ fn schema_tool_json(f: SchemaFn, lines: list[str], known_defs: list[str], graph:
     obj.append(",\"output_schema\":" + out_json)
     obj.append(",\"error_schema\":" + err_json)
     obj.append(",\"fallible\":" + (if fallible { "true" } else { "false" }))
+    let projection = if len(f.req_strs) + len(f.ens_strs) > 0 { "representable_subset" } else { "none" }
+    obj.append(",\"contract_projection\":" + diag_json_quote(projection))
     obj.append(",\"requires\":" + join_strings(req_j, ""))
     obj.append(",\"ensures\":" + join_strings(ens_j, ""))
     obj.append(",\"effects\":" + tool_str_list_json(effs))

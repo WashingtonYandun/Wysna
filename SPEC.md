@@ -523,6 +523,16 @@ Postfix `?` handles exactly the outer constructor. A second `?` on an optional p
 
 Optional/Option and fallible/Result spellings share canonical type identity. Optional display is payload-transparent; explicit Some values follow the same display policy as sugar. Some(None) differs from None. Implicit conversions do not add/remove nullable depth; use explicit Some for nested optionality. Guarded match arms do not contribute unconditional coverage. Nested variant payload cases must be exhaustive.
 
+Las postcondiciones se ejecutan en retornos exitosos explícitos e implícitos,
+incluido `unit`. En una función que retorna `T ! E`, `result` tiene tipo `T`
+y se enlaza al payload de éxito. Los retornos `Err` se propagan sin ejecutar
+`ensures`. Los predicados falsos producen W4005.
+
+Las cláusulas `requires` de campos son precondiciones de construcción de structs.
+Se evalúan al crear un valor nuevo o reconstruirlo con spread, después de
+evaluar los campos. La asignación de campos usa las reglas de mutabilidad y
+CoW. Si se necesita validar el valor actualizado, se reconstruye con spread.
+
 ## 8. Memory Model: Deterministic Reference Counting + Copy-on-Write
 
 > **Core Value Semantics Guarantee:** *"Copying a Wysna value produces a semantically independent value. Internal storage may be shared through copy-on-write as an implementation optimization, but mutations must never be observable through another value alias."*
