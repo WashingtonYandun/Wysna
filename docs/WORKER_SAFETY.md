@@ -107,8 +107,9 @@ un proceso y una política de aislamiento del sistema operativo apropiados.
 
 Los [grupos de CPU](TASK_GROUPS.md) usan esta frontera de transferencia y
 añaden límite de concurrencia, resultados por índice y cancelación cooperativa.
-La gestión de grupos de I/O y la política de cancelación del scheduler siguen
-en R2. Los anchos numéricos nuevos y perfiles móviles siguen en R3/R4.
+Los grupos GET usan el scheduler HTTP y cancelan sus transferencias al cerrar.
+Timers y corrutinas conservan la interfaz `Task`. Los anchos numéricos nuevos y
+perfiles móviles siguen en R3/R4.
 
 ## Verificación reproducible
 
