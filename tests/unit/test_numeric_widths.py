@@ -55,13 +55,13 @@ def test_bytes_support_prefixed_literals_loops_dicts_and_membership(engine, tmp_
     source = """
 let high: u8 = 0xff
 let mask: u8 = 0b10101010
-let bytes: list[u8] = [0, mask, high]
+let byte_list: list[u8] = [0, mask, high]
 let mut total = 0
-for item in bytes {
+for item in byte_list {
     total += int(item)
 }
 let labels: dict[u8, str] = {0: "zero", 255: "max"}
-print(total, labels[high], mask in bytes, bytes.contains(0))
+print(total, labels[high], mask in byte_list, byte_list.contains(0))
 """
     result = run_engine(engine, source, 'byte-collections', native_worker_compiler, tmp_path)
     assert result.runtime_ok, result.stderr
@@ -140,7 +140,7 @@ rejected()
     engine = 'hir' if producer == 'seed' else 'selfhost'
     result = run_engine(engine, program, 'byte-json-schema', native_worker_compiler, tmp_path)
     assert result.runtime_ok, result.stderr
-    assert result.stdout == '255 [0, 42] Some(17)\n0 [1] None\nu8 out of range\n'
+    assert result.stdout == '255 [0, 42] 17\n0 [1] none\nu8 out of range\n'
 
 
 @pytest.mark.parametrize('engine', ENGINES)

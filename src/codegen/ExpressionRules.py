@@ -63,7 +63,7 @@ def emit_string_literal(emitter: "CCodeGen", expr: StringLiteral, out: List[str]
         return f"wysna_str_n({emitter.escape_c_str(expr.value)}, {utf8_len})"
     literal = emitter.new_aux("_literal")
     out.append(f"static WStringLiteral {literal} = {{0}};")
-    return f"wysna_literal_str_n(&{literal}, {emitter.escape_c_str(expr.value)}, {utf8_len})"
+    return emitter._bind_call(f"wysna_literal_str_n(&{literal}, {emitter.escape_c_str(expr.value)}, {utf8_len})", out)
 
 
 def emit_bool_literal(emitter: "CCodeGen", expr: BoolLiteral, out: List[str]) -> str:
