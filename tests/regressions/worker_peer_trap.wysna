@@ -1,0 +1,7 @@
+import "std/algorithms" as alg
+fn work(x: int) -> int {
+    if x == 0 { return 1 / x }
+    while true {}
+    x
+}
+print(alg.parallel_map([0, 1, 2, 3], work))

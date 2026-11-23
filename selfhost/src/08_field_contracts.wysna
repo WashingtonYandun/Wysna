@@ -1,0 +1,154 @@
+# Field guards have declaration scope, independent of caller locals and closure captures.
+fn sem_struct_contracts(context: SemanticContext, value: SemValue, source: Token) -> SemValue {
+    let type_ = context.types[value.type_id]
+    if type_.kind != "struct" { return value }
+    let mut guarded = false
+    let mut definition = source
+    for field in context.fields {
+        if field.owner == type_.name and len(field.requires) > 0 { guarded = true definition = field.requires[0] }
+    }
+    if not guarded { return value }
+    let name = "__wysna_internal_field_contract_" + str(value.type_id)
+    let signature = sem_intern(context, "function", "", [value.type_id, value.type_id])
+    let mut target = -1
+    if context.capture_nodes {
+        target = sem_function(context, name)
+        if target >= 0 { return sem_expr(context, "call", value, source, name, [value.node], -1, target) }
+        target = len(context.functions)
+        context.functions.append(SemFunction { source: definition, declaration_name: name, attributes: [], abi_params: [], abi_return: "", name: name, params: ["__wysna_internal_record"], type_params: [], constraints: [], type_id: signature, body: 0, end: 0, owner: "", visible: false, contract_start: -1, is_async: false })
+    }
+    let previous_tokens = context.tokens
+    let previous_pos = context.pos
+    let previous_expected = context.expected_type
+    let previous_return = context.return_type
+    let previous_loop = context.loop
+    let previous_owner = context.owner
+    let previous_statement = context.statement_context
+    let previous_variables = context.variables
+    let previous_depth = context.depth
+    let previous_function = context.current_function
+    let previous_capture_depth = context.capture_depth
+    let previous_capture_names = context.capture_names
+    let previous_type_params = context.type_params
+    let previous_constraints = context.active_constraints
+    let previous_substitution_names = context.substitution_names
+    let previous_substitution_types = context.substitution_types
+    let previous_obligations = len(context.obligations)
+    let mut globals: list[SemVar] = []
+    for variable in previous_variables { if variable.depth == 0 { globals.append(variable) } }
+    context.variables = globals
+    context.depth = 1
+    context.current_function = name
+    context.capture_depth = -1
+    context.capture_names = []
+    context.return_type = -1
+    context.loop = 0
+    context.owner = ""
+    context.statement_context = false
+    let temporary = "__wysna_internal_record"
+    let binding = sem_declare(context, temporary, value.type_id, false)
+    let mut nodes: list[int] = []
+    let self_binding = sem_declare(context, "self", value.type_id, false)
+    let self_value = sem_node(context, "binding", value.type_id, definition, temporary, [], binding, -1)
+    nodes.append(sem_node(context, "let", context.unit_type, definition, "self", [self_value], self_binding, -1))
+    let mut parameters: list[str] = []
+    let mut constraints: list[str] = []
+    let generic = sem_generic_type(context, type_.name)
+    if generic >= 0 { parameters = context.generic_types[generic].params constraints = context.generic_types[generic].constraints }
+    context.type_params = parameters
+    context.active_constraints = constraints
+    context.substitution_names = parameters
+    context.substitution_types = type_.args
+    let mut module_prefix = ""
+    let marker = "__wysna_module_"
+    if len(type_.name) > len(marker) and slice(type_.name, 0, len(marker)) == marker {
+        let mut cursor = len(marker)
+        while cursor + 1 < len(type_.name) {
+            if slice(type_.name, cursor, cursor + 2) == "__" { module_prefix = slice(type_.name, 0, cursor + 2) break }
+            cursor += 1
+        }
+    }
+    for field in context.fields {
+        if field.owner == type_.name {
+            let field_type = sem_substitute_type(context, field.type_id, parameters, type_.args)
+            let record = sem_node(context, "binding", value.type_id, definition, temporary, [], binding, -1)
+            let member = sem_node(context, "member", field_type, definition, field.name, [record], -1, -1)
+            let local = sem_declare(context, field.name, field_type, false)
+            nodes.append(sem_node(context, "let", context.unit_type, definition, field.name, [member], local, -1))
+            # Qualified field references still shadow declarations in their own module.
+            if module_prefix != "" {
+                let qualified = module_prefix + field.name
+                let alias = sem_declare(context, qualified, field_type, false)
+                nodes.append(sem_node(context, "let", context.unit_type, definition, qualified, [member], alias, -1))
+            }
+        }
+    }
+    for field in context.fields {
+        if field.owner == type_.name and len(field.requires) > 0 {
+            let mut tokens = field.requires
+            let last = tokens[len(tokens) - 1]
+            tokens.append(Token { kind: "EOF", val: "", file: last.file, line: last.line, col: last.col })
+            context.tokens = tokens
+            context.pos = 0
+            while sem_at(context).kind == "IDENT" and sem_at(context).val == "requires" {
+                sem_take(context)
+                let condition_source = sem_at(context)
+                context.expected_type = context.boolean_type
+                let condition = sem_expression(context, 0, false)
+                sem_require_at(context, condition.type_id, context.boolean_type, "W2001", condition_source)
+                let message = sem_node(context, "string", context.string_type, condition_source, "Struct field contract ('requires') failed on '" + type_.name + "." + field.name + "'", [], -1, -1)
+                nodes.append(sem_node(context, "call", context.unit_type, condition_source, "contract_assert", [condition.node, message], -1, -1))
+            }
+            if not sem_is(context, "EOF") { sem_error(context, "W0006", "invalid field contract expression") }
+        }
+    }
+    nodes.append(sem_node(context, "binding", value.type_id, definition, temporary, [], binding, -1))
+    let body = sem_node(context, "block", value.type_id, definition, "", nodes, -1, -1)
+    if context.capture_nodes {
+        context.checked_functions.append(CheckedFunction { declaration_name: name, captures: [], closure: false, name: name, type_id: signature, params: [binding], body: body, source: definition, is_async: false, async_return_type: value.type_id })
+    } else {
+        while len(context.obligations) > previous_obligations { context.obligations.pop() }
+    }
+    context.variables = previous_variables
+    context.depth = previous_depth
+    context.current_function = previous_function
+    context.capture_depth = previous_capture_depth
+    context.capture_names = previous_capture_names
+    context.type_params = previous_type_params
+    context.active_constraints = previous_constraints
+    context.tokens = previous_tokens
+    context.pos = previous_pos
+    context.expected_type = previous_expected
+    context.return_type = previous_return
+    context.loop = previous_loop
+    context.owner = previous_owner
+    context.statement_context = previous_statement
+    context.substitution_names = previous_substitution_names
+    context.substitution_types = previous_substitution_types
+    return sem_expr(context, "call", value, source, name, [value.node], -1, target)
+}
+
+fn sem_validate_field_contracts(context: SemanticContext) {
+    let capture = context.capture_nodes
+    let definition = context.checking_definition
+    let mut owners: list[str] = []
+    context.capture_nodes = false
+    for field in context.fields {
+        if len(field.requires) == 0 or module_contains(owners, field.owner) { continue }
+        owners.append(field.owner)
+        let declared = sem_named(context, field.owner)
+        if sem_kind(context, declared) != "struct" { continue }
+        let generic = sem_generic_type(context, field.owner)
+        let mut type_id = declared
+        if generic >= 0 {
+            let mut arguments: list[int] = []
+            for parameter in context.generic_types[generic].params { arguments.append(sem_intern(context, "typeparam", parameter, [])) }
+            type_id = sem_intern(context, "struct", field.owner, arguments)
+        }
+        context.checking_definition = generic >= 0
+        let checked = sem_struct_contracts(context, sem_value(type_id), field.requires[0])
+        if checked.type_id != type_id { report_error_at("W9999", field.requires[0], "field contract validation changed nominal identity") }
+    }
+    context.capture_nodes = capture
+    context.checking_definition = definition
+}

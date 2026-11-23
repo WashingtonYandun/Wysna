@@ -1,7 +1,7 @@
 # ADR-06 · Metadatos tipados y evolución segura del runtime
 
 - Fecha: 2026-11-22.
-- Estado: R0 integrado en main/develop mediante PR #177 (`ba0953e`); R1–R4 definidos, pendientes.
+- Estado: R0 integrado en main/develop mediante PR #177 (`ba0953e`); R1 candidato de implementación; R2–R4 definidos, pendientes.
 - Sustituye: restricción de extensibilidad del apartado de atributos de ADR-05.
 - Autorización: el mantenedor eligió atributos propios como metadatos tipados y
   solicitó concurrencia, seguridad, portabilidad y evolución de tipos para agentes.
@@ -37,3 +37,15 @@ explícitos y perfiles de despliegue verificados. Estas funcionalidades no se
 consideran implementadas por tener un ADR. `int` conserva semántica Int64; ARC
 atómico y C99 permanecen. La publicación requiere pruebas y artefactos de release,
 no solo un cambio del número de versión.
+
+## R1: propiedad entre workers
+
+La transferencia exige copias completas de entradas, capturas y resultados, no
+solo incrementar ARC. Se adopta un contrato cerrado de callbacks sin efectos del
+host ni globals no capturados, con W2014/W2015 en ambos checkers. Se rechazan
+clases, interfaces, Weak, handles y funciones como datos en el grafo transferido.
+Los detalles, costes y límites están en [WORKER_SAFETY](../WORKER_SAFETY.md).
+
+El oráculo de rechazo incluye contratos de campos negativos, genéricos e
+importados y `ensures` con retorno implícito. Estas correcciones son posteriores
+a v0.9.0; no se reasigna el tag ni se anuncian grupos/cancelación de R2.

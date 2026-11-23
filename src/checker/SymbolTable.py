@@ -28,6 +28,8 @@ class Scope:
         self.types: Dict[str, WysnaType] = {}
 
     def define_symbol(self, symbol: Symbol, file: str = "<stdin>", *, allow_builtin_override: bool = False) -> None:
+        if not hasattr(symbol, 'global_binding'):
+            symbol.global_binding = self.parent is None
         if symbol.name in self.symbols:
             prev = self.symbols[symbol.name]
             if allow_builtin_override and getattr(prev, "kind", None) == "builtin":

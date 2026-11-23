@@ -776,7 +776,7 @@ class TypeChecker:
         """
         if symbol is not None and getattr(symbol, 'name', None) in self.CLOSURE_ENVIRONMENT_PARAMETERS:
             return (f"Cannot {action} on a captured variable: closures capture values "
-                    f"as immutable snapshots (use a `class` for shared mutable state or return the updated value)")
+                    f"as immutable snapshots (return the updated value; classes cannot cross worker boundaries)")
         return f"Cannot {action} on immutable binding '{self._binding_error_name(symbol)}'"
 
     def _find_value_root_symbol(self, expr: Expr) -> Optional[Symbol]:

@@ -85,6 +85,7 @@ class Function:
     source: Source = field(default_factory=Source)
     is_async: bool = False
     async_return_type: int = 0
+    declaration_name: str = ''
 
 
 @dataclass

@@ -382,7 +382,15 @@ class CompilationSession:
     def check_source(self, source, file='<stdin>'):
         path = self.path(file)
         self.prepare(path, source)
-        return self._check_unit(path, source, imported=False)
+        unit = self._check_unit(path, source, imported=False)
+        self.validate_workers(unit)
+        return unit
+
+    def validate_workers(self, unit):
+        stdlib = Path(get_repo_root()) / 'stdlib'
+        if any(self.path(str(stdlib / (name + '.wysna'))) in self.modules for name in ('algorithms', 'async')):
+            from checker.WorkerSafety import check_worker_boundaries
+            check_worker_boundaries(self.link(unit.program))
 
     def check_program(self, program, checker):
         path = self.path(checker.file)
@@ -401,6 +409,7 @@ class CompilationSession:
             vars(original_program).clear()
             vars(original_program).update(vars(unit.program))
         vars(checker).update(vars(unit.checker))
+        self.validate_workers(unit)
         return unit
 
     def validate_names(self, node, path):

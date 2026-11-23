@@ -58,13 +58,11 @@ typedef struct {
 static inline void wysna_format_push(WFormatTask** tasks, int32_t* count, int32_t* capacity,
                                  bool* heap_tasks, WFormatTask task) {
     if (*count == INT32_MAX) {
-        fprintf(stderr, "[W4003] RuntimeError: Formatting work list is too large\n");
-        wysna_panic_exit(1);
+        wysna_runtime_fail_unlocated("W4003", "Formatting work list is too large");
     }
     if (*count == *capacity) {
         if (*capacity > INT32_MAX / 2) {
-            fprintf(stderr, "[W4003] RuntimeError: Formatting work list is too large\n");
-            wysna_panic_exit(1);
+            wysna_runtime_fail_unlocated("W4003", "Formatting work list is too large");
         }
         int32_t new_capacity = *capacity * 2;
         WFormatTask* grown = (WFormatTask*)wysna_alloc_safe(
@@ -102,8 +100,7 @@ static inline void wysna_format_push_value(WFormatTask** tasks, int32_t* count, 
 static inline void wysna_format_append(char** buffer, size_t* length, size_t* capacity,
                                    const char* data, size_t data_length) {
     if (data_length > SIZE_MAX - *length - 1) {
-        fprintf(stderr, "[W4003] RuntimeError: Formatted value is too large\n");
-        wysna_panic_exit(1);
+        wysna_runtime_fail_unlocated("W4003", "Formatted value is too large");
     }
     size_t needed = *length + data_length + 1;
     if (needed > *capacity) {

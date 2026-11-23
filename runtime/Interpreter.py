@@ -60,6 +60,8 @@ class Interpreter:
         self.struct_decls: Dict[str, StructDecl] = {}
         self._quota_lock = threading.Lock()
         self._tls = threading.local()
+        from runtime.WorkerTransfer import WorkerFailure
+        self._worker_failure = WorkerFailure()
 
     def _get_call_stack(self) -> List[Tuple[str, str, int]]:
         stack = getattr(self._tls, "call_stack", None)
@@ -78,56 +80,38 @@ class Interpreter:
         return error
 
     def parallel_worker_dispatch(self, func: Any, items: List[WysnaValue]) -> List[WysnaValue]:
-        if not items:
-            return []
-        if len(items) == 1:
-            if isinstance(func, WysnaFunction):
-                return [self.call_function(func, [items[0]])]
-            elif isinstance(func, WysnaBoundMethod):
-                return [self.call_bound_method(func, [items[0]])]
-            elif callable(func):
-                return [func(items[0])]
-            else:
-                raise WysnaRuntimeError(f"Cannot dispatch worker for '{func}'", file=self.file)
-        worker_count = min(os.cpu_count() or 4, len(items), 8)
-        with concurrent.futures.ThreadPoolExecutor(max_workers=worker_count) as executor:
-            def _invoke(item):
-                if isinstance(func, WysnaFunction):
-                    return self.call_function(func, [item])
-                elif isinstance(func, WysnaBoundMethod):
-                    return self.call_bound_method(func, [item])
-                elif callable(func):
-                    return func(item)
-                else:
-                    raise WysnaRuntimeError(f"Cannot dispatch worker for '{func}'", file=self.file)
-            futures = [executor.submit(_invoke, item) for item in items]
-            return [f.result() for f in futures]
+        from runtime.WorkerTransfer import dispatch
+        return dispatch(self, func, items)
 
     def _tick_step(self, node: Any = None) -> None:
+        self._worker_failure.check()
         if self.max_steps is not None:
-            with self._quota_lock:
-                self.steps_executed += 1
-                exceeded = self.steps_executed > self.max_steps
+            owner = getattr(self, '_quota_owner', self)
+            with owner._quota_lock:
+                owner.steps_executed += 1
+                exceeded = owner.steps_executed > self.max_steps
             if exceeded:
                 raise WysnaRuntimeError(
                     message=f"Execution step quota exceeded (limit: {self.max_steps} steps)",
                     line=getattr(node, "line", None),
                     col=getattr(node, "col", None),
-                    file=self.file,
+                    file=getattr(node, 'source_file', None) or self.file,
                     code="W4004",
                 )
 
     def _charge_heap_bytes(self, num_bytes: int, node: Any = None) -> None:
+        self._worker_failure.check()
         if self.max_heap_bytes is not None and num_bytes > 0:
-            with self._quota_lock:
-                self.heap_bytes_allocated += num_bytes
-                exceeded = self.heap_bytes_allocated > self.max_heap_bytes
+            owner = getattr(self, '_quota_owner', self)
+            with owner._quota_lock:
+                owner.heap_bytes_allocated += num_bytes
+                exceeded = owner.heap_bytes_allocated > self.max_heap_bytes
             if exceeded:
                 raise WysnaRuntimeError(
                     message=f"Execution heap memory quota exceeded (limit: {self.max_heap_bytes} bytes)",
                     line=getattr(node, "line", None),
                     col=getattr(node, "col", None),
-                    file=self.file,
+                    file=getattr(node, 'source_file', None) or self.file,
                     code="W4004",
                 )
 
@@ -145,30 +129,37 @@ class Interpreter:
         elif isinstance(expr, BinaryExpr) and isinstance(value, WysnaStr):
             self._charge_heap_bytes(len(value.value.encode("utf-8")) + 24, expr)
 
-    def check_struct_contracts(self, struct_name: str, fields_map: Dict[str, WysnaValue], env: Environment, fallback_node: Any = None) -> None:
-        decl = self.struct_decls.get(struct_name)
-        if decl is None:
+    def check_struct_contracts(self, record: WysnaStructInstance, fallback_node: Any = None) -> None:
+        decl = self.struct_decls.get(record.struct_name)
+        if decl is None or not any(field.requires for field in decl.fields):
             return
-        check_env = Environment(parent=env)
-        for fname, fval in fields_map.items():
+        check_env = Environment(parent=self.global_env)
+        check_env.declare('self', record, is_mut=False)
+        for fname, fval in record.storage.data.items():
             check_env.declare(fname, fval, is_mut=False)
         for sf in decl.fields:
             for req_expr in getattr(sf, "requires", ()):
                 req_val = self.eval_expr(req_expr, check_env)
                 if not isinstance(req_val, WysnaBool) or not req_val.value:
                     raise WysnaRuntimeError(
-                        message=f"Contract violation: field '{struct_name}.{sf.name}' requires clause failed",
+                        message=f"Contract violation: field '{record.struct_name}.{sf.name}' requires clause failed",
                         line=getattr(req_expr, "line", getattr(fallback_node, "line", None)),
                         col=getattr(req_expr, "col", getattr(fallback_node, "col", None)),
-                        file=self.file,
+                        file=getattr(req_expr, 'source_file', None) or self.file,
                         code="W4005",
                     )
 
     def interpret(self, program: Program, *, process_entrypoint=False) -> WysnaValue:
         from runtime.HostAbi import set_effect_trace
+        if self._worker_failure.event.is_set():
+            from runtime.WorkerTransfer import WorkerFailure
+            self._worker_failure = WorkerFailure()
         set_effect_trace(self.execution_context.effect_trace)
         try:
             return self._interpret_inner(program, process_entrypoint=process_entrypoint)
+        except BaseException as error:
+            self._worker_failure.fail(error)
+            raise
         finally:
             set_effect_trace(None)
 
@@ -651,6 +642,9 @@ class Interpreter:
         stack = self._get_call_stack()
         fn_label = getattr(func.decl, "source_name", None) or func.decl.name
         fn_file = getattr(func.decl, "source_file", None) or self.file
+        previous_file = self.file
+        if getattr(self, '_in_worker', False):
+            self.file = fn_file
         stack.append((fn_label, fn_file, func.decl.line))
         try:
             for req_expr in getattr(func.decl, "requires", ()):
@@ -694,6 +688,7 @@ class Interpreter:
             raise
         finally:
             stack.pop()
+            self.file = previous_file
 
 
     def call_bound_method(self, bound: WysnaBoundMethod, args: List[WysnaValue]) -> WysnaValue:

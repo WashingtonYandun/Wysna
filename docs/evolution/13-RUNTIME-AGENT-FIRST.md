@@ -1,7 +1,7 @@
 # Evolución del runtime para agentes: decisiones y secuencia ejecutable
 
 Fecha: 2026-11-22. R0 integrado: `ba0953e` (PR #177, CI 39/39); base híbrida de PR #176.
-La alineación de versión y migración 0.9 se verifica en un ciclo separado. Esta hoja separa
+v0.9.0 está publicada; R1 se entrega como candidato posterior, sin modificar ese tag. Esta hoja separa
 implementación en curso de funcionalidades futuras. No requiere proveedores de IA.
 
 ## Decisiones
@@ -58,13 +58,18 @@ los cuatro motores, los sanitizadores aplicables y el CI del SHA publicado.
 
 ## R1 — Contrato seguro de workers
 
+Implementación candidata y reglas: [WORKER_SAFETY](../WORKER_SAFETY.md).
+Incluye snapshots completos y privados, comprobaciones W2014/W2015 en Seed y
+Selfhost, cierre fatal sin bloqueos y correcciones de contratos en los oráculos.
+La evidencia se registra para el commit verificado; no se atribuye a v0.9.0.
+
 Orden de trabajo:
 
 1. Inventariar los estados compartidos del runtime y clasificar cada uno: TLS,
    inmutable, atómico, protegido por lock o confinado al scheduler. Incluir Host ABI,
    caches de strings, ciclo de vida de tareas y recolección de ciclos.
 2. Implementar la comprobación estructural de transferencia y de efectos de callbacks
-   en Seed y Selfhost. Prohibir globals mutables, FFI desconocida y mutación de objetos
+   en Seed y Selfhost. Prohibir globals no capturados (incluidos los inmutables), FFI desconocida y mutación de objetos
    compartidos desde workers; diagnósticos JSON con captura/efecto y ubicación causal.
 3. Ejecutar stress de snapshots CoW, callbacks genéricos, workers anidados, fallos y
    shutdown; TSan en Linux/macOS donde el toolchain lo permita, ASan/UBSan y memcheck.

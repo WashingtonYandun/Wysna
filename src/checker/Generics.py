@@ -2,7 +2,7 @@
 from copy import copy
 
 from checker.OopGenerics import GenericOopTemplate, specialize as specialize_oop
-from checker.WysnaType import FunctionType, TypeParamType, ClassType
+from checker.WysnaType import FunctionType, TypeParamType, ClassType, StructType
 from error.Error import TypeError, WysnaError
 from node.NodeType import clone_ast, ClassDecl
 
@@ -178,6 +178,7 @@ class GenericDefinitionChecker:
         def check(_substitutions):
             declaration = clone_ast(template.ast_decl)
             seen_fields = set()
+            field_types = {}
             for field in declaration.fields:
                 if field.name in seen_fields:
                     raise TypeError(
@@ -185,7 +186,11 @@ class GenericDefinitionChecker:
                         line=field.line, col=field.col, file=checker.file, code="W1002"
                     )
                 seen_fields.add(field.name)
-                checker._resolve_type_node(field.type_ann)
+                field_types[field.name] = checker._resolve_type_node(field.type_ann)
+            if any(field.requires for field in declaration.fields):
+                declaration.type_params = []
+                checker.global_scope.types[template.name] = StructType(template.name, field_types)
+                checker._check_struct_contracts(declaration)
 
         self._check_isolated(template, check)
 

@@ -388,7 +388,7 @@ def evaluate_assignment_expr(interpreter: "Interpreter", expr: AssignmentExpr, e
             return val
         if isinstance(obj, WysnaStructInstance):
             obj.set_field(target.property, val)
-            interpreter.check_struct_contracts(obj.struct_name, obj.storage.data, env, expr)
+            interpreter.check_struct_contracts(obj, expr)
             return val
         raise WysnaRuntimeError(f"Cannot assign to property of '{type(obj).__name__}'", line=target.line, col=target.col, file=interpreter.file)
 
@@ -477,16 +477,11 @@ def evaluate_call_expr(interpreter: "Interpreter", expr: CallExpr, env: Environm
     if isinstance(callee, WysnaNativeFunction):
         return callee.call_fn(args)
     if isinstance(callee, WysnaFunction):
-        fn_name = callee.decl.name
-        base_fn_name = fn_name
-        for candidate in ("parallel_batch", "parallel_map", "parallel_filter", "parallel_reduce", "batch_get", "_spawn_handle", "_take_task_value"):
-            if fn_name == candidate or f"__{candidate}__" in fn_name or fn_name.endswith(f"__{candidate}"):
-                base_fn_name = candidate
-                break
+        base_fn_name = callee.worker_intrinsic
         if base_fn_name == "_spawn_handle" and len(args) == 1 and isinstance(args[0], WysnaFunction):
             from runtime.HostAbi import spawn_async_task
-            work_fn = args[0]
-            tid = spawn_async_task(lambda: interpreter.call_function(work_fn, []))
+            from runtime.WorkerTransfer import prepare_spawn
+            tid = spawn_async_task(prepare_spawn(interpreter, args[0]))
             return WysnaInt(tid)
         if base_fn_name == "_take_task_value" and len(args) == 2 and isinstance(args[0], WysnaInt):
             handle_val = args[0].value
@@ -523,14 +518,6 @@ def evaluate_call_expr(interpreter: "Interpreter", expr: CallExpr, env: Environm
             for item in mapped:
                 acc = interpreter.call_function(combiner, [acc, item]) if isinstance(combiner, WysnaFunction) else combiner(acc, item)
             return acc
-        if base_fn_name == "batch_get" and len(args) == 1 and isinstance(args[0], WysnaList) and len(args[0].storage.data) > 1:
-            urls = args[0].storage.data
-            def _get_one(u):
-                single_list = WysnaList(elements=[u])
-                res_list = interpreter.call_function(callee, [single_list])
-                return res_list.storage.data[0]
-            results = interpreter.parallel_worker_dispatch(_get_one, urls)
-            return WysnaList(elements=results)
         return interpreter.call_function(callee, args)
     if isinstance(callee, WysnaBoundMethod):
         return interpreter.call_bound_method(callee, args)
@@ -552,8 +539,9 @@ def evaluate_struct_init_expr(interpreter: "Interpreter", expr: StructInitExpr, 
     definition = getattr(expr, "inferred_type", None)
     field_order = getattr(definition, "fields", field_dict)
     ordered = {name: field_dict[name] for name in field_order}
-    interpreter.check_struct_contracts(expr.struct_name, ordered, env, expr)
-    return WysnaStructInstance(expr.struct_name, fields=ordered)
+    result = WysnaStructInstance(expr.struct_name, fields=ordered)
+    interpreter.check_struct_contracts(result, expr)
+    return result
 
 
 def evaluate_list_expr(interpreter: "Interpreter", expr: ListExpr, env: Environment) -> WysnaValue:

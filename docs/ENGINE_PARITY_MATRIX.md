@@ -10,10 +10,10 @@ Wysna Compiler's `native-core-v1` profile uses verified MIR for its normal C99 r
 
 ## Measured corpus
 
-The table comes from an actual `tools/ci_conformance.py --profile=release` run. Its
+The table comes from the [Ubuntu ASan/UBSan corpus run](https://github.com/WashingtonYandun/Wysna/actions/runs/45214024546/job/137830173507) for PR #179. Its
 `summary.json` records the Git revision and hashes of the source, fixture and harness
 inputs; the measured input digest is
-`2e8064730c0828e5294d9176e4059aa43ff931f2c3f227fd841848a230e79c41`. La revisión medida es `ed05906`.
+`bdab3f716c0b28515eeada8bb8ea8a28cb2df33379d3914825aaa0ad3714ed9e`. The measured trial merge is `a9a35e7`. The corpus step passed before a separate persistent-resource gate timed out.
 Release CI uploads that evidence with the run. The matrix covers the public runtime
 examples and negative fixtures, with no unsupported exclusions. The separate sanitizer
 gate checks memory safety; neither gate establishes universal language parity or measures
@@ -23,7 +23,7 @@ code coverage.
 
 | Feature Category | Fixtures | Wysna Seed (Interpreter) | Wysna Seed (AST C99) | Wysna Seed (HIR C99) | Wysna Compiler (Self-Hosted) | Status / Milestone |
 | :--- | :---: | :---: | :---: | :---: | :---: | :--- |
-| **`core`** | 160 | ✅ 160/160 | ✅ 160/160 | ✅ 160/160 | ✅ 160/160 | Declared supported |
+| **`core`** | 165 | ✅ 165/165 | ✅ 165/165 | ✅ 165/165 | ✅ 165/165 | Declared supported |
 | **`generics`** | 15 | ✅ 15/15 | ✅ 15/15 | ✅ 15/15 | ✅ 15/15 | Declared supported |
 | **`generic_class_methods`** | 1 | ✅ 1/1 | ✅ 1/1 | ✅ 1/1 | ✅ 1/1 | Declared supported |
 | **`checked_modules`** | 1 | ✅ 1/1 | ✅ 1/1 | ✅ 1/1 | ✅ 1/1 | Declared supported |
@@ -32,7 +32,7 @@ code coverage.
 | **`functions`** | 5 | ✅ 5/5 | ✅ 5/5 | ✅ 5/5 | ✅ 5/5 | Declared supported |
 | **`stdlib`** | 6 | ✅ 6/6 | ✅ 6/6 | ✅ 6/6 | ✅ 6/6 | Declared supported |
 | **`regressions`** | 13 | ✅ 13/13 | ✅ 13/13 | ✅ 13/13 | ✅ 13/13 | Declared supported |
-| **Total Verified** | **212** | **212/212 (100.0%)** | **212/212 (100.0%)** | **212/212 (100.0%)** | **212/212 (100.0%)** | _measured_ |
+| **Total Verified** | **217** | **217/217 (100.0%)** | **217/217 (100.0%)** | **217/217 (100.0%)** | **217/217 (100.0%)** | _measured_ |
 
 <!-- GENERATED TABLE END -->
 

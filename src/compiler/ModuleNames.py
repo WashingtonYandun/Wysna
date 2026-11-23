@@ -82,10 +82,19 @@ class ModuleNames:
             for parameter in node.params:
                 self.visit(parameter.type_ann, values, type_scope)
             self.visit(node.return_type, values, type_scope)
-            self.visit(node.body, values | {parameter.name for parameter in node.params}, type_scope)
+            parameter_values = values | {parameter.name for parameter in node.params}
+            self.visit(getattr(node, 'requires', []), parameter_values, type_scope)
+            self.visit(getattr(node, 'ensures', []), parameter_values | {'result'}, type_scope)
+            self.visit(node.body, parameter_values, type_scope)
             return node
         if isinstance(node, (A.StructDecl, A.EnumDecl, A.ClassDecl, A.InterfaceDecl)):
             types = types | {parameter.name for parameter in node.type_params}
+        if isinstance(node, A.StructDecl):
+            self.visit(node.type_params, values, types)
+            field_values = values | {field.name for field in node.fields} | {'self'}
+            for field in node.fields:
+                self.visit(field, field_values, types)
+            return node
         if isinstance(node, A.ClassDecl):
             node.superclass = self.names.get(node.superclass, node.superclass) if isinstance(node.superclass, str) else self.visit(node.superclass, values, types)
             node.interfaces = [self.names.get(name, name) if isinstance(name, str) else self.visit(name, values, types) for name in node.interfaces]

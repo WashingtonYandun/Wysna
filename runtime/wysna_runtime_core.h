@@ -195,6 +195,8 @@ typedef struct WysnaRuntimeContext {
     int64_t max_steps;
     int64_t heap_bytes_allocated;
     int64_t max_heap_bytes;
+    int64_t active_workers;
+    volatile int worker_failure_lock;
     bool quotas_initialized;
     WWeakControl* purple_head;
     int64_t collected_cycles;
@@ -238,13 +240,20 @@ typedef struct WysnaThreadDiagnostics {
 } WysnaThreadDiagnostics;
 #ifdef WYSNA_SHARED_RUNTIME
 extern WYSNA_THREAD_LOCAL WysnaThreadDiagnostics wysna_thread_diagnostics;
+extern WYSNA_THREAD_LOCAL int32_t wysna_worker_depth;
 #else
 static WYSNA_THREAD_LOCAL WysnaThreadDiagnostics wysna_thread_diagnostics = {0};
+/* Worker callbacks own their value graphs and cannot use the shared host registry. */
+static WYSNA_THREAD_LOCAL int32_t wysna_worker_depth = 0;
 #endif
 #define wysna_g_string_literals (wysna_runtime_context.string_literals)
 #ifdef W_STRING_METRICS
 #define wysna_g_string_scan_steps (wysna_runtime_context.string_scan_steps)
+#if defined(__GNUC__) || defined(__clang__)
+#define W_STRING_SCAN_STEP() (__atomic_add_fetch(&wysna_g_string_scan_steps, 1, __ATOMIC_RELAXED))
+#else
 #define W_STRING_SCAN_STEP() (++wysna_g_string_scan_steps)
+#endif
 #else
 #define W_STRING_SCAN_STEP() ((void)0)
 #endif
@@ -350,6 +359,8 @@ static inline void wysna_runtime_pop_frame(void) {
  * full LSan and WYSNA_MEM_CHECK verification on normal main() completion. */
 static inline WYSNA_NORETURN void wysna_panic_exit(int status) {
     fflush(NULL);
+    /* A worker must never run atexit cleanup that joins its own OS thread. */
+    if (wysna_worker_depth > 0 || wysna_atomic_add_i64(&wysna_runtime_context.active_workers, 0) > 0) _Exit(status);
 #if defined(WYSNA_HAS_ASAN) && !defined(__EMSCRIPTEN__) && !defined(__wasi__)
     _Exit(status);
 #else
@@ -357,19 +368,18 @@ static inline WYSNA_NORETURN void wysna_panic_exit(int status) {
 #endif
 }
 
-static inline WYSNA_NORETURN void wysna_runtime_fail(const char* code, const char* format, ...) {
-    if (wysna_g_source_file && wysna_g_source_file[0] != '\0' && wysna_g_source_line > 0) {
+static inline void wysna_runtime_vdiagnostic(bool located, const char* code, const char* format, va_list args) {
+    bool worker_failure = wysna_worker_depth > 0 || wysna_atomic_add_i64(&wysna_runtime_context.active_workers, 0) > 0;
+    if (worker_failure) wysna_spinlock_acquire(&wysna_runtime_context.worker_failure_lock);
+    if (located && wysna_g_source_file && wysna_g_source_file[0] != '\0' && wysna_g_source_line > 0) {
         fprintf(stderr, "[%s] %s:%" PRId32 ":%" PRId32 " - ",
                 code, wysna_g_source_file, wysna_g_source_line, wysna_g_source_col);
     } else {
         fprintf(stderr, "[%s] RuntimeError: ", code);
     }
-    va_list args;
-    va_start(args, format);
     vfprintf(stderr, format, args);
-    va_end(args);
     fputc('\n', stderr);
-    if (wysna_thread_diagnostics.call_depth > 1) {
+    if (located && wysna_thread_diagnostics.call_depth > 1) {
         int32_t top = wysna_thread_diagnostics.call_depth < 64 ? wysna_thread_diagnostics.call_depth : 64;
         for (int32_t i = top - 1; i >= 0; i--) {
             const char* fn_name = wysna_thread_diagnostics.call_stack_fn[i];
@@ -381,6 +391,25 @@ static inline WYSNA_NORETURN void wysna_runtime_fail(const char* code, const cha
             }
         }
     }
+    if (worker_failure) {
+        fflush(NULL);
+        _Exit(1);
+    }
+}
+
+static inline WYSNA_NORETURN void wysna_runtime_fail(const char* code, const char* format, ...) {
+    va_list args;
+    va_start(args, format);
+    wysna_runtime_vdiagnostic(true, code, format, args);
+    va_end(args);
+    wysna_panic_exit(1);
+}
+
+static inline WYSNA_NORETURN void wysna_runtime_fail_unlocated(const char* code, const char* format, ...) {
+    va_list args;
+    va_start(args, format);
+    wysna_runtime_vdiagnostic(false, code, format, args);
+    va_end(args);
     wysna_panic_exit(1);
 }
 
@@ -462,22 +491,19 @@ static inline void wysna_mem_on_free(void) {
     wysna_atomic_add_i64(&wysna_g_free_count, 1);
     int64_t live = wysna_atomic_sub_i64(&wysna_g_live_objects, 1);
     if (live < 0) {
-        fprintf(stderr, "[W4003] RuntimeError: Memory safety violation (live_object_count underflow: %" PRId64 ")\n", live);
-        wysna_panic_exit(1);
+        wysna_runtime_fail_unlocated("W4003", "Memory safety violation (live_object_count underflow: %" PRId64 ")", live);
     }
 }
 
 static inline void wysna_check_refcount(int32_t rc, const char* op) {
     if (rc <= 0) {
-        fprintf(stderr, "[W4003] RuntimeError: Memory safety violation (%s on object with refcount %" PRId32 ")\n", op, rc);
-        wysna_panic_exit(1);
+        wysna_runtime_fail_unlocated("W4003", "Memory safety violation (%s on object with refcount %" PRId32 ")", op, rc);
     }
 }
 
 static inline void wysna_check_retain_count(int32_t rc, const char* op) {
     if (rc == INT32_MAX) {
-        fprintf(stderr, "[W4003] RuntimeError: Memory safety violation (reference count overflow during %s)\n", op);
-        wysna_panic_exit(1);
+        wysna_runtime_fail_unlocated("W4003", "Memory safety violation (reference count overflow during %s)", op);
     }
     wysna_check_refcount(rc, op);
 }
@@ -524,10 +550,10 @@ static inline void wysna_charge_heap_bytes(size_t size) {
     if (!wysna_runtime_context.quotas_initialized) wysna_init_quotas();
     if (wysna_runtime_context.max_heap_bytes > 0 && size > 0) {
         int64_t allocated = wysna_atomic_add_i64(&wysna_runtime_context.heap_bytes_allocated, (int64_t)size);
-        if (allocated > wysna_runtime_context.max_heap_bytes && !wysna_runtime_context.collecting_cycles) {
+        if (allocated > wysna_runtime_context.max_heap_bytes && wysna_worker_depth == 0 && !wysna_runtime_context.collecting_cycles) {
             wysna_collect_cycles();
         }
-        if (wysna_runtime_context.heap_bytes_allocated > wysna_runtime_context.max_heap_bytes) {
+        if (wysna_atomic_add_i64(&wysna_runtime_context.heap_bytes_allocated, 0) > wysna_runtime_context.max_heap_bytes) {
             wysna_runtime_fail("W4004", "Execution heap memory quota exceeded (limit: %" PRId64 " bytes)",
                                wysna_runtime_context.max_heap_bytes);
         }
@@ -539,8 +565,7 @@ static inline void* wysna_alloc_safe(size_t size) {
     wysna_charge_heap_bytes(size);
     void* ptr = malloc(size);
     if (!ptr) {
-        fprintf(stderr, "[W4003] RuntimeError: Out of memory (failed to allocate %zu bytes)\n", size);
-        wysna_panic_exit(1);
+        wysna_runtime_fail_unlocated("W4003", "Out of memory (failed to allocate %zu bytes)", size);
     }
     return ptr;
 }
@@ -553,8 +578,7 @@ static inline void* wysna_realloc_safe(void* old_ptr, size_t new_size) {
     wysna_charge_heap_bytes(new_size);
     void* ptr = realloc(old_ptr, new_size);
     if (!ptr) {
-        fprintf(stderr, "[W4003] RuntimeError: Out of memory (failed to reallocate %zu bytes)\n", new_size);
-        wysna_panic_exit(1);
+        wysna_runtime_fail_unlocated("W4003", "Out of memory (failed to reallocate %zu bytes)", new_size);
     }
     return ptr;
 }

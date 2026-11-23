@@ -43,6 +43,7 @@
 #include "wysna_runtime_operators.h"
 #include "wysna_runtime_format.h"
 #include "wysna_runtime_builtins.h"
+#include "wysna_runtime_workers.h"
 
 #include "wysna_host.h"
 

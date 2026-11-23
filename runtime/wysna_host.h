@@ -37,7 +37,7 @@
 #ifdef __APPLE__
 #include <mach-o/dyld.h>
 #endif
-#if (defined(__GNUC__) || defined(__clang__)) && !defined(__APPLE__)
+#if (defined(__GNUC__) || defined(__clang__)) && !defined(__APPLE__) && !defined(WYSNA_LINK_PTHREAD)
 #pragma weak pthread_create
 #pragma weak pthread_join
 #endif
@@ -582,14 +582,19 @@ static void wysna_async_shutdown(void) {
 }
 
 static inline void wysna_spawn_worker_run(WysnaSpawnTask* task) {
+    wysna_worker_depth++;
     WVal fn_local = task->fn;
     task->fn = wysna_unit();
     WVal out = wysna_call(fn_local, 0, NULL);
+    WVal transferred = wysna_worker_snapshot(out);
+    wysna_release(out);
     wysna_release(fn_local);
+    wysna_worker_depth--;
     wysna_spinlock_acquire(&wysna_spawn_lock);
-    task->result = out;
+    task->result = transferred;
     task->done = true;
     wysna_spinlock_release(&wysna_spawn_lock);
+    wysna_atomic_sub_i64(&wysna_runtime_context.active_workers, 1);
 }
 
 #if !defined(_WIN32) && !defined(__wasi__)
@@ -605,9 +610,9 @@ static DWORD WINAPI wysna_spawn_win32_entry(LPVOID arg) {
 #endif
 
 static inline bool wysna_spawn_threads_available(void) {
-#if defined(__wasi__)
+#if defined(__wasi__) || (!defined(__GNUC__) && !defined(__clang__))
     return false;
-#elif !defined(_WIN32) && (defined(__GNUC__) || defined(__clang__)) && !defined(__APPLE__)
+#elif !defined(_WIN32) && (defined(__GNUC__) || defined(__clang__)) && !defined(__APPLE__) && !defined(WYSNA_LINK_PTHREAD)
     typedef int (*WysnaPthreadCreateFn)(pthread_t*, const pthread_attr_t*, void*(*)(void*), void*);
     typedef int (*WysnaPthreadJoinFn)(pthread_t, void**);
     volatile WysnaPthreadCreateFn p_create = pthread_create;
@@ -620,10 +625,11 @@ static inline bool wysna_spawn_threads_available(void) {
 
 static inline int64_t wysna_async_spawn_handle(WVal fn) {
     wysna_step_tick();
+    if (wysna_worker_depth > 0) wysna_runtime_fail("W4003", "Worker callbacks cannot spawn tasks");
     wysna_runtime_context.host_async_cleanup = wysna_async_shutdown;
     WysnaSpawnTask* task = (WysnaSpawnTask*)calloc(1, sizeof(WysnaSpawnTask));
     if (!task) return -1;
-    task->fn = wysna_clone(fn);
+    task->fn = wysna_worker_snapshot(fn);
     task->result = wysna_unit();
     task->done = false;
     task->joined = false;
@@ -635,6 +641,7 @@ static inline int64_t wysna_async_spawn_handle(WVal fn) {
     int64_t task_id = task->id;
     wysna_spinlock_release(&wysna_spawn_lock);
 
+    wysna_atomic_add_i64(&wysna_runtime_context.active_workers, 1);
     if (wysna_spawn_threads_available()) {
 #if !defined(_WIN32) && !defined(__wasi__)
         if (pthread_create(&task->thread_id, NULL, wysna_spawn_posix_entry, task) == 0) {
@@ -2042,13 +2049,18 @@ typedef struct WysnaParallelWork {
 static int32_t wysna_parallel_active_depth = 0;
 
 static inline void wysna_parallel_run_slice(WysnaParallelWork* work) {
+    wysna_worker_depth++;
     for (int32_t i = work->start; i < work->end; i++) {
-        work->outputs[i] = wysna_call(work->fn, 1, &work->inputs[i]);
+        WVal out = wysna_call(work->fn, 1, &work->inputs[i]);
+        work->outputs[i] = wysna_worker_snapshot(out);
+        wysna_release(out);
         wysna_release(work->inputs[i]);
         work->inputs[i] = wysna_unit();
     }
     wysna_release(work->fn);
     work->fn = wysna_unit();
+    wysna_worker_depth--;
+    wysna_atomic_sub_i64(&wysna_runtime_context.active_workers, 1);
 }
 
 #if !defined(_WIN32) && !defined(__wasi__)
@@ -2074,6 +2086,8 @@ static inline WVal wysna_parallel_map(WVal values, WVal transform) {
     }
     int32_t len = list->len;
     if (len <= 0) {
+        WVal checked = wysna_worker_snapshot(transform);
+        wysna_release(checked);
         return wysna_make_list(0, NULL);
     }
 
@@ -2084,39 +2098,17 @@ static inline WVal wysna_parallel_map(WVal values, WVal transform) {
         if (parsed <= 1) max_workers = 1;
         else if (parsed < (long)max_workers) max_workers = (int32_t)parsed;
     }
-#if defined(__wasi__)
-    max_workers = 1;
-#elif !defined(_WIN32)
-#if (defined(__GNUC__) || defined(__clang__)) && !defined(__APPLE__)
-    typedef int (*WysnaPthreadCreateFn)(pthread_t*, const pthread_attr_t*, void*(*)(void*), void*);
-    typedef int (*WysnaPthreadJoinFn)(pthread_t, void**);
-    volatile WysnaPthreadCreateFn p_create = pthread_create;
-    volatile WysnaPthreadJoinFn p_join = pthread_join;
-    if (!p_create || !p_join) max_workers = 1;
-#endif
-#endif
-    if (wysna_atomic_load_i32(&wysna_parallel_active_depth) > 0) {
+    if (!wysna_spawn_threads_available()) max_workers = 1;
+    if (wysna_worker_depth > 0 || wysna_atomic_load_i32(&wysna_parallel_active_depth) > 0) {
         max_workers = 1;
     }
 
     int32_t workers = len < max_workers ? len : max_workers;
-    if (workers <= 1 || len <= 1) {
-        WVal* outputs = (WVal*)wysna_alloc_safe(sizeof(WVal) * (size_t)len);
-        for (int32_t i = 0; i < len; i++) {
-            WVal item = list->data[i];
-            outputs[i] = wysna_call(transform, 1, &item);
-        }
-        WVal result = wysna_make_list(len, outputs);
-        for (int32_t i = 0; i < len; i++) wysna_release(outputs[i]);
-        free(outputs);
-        return result;
-    }
-
     wysna_atomic_inc_i32(&wysna_parallel_active_depth);
     WVal* inputs = (WVal*)wysna_alloc_safe(sizeof(WVal) * (size_t)len);
     WVal* outputs = (WVal*)wysna_alloc_safe(sizeof(WVal) * (size_t)len);
     for (int32_t i = 0; i < len; i++) {
-        inputs[i] = wysna_clone(list->data[i]);
+        inputs[i] = wysna_unit();
         outputs[i] = wysna_unit();
     }
 
@@ -2128,12 +2120,16 @@ static inline WVal wysna_parallel_map(WVal values, WVal transform) {
         int32_t span = base + (w < rem ? 1 : 0);
         tasks[w].inputs = inputs;
         tasks[w].outputs = outputs;
-        tasks[w].fn = wysna_clone(transform);
+        WysnaWorkerCopy memo = {0};
+        tasks[w].fn = wysna_worker_copy_value(&memo, transform, 0);
+        for (int32_t i = cursor; i < cursor + span; i++) inputs[i] = wysna_worker_copy_value(&memo, list->data[i], 0);
+        wysna_worker_copy_clear(&memo);
         tasks[w].start = cursor;
         tasks[w].end = cursor + span;
         cursor += span;
     }
 
+    wysna_atomic_add_i64(&wysna_runtime_context.active_workers, workers);
 #if !defined(_WIN32) && !defined(__wasi__)
     pthread_t tids[4];
     bool launched[4] = {false, false, false, false};

@@ -1,0 +1,3 @@
+struct Positive { value: int requires value > 0 }
+let invalid = Positive { value: -1 }
+print(invalid.value)

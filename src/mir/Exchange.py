@@ -57,7 +57,7 @@ def _decode(value):
             if constructor is None:
                 _fail(f"Unknown MIR exchange node type: {type_name!r}")
             expected = {field.name for field in fields(constructor)}
-            optional_defaults = {"is_async": False, "async_return_type": 0} if constructor is Function else {}
+            optional_defaults = {"is_async": False, "async_return_type": 0, "declaration_name": ""} if constructor is Function else {}
             keys = set(value)
             missing = (expected | {"$type"}) - keys
             extra = keys - (expected | {"$type"})

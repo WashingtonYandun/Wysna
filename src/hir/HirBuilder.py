@@ -599,6 +599,7 @@ class HirBuilder:
             span=self._span(decl),
             is_async=is_async,
             async_return_type_id=ret_tid,
+            declaration_name=getattr(decl, 'source_name', None) or decl.name,
         )
 
     def _discard_unit_result_tail(self, body):

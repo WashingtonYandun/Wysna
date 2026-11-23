@@ -12,8 +12,8 @@ struct SemGenericType { name: str, kind: str, params: list[str], constraints: li
 struct SemVar { name: str, type_id: int, mutable: bool, depth: int, binding: int }
 struct AttributeArgument { name: str, kind: str, value: str }
 struct StaticAttribute { name: str, message: str, arguments: list[AttributeArgument], source: Token }
-struct SemFunction { declaration_name: str, attributes: list[StaticAttribute], abi_params: list[str], abi_return: str, name: str, params: list[str], type_params: list[str], constraints: list[str], type_id: int, body: int, end: int, owner: str, visible: bool, contract_start: int, is_async: bool }
-struct SemField { owner: str, name: str, type_id: int, visible: bool }
+struct SemFunction { source: Token, declaration_name: str, attributes: list[StaticAttribute], abi_params: list[str], abi_return: str, name: str, params: list[str], type_params: list[str], constraints: list[str], type_id: int, body: int, end: int, owner: str, visible: bool, contract_start: int, is_async: bool }
+struct SemField { owner: str, name: str, type_id: int, visible: bool, requires: list[Token] }
 struct SemInterfaceRef { name: str, args: list[int] }
 struct SemClass { name: str, parent: str, parent_args: list[int], interfaces: list[SemInterfaceRef] }
 struct SemValue { type_id: int, root: str, writable: int, terminates: bool, node: int }

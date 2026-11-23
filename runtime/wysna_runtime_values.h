@@ -257,18 +257,18 @@ static inline WVal wysna_virtual_call(WVal receiver, int32_t slot, int32_t argc,
     WStructBuf* st = wysna_hi(receiver) == WVAL_HI_OBJECT ? wysna_as_struct(receiver) : NULL;
     const WClassVTable* table = st ? st->vtable : NULL;
     if (!table || slot < 0 || slot >= table->count || !table->methods[slot]) {
-        fprintf(stderr, "[W4003] RuntimeError: Invalid virtual method dispatch\n"); wysna_panic_exit(1);
+        wysna_runtime_fail_unlocated("W4003", "Invalid virtual method dispatch");
     }
     return table->methods[slot](receiver, argc, argv);
 }
 
 static inline int32_t wysna_ffi_int32(WVal value) {
     if (wysna_tag(value) != W_INT) {
-        fprintf(stderr, "[W4003] RuntimeError: int32 FFI argument out of range\n"); wysna_panic_exit(1);
+        wysna_runtime_fail_unlocated("W4003", "int32 FFI argument out of range");
     }
     int64_t i = wysna_as_int(value);
     if (i < INT32_MIN || i > INT32_MAX) {
-        fprintf(stderr, "[W4003] RuntimeError: int32 FFI argument out of range\n"); wysna_panic_exit(1);
+        wysna_runtime_fail_unlocated("W4003", "int32 FFI argument out of range");
     }
     return (int32_t)i;
 }
@@ -361,8 +361,12 @@ static inline WVal wysna_str_n(const char* s, size_t length) {
     return wysna_make_hi_ptr(WVAL_HI_CSTR, s);
 }
 
+static inline WVal wysna_copy_str_n(const char* data, size_t length);
+
 static inline WVal wysna_literal_str_n(WStringLiteral* literal, const char* data, size_t length) {
     if (length <= 6) return wysna_sso_from_n(data ? data : "", length);
+    /* Literal index caches belong to the main thread, never to a worker graph. */
+    if (wysna_worker_depth > 0) return wysna_copy_str_n(data, length);
     if (wysna_atomic_load_i32(&literal->buffer.refcount) == 0) {
         wysna_spinlock_acquire(&wysna_runtime_context.runtime_lock);
         if (literal->buffer.refcount == 0) {

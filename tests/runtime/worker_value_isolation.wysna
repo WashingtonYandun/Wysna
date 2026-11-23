@@ -1,0 +1,23 @@
+import "std/algorithms" as alg
+import "std/async" as tasks
+
+struct Data { values: list[int] }
+fn change(input: Data) -> Data {
+    let mut owned = input
+    owned.values[0] += 1
+    owned
+}
+fn main() {
+    let original = Data { values: [10] }
+    let output = alg.parallel_map([original, original], change)
+    print(original.values[0], output[0].values[0], output[1].values[0])
+    let mut captured = [41]
+    let task = tasks.spawn(|| => captured[0] + 1)
+    captured[0] = 99
+    let value = tasks.wait(task) else err { print(err) return }
+    print(value, captured[0])
+    let result = alg.parallel_reduce([10000000000000000.0, -10000000000000000.0, 1.0], 0.0, |x: float| => x, |a: float, b: float| => a + b)
+    print(result == 1.0)
+    print(alg.parallel_map([1, 2], |x: int| => Some(x)))
+}
+main()

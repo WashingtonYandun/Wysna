@@ -1,0 +1,6 @@
+import "std/async" as tasks
+struct Positive { value: int requires value > 0 }
+fn forever() -> int { while true {} 0 }
+let task = tasks.spawn(forever)
+let invalid = Positive { value: -1 }
+print(invalid.value)

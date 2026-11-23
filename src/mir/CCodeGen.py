@@ -5,6 +5,7 @@ from codegen.CStrings import quote
 from common.Telemetry import CodegenTelemetry
 from mir.AsyncLowering import build_cps_plan
 from mir.Verifier import Verifier
+from compiler.StdlibIdentity import stdlib_declaration
 
 
 class CCodeGen:
@@ -288,33 +289,17 @@ class CCodeGen:
 
     @staticmethod
     def _parallel_runtime_helper(function):
-        name = function.name
-        algo_mod = '616c676f726974686d732e7779736e61__'
-        if algo_mod not in name:
-            return None
-        if f'{algo_mod}parallel_map__' in name or name.endswith(f'{algo_mod}parallel_map'):
-            if len(function.params) == 2:
-                return 'wysna_parallel_map'
-        elif f'{algo_mod}parallel_batch__' in name or name.endswith(f'{algo_mod}parallel_batch'):
-            if len(function.params) == 3:
-                return 'wysna_parallel_batch'
-        elif f'{algo_mod}parallel_filter__' in name or name.endswith(f'{algo_mod}parallel_filter'):
-            if len(function.params) == 2:
-                return 'wysna_parallel_filter'
+        for name, arity in (('parallel_map', 2), ('parallel_batch', 3), ('parallel_filter', 2)):
+            if stdlib_declaration(function, 'algorithms', name, arity):
+                return 'wysna_' + name
         return None
 
     @staticmethod
     def _async_runtime_helper(function):
-        name = function.name
-        async_mod = '6173796e632e7779736e61__'
-        if async_mod not in name:
-            return None
-        if f'{async_mod}_spawn_handle__' in name or name.endswith(f'{async_mod}_spawn_handle'):
-            if len(function.params) == 1:
-                return 'wysna_async_spawn_handle'
-        elif f'{async_mod}_take_task_value__' in name or name.endswith(f'{async_mod}_take_task_value'):
-            if len(function.params) == 2:
-                return 'wysna_spawn_take_option'
+        if stdlib_declaration(function, 'async', '_spawn_handle', 1):
+            return 'wysna_async_spawn_handle'
+        if stdlib_declaration(function, 'async', '_take_task_value', 2):
+            return 'wysna_spawn_take_option'
         return None
 
     @staticmethod

@@ -383,6 +383,11 @@ static int sdk_build(SdkInvocation* invocation, const SdkOptions* options) {
     arguments[count++] = "cc"; arguments[count++] = "-target"; arguments[count++] = WYSNA_NATIVE_TARGET; arguments[count++] = "-std=c99"; arguments[count++] = "-mcpu=baseline";
     if (strcmp(options->profile, "dev") == 0) { arguments[count++] = "-O0"; arguments[count++] = "-g"; }
     else arguments[count++] = strcmp(options->profile, "size") == 0 ? "-Os" : "-O2";
+#ifdef __linux__
+    /* Weak references alone cannot pull pthread into the SDK's static musl programs. */
+    arguments[count++] = "-pthread";
+    arguments[count++] = "-DWYSNA_LINK_PTHREAD";
+#endif
     arguments[count++] = sdk_owned(invocation, "-I", invocation->root);
     for (int index = 0; index < options->include_count; index++) {
         if (!sdk_absolute(invocation->scratch, options->includes[index], 1) || !sdk_is_directory(invocation->scratch)) return sdk_error("W5002", "Invalid include directory", options->includes[index]);

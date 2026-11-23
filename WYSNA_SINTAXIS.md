@@ -19,7 +19,7 @@ Este documento constituye la referencia técnica canónica, completa y exhaustiv
 11. [Funciones y Métodos Integrados (Builtins del Runtime)](#11-funciones-y-métodos-integrados)
 12. [Semántica de Memoria: ARC, Copy-on-Write y Búferes Escalares](#12-semántica-de-memoria)
 13. [Gobernanza de Ejecución: Cuotas y Cassettes de Efectos](#13-gobernanza-de-ejecución)
-14. [Concurrencia Multi-Núcleo Determinista](#14-concurrencia-multi-núcleo-determinista)
+14. [Workers Multi-Núcleo con Resultados Ordenados](#14-workers-multi-núcleo-con-resultados-ordenados)
 15. [Herramientas de Línea de Comandos (Toolchain CLI)](#15-herramientas-de-línea-de-comandos)
 16. [Catálogo Canónico de Códigos Diagnósticos (`Wxxxx`)](#16-catálogo-canónico-de-códigos-diagnósticos)
 
@@ -38,10 +38,10 @@ flowchart LR
     D --> F["Backend Nativo C99 / LLVM<br/>Binarios autocontenidos sin GC"]
 ```
 
-* **Semántica de Valores Pura:** Por defecto, las colecciones (`list`, `dict`, `tuple`, `struct`, `enum`) se comportan como valores inmutables compartidos mediante **Copy-on-Write (CoW)** con conteo de referencias automático (**ARC**).
+* **Semántica de Valores:** Por defecto, las colecciones (`list`, `dict`, `tuple`, `struct`, `enum`) se comportan como valores inmutables compartidos mediante **Copy-on-Write (CoW)** con conteo de referencias automático (**ARC**).
 * **Ausencia de Garbage Collector (GC):** La liberación de memoria es determinista e inmediata en el momento en que el contador de referencias llega a 0, con rutas de liberación $O(1)$ para búferes escalares planos.
-* **Canales de Error en la Firma de Tipos:** No existen excepciones ocultas ni desenrollado de pila opaco (`panic`/`throw`). Toda función que puede fallar declara formalmente su conjunto de errores en la firma: `T ! E`.
-* **Contratos Estáticos y Dinámicos:** Soporte nativo para precondiciones (`requires`) y postcondiciones (`ensures`), exportables automáticamente a **JSON Schema (Draft 2020-12)**.
+* **Canales de Error en la Firma de Tipos:** Los errores recuperables se declaran en la firma `T ! E`. Los traps de runtime (división por cero, índices, contratos y cuotas) terminan la ejecución y no se capturan con `else err`. Los fallos del entorno y FFI tienen límites propios de aislamiento.
+* **Contratos Estáticos y Dinámicos:** Soporte nativo para precondiciones (`requires`) y postcondiciones (`ensures`), con exportación de restricciones representables a **JSON Schema (Draft 2020-12)**; un schema no equivale al contrato ejecutable completo.
 
 ---
 
@@ -177,7 +177,7 @@ graph TD
 
 ### 3.2 Colecciones Copy-on-Write y Tuplas
 * **`list[T]`:** Lista dinámica redimensionable con semántica Copy-on-Write (`WListBuf`).
-  * **Representación en memoria:** Los elementos se almacenan en un arreglo contiguo de palabras NaN-boxed `WVal` de 8 bytes (donde `int`, `float` y `bool` se empaquetan en 8 bytes sin asignaciones individuales en heap para escalares estándar) con desprendimiento CoW vía `memcpy` cuando el refcount > 1; en MIR, las variables locales escalares (`int64_t`, `double`, `bool`) operan desenpaquetadas en registros nativos.
+  * **Representación en memoria:** Los elementos se almacenan en un arreglo contiguo de palabras NaN-boxed `WVal` de 8 bytes (con `float` y `bool` inmediatos; `int` tiene semántica Int64, rango inmediato de 48 bits con signo y boxing en heap fuera de ese rango) con desprendimiento CoW vía `memcpy` cuando el refcount > 1; en MIR, las variables locales escalares (`int64_t`, `double`, `bool`) operan desenpaquetadas en registros nativos.
 * **`dict[K, V]`:** Tabla hash asociativa. Las claves (`K`) deben ser tipos comparables (`int`, `str`, `bool`, `enum` o tuplas hashables).
 * **`tuple[T1, T2, ...]` (atajo `(T1, T2, ...)`):** Producto heterogéneo inmutable de tamaño fijo (su tipo se anota como `tuple[int, str]` o `(int, str)`, sus elementos se leen posicionalmente con `pair.0`, `nested.0.1`, y se desestructura directamente en `let (a, b) = pair`, `match` con `(a, b) => ...` o `for a, b in ...`).
 
@@ -193,7 +193,7 @@ let display_name: str = possible_name ?? "Anónimo"
 ```
 
 ### 3.4 Canales de Error y Uniones (`T ! E` / `T ! E1 | E2`)
-Las funciones no arrojan excepciones no tipadas. Cuando una función puede fallar, declara el tipo exitoso (`T`) y el tipo o unión de tipos de error (`E1 | E2`) separados por el operador de exclamación `!`:
+Los errores recuperables son valores tipados; los traps terminan el proceso. Cuando una función puede devolver un error recuperable, declara el tipo exitoso (`T`) y el tipo o unión de tipos de error (`E1 | E2`) separados por el operador de exclamación `!`:
 
 ```wysna
 fn divide(a: int, b: int) -> int ! str {
@@ -278,7 +278,7 @@ let remaining = withdraw(100, 30)  # 70
 ```
 
 > [!NOTE]
-> Las herramientas de introspección del compilador (`wysna schema`) leen los contratos `requires`/`ensures` del AST/MIR y los traducen automáticamente a restricciones numéricas (`minimum`, `exclusiveMinimum`, etc.) en formato **JSON Schema Draft 2020-12** para llamadas a herramientas de LLMs.
+> `wysna schema` exporta las restricciones representables, como límites numéricos (`minimum`, `exclusiveMinimum`), a JSON Schema Draft 2020-12. Relaciones entre campos y postcondiciones generales necesitan el contrato ejecutable; la exportación parcial no es equivalente a validarlo completo.
 
 ### 5.3 Funciones Genéricas
 Las funciones admiten parámetros de tipo encerrados entre corchetes `[T]`:
@@ -747,13 +747,13 @@ dict_val.remove("a")
 
 ## 12. Semántica de Memoria
 
-Wysna garantiza la seguridad de memoria sin recurrir a pausas de recolección de basura (*Stop-the-World GC*):
+Wysna gestiona memoria con ARC y CoW. Estas reglas no garantizan latencia acotada ni hacen seguro un acceso arbitrario mediante FFI:
 
 ### 12.1 Conteo de Referencias Automático (ARC)
-Todo objeto en el heap posee un bloque de control de referencias atómicas. Cuando el último propietario sale de su ámbito léxico, la memoria se libera de manera inmediata y predecible.
+Todo objeto en el heap posee un bloque de control de referencias atómicas. Cuando el último propietario sale de su ámbito léxico, se inicia la destrucción del grafo alcanzable. Su coste depende del tamaño; los ciclos fuertes necesitan Weak, ruptura explícita o el recolector de ciclos.
 
 ### 12.2 Copy-on-Write (CoW) Inmutable
-Las estructuras de datos compartidas solo se duplican físicamente en el instante exacto en que una copia intenta mutar sus elementos:
+Dentro de un mismo propietario, los buffers de valores compartidos se desprenden al mutarlos. Un struct que contiene una clase conserva la identidad compartida de esa clase. En una frontera de worker se copia todo el grafo transferible y se rechazan clases:
 
 ```wysna
 let original = [1, 2, 3, 4]
@@ -768,7 +768,7 @@ Para evitar fugas de memoria causadas por ciclos fuertes de referencia entre cla
 
 ## 13. Gobernanza de Ejecución
 
-Diseñado para agentes autónomos que ejecutan código dinámico en entornos aislados o sandbox:
+Las cuotas y el replay ayudan a gobernar código generado por agentes. Cubren operaciones instrumentadas; no aíslan código nativo ni FFI. Para código no confiable se requiere aislamiento del sistema operativo:
 
 ### 13.1 Cuotas Deterministas (`--max-steps` / `--max-heap-mb`)
 Limita la cantidad máxima de instrucciones evaluadas y la memoria de heap consumida. Superar cualquier límite aborta la ejecución con el código de diagnóstico determinista `[W4004]`:
@@ -782,7 +782,7 @@ WYSNA_MAX_STEPS=500000 WYSNA_MAX_HEAP_BYTES=16777216 ./main
 ```
 
 ### 13.2 Cassettes de Efectos (`--record-trace` / `--replay-trace`)
-Permite capturar todas las interacciones con el entorno exterior (llamadas HTTP, lectura de archivos, reloj) en un sobre serializado `wysna.effect.trace/1` y reproducirlas posteriormente de forma exacta y fuera de línea sin I/O real:
+Permite capturar las interacciones instrumentadas con el entorno exterior (llamadas HTTP, lectura de archivos, reloj) en un sobre serializado `wysna.effect.trace/1` y reproducirlas posteriormente de forma exacta y fuera de línea sin I/O real:
 
 ```sh
 # Fase de grabación
@@ -794,9 +794,9 @@ wysna run --replay-trace=network_test.json test_runner.wysna
 
 ---
 
-## 14. Concurrencia Multi-Núcleo Determinista
+## 14. Workers Multi-Núcleo con Resultados Ordenados
 
-Wysna implementa concurrencia estructurada a través de la biblioteca estándar `std/algorithms` y `std/http`:
+`std/algorithms` ejecuta callbacks de CPU en workers; `std/http` conserva I/O cooperativo en el scheduler. TaskGroup, deadlines y cancelación pública siguen pendientes:
 
 ```wysna
 import "std/algorithms" as alg
@@ -808,8 +808,9 @@ let squares = alg.parallel_map[int, int] (numbers, |n: int| => n * n)
 print(squares)  # [1, 4, 9, 16, 25, 36, 49, 64]
 ```
 
-* **Garantía de Orden Determinista:** El resultado de `parallel_map`, `parallel_batch`, `parallel_filter` y `parallel_reduce` produce un orden de salida indexado idéntico al de una ejecución puramente secuencial.
-* **Seguridad de Hilos en Host ABI:** El runtime incorpora bloqueos reentrantes en operaciones críticas de memoria y almacenamiento de estados thread-local.
+* **Resultados ordenados:** map/batch/filter preservan el orden de entrada. `parallel_reduce` mapea en paralelo y combina mediante fold izquierdo secuencial, sin reasociar sumas de coma flotante.
+* **Propiedad aislada:** entradas, capturas y resultados se copian como grafos privados. W2014 rechaza tipos con identidad/handles; W2015 rechaza globals no capturados, efectos transitivos, FFI, scheduler y callbacks no verificables.
+* **Límites:** no se permiten workers anidados ni efectos de host en callbacks de CPU. ARC atómico y locks internos no constituyen seguridad universal de hilos. Véase [el contrato de workers](docs/WORKER_SAFETY.md).
 
 ---
 

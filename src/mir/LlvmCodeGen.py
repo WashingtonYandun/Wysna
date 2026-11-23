@@ -1,5 +1,6 @@
 """Textual LLVM IR from verified MIR; no syntax traversal or C program emission."""
 import struct
+from compiler.StdlibIdentity import stdlib_declaration
 from checker.TypeInterner import TYPE_UNIT, TYPE_BOOL, TYPE_INT, TYPE_FLOAT, TYPE_STR
 from mir.LlvmDebug import DebugInfo
 from mir.LlvmText import quote_bytes
@@ -191,16 +192,9 @@ class LlvmCodeGen:
 
     @staticmethod
     def _async_runtime_helper(function):
-        name = function.name
-        async_mod = '6173796e632e7779736e61__'
-        if async_mod not in name:
-            return None
-        if f'{async_mod}_spawn_handle__' in name or name.endswith(f'{async_mod}_spawn_handle'):
-            if len(function.params) == 1:
-                return '_spawn_handle'
-        elif f'{async_mod}_take_task_value__' in name or name.endswith(f'{async_mod}_take_task_value'):
-            if len(function.params) == 2:
-                return '_take_task_value'
+        for name, arity in (('_spawn_handle', 1), ('_take_task_value', 2)):
+            if stdlib_declaration(function, 'async', name, arity):
+                return name
         return None
 
     @staticmethod
@@ -485,9 +479,11 @@ class LlvmCodeGen:
         self.lines.extend(['}', ''])
         return step_lines + self.lines
 
-    def fail(self, code, message, source):
+    def fail(self, code, message, source=None):
+        location = (f'ptr {self.string(source.file)}, i32 {source.line}, i32 {source.col}'
+                    if source is not None else 'ptr null, i32 0, i32 0')
         self.emit('call void @wysna_llvm_fail(ptr ' + self.string(code) + ', ptr ' + self.string(message) +
-                  ', ptr ' + self.string(source.file) + ', i32 ' + str(source.line) + ', i32 ' + str(source.col) + ')')
+                  ', ' + location + ')')
         self.emit('unreachable')
 
     def operation(self, operation):
@@ -640,8 +636,16 @@ class LlvmCodeGen:
                 value = self.result('sitofp i64 ' + self.load(args[0]) + ' to double')
                 self.write(result, value)
             elif name == 'wysna_builtin_int' and arg_type == TYPE_FLOAT:
-                value = self.result('fptosi double ' + self.load(args[0]) + ' to i64')
-                self.write(result, value)
+                operand = self.load(args[0])
+                lower = self.result(f'fcmp oge double {operand}, 0xC3E0000000000000')
+                upper = self.result(f'fcmp olt double {operand}, 0x43E0000000000000')
+                valid = self.result(f'and i1 {lower}, {upper}')
+                resume, fault = self.label('int_cast_valid'), self.label('int_cast_fault')
+                self.emit(f'br i1 {valid}, label %{resume}, label %{fault}')
+                self.lines.append(fault + ':')
+                self.fail('W4003', 'Invalid int conversion')
+                self.lines.append(resume + ':')
+                self.write(result, self.result(f'fptosi double {operand} to i64'))
             elif name == 'wysna_builtin_int' and arg_type == TYPE_INT:
                 self.write(result, self.load(args[0]))
             elif name == 'wysna_builtin_float' and arg_type == TYPE_FLOAT:
