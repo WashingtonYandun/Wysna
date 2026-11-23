@@ -855,28 +855,34 @@ fn schema_collect_decls(tokens: list[Token], out: SchemaDeclSet) -> unit {
                 if ck == "IDENT" and (cv == "requires" or cv == "ensures") {
                     let is_req = cv == "requires"
                     c.pos = c.pos + 1
-                    let mut ctoks: list[Token] = []
-                    let mut rdepth = 0
-                    while schema_cur_kind(c) != "EOF" {
-                        let rk = schema_cur_kind(c)
-                        let rv = schema_cur_val(c)
-                        if rdepth == 0 and (rk == "NEWLINE" or rk == "LBRACE" or (rk == "IDENT" and (rv == "requires" or rv == "ensures"))) {
-                            break
+                    let mut more = true
+                    while more {
+                        schema_skip_newlines(c)
+                        let mut ctoks: list[Token] = []
+                        let mut rdepth = 0
+                        while schema_cur_kind(c) != "EOF" {
+                            let rk = schema_cur_kind(c)
+                            let rv = schema_cur_val(c)
+                            if rdepth == 0 and (rk == "NEWLINE" or rk == "LBRACE" or rk == "COMMA" or (rk == "IDENT" and (rv == "requires" or rv == "ensures"))) {
+                                break
+                            }
+                            if rk == "LPAREN" or rk == "LBRACKET" { rdepth = rdepth + 1 }
+                            elif (rk == "RPAREN" or rk == "RBRACKET") and rdepth > 0 { rdepth = rdepth - 1 }
+                            if rk != "NEWLINE" { ctoks.append(c.tokens[c.pos]) }
+                            c.pos = c.pos + 1
                         }
-                        if rk == "LPAREN" or rk == "LBRACKET" { rdepth = rdepth + 1 }
-                        elif (rk == "RPAREN" or rk == "RBRACKET") and rdepth > 0 { rdepth = rdepth - 1 }
-                        if rk != "NEWLINE" { ctoks.append(c.tokens[c.pos]) }
-                        c.pos = c.pos + 1
-                    }
-                    if len(ctoks) > 0 {
-                        let cstr = schema_format_tok_slice(ctoks)
-                        if is_req {
-                            f.req_strs.append(cstr)
-                            f.req_clauses.append(ctoks)
-                        } else {
-                            f.ens_strs.append(cstr)
-                            f.ens_clauses.append(ctoks)
+                        if len(ctoks) > 0 {
+                            let cstr = schema_format_tok_slice(ctoks)
+                            if is_req {
+                                f.req_strs.append(cstr)
+                                f.req_clauses.append(ctoks)
+                            } else {
+                                f.ens_strs.append(cstr)
+                                f.ens_clauses.append(ctoks)
+                            }
                         }
+                        more = schema_cur_kind(c) == "COMMA"
+                        if more { c.pos = c.pos + 1 }
                     }
                 } else {
                     break

@@ -2629,7 +2629,6 @@ fn sem_guard_return(context: SemanticContext, value: int, returned: int, source:
     let mut guards: list[int] = []
     for position in tokens {
         context.pos = position
-        sem_take(context)
         let location = sem_at(context)
         context.expected_type = context.boolean_type
         let condition = sem_expression(context, 0, false)
@@ -2835,27 +2834,33 @@ fn sem_check_function(context: SemanticContext, function: SemFunction) {
         while context.pos < function.body and not sem_is(context, "EOF") and not sem_is(context, "LBRACE") {
             sem_skip_separators(context)
             if context.pos >= function.body or sem_is(context, "LBRACE") { break }
-            if sem_at(context).kind == "IDENT" and sem_at(context).val == "requires" {
-                sem_take(context)
-                let req_src = sem_at(context)
-                let cond_val = sem_expression(context, 0, false)
-                sem_require_at(context, cond_val.type_id, context.boolean_type, "W2001", req_src)
-                let msg_text = "Precondition ('requires') failed in '" + function.name + "'"
-                let msg_node = sem_node(context, "string", context.string_type, req_src, msg_text, [], -1, -1)
-                let assert_node = sem_node(context, "call", context.unit_type, req_src, "contract_assert", [cond_val.node, msg_node], -1, -1)
-                req_assert_nodes.append(assert_node)
-            } elif sem_at(context).kind == "IDENT" and sem_at(context).val == "ensures" {
-                let ens_tok_pos = context.pos
-                ens_start_tokens.append(ens_tok_pos)
-                sem_take(context)
-                let ens_scope = sem_enter_scope(context)
-                let _res = sem_declare(context, "result", sem_success_type(context, context.return_type), false)
-                let ens_src = sem_at(context)
-                let cond_val = sem_expression(context, 0, false)
-                sem_require_at(context, cond_val.type_id, context.boolean_type, "W2001", ens_src)
-                sem_leave_scope(context, ens_scope)
-            } else {
-                break
+            let clause = sem_take(context)
+            if clause.kind != "IDENT" or (clause.val != "requires" and clause.val != "ensures") {
+                report_error_at("W0006", clause, "expected requires or ensures")
+            }
+            let mut more = true
+            while more {
+                while sem_match(context, "NEWLINE") {}
+                let location = sem_at(context)
+                if context.pos >= function.body { report_error_at("W0006", location, "expected contract predicate") }
+                let expected = context.expected_type
+                context.expected_type = context.boolean_type
+                if clause.val == "requires" {
+                    let condition = sem_expression(context, 0, false)
+                    sem_require_at(context, condition.type_id, context.boolean_type, "W2001", location)
+                    let text = "Precondition ('requires') failed in '" + function.name + "'"
+                    let message = sem_node(context, "string", context.string_type, location, text, [], -1, -1)
+                    req_assert_nodes.append(sem_node(context, "call", context.unit_type, location, "contract_assert", [condition.node, message], -1, -1))
+                } else {
+                    ens_start_tokens.append(context.pos)
+                    let scope = sem_enter_scope(context)
+                    let _result = sem_declare(context, "result", sem_success_type(context, context.return_type), false)
+                    let condition = sem_expression(context, 0, false)
+                    sem_require_at(context, condition.type_id, context.boolean_type, "W2001", location)
+                    sem_leave_scope(context, scope)
+                }
+                context.expected_type = expected
+                more = sem_match(context, "COMMA")
             }
         }
         context.pos = contract_pos

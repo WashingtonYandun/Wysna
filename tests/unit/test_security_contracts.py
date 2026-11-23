@@ -76,7 +76,9 @@ print(first.value, second.value, box.items[0])
 @pytest.mark.parametrize('engine', ENGINES)
 @pytest.mark.parametrize('source', [
     'fn f(x: int) -> int requires x > 0 { x }\nprint(f(-1))',
+    'fn f(x: int) -> int requires x > 0,\n x < 10 { x }\nprint(f(11))',
     'fn f(x: int) -> int ensures result > 0 { return x }\nprint(f(-1))',
+    'fn f(x: int) -> int ensures result > 0, result < 10 { x }\nprint(f(11))',
     'fn f(x: int) -> int ensures result > 0 { x }\nprint(f(-1))',
     'struct Box[T] { items: list[T] requires len(items) > 0 }\nlet b = Box[int] { items: [] }\nprint(len(b.items))',
     'struct Positive { value: int requires value > 0 }\nlet good = Positive { value: 1 }\nlet bad = Positive { ..good, value: -1 }\nprint(bad.value)',
@@ -166,8 +168,8 @@ def test_schema_reports_partial_contract_projection(engine, tmp_path, native_wor
 
     path = tmp_path / 'transfer.wysna'
     path.write_text('pub fn withdraw(balance: int, amount: int) -> int\n'
-                    '    requires amount > 0\n'
-                    '    requires balance >= amount\n'
+                    '    requires amount > 0,\n'
+                    '    balance >= amount\n'
                     '    ensures result == balance - amount\n'
                     '{ balance - amount }\n', encoding='utf-8')
     command = ([sys.executable, str(ROOT / 'main.py'), 'schema', '--engine=seed'] if engine == 'seed'

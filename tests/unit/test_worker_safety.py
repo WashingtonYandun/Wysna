@@ -48,6 +48,7 @@ def test_known_pure_worker_callbacks_are_accepted(source, tmp_path):
 UNSAFE_CASES = [
     ('fn work(x: int) -> int { match x { 1 => { print(x) x }, _ => x } }\nalg.parallel_map([1], work)', 'W2015'),
     ('fn guard(x: int) -> bool { print(x) true }\nfn work(x: int) -> int requires guard(x) { x }\nalg.parallel_map([1], work)', 'W2015'),
+    ('fn guard(x: int) -> bool { print(x) true }\nfn work(x: int) -> int requires x > 0, guard(x) { x }\nalg.parallel_map([1], work)', 'W2015'),
     ('fn guard(x: int) -> bool { print(x) true }\nstruct Checked { value: int requires guard(value) }\nfn work(x: int) -> int { Checked { value: x }.value }\nalg.parallel_map([1], work)', 'W2015'),
     ('let limit = 3\nstruct Checked { value: int requires value < limit }\nalg.parallel_map([1], |x: int| { let captured = limit; Checked { value: x + captured - captured }.value })', 'W2015'),
     ('import "std/async" as tasks\nfn work(x: int) -> int? { tasks._take_task_value[int](x, None) }\nalg.parallel_map([1], work)', 'W2015'),
