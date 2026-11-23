@@ -55,6 +55,7 @@ jobs:
           tests/unit/test_target_profiles.py
           tests/unit/test_exit_runtime.py
           tests/unit/test_package_download.py
+          tests/unit/test_isolated_runner.py
           bench/ai_eval/tests/
 
   native-diagnostics:
@@ -880,3 +881,25 @@ jobs:
           name: native-sdk-acceptance-${{ matrix.os }}
           path: native-install-report.json
           if-no-files-found: error
+
+  isolated-linux-sdk:
+    name: Linux SDK in an isolated container
+    needs: native-sdk-build
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - uses: actions/download-artifact@v4
+        with:
+          name: native-sdk-ubuntu-latest
+          path: native-artifact
+      - name: Build the offline SDK image from the Linux archive
+        run: |
+          mkdir installed
+          tar -xzf native-artifact/wysna-native.tar.gz -C installed
+          docker build --quiet --network=none --file packaging/container/Dockerfile installed/wysna-native > linux-sdk-image.txt
+      - name: Verify SDK commands, isolation and cleanup
+        run: python tools/validate_linux_container.py --image "$(cat linux-sdk-image.txt)"
