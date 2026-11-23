@@ -990,7 +990,7 @@ int main(int argc, char** argv) {
     if (options.unsupported_target) {
         char message[512];
         snprintf(message, sizeof(message),
-                 "Target '%s' is unavailable for this command in the Native SDK. Use wysna build --target=wasi for a WASI artifact, or Seed for browser builds and WASI project execution.",
+                 "Target '%s' is unavailable for this command in the Native SDK. Use wysna build --target=wasi for a WASI artifact, or the Seed distribution for browser builds and WASI project execution.",
                  options.unsupported_target);
         if (sdk_has_json_v1(argc, argv)) {
             printf("{\"schema_version\":\"wysna.tool-result/1\",\"command\":");
