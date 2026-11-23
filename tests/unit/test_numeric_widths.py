@@ -148,14 +148,22 @@ def test_c_abi_uses_unsigned_bytes(engine, tmp_path, native_worker_compiler):
     import sys
 
     adapter = tmp_path / 'adapter.c'
-    adapter.write_text('#include <stdint.h>\nuint8_t byte_identity(uint8_t value) { return value; }\n',
-                       encoding='utf-8')
+    adapter.write_text(
+        '#include <stdint.h>\n'
+        '#ifdef _WIN32\n'
+        '#define BYTE_EXPORT __declspec(dllexport)\n'
+        '#else\n'
+        '#define BYTE_EXPORT\n'
+        '#endif\n'
+        'BYTE_EXPORT uint8_t byte_identity(uint8_t value) { return value; }\n',
+        encoding='utf-8',
+    )
     program = 'extern "C" fn byte_identity(value: u8) -> u8\nprint(int(byte_identity(255)))\n'
     if engine == 'interpreter':
         suffix = '.dll' if os.name == 'nt' else '.dylib' if sys.platform == 'darwin' else '.so'
         library = tmp_path / ('adapter' + suffix)
         target = '-dynamiclib' if sys.platform == 'darwin' else '-shared'
-        compiled = subprocess.run([*compiler_command(), target, str(adapter), '-o', str(library)],
+        compiled = subprocess.run([*compiler_command(), '-std=c99', target, str(adapter), '-o', str(library)],
                                   capture_output=True, text=True, timeout=60)
         assert compiled.returncode == 0, compiled.stderr
         source = tmp_path / 'source.wysna'
