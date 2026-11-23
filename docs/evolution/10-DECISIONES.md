@@ -12,7 +12,7 @@ Este documento recoge las **5 decisiones arquitectónicas y de evolución (`ADR-
 | **ADR-01** | [`LANG-04`](03-LENGUAJE.md) | Incorporar los **7 métodos intrínsecos de `str`** (`.trim()`, `.split()`, `.to_lower()`, `.to_upper()`, `.starts_with()`, `.ends_with()`, `.replace()`) ya prometidos en `WYSNA_SINTAXIS.md:660-664`. | Superficie de métodos primitivos en `Seed` y `Selfhost` | Implementado |
 | **ADR-02** | [`GAP-03`](06-BRECHAS.md) | Incorporar **`.remove(key) -> V?` y `.clear() -> void`** en `dict[K, V]` con semántica ARC + Copy-on-Write (`CoW`). | Superficie de colecciones built-in y runtime ARC | Implementado |
 | **ADR-03** | [`LANG-05`](03-LENGUAJE.md) | Canonizar la instanciación de `class` a **`Class(...)` sin keyword `new`** en `wysna fmt` y documentación, manteniendo `new` como alias aceptado en el parser. | Formato canónico y reducción de entropía para agentes | Implementado |
-| **ADR-04** | [`GAP-06`](06-BRECHAS.md) | Compilar los targets WebAssembly (`web` y `wasi`) con el toolchain **`zig cc` (`Zig 0.15.2`) ya empaquetado**, eliminando la dependencia externa obligatoria de `Emscripten 5.0.1` y `wasi-sdk 34`. | Toolchain y empaquetado de targets WebAssembly | Implementado |
+| **ADR-04** | [`GAP-06`](06-BRECHAS.md) | Compilar los targets WebAssembly (`web` y `wasi`) con el toolchain **`zig cc` (`Zig 0.15.2`) ya empaquetado**, eliminando la dependencia externa obligatoria de `Emscripten 5.0.1` y `wasi-sdk 34`. | Toolchain y empaquetado de targets WebAssembly | Selección de target en Seed integrada. Port Zig del SDK diferido por [ADR-05](ADR-05-arquitectura-hibrida-tooling-selfhost.md). |
 
 ---
 

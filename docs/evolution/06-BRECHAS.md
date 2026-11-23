@@ -203,6 +203,12 @@ Siguiendo la regla *"Si integrar una solución existente es técnica y económic
 
 ### `GAP-06` · Soportar compilación Wasm (`wasi-command` y `browser-library`) con el toolchain Zig ya empaquetado y auto-seleccionar target único en `wysna project check`
 
+Estado vigente. Seed conserva WASI y navegador con sus toolchains verificados.
+El SDK nativo informa W2013 y dirige a Seed. La sustitución por Zig empaquetado
+pertenece a R4 y queda diferida después de 1.0 según
+[ADR-05](ADR-05-arquitectura-hibrida-tooling-selfhost.md).
+
+
 - **Prioridad:** P2
 - **Decisión:** SIMPLIFY
 - **Evidencia:** Bloqueos reproducidos en Fase 2 Programa C: [check_v08_manifest.json](evidence/prog_c_wasm/check_v08_manifest.json) (`[W5002] unknown target 'app'` al correr `wysna project check` sobre un manifiesto con `[targets.web]`), [build_web.json](evidence/prog_c_wasm/build_web.json) (`[W5005] Emscripten 5.0.1 was not found`), [src/tooling/ProjectCLI.py:165-210](../../src/tooling/ProjectCLI.py#L165-L210), [src/compiler/WasiToolchain.py:1-94](../../src/compiler/WasiToolchain.py#L1-L94), [src/compiler/BrowserLibraryToolchain.py:1-182](../../src/compiler/BrowserLibraryToolchain.py#L1-L182). Nivel: **verificado**.
@@ -223,13 +229,18 @@ Siguiendo la regla *"Si integrar una solución existente es técnica y económic
 - **Depende de:** Ninguno.
 - **Criterio de aceptación:** `./wysna project check --manifest docs/evolution/evidence/prog_c_wasm/wysna.toml --output-format=json-v1` (sin `--target web`) selecciona automáticamente el único target `web` y devuelve `status: "ok"`.
 - **Requiere aprobación:** sí (para reemplazar Emscripten por `zig cc` en `browser-library`; el fix de auto-selección de target único en `project check` no requiere aprobación; ver `10-DECISIONES.md`).
-- **Estado:** implementado.
+- **Estado:** selección automática integrada. Toolchain Wasm del SDK diferido a R4.
 
 ---
 
 ## 5. Hipótesis (`RESEARCH`)
 
-### `GAP-R01` · Hipótesis: Añadir aserciones no terminantes y runner por funciones `test_*` en `std/test`
+### Propuesta histórica de pruebas por función y aserciones acumuladas
+
+TEST-A01 cerró el descubrimiento por archivo y el reporte por caso. El
+descubrimiento de funciones y las aserciones acumuladas se posponen. El informe
+[GAP-R01](research/GAP-R01-concurrency-arc.md) documenta la investigación
+independiente de concurrencia y ARC.
 
 - **Observación:** Hoy `std/test` (`stdlib/test.wysna:1-20`) solo tiene 3 funciones (`expect`, `expect_equal_int`, `expect_equal_text`) que llaman a `exit(1)` en el primer fallo, deteniendo todo el archivo de test sin ejecutar las demás aserciones.
 - **Cómo falsificarla:** En el uso de `wysna project test` sobre `examples/wysofia-ops` y nuevos proyectos de scripting, medir si añadir `expect_equal_float`, `expect_equal_bool` y un contador de fallos que reporte todas las aserciones fallidas antes de salir con `exit(1)` reduce las rondas de depuración de agentes en `bench/ai_eval/`.

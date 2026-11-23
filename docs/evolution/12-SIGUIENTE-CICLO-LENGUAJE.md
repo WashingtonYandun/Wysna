@@ -101,10 +101,30 @@ Los agentes son el usuario principal. Las mejoras deben permitir descubrir capac
 4. **FUZZ-A01 — Combinaciones y compatibilidad.** Ampliar el generador existente con proyectos multiarchivo, genéricos, errores, closures y async dentro del perfil común. Conservar semillas y reducción de casos; agregar proyectos de referencia de v0.8. Cierre: divergencias reproducibles y minimizadas, rechazos esperados sin `W9999` y contratos CLI/JSON compatibles.
 5. **OPS-A01 — Integración real.** Usar dependencias y pruebas de proyecto en `wysofia-ops`, con escritura segura y rutas de recuperación verificadas. Cierre: flujo completo desde SDK instalado, lock congelado, datos válidos/inválidos y fallos de escritura simulados; el agente obtiene artefactos y diagnósticos verificables.
 
-TEST-A01, PKG-A01, FUZZ-A01 y OPS-A01 están aprobados para implementación; todavía no se presentan como terminados. Cada bloque requiere su propio código, regresiones y evidencia. Se conserva C99 como backend estable, LLVM congelado y el límite explícito entre Seed y el perfil nativo.
+## Estado de entrega del ciclo de proyectos
 
+La arquitectura y los bloques de trabajo quedaron integrados en #176. La
+[publicación de v0.9.0](https://github.com/WashingtonYandun/Wysna/releases/tag/v0.9.0)
+incluyó la aceptación instalada de 102 comprobaciones en macOS y Linux y 95 en
+Windows, más la migración explícita del lock. [Run de publicación](https://github.com/WashingtonYandun/Wysna/actions/runs/45190517517).
 
-## TEST-A01: candidato implementado y validado localmente
+- **TEST-A01 cerrado.** Planes de prueba, selección, JSON, JUnit y fixtures
+  comprobados en ambos perfiles. [Protocolo](../PROJECTS.md#pruebas-para-agentes-de-ia).
+- **PKG-A01 cerrado para USTAR v1.** Selfhost verifica SHA-256 y empaqueta,
+  adquiere, agrega y restaura desde caché. El build congelado conserva el lock.
+  El registro y la resolución de versiones remotas están fuera de ese alcance.
+  [Contrato del SDK](../NATIVE_SDK.md#paquetes-reproducibles-para-agentes).
+- **FUZZ-A01 cerrado como gate.** La campaña multiarchivo y sus regresiones
+  ejecutan los cuatro motores y comprueban rechazos. Divergencias nuevas se
+  gestionan como defectos reproducibles.
+  [Suite](../../tests/unit/test_fuzz_a01_combinations.py).
+- **OPS-A01 cerrado para el flujo probado.** El ejemplo restaura dependencias,
+  prueba el proyecto congelado y cubre inputs válidos, inválidos y fallos de
+  escritura. [Prueba](../../tests/unit/test_ops_a01_workflow.py).
+- **DOC-A01 cerrado para el ciclo.** El índice apunta a la versión publicada,
+  distingue hallazgos de la auditoría inicial e identifica el trabajo abierto.
+
+## Evidencia histórica del candidato TEST-A01
 
 Se implementaron planes `wysna.project-test-plan/1`, IDs exactos, descubrimiento
 optativo, precondición de hash, JSON/JUnit, diagnósticos por caso, captura de 1 MiB

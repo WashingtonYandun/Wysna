@@ -188,7 +188,11 @@ Todos los ítems con esfuerzo **S (<1 día)**, riesgo **bajo** y **sin necesidad
 
 ## 2. Hipótesis (`RESEARCH`)
 
-### `DX-R01` · Hipótesis: Añadir pretty-printer de LLDB/GDB para inspeccionar valores `WVal` NaN-boxed (`8` bytes) en depuradores nativos
+### Propuesta diferida de inspección de WVal en LLDB/GDB
+
+El informe [DX-R01](research/DX-R01-line-directives.md) comprueba localización de
+código fuente mediante `#line`. La inspección del contenido de `WVal` se considera
+una mejora posterior de depuración.
 
 - **Observación:** Al depurar un binario C99 o LLVM con `lldb` o `gdb`, todas las variables no escalares (`str`, `list`, `dict`, `struct`, `enum`, `T?`, `T ! E`) se muestran como `WVal { bits = 18444914486360932352 }` debido a la codificación NaN-boxed de ABI v3 (`runtime/wysna_runtime_core.h:238-270`).
 - **Cómo falsificarla:** Escribir un script de 40 líneas de Python para LLDB (`tools/lldb_wysna.py`) que decodifique los 16 bits superiores (`bits >> 48`) o llame a `wysna_to_cstr(val)` y medir si simplifica el diagnóstico de bugs de runtime/FFI durante el ciclo. Si rara vez se usa `lldb` porque los diagnósticos `[W400x]` con stack trace (**`DX-05`**) bastan, no se empaqueta en el SDK.
