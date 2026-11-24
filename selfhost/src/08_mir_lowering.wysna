@@ -506,18 +506,32 @@ fn mir_is_readonly_runtime(name: str) -> bool {
     )
 }
 
-fn mir_op_is_readonly_use(op: MirOperation) -> bool {
+fn mir_op_is_readonly_use(op: MirOperation, sync_callees: dict[str, bool]) -> bool {
     if op.opcode == "load_field" or op.opcode == "tuple_get" or op.opcode == "iterate_test" or op.opcode == "iterate_value" {
         return true
     }
     if op.opcode == "runtime" {
         return mir_is_readonly_runtime(op.name)
     }
+    if op.opcode == "call" {
+        return sync_callees.contains(op.name)
+    }
     return false
 }
 
-fn mir_optimize_function_local_clones(module: MirModule, fn_: MirFunction) -> MirFunction {
+fn mir_optimize_function_local_clones(module: MirModule, fn_: MirFunction, sync_callees: dict[str, bool]) -> MirFunction {
     if fn_.is_async { return fn_ }
+    let mut has_clone = false
+    for block in fn_.blocks {
+        for op in block.operations {
+            if op.opcode == "clone" {
+                has_clone = true
+                break
+            }
+        }
+        if has_clone { break }
+    }
+    if not has_clone { return fn_ }
     let mut cur = fn_
     let slot_count = len(cur.slots)
     let mut pass = 0
@@ -568,7 +582,7 @@ fn mir_optimize_function_local_clones(module: MirModule, fn_: MirFunction) -> Mi
                         use_block[ix] = -2
                     }
                 }
-                let is_ro = mir_op_is_readonly_use(op)
+                let is_ro = mir_op_is_readonly_use(op, sync_callees)
                 if mir_consumes(op) {
                     for a in op.args {
                         if a >= 0 and a < slot_count { protected[a] = true }
@@ -681,9 +695,15 @@ fn mir_optimize_function_local_clones(module: MirModule, fn_: MirFunction) -> Mi
 }
 
 fn mir_optimize_local_read_clones(module: MirModule) -> MirModule {
+    let mut sync_callees: dict[str, bool] = {}
+    for fn_ in module.functions {
+        if not fn_.is_async {
+            sync_callees[fn_.name] = true
+        }
+    }
     let mut optimized: list[MirFunction] = []
     for fn_ in module.functions {
-        optimized.append(mir_optimize_function_local_clones(module, fn_))
+        optimized.append(mir_optimize_function_local_clones(module, fn_, sync_callees))
     }
     return MirModule { file: module.file, functions: optimized, globals: module.globals, records: module.records, virtual_slots: module.virtual_slots, externs: module.externs, types: module.types, source: module.source }
 }

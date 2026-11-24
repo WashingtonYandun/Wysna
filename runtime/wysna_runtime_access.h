@@ -347,11 +347,9 @@ WYSNA_RT_FN void wysna_list_set_slow_at(WVal* list_val, int64_t idx, WVal owned_
     }
     WListBuf* probe = wysna_as_list(*list_val);
     if (W_UNLIKELY(!probe || idx < 0 || idx >= probe->len)) {
-        int32_t len = probe ? probe->len : 0;
         wysna_release(owned_val);
         wysna_runtime_set_position(file, line, col);
-        wysna_runtime_fail("W4002",
-                           "List index %" PRId64 " out of bounds for length %d", idx, len);
+        wysna_runtime_fail("W4002", "List index out of bounds");
     }
     wysna_list_detach(list_val);
     WListBuf* b = wysna_as_list(*list_val);
