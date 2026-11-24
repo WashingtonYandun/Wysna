@@ -45,6 +45,17 @@ fn mir_verify_runtime(module: MirModule, operation: MirOperation, slots: list[Mi
     if name == "wysna_builtin_slice" {
         return len(operation.args) == 3 and slots[operation.args[0]].type_id == returned and (returned == 5 or module.types[returned].kind == "list") and slots[operation.args[1]].type_id == 3 and slots[operation.args[2]].type_id == 3
     }
+    if name == "wysna_builtin_json_parse" {
+        if len(operation.args) != 6 or not mir_is_result(module.types, returned) { return false }
+        let a0 = slots[operation.args[0]].type_id
+        let a1 = slots[operation.args[1]].type_id
+        let a2 = slots[operation.args[2]].type_id
+        let a3 = slots[operation.args[3]].type_id
+        let a4 = slots[operation.args[4]].type_id
+        let a5 = slots[operation.args[5]].type_id
+        let channel = module.types[returned].args
+        return a0 == 5 and a1 == 3 and a2 == 3 and a3 == 3 and module.types[a4].kind == "enum" and module.types[a5].kind == "struct" and channel[0] == a4 and channel[1] == a5
+    }
     if len(operation.args) == 1 {
         let argument = operation.args[0]
         let type_ = slots[argument].type_id
@@ -87,6 +98,7 @@ fn mir_verify_runtime(module: MirModule, operation: MirOperation, slots: list[Mi
         if name == "wysna_builtin_u8" { return type_ == 3 and mir_is_optional(module.types, returned) and module.types[returned].args[0] == 7 }
         if name == "wysna_builtin_int" { return ((type_ >= 2 and type_ <= 6) or type_ == 7) and returned == 3 }
         if name == "wysna_builtin_float" { return ((type_ >= 2 and type_ <= 6) or type_ == 7) and returned == 4 }
+        if name == "wysna_builtin_json_parse_int" { return type_ == 5 and mir_is_result(module.types, returned) and module.types[returned].args == [3, 5] }
         if name == "wysna_str_trim" or name == "wysna_str_to_lower" or name == "wysna_str_to_upper" { return type_ == 5 and returned == 5 }
         if name == "wysna_await" { return true }
         return false

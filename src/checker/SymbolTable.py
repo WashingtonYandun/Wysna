@@ -137,5 +137,7 @@ def create_global_scope() -> Scope:
 
     scope.define_symbol(Symbol("weak", FunctionType([AnyType()], AnyType()), kind="builtin"))
     scope.define_symbol(Symbol("upgrade", FunctionType([AnyType()], AnyType()), kind="builtin"))
+    scope.define_symbol(Symbol("__wysna_json_parse", FunctionType([StrType, IntType, IntType, IntType, AnyType(), AnyType()], AnyType()), kind="builtin"))
+    scope.define_symbol(Symbol("__wysna_json_parse_int", FunctionType([StrType], ResultType(IntType, StrType)), kind="builtin"))
     return scope
 

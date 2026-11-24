@@ -2449,8 +2449,10 @@ fn module_expand(context: ModuleLoader, src: str, path: str, entry: bool) -> int
     let mut names: list[str] = []
     let mut exports: list[str] = []
     let tokens = tokenize(src, canonical)
+    let allow_json_builtins = canonical == module_canonical(module_stdlib_path("std/json"))
     for token in tokens {
         if token.kind == "IDENT" {
+            if allow_json_builtins and (token.val == "__wysna_json_parse" or token.val == "__wysna_json_parse_int") { continue }
             if (len(token.val) >= 8 and slice(token.val, 0, 8) == "__wysna_") or (len(token.val) >= 7 and slice(token.val, 0, 7) == "_WYSNA_") { report_error_at("W1002", token, "reserved compiler namespace") }
         }
     }
@@ -4127,7 +4129,7 @@ fn sem_collect_record(context: SemanticContext, kind: str) {
     context.type_params = previous_type_params
 }
 fn sem_builtin(name: str) -> bool {
-    if name == "u8" { return true }
+    if name == "u8" or name == "__wysna_json_parse" or name == "__wysna_json_parse_int" { return true }
     return name == "join_strings" or name == "print" or name == "eprint" or name == "len" or name == "int" or name == "float" or name == "str" or name == "ord" or name == "chr" or name == "bytes" or name == "slice" or name == "args" or name == "env" or name == "unix_time" or name == "exit" or name == "enumerate" or name == "dict_items" or name == "read_file" or name == "write_file" or name == "Some" or name == "Ok" or name == "Err" or name == "weak" or name == "upgrade" or name == "contract_assert"
 }
 fn sem_call_builtin(context: SemanticContext, name: str, args: list[int], sources: list[Token], discard: bool) -> int {
@@ -4145,6 +4147,7 @@ fn sem_call_builtin(context: SemanticContext, name: str, args: list[int], source
     let mut arity = 1
     if name == "slice" { arity = 3 }
     if name == "write_file" or name == "join_strings" { arity = 2 }
+    if name == "__wysna_json_parse" { arity = 6 }
     if count != arity { sem_error(context, "W2005", "builtin arity: " + name) }
     if name == "join_strings" {
         if count != 2 { sem_error(context, "W2005", "join_strings arity") }
@@ -4224,6 +4227,19 @@ fn sem_call_builtin(context: SemanticContext, name: str, args: list[int], source
     if name == "dict_items" {
         if kind != "dict" { report_error_at("W2001", sem_source_at(context, sources, 0), "dict_items requires dict") }
         return sem_wrap(context, "list", sem_intern(context, "tuple", "", context.types[first].args))
+    }
+    if name == "__wysna_json_parse" {
+        sem_require_at(context, first, context.string_type, "W2001", sem_source_at(context, sources, 0))
+        sem_require_at(context, args[1], context.integer_type, "W2001", sem_source_at(context, sources, 1))
+        sem_require_at(context, args[2], context.integer_type, "W2001", sem_source_at(context, sources, 2))
+        sem_require_at(context, args[3], context.integer_type, "W2001", sem_source_at(context, sources, 3))
+        if sem_kind(context, args[4]) != "enum" { report_error_at("W2001", sem_source_at(context, sources, 4), "__wysna_json_parse requires enum prototype") }
+        if sem_kind(context, args[5]) != "struct" { report_error_at("W2001", sem_source_at(context, sources, 5), "__wysna_json_parse requires struct error prototype") }
+        return sem_intern(context, "result", "", [args[4], args[5]])
+    }
+    if name == "__wysna_json_parse_int" {
+        sem_require_at(context, first, context.string_type, "W2001", sem_source_at(context, sources, 0))
+        return sem_intern(context, "result", "", [context.integer_type, context.string_type])
     }
     sem_error(context, "W1001", "unknown builtin")
     return context.unit_type
@@ -7343,7 +7359,7 @@ fn worker_children(program: CheckedProgram, node: CheckedNode) -> list[int] {
     return children
 }
 fn worker_pure_builtin(name: str) -> bool {
-    return name == "len" or name == "int" or name == "u8" or name == "float" or name == "str" or name == "bytes" or name == "ord" or name == "chr" or name == "slice" or name == "join_strings" or name == "enumerate" or name == "dict_items" or name == "contract_assert" or name == "Some" or name == "Ok" or name == "Err"
+    return name == "len" or name == "int" or name == "u8" or name == "float" or name == "str" or name == "bytes" or name == "ord" or name == "chr" or name == "slice" or name == "join_strings" or name == "enumerate" or name == "dict_items" or name == "__wysna_json_parse" or name == "__wysna_json_parse_int" or name == "contract_assert" or name == "Some" or name == "Ok" or name == "Err"
 }
 fn worker_global(program: CheckedProgram, binding: int, function: CheckedFunction, source: Token, boundary: Token) {
     if binding >= 0 and program.bindings[binding].global and not worker_has(function.captures, binding) {
@@ -9428,6 +9444,8 @@ fn mir_call(context: MirBuilder, node: CheckedNode) -> int {
     }
     if node.text == "weak" { return mir_op(context, "runtime", returned, arguments, "wysna_builtin_weak_owned", mir_literal_unit(), node.source) }
     if node.text == "contract_assert" or node.text == "__wysna_contract_assert" { return mir_op(context, "runtime", returned, arguments, "wysna_builtin_contract_assert_at", mir_literal_unit(), node.source) }
+    if node.text == "__wysna_json_parse" { return mir_op(context, "runtime", returned, arguments, "wysna_builtin_json_parse", mir_literal_unit(), node.source) }
+    if node.text == "__wysna_json_parse_int" { return mir_op(context, "runtime", returned, arguments, "wysna_builtin_json_parse_int", mir_literal_unit(), node.source) }
     let builtins: list[str] = ["upgrade", "print", "eprint", "int", "u8", "float", "str", "len", "ord", "chr", "slice", "bytes", "args", "env", "unix_time", "join_strings", "enumerate", "dict_items", "read_file", "write_file"]
     for name in builtins { if node.text == name { return mir_op(context, "runtime", returned, arguments, "wysna_builtin_" + name, mir_literal_unit(), node.source) } }
     mir_unsupported(node.source, "builtin call " + node.text)
@@ -9964,6 +9982,17 @@ fn mir_verify_runtime(module: MirModule, operation: MirOperation, slots: list[Mi
     if name == "wysna_builtin_slice" {
         return len(operation.args) == 3 and slots[operation.args[0]].type_id == returned and (returned == 5 or module.types[returned].kind == "list") and slots[operation.args[1]].type_id == 3 and slots[operation.args[2]].type_id == 3
     }
+    if name == "wysna_builtin_json_parse" {
+        if len(operation.args) != 6 or not mir_is_result(module.types, returned) { return false }
+        let a0 = slots[operation.args[0]].type_id
+        let a1 = slots[operation.args[1]].type_id
+        let a2 = slots[operation.args[2]].type_id
+        let a3 = slots[operation.args[3]].type_id
+        let a4 = slots[operation.args[4]].type_id
+        let a5 = slots[operation.args[5]].type_id
+        let channel = module.types[returned].args
+        return a0 == 5 and a1 == 3 and a2 == 3 and a3 == 3 and module.types[a4].kind == "enum" and module.types[a5].kind == "struct" and channel[0] == a4 and channel[1] == a5
+    }
     if len(operation.args) == 1 {
         let argument = operation.args[0]
         let type_ = slots[argument].type_id
@@ -10006,6 +10035,7 @@ fn mir_verify_runtime(module: MirModule, operation: MirOperation, slots: list[Mi
         if name == "wysna_builtin_u8" { return type_ == 3 and mir_is_optional(module.types, returned) and module.types[returned].args[0] == 7 }
         if name == "wysna_builtin_int" { return ((type_ >= 2 and type_ <= 6) or type_ == 7) and returned == 3 }
         if name == "wysna_builtin_float" { return ((type_ >= 2 and type_ <= 6) or type_ == 7) and returned == 4 }
+        if name == "wysna_builtin_json_parse_int" { return type_ == 5 and mir_is_result(module.types, returned) and module.types[returned].args == [3, 5] }
         if name == "wysna_str_trim" or name == "wysna_str_to_lower" or name == "wysna_str_to_upper" { return type_ == 5 and returned == 5 }
         if name == "wysna_await" { return true }
         return false

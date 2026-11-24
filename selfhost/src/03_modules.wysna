@@ -352,8 +352,10 @@ fn module_expand(context: ModuleLoader, src: str, path: str, entry: bool) -> int
     let mut names: list[str] = []
     let mut exports: list[str] = []
     let tokens = tokenize(src, canonical)
+    let allow_json_builtins = canonical == module_canonical(module_stdlib_path("std/json"))
     for token in tokens {
         if token.kind == "IDENT" {
+            if allow_json_builtins and (token.val == "__wysna_json_parse" or token.val == "__wysna_json_parse_int") { continue }
             if (len(token.val) >= 8 and slice(token.val, 0, 8) == "__wysna_") or (len(token.val) >= 7 and slice(token.val, 0, 7) == "_WYSNA_") { report_error_at("W1002", token, "reserved compiler namespace") }
         }
     }

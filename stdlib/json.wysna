@@ -8,373 +8,19 @@ pub struct JsonError {
     message: str,
 }
 
-fn utf8_width(codepoint: int) -> int {
-    if codepoint <= 127 {
-        return 1
-    }
-    if codepoint <= 2047 {
-        return 2
-    }
-    if codepoint <= 65535 {
-        return 3
-    }
-    return 4
-}
-
-fn validate_input_size(source: str, max_input_bytes: int) -> unit ! JsonError {
-    let mut total_bytes = 0
-    let mut index = 0
-    while index < len(source) {
-        let width = utf8_width(ord(source[index]))
-        if total_bytes + width > max_input_bytes {
-            return Err(JsonError { offset: index, message: "maximum JSON input byte limit exceeded" })
-        }
-        total_bytes = total_bytes + width
-        index = index + 1
-    }
-}
-
-fn is_digit(value: str) -> bool {
-    if len(value) != 1 {
-        return false
-    }
-    let codepoint = ord(value)
-    return codepoint >= 48 and codepoint <= 57
-}
-
-fn is_nonzero_digit(value: str) -> bool {
-    if len(value) != 1 {
-        return false
-    }
-    let codepoint = ord(value)
-    return codepoint >= 49 and codepoint <= 57
-}
-
-fn hex_digit(value: str) -> int {
-    if len(value) != 1 {
-        return -1
-    }
-    let codepoint = ord(value)
-    if codepoint >= 48 and codepoint <= 57 {
-        return codepoint - 48
-    }
-    if codepoint >= 65 and codepoint <= 70 {
-        return codepoint - 55
-    }
-    if codepoint >= 97 and codepoint <= 102 {
-        return codepoint - 87
-    }
-    return -1
-}
-
-class Decoder {
-    private source: str
-    private index: int
-    private depth: int
-    private max_depth: int
-    private max_nodes: int
-    private node_count: int
-    public fn init(source: str, max_depth: int, max_nodes: int) -> unit {
-        this.source = source
-        this.index = 0
-        this.depth = 0
-        this.max_depth = max_depth
-        this.max_nodes = max_nodes
-        this.node_count = 0
-    }
-    public fn peek() -> str {
-        if this.index >= len(this.source) {
-            return ""
-        }
-        return this.source[this.index]
-    }
-    public fn take() -> str {
-        if this.index >= len(this.source) {
-            return ""
-        }
-        let value = this.source[this.index]
-        this.index = this.index + 1
-        return value
-    }
-    public fn skip_space() -> unit {
-        while this.index < len(this.source) {
-            let value = this.peek()
-            if value == " " or value == "\t" or value == "\r" or value == "\n" {
-                this.index = this.index + 1
-            } else {
-                break
-            }
-        }
-    }
-    public fn fail(message: str) -> JsonError {
-        return JsonError { offset: this.index, message: message }
-    }
-    public fn reserve_node() -> unit ! JsonError {
-        if this.node_count >= this.max_nodes {
-            return Err(this.fail("maximum JSON value node limit exceeded"))
-        }
-        this.node_count = this.node_count + 1
-    }
-    public fn expect(value: str) -> unit ! JsonError {
-        if this.take() != value {
-            return Err(this.fail("expected '" + value + "'"))
-        }
-    }
-    public fn read_hex4() -> int ! JsonError {
-        let mut value = 0
-        for digit_index in 0..4 {
-            let character = this.take()
-            let digit = hex_digit(character)
-            if digit < 0 {
-                return Err(this.fail("expected four hexadecimal digits"))
-            }
-            value = value * 16 + digit
-        }
-        return value
-    }
-    public fn read_string() -> str ! JsonError {
-        if this.take() != "\"" {
-            return Err(this.fail("expected string"))
-        }
-        let mut parts: list[str] = []
-        while this.index < len(this.source) and this.peek() != "\"" {
-            let value = this.take()
-            if value == "\\" {
-                let escape = this.take()
-                if escape == "\"" {
-                    parts.append("\"")
-                } elif escape == "\\" {
-                    parts.append("\\")
-                } elif escape == "/" {
-                    parts.append("/")
-                } elif escape == "b" {
-                    parts.append(chr(8))
-                } elif escape == "f" {
-                    parts.append(chr(12))
-                } elif escape == "n" {
-                    parts.append("\n")
-                } elif escape == "r" {
-                    parts.append("\r")
-                } elif escape == "t" {
-                    parts.append("\t")
-                } elif escape == "u" {
-                    let first = this.read_hex4()?
-                    let mut codepoint = first
-                    if first >= 55296 and first <= 56319 {
-                        if this.take() != "\\" or this.take() != "u" {
-                            return Err(this.fail("high surrogate must be followed by a low surrogate"))
-                        }
-                        let second = this.read_hex4()?
-                        if second < 56320 or second > 57343 {
-                            return Err(this.fail("high surrogate must be followed by a low surrogate"))
-                        }
-                        codepoint = 65536 + (first - 55296) * 1024 + (second - 56320)
-                    } elif first >= 56320 and first <= 57343 {
-                        return Err(this.fail("unexpected low surrogate"))
-                    }
-                    parts.append(chr(codepoint))
-                } else {
-                    return Err(this.fail("invalid string escape"))
-                }
-            } else {
-                if ord(value) < 32 {
-                    return Err(this.fail("unescaped control character in string"))
-                }
-                parts.append(value)
-            }
-        }
-        if this.index >= len(this.source) {
-            return Err(this.fail("unterminated string"))
-        }
-        this.index = this.index + 1
-        return join_strings(parts, "")
-    }
-    public fn read_literal(expected: str) -> unit ! JsonError {
-        if this.index + len(expected) > len(this.source) or slice(this.source, this.index, this.index + len(expected)) != expected {
-            return Err(this.fail("invalid literal"))
-        }
-        this.index = this.index + len(expected)
-    }
-    public fn read_number() -> str ! JsonError {
-        let start = this.index
-        if this.peek() == "-" {
-            this.index = this.index + 1
-        }
-        if this.peek() == "0" {
-            this.index = this.index + 1
-            if is_digit(this.peek()) {
-                return Err(this.fail("leading zero in number"))
-            }
-        } elif is_nonzero_digit(this.peek()) {
-            while is_digit(this.peek()) {
-                this.index = this.index + 1
-            }
-        } else {
-            return Err(this.fail("expected integer part"))
-        }
-        if this.peek() == "." {
-            this.index = this.index + 1
-            if not is_digit(this.peek()) {
-                return Err(this.fail("expected digit after decimal point"))
-            }
-            while is_digit(this.peek()) {
-                this.index = this.index + 1
-            }
-        }
-        if this.peek() == "e" or this.peek() == "E" {
-            this.index = this.index + 1
-            if this.peek() == "+" or this.peek() == "-" {
-                this.index = this.index + 1
-            }
-            if not is_digit(this.peek()) {
-                return Err(this.fail("expected exponent digits"))
-            }
-            while is_digit(this.peek()) {
-                this.index = this.index + 1
-            }
-        }
-        return slice(this.source, start, this.index)
-    }
-    public fn read_array() -> Value ! JsonError {
-        this.index = this.index + 1
-        this.depth = this.depth + 1
-        if this.depth > this.max_depth {
-            let message = if this.max_depth == 32 {
-                "maximum JSON nesting depth is 32"
-            } else {
-                "maximum JSON nesting depth limit exceeded"
-            }
-            return Err(this.fail(message))
-        }
-        this.skip_space()
-        let mut values: list[Value] = []
-        if this.peek() == "]" {
-            this.index = this.index + 1
-            this.depth = this.depth - 1
-            return Value.Array(values)
-        }
-        while true {
-            values.append(this.read_value()?)
-            this.skip_space()
-            if this.peek() == "]" {
-                this.index = this.index + 1
-                this.depth = this.depth - 1
-                return Value.Array(values)
-            }
-            if this.peek() != "," {
-                return Err(this.fail("expected ',' or ']'"))
-            }
-            this.index = this.index + 1
-            this.skip_space()
-        }
-        return Value.Array(values)
-    }
-    public fn read_object() -> Value ! JsonError {
-        this.index = this.index + 1
-        this.depth = this.depth + 1
-        if this.depth > this.max_depth {
-            let message = if this.max_depth == 32 {
-                "maximum JSON nesting depth is 32"
-            } else {
-                "maximum JSON nesting depth limit exceeded"
-            }
-            return Err(this.fail(message))
-        }
-        this.skip_space()
-        let mut fields: dict[str, Value] = {}
-        if this.peek() == "}" {
-            this.index = this.index + 1
-            this.depth = this.depth - 1
-            return Value.Object(fields)
-        }
-        while true {
-            if this.peek() != "\"" {
-                return Err(this.fail("object key must be a string"))
-            }
-            let key = this.read_string()?
-            this.skip_space()
-            if this.take() != ":" {
-                return Err(this.fail("expected ':' after object key"))
-            }
-            this.skip_space()
-            fields[key] = this.read_value()?
-            this.skip_space()
-            if this.peek() == "}" {
-                this.index = this.index + 1
-                this.depth = this.depth - 1
-                return Value.Object(fields)
-            }
-            if this.peek() != "," {
-                return Err(this.fail("expected ',' or '}'"))
-            }
-            this.index = this.index + 1
-            this.skip_space()
-        }
-        return Value.Object(fields)
-    }
-    public fn read_value() -> Value ! JsonError {
-        this.skip_space()
-        let current = this.peek()
-        if current == "\"" {
-            this.reserve_node()?
-            return Value.String(this.read_string()?)
-        }
-        if current == "{" {
-            this.reserve_node()?
-            return this.read_object()
-        }
-        if current == "[" {
-            this.reserve_node()?
-            return this.read_array()
-        }
-        if current == "t" {
-            this.reserve_node()?
-            this.read_literal("true")?
-            return Value.Bool(true)
-        }
-        if current == "f" {
-            this.reserve_node()?
-            this.read_literal("false")?
-            return Value.Bool(false)
-        }
-        if current == "n" {
-            this.reserve_node()?
-            this.read_literal("null")?
-            return Value.Null
-        }
-        if current == "-" or is_digit(current) {
-            this.reserve_node()?
-            return Value.Number(this.read_number()?)
-        }
-        return Err(this.fail("expected JSON value"))
-    }
-    public fn document() -> Value ! JsonError {
-        this.skip_space()
-        let value = this.read_value()?
-        this.skip_space()
-        if this.index != len(this.source) {
-            return Err(this.fail("trailing characters after JSON value"))
-        }
-        return value
-    }
-}
-
 pub fn parse(source: str) -> Value ! JsonError {
     return parse_with_limits(source, 1048576, 32, 100000)
 }
 
 pub fn parse_with_limits(source: str, max_input_bytes: int, max_depth: int, max_nodes: int) -> Value ! JsonError {
-    if max_input_bytes < 1 or max_input_bytes > 16777216 {
-        return Err(JsonError { offset: 0, message: "max_input_bytes must be between 1 and 16777216" })
-    }
-    if max_depth < 1 or max_depth > 32 {
-        return Err(JsonError { offset: 0, message: "max_depth must be between 1 and 32" })
-    }
-    if max_nodes < 1 or max_nodes > 100000 {
-        return Err(JsonError { offset: 0, message: "max_nodes must be between 1 and 100000" })
-    }
-    validate_input_size(source, max_input_bytes)?
-    return Decoder(source, max_depth, max_nodes).document()
+    return __wysna_json_parse(
+        source,
+        max_input_bytes,
+        max_depth,
+        max_nodes,
+        Value.Null,
+        JsonError { offset: 0, message: "" },
+    )
 }
 
 pub fn null() -> Value {
@@ -630,17 +276,19 @@ pub fn to_object(value: Value) -> dict[str, Value] ! JsonError {
 pub fn to_int(value: Value) -> int ! JsonError {
     match value {
         Value.Number(raw) => {
-            let validated = validate_number(raw)?
-            for index in 0..len(validated) {
-                let ch = validated[index]
-                if ch == "." or ch == "e" or ch == "E" {
-                    return Err(error(index, "expected JSON integer, found JSON number with a fractional or exponent part"))
+            return __wysna_json_parse_int(raw) else _msg {
+                let validated = validate_number(raw)?
+                for index in 0..len(validated) {
+                    let ch = validated[index]
+                    if ch == "." or ch == "e" or ch == "E" {
+                        return Err(error(index, "expected JSON integer, found JSON number with a fractional or exponent part"))
+                    }
                 }
+                let integer = numeric.parse_int(validated) else issue {
+                    return Err(error(issue.offset, issue.message))
+                }
+                return Ok(integer)
             }
-            let integer = numeric.parse_int(validated) else issue {
-                return Err(error(issue.offset, issue.message))
-            }
-            return Ok(integer)
         },
         _ => {
             return Err(type_mismatch(value, "integer"))
@@ -696,19 +344,108 @@ fn convert_field[T](field: Value, key: str, convert: fn(Value) -> T ! JsonError)
 }
 
 pub fn get_str(value: Value, key: str) -> str ! JsonError {
-    return convert_field(get_required(value, key)?, key, to_str)
+    match value {
+        Value.Object(fields) => {
+            match fields.get(key) {
+                None => {
+                    return Err(error(0, field_label(key) + ": missing required JSON field"))
+                },
+                Some(field) => {
+                    return match field {
+                        Value.String(result) => Ok(result),
+                        _ => Err(error(0, field_label(key) + ": " + type_mismatch(field, "string").message)),
+                    }
+                },
+            }
+        },
+        _ => {
+            let issue = type_mismatch(value, "object")
+            return Err(error(issue.offset, field_label(key) + ": " + issue.message))
+        },
+    }
 }
 
 pub fn get_int(value: Value, key: str) -> int ! JsonError {
-    return convert_field(get_required(value, key)?, key, to_int)
+    match value {
+        Value.Object(fields) => {
+            match fields.get(key) {
+                None => {
+                    return Err(error(0, field_label(key) + ": missing required JSON field"))
+                },
+                Some(field) => {
+                    match field {
+                        Value.Number(raw) => {
+                            return __wysna_json_parse_int(raw) else _msg {
+                                return to_int(field) else issue {
+                                    return Err(error(issue.offset, field_label(key) + ": " + issue.message))
+                                }
+                            }
+                        },
+                        _ => {
+                            let issue = type_mismatch(field, "integer")
+                            return Err(error(issue.offset, field_label(key) + ": " + issue.message))
+                        },
+                    }
+                },
+            }
+        },
+        _ => {
+            let issue = type_mismatch(value, "object")
+            return Err(error(issue.offset, field_label(key) + ": " + issue.message))
+        },
+    }
 }
 
 pub fn get_float(value: Value, key: str) -> float ! JsonError {
-    return convert_field(get_required(value, key)?, key, to_float)
+    match value {
+        Value.Object(fields) => {
+            match fields.get(key) {
+                None => {
+                    return Err(error(0, field_label(key) + ": missing required JSON field"))
+                },
+                Some(field) => {
+                    match field {
+                        Value.Number(raw) => {
+                            let validated = validate_number(raw) else issue {
+                                return Err(error(issue.offset, field_label(key) + ": " + issue.message))
+                            }
+                            return Ok(float(validated))
+                        },
+                        _ => {
+                            let issue = type_mismatch(field, "number")
+                            return Err(error(issue.offset, field_label(key) + ": " + issue.message))
+                        },
+                    }
+                },
+            }
+        },
+        _ => {
+            let issue = type_mismatch(value, "object")
+            return Err(error(issue.offset, field_label(key) + ": " + issue.message))
+        },
+    }
 }
 
 pub fn get_bool(value: Value, key: str) -> bool ! JsonError {
-    return convert_field(get_required(value, key)?, key, to_bool)
+    match value {
+        Value.Object(fields) => {
+            match fields.get(key) {
+                None => {
+                    return Err(error(0, field_label(key) + ": missing required JSON field"))
+                },
+                Some(field) => {
+                    return match field {
+                        Value.Bool(result) => Ok(result),
+                        _ => Err(error(0, field_label(key) + ": " + type_mismatch(field, "boolean").message)),
+                    }
+                },
+            }
+        },
+        _ => {
+            let issue = type_mismatch(value, "object")
+            return Err(error(issue.offset, field_label(key) + ": " + issue.message))
+        },
+    }
 }
 
 pub fn get_optional_str(value: Value, key: str) -> str? ! JsonError {

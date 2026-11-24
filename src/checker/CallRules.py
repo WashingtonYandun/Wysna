@@ -698,6 +698,29 @@ def check_builtin_call(checker: "TypeChecker", expr: CallExpr) -> Optional[Wysna
         if not isinstance(a_t, DictType):
             raise TypeError(message=f"dict_items() expects dict, found '{a_t}'", line=expr.line, col=expr.col, file=checker.file, code="W2001")
         return ListType(TupleType([a_t.key, a_t.value]))
+
+    if name == "__wysna_json_parse":
+        if len(expr.args) != 6:
+            raise TypeError(message="__wysna_json_parse() takes exactly 6 arguments", line=expr.line, col=expr.col, file=checker.file, code="W2005")
+        arg_types = [checker._check_expr(arg) for arg in expr.args]
+        if arg_types[0] != StrType:
+            raise TypeError(message=f"__wysna_json_parse() argument 0 expects str, found '{arg_types[0]}'", line=expr.args[0].line, col=expr.args[0].col, file=checker.file, code="W2001")
+        for idx in (1, 2, 3):
+            if arg_types[idx] != IntType:
+                raise TypeError(message=f"__wysna_json_parse() argument {idx} expects int, found '{arg_types[idx]}'", line=expr.args[idx].line, col=expr.args[idx].col, file=checker.file, code="W2001")
+        if not isinstance(arg_types[4], EnumType):
+            raise TypeError(message=f"__wysna_json_parse() argument 4 expects enum Value prototype, found '{arg_types[4]}'", line=expr.args[4].line, col=expr.args[4].col, file=checker.file, code="W2001")
+        if not isinstance(arg_types[5], StructType):
+            raise TypeError(message=f"__wysna_json_parse() argument 5 expects struct error prototype, found '{arg_types[5]}'", line=expr.args[5].line, col=expr.args[5].col, file=checker.file, code="W2001")
+        return ResultType(arg_types[4], arg_types[5])
+
+    if name == "__wysna_json_parse_int":
+        if len(expr.args) != 1:
+            raise TypeError(message="__wysna_json_parse_int() takes exactly 1 argument", line=expr.line, col=expr.col, file=checker.file, code="W2005")
+        a_t = checker._check_expr(expr.args[0])
+        if a_t != StrType:
+            raise TypeError(message=f"__wysna_json_parse_int() expects str, found '{a_t}'", line=expr.args[0].line, col=expr.args[0].col, file=checker.file, code="W2001")
+        return ResultType(IntType, StrType)
     return None
 
 

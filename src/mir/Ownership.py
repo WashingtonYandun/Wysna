@@ -151,6 +151,8 @@ _READONLY_RUNTIME_ARGS = {
     'wysna_dict_keys': (0,),
     'wysna_dict_values': (0,),
     'wysna_builtin_dict_items': (0,),
+    'wysna_builtin_json_parse': (0, 4, 5),
+    'wysna_builtin_json_parse_int': (0,),
     'wysna_builtin_enumerate': (0,),
     'wysna_builtin_slice': (0,),
     'wysna_builtin_str': (0,),
