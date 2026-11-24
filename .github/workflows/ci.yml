@@ -79,7 +79,7 @@ jobs:
       - name: Verify native diagnostics and agent project tests
         run: >-
           python tools/run_ci_parallel.py --mode pytest
-          --group tests/unit/test_agent_project_tests.py,tests/unit/test_block1_dev_split_and_delegation.py,tests/unit/test_native_sandbox_and_lints.py,tests/unit/test_project_packages.py,tests/unit/test_ops_a01_workflow.py
+          --group tests/unit/test_agent_project_tests.py,tests/unit/test_block1_dev_split_and_delegation.py,tests/unit/test_native_sandbox_and_lints.py,tests/unit/test_project_packages.py,tests/unit/test_ops_a01_workflow.py,tests/unit/test_v09_project_migration.py
           tests/unit/test_selfhost_diagnostics.py
           tests/unit/test_native_generic_error_unions.py
           tests/unit/test_host_contracts.py
@@ -96,7 +96,6 @@ jobs:
           tests/unit/test_native_intrinsic_identity.py
           tests/unit/test_runtime_modular_linking.py
           tests/unit/test_native_delegation_profiles.py
-          tests/unit/test_v09_project_migration.py
 
   llvm-smoke:
     name: LLVM backend smoke (${{ matrix.os }})

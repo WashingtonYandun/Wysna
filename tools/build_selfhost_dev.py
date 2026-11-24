@@ -115,6 +115,9 @@ def _runtime_headers() -> list[Path]:
 
 
 def _copy_atomic(src: Path, dst: Path) -> None:
+    # Windows keeps a running executable open without sharing delete access.
+    if dst.is_file() and src.stat().st_mode == dst.stat().st_mode and src.read_bytes() == dst.read_bytes():
+        return
     dst.parent.mkdir(parents=True, exist_ok=True)
     with tempfile.NamedTemporaryFile(dir=dst.parent, prefix=".dev-unit-", delete=False) as tmp:
         tmp_path = Path(tmp.name)

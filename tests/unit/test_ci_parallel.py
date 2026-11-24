@@ -269,3 +269,29 @@ def test_ci_conformance_resolve_jobs_and_deterministic_order(tmp_path: Path, cap
     assert summary["passed_cases"] == 3
     assert summary["total_cases"] == 3
     assert summary["coverage"]["selfhost"]["passed"] == 3
+
+
+def test_cached_sdk_binary_is_not_replaced(tmp_path: Path, monkeypatch):
+    from tools.build_selfhost_dev import _copy_atomic
+
+    source = tmp_path / "cached" / "wysna.exe"
+    destination = tmp_path / "installed" / "wysna.exe"
+    source.parent.mkdir()
+    source.write_bytes(b"original")
+    _copy_atomic(source, destination)
+
+    replaced = []
+    replace = Path.replace
+
+    def record_replacement(temporary, target):
+        replaced.append(target)
+        return replace(temporary, target)
+
+    monkeypatch.setattr(Path, "replace", record_replacement)
+    _copy_atomic(source, destination)
+    assert replaced == []
+
+    source.write_bytes(b"updated")
+    _copy_atomic(source, destination)
+    assert replaced == [destination]
+    assert destination.read_bytes() == b"updated"
