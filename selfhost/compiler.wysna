@@ -15816,12 +15816,14 @@ class SchemaField {
 
 class SchemaStruct {
     name: str
+    file: str
     line: int
     has_type_params: bool
     fields: list[SchemaField]
 
     fn init(name: str, line: int, has_type_params: bool) {
         this.name = name
+        this.file = ""
         this.line = line
         this.has_type_params = has_type_params
         let fs: list[SchemaField] = []
@@ -15842,12 +15844,14 @@ class SchemaVariant {
 
 class SchemaEnum {
     name: str
+    file: str
     line: int
     has_type_params: bool
     variants: list[SchemaVariant]
 
     fn init(name: str, line: int, has_type_params: bool) {
         this.name = name
+        this.file = ""
         this.line = line
         this.has_type_params = has_type_params
         let vs: list[SchemaVariant] = []
@@ -15869,6 +15873,7 @@ class SchemaParam {
 
 class SchemaFn {
     name: str
+    file: str
     line: int
     is_pub: bool
     type_params: list[str]
@@ -15882,6 +15887,7 @@ class SchemaFn {
 
     fn init(name: str, line: int, is_pub: bool) {
         this.name = name
+        this.file = ""
         this.line = line
         this.is_pub = is_pub
         let tp: list[str] = []
@@ -16160,7 +16166,6 @@ fn schema_json_primitive_type(t: SchemaType, known_defs: list[str]) -> str {
         if t.name == "float" { return "number" }
         if t.name == "bool" { return "boolean" }
         if t.name == "unit" or t.name == "none" { return "null" }
-        if not tool_str_contains(known_defs, t.name) { return "string" }
         return ""
     }
     if t.kind == "list" { return "array" }
@@ -16176,7 +16181,7 @@ fn schema_type_to_json(t: SchemaType, known_defs: list[str]) -> str {
         if t.name == "str" { return "{\"type\":\"string\"}" }
         if t.name == "unit" or t.name == "none" { return "{\"type\":\"null\"}" }
         if tool_str_contains(known_defs, t.name) { return "{\"$ref\":" + diag_json_quote("#/$defs/" + t.name) + "}" }
-        return "{\"type\":\"string\",\"x-wysna-type\":" + diag_json_quote(t.name) + "}"
+        return "{\"x-wysna-type\":" + diag_json_quote(t.name) + ",\"x-wysna-unrepresentable\":true}"
     }
     if t.kind == "optional" and len(t.args) == 1 {
         return "{\"anyOf\":[" + schema_type_to_json(t.args[0], known_defs) + ",{\"type\":\"null\"}]}"
@@ -16478,12 +16483,14 @@ fn schema_collect_decls(tokens: list[Token], out: SchemaDeclSet) -> unit {
             continue
         }
         if k == "STRUCT" and c.pos + 1 < len(c.tokens) and c.tokens[c.pos + 1].kind == "IDENT" {
+            let declaration_file = c.tokens[c.pos].file
             let line_1 = c.tokens[c.pos].line
             c.pos = c.pos + 1
             let name = schema_cur_val(c)
             c.pos = c.pos + 1
             let tps = schema_skip_brackets(c)
             let st = SchemaStruct(name, line_1, len(tps) > 0)
+            st.file = declaration_file
             schema_skip_newlines(c)
             if schema_cur_kind(c) == "LBRACE" {
                 c.pos = c.pos + 1
@@ -16534,12 +16541,14 @@ fn schema_collect_decls(tokens: list[Token], out: SchemaDeclSet) -> unit {
             continue
         }
         if k == "ENUM" and c.pos + 1 < len(c.tokens) and c.tokens[c.pos + 1].kind == "IDENT" {
+            let declaration_file = c.tokens[c.pos].file
             let line_1 = c.tokens[c.pos].line
             c.pos = c.pos + 1
             let name = schema_cur_val(c)
             c.pos = c.pos + 1
             let tps = schema_skip_brackets(c)
             let en = SchemaEnum(name, line_1, len(tps) > 0)
+            en.file = declaration_file
             schema_skip_newlines(c)
             if schema_cur_kind(c) == "LBRACE" {
                 c.pos = c.pos + 1
@@ -16578,11 +16587,13 @@ fn schema_collect_decls(tokens: list[Token], out: SchemaDeclSet) -> unit {
                 is_extern = false
                 continue
             }
+            let declaration_file = c.tokens[c.pos].file
             let line_1 = c.tokens[c.pos].line
             c.pos = c.pos + 1
             let name = schema_cur_val(c)
             c.pos = c.pos + 1
             let f = SchemaFn(name, line_1, is_pub)
+            f.file = declaration_file
             f.type_params = schema_skip_brackets(c)
             if schema_cur_kind(c) == "LPAREN" {
                 c.pos = c.pos + 1
@@ -16738,7 +16749,7 @@ fn schema_is_read_only_cap(cap: str) -> bool {
     return cap == "arguments" or cap == "environment" or cap == "clock" or cap == "filesystem.read"
 }
 
-fn schema_tool_json(f: SchemaFn, lines: list[str], known_defs: list[str], graph: ToolGraph) -> str {
+fn schema_tool_json(f: SchemaFn, spelling: SchemaFn, lines: list[str], known_defs: list[str], graph: ToolGraph) -> str {
     let mut pnames: list[str] = []
     let mut pbounds: list[SchemaBound] = []
     for p in f.params {
@@ -16791,8 +16802,8 @@ fn schema_tool_json(f: SchemaFn, lines: list[str], known_defs: list[str], graph:
     let out_json = schema_inject_tail(out_base_j, schema_bound_json_tail(out_bound, out_prim_t, false))
 
     let mut sig_ps: list[str] = []
-    for p in f.params { sig_ps.append(p.name + ": " + schema_type_text(p.t)) }
-    let ret_sig = if f.has_ret { schema_type_text(f.ret) } else { "unit" }
+    for p in spelling.params { sig_ps.append(p.name + ": " + schema_type_text(p.t)) }
+    let ret_sig = if spelling.has_ret { schema_type_text(spelling.ret) } else { "unit" }
     let gen_prefix = if len(f.type_params) > 0 { "[" + join_strings(f.type_params, ", ") + "]" } else { "" }
     let signature = "fn " + f.name + gen_prefix + "(" + join_strings(sig_ps, ", ") + ") -> " + ret_sig
 
@@ -17065,6 +17076,55 @@ fn schema_emit_usage_error(json_mode: bool, msg: str) -> unit {
     exit(2)
 }
 
+fn schema_definition_key(file: str, entry: str, name: str) -> str {
+    if file == entry { return name }
+    let parent = module_directory(entry)
+    let directories = slice(parent, 0, len(parent) - 1).split("/")
+    let destination = file.split("/")
+    let mut shared = 0
+    while shared < len(directories) and shared < len(destination) and directories[shared] == destination[shared] {
+        shared = shared + 1
+    }
+    let mut relative: list[str] = []
+    for i in shared..len(directories) { relative.append("..") }
+    for i in shared..len(destination) { relative.append(destination[i]) }
+    let path = if shared == 0 { file } else { join_strings(relative, "/") }
+    return tool_short_name(name) + "__" + slice(diag_sha256_hex(path), 0, 16)
+}
+
+class SchemaProjection {
+    keys: dict[str, str]
+    needed: dict[str, bool]
+    pending: list[str]
+    fn init(keys: dict[str, str]) {
+        this.keys = keys
+        let needed: dict[str, bool] = {}
+        let pending: list[str] = []
+        this.needed = needed
+        this.pending = pending
+    }
+}
+
+fn schema_register_type(projection: SchemaProjection, name: str) {
+    if name in projection.keys and not (name in projection.needed) {
+        projection.needed[name] = true
+        projection.pending.append(name)
+    }
+}
+
+fn schema_project_type(projection: SchemaProjection, type_: SchemaType) {
+    let original = type_.name
+    schema_register_type(projection, original)
+    type_.name = projection.keys.get(original) ?? original
+    for child in type_.args { schema_project_type(projection, child) }
+}
+
+fn schema_source_lines(file: str, entry: str, lines: list[str]) -> list[str] {
+    if file == entry { return lines }
+    let loaded = module_read_text_or_overlay(file)
+    return schema_split_lines(loaded[1])
+}
+
 fn tool_handle_schema(args: list[str], json_mode_in: bool) -> unit {
     let mut json_mode = json_mode_in
     let mut include_all = false
@@ -17122,24 +17182,6 @@ fn tool_handle_schema(args: list[str], json_mode_in: bool) -> unit {
     let enums = decls.enums
     let fns = decls.fns
 
-    let mut known_defs: list[str] = []
-    for st in structs { known_defs.append(st.name) }
-    for en in enums { known_defs.append(en.name) }
-
-    let mut defs_parts: list[str] = ["{"]
-    let mut def_cnt = 0
-    for st in structs {
-        if def_cnt > 0 { defs_parts.append(",") }
-        def_cnt = def_cnt + 1
-        defs_parts.append(diag_json_quote(st.name) + ":" + schema_struct_def_json(st, lines, known_defs))
-    }
-    for en in enums {
-        if def_cnt > 0 { defs_parts.append(",") }
-        def_cnt = def_cnt + 1
-        defs_parts.append(diag_json_quote(en.name) + ":" + schema_enum_def_json(en, lines, known_defs))
-    }
-    defs_parts.append("}")
-
     let mut selected: list[SchemaFn] = []
     if has_fn_filter {
         for f in fns {
@@ -17168,16 +17210,78 @@ fn tool_handle_schema(args: list[str], json_mode_in: bool) -> unit {
         }
     }
 
-    let mut tools_parts: list[str] = ["["]
-    for idx in 0..len(selected) {
-        if idx > 0 { tools_parts.append(",") }
-        tools_parts.append(schema_tool_json(selected[idx], lines, known_defs, graph))
+    let linked = SchemaDeclSet()
+    let expanded = module_tokens(src, canonical)
+    schema_collect_decls(slice(expanded, 1, len(expanded)), linked)
+    let mut keys: dict[str, str] = {}
+    let mut structs_by_name: dict[str, int] = {}
+    let mut enums_by_name: dict[str, int] = {}
+    let mut entry_functions: dict[str, int] = {}
+    for i in 0..len(linked.structs) {
+        let st = linked.structs[i]
+        keys[st.name] = schema_definition_key(st.file, canonical, st.name)
+        structs_by_name[st.name] = i
     }
-    tools_parts.append("]")
+    for i in 0..len(linked.enums) {
+        let en = linked.enums[i]
+        keys[en.name] = schema_definition_key(en.file, canonical, en.name)
+        enums_by_name[en.name] = i
+    }
+    for i in 0..len(linked.fns) {
+        if linked.fns[i].file == canonical { entry_functions[linked.fns[i].name] = i }
+    }
+    let projection = SchemaProjection(keys)
+    for st in structs { schema_register_type(projection, st.name) }
+    for en in enums { schema_register_type(projection, en.name) }
+    let mut resolved_fns: list[SchemaFn] = []
+    for spelling in selected {
+        let index = entry_functions.get(spelling.name) else {
+            report_error(file, "W9999", spelling.line, 1, "checked schema declaration is missing: " + spelling.name)
+            -1
+        }
+        let f = linked.fns[index]
+        for param in f.params { schema_project_type(projection, param.t) }
+        schema_project_type(projection, f.ret)
+        resolved_fns.append(f)
+    }
+    let mut cursor = 0
+    while cursor < len(projection.pending) {
+        let name = projection.pending[cursor]
+        let st = structs_by_name.get(name) ?? -1
+        if st >= 0 {
+            for field in linked.structs[st].fields { schema_project_type(projection, field.t) }
+        } else {
+            let en = enums_by_name[name]
+            for variant in linked.enums[en].variants {
+                for payload in variant.payloads { schema_project_type(projection, payload) }
+            }
+        }
+        cursor = cursor + 1
+    }
+    let mut known_defs: list[str] = []
+    for name in projection.pending { known_defs.append(keys[name]) }
+    let mut defs_parts: list[str] = []
+    for name in projection.pending {
+        let st = structs_by_name.get(name) ?? -1
+        let prefix = diag_json_quote(keys[name]) + ":"
+        if st >= 0 {
+            let item = linked.structs[st]
+            defs_parts.append(prefix + schema_struct_def_json(item, schema_source_lines(item.file, canonical, lines), known_defs))
+        } else {
+            let item = linked.enums[enums_by_name[name]]
+            defs_parts.append(prefix + schema_enum_def_json(item, schema_source_lines(item.file, canonical, lines), known_defs))
+        }
+    }
+    let mut tools_parts: list[str] = []
+    for idx in 0..len(selected) {
+        tools_parts.append(schema_tool_json(resolved_fns[idx], selected[idx], lines, known_defs, graph))
+    }
+    let definitions = "{" + join_strings(defs_parts, ",") + "}"
+    let tools = "[" + join_strings(tools_parts, ",") + "]"
 
     let codecs_src = if emit_codecs { schema_generate_codecs(structs, enums, known_defs) } else { "" }
     let codecs_field = if emit_codecs { ",\"codecs_source\":" + diag_json_quote(codecs_src) } else { "" }
-    let payload_json = ("{\"schema_version\":\"wysna.schema/1\",\"compiler_version\":\"" + tool_compiler_version() + "\",\"$schema\":\"https://json-schema.org/draft/2020-12/schema\",\"$defs\":") + join_strings(defs_parts, "") + ",\"tools\":" + join_strings(tools_parts, "") + codecs_field + "}"
+    let payload_json = ("{\"schema_version\":\"wysna.schema/1\",\"compiler_version\":\"" + tool_compiler_version() + "\",\"$schema\":\"https://json-schema.org/draft/2020-12/schema\",\"$defs\":") + definitions + ",\"tools\":" + tools + codecs_field + "}"
 
     if out_path != "" {
         let out_content = if emit_codecs and not json_mode { codecs_src } else { payload_json + "\n" }
