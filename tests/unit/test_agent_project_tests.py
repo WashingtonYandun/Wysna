@@ -24,7 +24,7 @@ def project(tmp_path, source='print("hello")\n'):
 
 
 def machine(root, *arguments):
-    result = run_cli(root, 'project', 'test', '--output-format=json-v1', *arguments)
+    result = run_cli(root, 'project', 'test', '--engine=seed', '--output-format=json-v1', *arguments)
     payload = json.loads(result.stdout)
     assert payload['schema_version'] == 'wysna.tool-result/1'
     assert result.stderr == ''
