@@ -52,10 +52,12 @@ and `fixes`:
   byte offsets into the source identified by `source_id`; verify `source_sha256`
   before editing that snapshot. Do not treat byte offsets as Unicode character
   indexes, and do not guess a location when `primary_span` is absent.
-- `data` carries structured machine facts (`expected`, `found`, `conversion_hint`,
-  `unwrap_hint`, `missing_field`, `help`).
-- `related` points to secondary source spans (such as the immutable `let`
-  declaration on `W3001` or the prior declaration on `W1002`).
+- `data` carries structured machine facts (`expected`, `found`, `context`,
+  `argument_index`, `parameter_name`, `callee`, `expected_arity`,
+  `found_arity`, `conversion_hint`, `unwrap_hint`, `missing_field`, `help`)
+  described by [wysna-tool-result.v1.schema.json](../schemas/wysna-tool-result.v1.schema.json).
+- `related` points to secondary source spans (such as the callee declaration on
+  `W2001`/`W2005`, immutable `let` on `W3001`, or prior declaration on `W1002`).
 - `fixes` contains SHA-256-guarded byte-range edits (`applicability: "machine"` or
   `"maybe"`). Run `wysna fix --apply --output-format=json-v1 <file.wysna>` before
   spending an LLM repair turn for automatic repair of identifier/field typos,
@@ -92,10 +94,13 @@ the standalone SDK / Selfhost Stage-2+ toolchain:
 ```sh
 wysna graph src/main.wysna --output-format=json-v1
 wysna graph src/main.wysna --symbol Service --rel impact --output-format=json-v1
-wysna inspect src/main.wysna --symbol run_pipeline --with-deps --output-format=json-v1
+wysna inspect src/main.wysna --symbol run_pipeline --with-deps --max-bytes 2048 --output-format=json-v1
 wysna patch src/main.wysna --symbol Service.run --expect-graph-hash graph:... --with "..." --apply --output-format=json-v1
+wysna patch --manifest wysna.toml --edits changes.json --apply --expect-plan-hash HASH --output-format=json-v1
 wysna lsp
 ```
+
+`wysna inspect` enforces UTF-8 byte budgets via `--max-bytes` (`--source-offset` / `--offset`), returns resumable fetch handles in `omitted[].ref`, and surfaces `call_resolution` plus `analysis_boundaries` (`virtual-dispatch`, `indirect-call`, `c-ffi`) across `graph` and `inspect`. Both Seed and the Native SDK (`patch --manifest ... --edits ...` and `wysna_patch` MCP) support checked multi-file workspace patches with unified diffs, impact selection, plan-hash validation (`W5005`), and staged atomic commit/rollback.
 
 `wysna patch` rejects stale `graph:...` hashes with `W5005` and verifies types in
 memory before mutating disk. When applying edits via Seed CLI or MCP (`wysna patch --apply`
