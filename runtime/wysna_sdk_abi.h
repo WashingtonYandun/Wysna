@@ -156,6 +156,10 @@ typedef struct WysnaRuntimeContext {
 #ifdef _WIN32
     bool argv_allocated;
 #endif
+    WBoxBuf* box_pool[16];
+    int32_t box_pool_len;
+    WEnumBuf* enum_pool[16];
+    int32_t enum_pool_len;
 } WysnaRuntimeContext;
 
 #if defined(__wasi__) && !defined(__wasm_threads__)
@@ -359,7 +363,7 @@ extern void wysna_set_vtable(WVal obj, const WClassVTable* table);
 extern bool wysna_value_is_error_type(WVal value, const char* kind, const char* name);
 extern WVal wysna_virtual_call(WVal receiver, int32_t slot, int32_t argc, const WVal* argv);
 extern int32_t wysna_ffi_int32(WVal value);
-extern WVal wysna_str_n(const char* s, size_t length);
+extern WVal wysna_str_n_cstr(const char* s, size_t length);
 extern WVal wysna_copy_str_n(const char* data, size_t length);
 extern WVal wysna_literal_str_n(WStringLiteral* literal, const char* data, size_t length);
 extern WVal wysna_str(const char* s);
@@ -432,15 +436,7 @@ extern WVal wysna_member_get(WVal obj, const char* prop);
 extern WVal* wysna_member_ref(WVal* obj, const char* prop);
 extern WVal wysna_tuple_get_at(WVal value, int32_t index, const char* file, int32_t line, int32_t col);
 extern WVal wysna_tuple_get_owned_at(WVal value, int32_t index, const char* file, int32_t line, int32_t col);
-extern int32_t wysna_list_iteration_length_at(WVal value, const char* file, int32_t line, int32_t col);
-extern WVal wysna_list_iteration_get_at(WVal value, int32_t index, const char* file, int32_t line, int32_t col);
-extern WVal wysna_list_iteration_get_owned_at(WVal value, int32_t index, const char* file, int32_t line, int32_t col);
-extern int64_t wysna_list_get_int_at(WVal obj, int64_t idx, const char* file, int32_t line, int32_t col);
-extern double wysna_list_get_float_at(WVal obj, int64_t idx, const char* file, int32_t line, int32_t col);
-extern bool wysna_list_get_bool_at(WVal obj, int64_t idx, const char* file, int32_t line, int32_t col);
-extern int64_t wysna_list_iteration_get_int_at(WVal value, int32_t index, const char* file, int32_t line, int32_t col);
-extern double wysna_list_iteration_get_float_at(WVal value, int32_t index, const char* file, int32_t line, int32_t col);
-extern bool wysna_list_iteration_get_bool_at(WVal value, int32_t index, const char* file, int32_t line, int32_t col);
+extern WYSNA_NORETURN void wysna_list_iteration_fail_at(const char* code, const char* message, const char* file, int32_t line, int32_t col);
 extern WVal* wysna_field_ref_at(WVal* object, int32_t index);
 extern WVal wysna_enum_payload_owned(WVal value);
 extern WVal wysna_list_append(WVal* list_val, WVal item);
@@ -917,6 +913,12 @@ static inline const char* wysna_str_bytes(WVal v, char scratch[7], size_t* out_l
     return "";
 }
 
+static inline WVal wysna_str_n(const char* s, size_t length) {
+    if (!s || length == 0) return wysna_sso_from_n("", 0);
+    if (length <= 6) return wysna_sso_from_n(s, length);
+    return wysna_str_n_cstr(s, length);
+}
+
 static inline bool wysna_val64_is_double(WVal64 w) { return wysna_is_double(w); }
 static inline bool wysna_val64_is_int(WVal64 w) { return wysna_hi(w) == WVAL_HI_INT; }
 static inline int64_t wysna_val64_as_int(WVal64 w) { return wysna_as_int(w); }
@@ -1008,6 +1010,60 @@ static inline WVal wysna_field_get_at(WVal object, int32_t index) {
     if (!st || index < 0 || index >= st->len)
         wysna_runtime_fail("W4003", "Invalid physical field read");
     return st->vals[index];
+}
+
+static inline int32_t wysna_list_iteration_length_at(WVal value, const char* file, int32_t line, int32_t col) {
+    WListBuf* b = wysna_as_list(value);
+    if (W_UNLIKELY(!b)) wysna_list_iteration_fail_at("W4003", "For loop requires a list value", file, line, col);
+    return b->len;
+}
+
+static inline WVal wysna_list_iteration_get_at(WVal value, int32_t index, const char* file, int32_t line, int32_t col) {
+    WListBuf* b = wysna_as_list(value);
+    if (W_UNLIKELY(!b)) wysna_list_iteration_fail_at("W4003", "For loop requires a list value", file, line, col);
+    if (W_UNLIKELY(index < 0 || index >= b->len))
+        wysna_list_iteration_fail_at("W4002", "List index out of bounds", file, line, col);
+    return wysna_list_load(b, index);
+}
+
+static inline WVal wysna_list_iteration_get_owned_at(WVal value, int32_t index, const char* file, int32_t line, int32_t col) {
+    return wysna_clone(wysna_list_iteration_get_at(value, index, file, line, col));
+}
+
+static inline int64_t wysna_list_get_int_at(WVal obj, int64_t idx, const char* file, int32_t line, int32_t col) {
+    WListBuf* b = wysna_as_list(obj);
+    if (W_UNLIKELY(!b || idx < 0 || idx >= b->len)) {
+        wysna_list_iteration_fail_at("W4002", "List index out of bounds", file, line, col);
+    }
+    return wysna_as_int(wysna_list_load(b, (int32_t)idx));
+}
+
+static inline double wysna_list_get_float_at(WVal obj, int64_t idx, const char* file, int32_t line, int32_t col) {
+    WListBuf* b = wysna_as_list(obj);
+    if (W_UNLIKELY(!b || idx < 0 || idx >= b->len)) {
+        wysna_list_iteration_fail_at("W4002", "List index out of bounds", file, line, col);
+    }
+    return wysna_as_float(wysna_list_load(b, (int32_t)idx));
+}
+
+static inline bool wysna_list_get_bool_at(WVal obj, int64_t idx, const char* file, int32_t line, int32_t col) {
+    WListBuf* b = wysna_as_list(obj);
+    if (W_UNLIKELY(!b || idx < 0 || idx >= b->len)) {
+        wysna_list_iteration_fail_at("W4002", "List index out of bounds", file, line, col);
+    }
+    return wysna_as_bool(wysna_list_load(b, (int32_t)idx));
+}
+
+static inline int64_t wysna_list_iteration_get_int_at(WVal value, int32_t index, const char* file, int32_t line, int32_t col) {
+    return wysna_as_int(wysna_list_iteration_get_at(value, index, file, line, col));
+}
+
+static inline double wysna_list_iteration_get_float_at(WVal value, int32_t index, const char* file, int32_t line, int32_t col) {
+    return wysna_as_float(wysna_list_iteration_get_at(value, index, file, line, col));
+}
+
+static inline bool wysna_list_iteration_get_bool_at(WVal value, int32_t index, const char* file, int32_t line, int32_t col) {
+    return wysna_as_bool(wysna_list_iteration_get_at(value, index, file, line, col));
 }
 
 static inline WVal wysna_not(WVal value) { return wysna_bool(!wysna_as_bool(value)); }

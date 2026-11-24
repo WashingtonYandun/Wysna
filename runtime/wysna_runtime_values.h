@@ -380,13 +380,18 @@ static inline const char* wysna_str_bytes(WVal v, char scratch[7], size_t* out_l
     return "";
 }
 
-WYSNA_RT_FN WVal wysna_str_n(const char* s, size_t length) {
-    if (!s) length = 0;
-    if (length <= 6) return wysna_sso_from_n(s ? s : "", length);
+WYSNA_RT_FN WVal wysna_str_n_cstr(const char* s, size_t length) {
+    if (!s) return wysna_sso_from_n("", 0);
     if (memchr(s, '\0', length) != NULL || s[length] != '\0') {
         wysna_runtime_fail("W4003", "Unowned string > 6 bytes with embedded NUL requires WStringLiteral");
     }
     return wysna_make_hi_ptr(WVAL_HI_CSTR, s);
+}
+
+static inline WVal wysna_str_n(const char* s, size_t length) {
+    if (!s || length == 0) return wysna_sso_from_n("", 0);
+    if (length <= 6) return wysna_sso_from_n(s, length);
+    return wysna_str_n_cstr(s, length);
 }
 
 WYSNA_RT_FN WVal wysna_copy_str_n(const char* data, size_t length);
@@ -457,6 +462,12 @@ WYSNA_RT_FN WVal wysna_ok(WVal inner);
 WYSNA_RT_FN WVal wysna_err(WVal inner);
 
 WYSNA_RT_FN bool wysna_builtin_name(const char* name, const char* base) {
+    if (name == base) return true;
+    if (!name || !base) return false;
+    if (name[0] != base[0]) {
+        return (name[0] == '\0' && base[0] == '_' && base[1] == '_') ||
+               (base[0] == '\0' && name[0] == '_' && name[1] == '_');
+    }
     if (strcmp(name, base) == 0) return true;
     const char* p1 = strstr(name, "__");
     const char* p2 = strstr(base, "__");
@@ -470,13 +481,38 @@ WYSNA_RT_FN bool wysna_builtin_name(const char* name, const char* base) {
     return false;
 }
 
+static inline WEnumBuf* wysna_alloc_enum_buf(void) {
+#if !defined(WYSNA_HAS_ASAN)
+    if (W_LIKELY(wysna_runtime_context.quotas_initialized &&
+                 !wysna_runtime_context.multi_threaded &&
+                 wysna_runtime_context.max_heap_bytes == 0 &&
+                 wysna_runtime_context.enum_pool_len > 0)) {
+        return wysna_runtime_context.enum_pool[--wysna_runtime_context.enum_pool_len];
+    }
+#endif
+    return (WEnumBuf*)wysna_alloc_safe(sizeof(WEnumBuf));
+}
+
+static inline WBoxBuf* wysna_alloc_box_buf(void) {
+#if !defined(WYSNA_HAS_ASAN)
+    if (W_LIKELY(wysna_runtime_context.quotas_initialized &&
+                 !wysna_runtime_context.multi_threaded &&
+                 wysna_runtime_context.max_heap_bytes == 0 &&
+                 wysna_runtime_context.box_pool_len > 0)) {
+        return wysna_runtime_context.box_pool[--wysna_runtime_context.box_pool_len];
+    }
+#endif
+    return (WBoxBuf*)wysna_alloc_safe(sizeof(WBoxBuf));
+}
+
 WYSNA_RT_FN WVal wysna_enum_literal(WEnumBuf* literal, const char* enum_name, const char* variant) {
-    if (wysna_builtin_name(enum_name, "Option") && strcmp(variant, "None") == 0) return wysna_none();
+    bool is_option = enum_name && enum_name[0] == 'O' && wysna_builtin_name(enum_name, "Option");
+    if (is_option && strcmp(variant, "None") == 0) return wysna_none();
     if (wysna_rc_load(&literal->refcount) == 0) {
         if (wysna_runtime_context.multi_threaded) wysna_spinlock_acquire(&wysna_runtime_context.runtime_lock);
         if (literal->refcount == 0) {
             literal->has_payload = false;
-            literal->enum_name = wysna_builtin_name(enum_name, "Option") ? "Option" : enum_name;
+            literal->enum_name = is_option ? "Option" : enum_name;
             literal->variant = variant;
             literal->payload = wysna_unit();
             wysna_rc_store(&literal->refcount, -1);
@@ -487,11 +523,12 @@ WYSNA_RT_FN WVal wysna_enum_literal(WEnumBuf* literal, const char* enum_name, co
 }
 
 WYSNA_RT_FN WVal wysna_enum(const char* enum_name, const char* variant) {
-    if (wysna_builtin_name(enum_name, "Option") && strcmp(variant, "None") == 0) return wysna_none();
-    WEnumBuf* en = (WEnumBuf*)wysna_alloc_safe(sizeof(WEnumBuf));
+    bool is_option = enum_name && enum_name[0] == 'O' && wysna_builtin_name(enum_name, "Option");
+    if (is_option && strcmp(variant, "None") == 0) return wysna_none();
+    WEnumBuf* en = wysna_alloc_enum_buf();
     en->refcount = 1;
     en->has_payload = false;
-    en->enum_name = wysna_builtin_name(enum_name, "Option") ? "Option" : enum_name;
+    en->enum_name = is_option ? "Option" : enum_name;
     en->variant = variant;
     en->payload = wysna_unit();
     wysna_mem_on_alloc();
@@ -499,14 +536,14 @@ WYSNA_RT_FN WVal wysna_enum(const char* enum_name, const char* variant) {
 }
 
 WYSNA_RT_FN WVal wysna_enum_payload(const char* enum_name, const char* variant, WVal payload) {
-    if (wysna_builtin_name(enum_name, "Result")) {
-        if (strcmp(variant, "Ok") == 0) return wysna_ok(payload);
-        if (strcmp(variant, "Err") == 0) return wysna_err(payload);
+    if (enum_name && enum_name[0] == 'R' && wysna_builtin_name(enum_name, "Result")) {
+        if (variant && variant[0] == 'O' && strcmp(variant, "Ok") == 0) return wysna_ok(payload);
+        if (variant && variant[0] == 'E' && strcmp(variant, "Err") == 0) return wysna_err(payload);
     }
-    WEnumBuf* en = (WEnumBuf*)wysna_alloc_safe(sizeof(WEnumBuf));
+    WEnumBuf* en = wysna_alloc_enum_buf();
     en->refcount = 1;
     en->has_payload = true;
-    en->enum_name = wysna_builtin_name(enum_name, "Option") ? "Option" : enum_name;
+    en->enum_name = (enum_name && enum_name[0] == 'O' && wysna_builtin_name(enum_name, "Option")) ? "Option" : enum_name;
     en->variant = variant;
     en->payload = payload;
     wysna_mem_on_alloc();
@@ -514,7 +551,7 @@ WYSNA_RT_FN WVal wysna_enum_payload(const char* enum_name, const char* variant, 
 }
 
 WYSNA_RT_FN WVal wysna_make_box(uint64_t hi, WVal inner) {
-    WBoxBuf* b = (WBoxBuf*)wysna_alloc_safe(sizeof(WBoxBuf));
+    WBoxBuf* b = wysna_alloc_box_buf();
     b->refcount = 1;
     b->val = inner;
     wysna_mem_on_alloc();

@@ -219,6 +219,10 @@ typedef struct WysnaRuntimeContext {
 #ifdef _WIN32
     bool argv_allocated;
 #endif
+    WBoxBuf* box_pool[16];
+    int32_t box_pool_len;
+    WEnumBuf* enum_pool[16];
+    int32_t enum_pool_len;
 } WysnaRuntimeContext;
 
 WYSNA_RT_FN int64_t wysna_collect_cycles(void);
@@ -662,7 +666,9 @@ WYSNA_RT_FN void wysna_charge_heap_bytes(size_t size) {
 
 WYSNA_RT_FN void* wysna_alloc_safe(size_t size) {
     if (size == 0) return NULL;
-    wysna_charge_heap_bytes(size);
+    if (W_UNLIKELY(!wysna_runtime_context.quotas_initialized || wysna_runtime_context.max_heap_bytes > 0)) {
+        wysna_charge_heap_bytes(size);
+    }
     void* ptr = malloc(size);
     if (!ptr) {
         wysna_runtime_fail_unlocated("W4003", "Out of memory (failed to allocate %zu bytes)", size);
@@ -675,7 +681,9 @@ WYSNA_RT_FN void* wysna_realloc_safe(void* old_ptr, size_t new_size) {
         free(old_ptr);
         return NULL;
     }
-    wysna_charge_heap_bytes(new_size);
+    if (W_UNLIKELY(!wysna_runtime_context.quotas_initialized || wysna_runtime_context.max_heap_bytes > 0)) {
+        wysna_charge_heap_bytes(new_size);
+    }
     void* ptr = realloc(old_ptr, new_size);
     if (!ptr) {
         wysna_runtime_fail_unlocated("W4003", "Out of memory (failed to reallocate %zu bytes)", new_size);
@@ -721,6 +729,16 @@ WYSNA_RT_FN void wysna_runtime_cleanup_impl(bool verify_live_objects) {
         wysna_runtime_context.purple_head->buffered = false;
         wysna_runtime_context.purple_head = next;
     }
+    for (int32_t i = 0; i < wysna_runtime_context.box_pool_len; i++) {
+        free(wysna_runtime_context.box_pool[i]);
+        wysna_runtime_context.box_pool[i] = NULL;
+    }
+    wysna_runtime_context.box_pool_len = 0;
+    for (int32_t i = 0; i < wysna_runtime_context.enum_pool_len; i++) {
+        free(wysna_runtime_context.enum_pool[i]);
+        wysna_runtime_context.enum_pool[i] = NULL;
+    }
+    wysna_runtime_context.enum_pool_len = 0;
     const char* stats_env = getenv("WYSNA_MEM_STATS");
     if (stats_env && strcmp(stats_env, "1") == 0) {
         fprintf(stderr, "[WYSNA_MEM_STATS] alloc=%" PRId64 " free=%" PRId64 " retain=%" PRId64 " release=%" PRId64 " live=%" PRId64 "\n",

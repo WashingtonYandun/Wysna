@@ -178,67 +178,71 @@ WYSNA_RT_FN WVal wysna_tuple_get_owned_at(WVal value, int32_t index,
                                            const char* file, int32_t line, int32_t col) {
     return wysna_clone(wysna_tuple_get_at(value, index, file, line, col));
 }
-WYSNA_RT_FN int32_t wysna_list_iteration_length_at(WVal value,
-                                                    const char* file, int32_t line, int32_t col) {
+WYSNA_RT_FN WYSNA_NORETURN void wysna_list_iteration_fail_at(
+    const char* code, const char* message, const char* file, int32_t line, int32_t col
+) {
     wysna_runtime_set_position(file, line, col);
+    wysna_runtime_fail(code, "%s", message);
+}
+
+static inline int32_t wysna_list_iteration_length_at(WVal value,
+                                                     const char* file, int32_t line, int32_t col) {
     WListBuf* b = wysna_as_list(value);
-    if (!b) wysna_runtime_fail("W4003", "For loop requires a list value");
+    if (W_UNLIKELY(!b)) wysna_list_iteration_fail_at("W4003", "For loop requires a list value", file, line, col);
     return b->len;
 }
-WYSNA_RT_FN WVal wysna_list_iteration_get_at(WVal value, int32_t index,
-                                              const char* file, int32_t line, int32_t col) {
-    int32_t length = wysna_list_iteration_length_at(value, file, line, col);
-    if (index < 0 || index >= length)
-        wysna_runtime_fail("W4002", "List index out of bounds");
-    return wysna_list_load(wysna_as_list(value), index);
+static inline WVal wysna_list_iteration_get_at(WVal value, int32_t index,
+                                               const char* file, int32_t line, int32_t col) {
+    WListBuf* b = wysna_as_list(value);
+    if (W_UNLIKELY(!b)) wysna_list_iteration_fail_at("W4003", "For loop requires a list value", file, line, col);
+    if (W_UNLIKELY(index < 0 || index >= b->len))
+        wysna_list_iteration_fail_at("W4002", "List index out of bounds", file, line, col);
+    return wysna_list_load(b, index);
 }
-WYSNA_RT_FN WVal wysna_list_iteration_get_owned_at(WVal value, int32_t index,
-                                                    const char* file, int32_t line, int32_t col) {
+static inline WVal wysna_list_iteration_get_owned_at(WVal value, int32_t index,
+                                                     const char* file, int32_t line, int32_t col) {
     return wysna_clone(wysna_list_iteration_get_at(value, index, file, line, col));
 }
 
 /* W03: Unboxed scalar list accessors (zero retain/release, zero allocation) */
-WYSNA_RT_FN int64_t wysna_list_get_int_at(WVal obj, int64_t idx,
+static inline int64_t wysna_list_get_int_at(WVal obj, int64_t idx,
                                             const char* file, int32_t line, int32_t col) {
-    wysna_runtime_set_position(file, line, col);
     WListBuf* b = wysna_as_list(obj);
-    if (!b || idx < 0 || idx >= b->len) {
-        wysna_runtime_fail("W4002", "List index out of bounds");
+    if (W_UNLIKELY(!b || idx < 0 || idx >= b->len)) {
+        wysna_list_iteration_fail_at("W4002", "List index out of bounds", file, line, col);
     }
     return wysna_as_int(wysna_list_load(b, (int32_t)idx));
 }
 
-WYSNA_RT_FN double wysna_list_get_float_at(WVal obj, int64_t idx,
+static inline double wysna_list_get_float_at(WVal obj, int64_t idx,
                                              const char* file, int32_t line, int32_t col) {
-    wysna_runtime_set_position(file, line, col);
     WListBuf* b = wysna_as_list(obj);
-    if (!b || idx < 0 || idx >= b->len) {
-        wysna_runtime_fail("W4002", "List index out of bounds");
+    if (W_UNLIKELY(!b || idx < 0 || idx >= b->len)) {
+        wysna_list_iteration_fail_at("W4002", "List index out of bounds", file, line, col);
     }
     return wysna_as_float(wysna_list_load(b, (int32_t)idx));
 }
 
-WYSNA_RT_FN bool wysna_list_get_bool_at(WVal obj, int64_t idx,
+static inline bool wysna_list_get_bool_at(WVal obj, int64_t idx,
                                           const char* file, int32_t line, int32_t col) {
-    wysna_runtime_set_position(file, line, col);
     WListBuf* b = wysna_as_list(obj);
-    if (!b || idx < 0 || idx >= b->len) {
-        wysna_runtime_fail("W4002", "List index out of bounds");
+    if (W_UNLIKELY(!b || idx < 0 || idx >= b->len)) {
+        wysna_list_iteration_fail_at("W4002", "List index out of bounds", file, line, col);
     }
     return wysna_as_bool(wysna_list_load(b, (int32_t)idx));
 }
 
-WYSNA_RT_FN int64_t wysna_list_iteration_get_int_at(WVal value, int32_t index,
+static inline int64_t wysna_list_iteration_get_int_at(WVal value, int32_t index,
                                                       const char* file, int32_t line, int32_t col) {
     return wysna_as_int(wysna_list_iteration_get_at(value, index, file, line, col));
 }
 
-WYSNA_RT_FN double wysna_list_iteration_get_float_at(WVal value, int32_t index,
+static inline double wysna_list_iteration_get_float_at(WVal value, int32_t index,
                                                        const char* file, int32_t line, int32_t col) {
     return wysna_as_float(wysna_list_iteration_get_at(value, index, file, line, col));
 }
 
-WYSNA_RT_FN bool wysna_list_iteration_get_bool_at(WVal value, int32_t index,
+static inline bool wysna_list_iteration_get_bool_at(WVal value, int32_t index,
                                                     const char* file, int32_t line, int32_t col) {
     return wysna_as_bool(wysna_list_iteration_get_at(value, index, file, line, col));
 }
@@ -269,9 +273,16 @@ WYSNA_RT_FN WVal wysna_enum_payload_owned(WVal value) { return wysna_clone(wysna
 
 /* Methods on List / Dict */
 WYSNA_RT_FN WVal wysna_list_append(WVal* list_val, WVal item) {
-    if (wysna_hi(*list_val) != WVAL_HI_LIST) wysna_runtime_fail("W4003", "List intrinsic requires list receiver");
-    wysna_list_detach(list_val);
+    if (W_UNLIKELY(wysna_hi(*list_val) != WVAL_HI_LIST)) wysna_runtime_fail("W4003", "List intrinsic requires list receiver");
     WListBuf* b = wysna_as_list(*list_val);
+    if (W_LIKELY(wysna_rc_load(&b->refcount) == 1 && b->len < b->cap && !wysna_list_is_u8(b) &&
+                 (wysna_hi(item) == WVAL_HI_INT || wysna_is_double(item) ||
+                  item.bits == WVAL_TRUE_BITS || item.bits == WVAL_FALSE_BITS))) {
+        b->data[b->len++] = item;
+        return wysna_unit();
+    }
+    wysna_list_detach(list_val);
+    b = wysna_as_list(*list_val);
     if (b->len >= b->cap) {
         if (b->cap > INT32_MAX / 2) wysna_runtime_fail("W4003", "List too large");
         b->cap = b->cap > 0 ? b->cap * 2 : 4;
@@ -350,7 +361,7 @@ WYSNA_RT_FN WVal wysna_dict_clear(WVal* dict_val) {
         wysna_release(d->vals[i]);
     }
     d->len = 0;
-    for (int32_t i = 0; i < d->bucket_count; i++) d->buckets[i] = -1;
+    memset(d->buckets, -1, sizeof(int32_t) * (size_t)d->bucket_count);
     return wysna_unit();
 }
 
@@ -372,7 +383,7 @@ WYSNA_RT_FN WVal wysna_dict_remove(WVal* dict_val, WVal key) {
         memmove(&d->vals[found], &d->vals[found + 1], sizeof(WVal) * (size_t)(last - found));
     }
     d->len = last;
-    for (int32_t i = 0; i < d->bucket_count; i++) d->buckets[i] = -1;
+    memset(d->buckets, -1, sizeof(int32_t) * (size_t)d->bucket_count);
     for (int32_t i = 0; i < d->len; i++) wysna_dict_index_entry(d, i);
     wysna_release(removed_key);
     return wysna_enum_payload("Option", "Some", removed_val);
