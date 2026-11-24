@@ -1,0 +1,51 @@
+struct Entry { id: int, units: int }
+pub struct Summary { count: int, total: int, rolled_back: bool }
+
+class Ledger {
+    private balances: dict[int, int]
+    private total: int
+
+    fn init() {
+        let initial: dict[int, int] = {0: 7}
+        this.balances = initial
+        this.total = 7
+    }
+
+    public fn apply(entries: list[Entry]) -> bool {
+        let mut pending: dict[int, int] = {}
+        let mut subtotal = 0
+        for entry in entries {
+            if this.balances.contains(entry.id) or pending.contains(entry.id) {
+                return false
+            }
+            pending[entry.id] = entry.units
+            subtotal = subtotal + entry.units
+        }
+        for entry in entries {
+            this.balances[entry.id] = entry.units
+        }
+        this.total = this.total + subtotal
+        return true
+    }
+
+    public fn summary(rolled_back: bool) -> Summary {
+        return Summary { count: len(this.balances), total: this.total, rolled_back: rolled_back }
+    }
+}
+
+fn batch(start: int, size: int, duplicate: bool) -> list[Entry] {
+    let mut entries: list[Entry] = []
+    for offset in 0..size {
+        let id = if duplicate and offset == size - 1 { 1 } else { start + offset }
+        entries.append(Entry { id: id, units: id % 1000 + 1 })
+    }
+    return entries
+}
+
+pub fn exercise(size: int) -> Summary {
+    let ledger = Ledger()
+    let committed = ledger.apply(batch(1, size, false))
+    if not committed { exit(3) }
+    let rolled_back = not ledger.apply(batch(size + 1, size, true))
+    return ledger.summary(rolled_back)
+}

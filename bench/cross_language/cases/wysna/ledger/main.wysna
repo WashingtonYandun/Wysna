@@ -1,0 +1,10 @@
+import "ledger.wysna" as ledger
+import "std/parse" as parse
+
+fn main() {
+    let size = parse.parse_int(args()[1]) else err { exit(2) return }
+    if size < 1 or size > 1000000 { exit(2) }
+    let result = ledger.exercise(size)
+    print(result.count, result.total, result.rolled_back)
+}
+main()
