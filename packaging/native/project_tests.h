@@ -17,7 +17,7 @@ typedef struct {
 } SdkProjectTest;
 
 typedef struct {
-    const char *name, *root, *manifest, *manifest_sha, *lock_sha, *hash;
+    const char *name, *root, *manifest, *manifest_sha, *lock_sha, *revision, *hash;
     const char *report_json, *report_junit, *json;
     int list_only;
     SdkProjectTest* cases;
@@ -226,6 +226,7 @@ static void sdk_project_test_report(FILE* file, const SdkProjectTestPlan* plan, 
         fputs(",\"manifest_sha256\":", file); sdk_test_string(file, plan->manifest_sha);
         fputs(",\"toolchain\":\"" WYSNA_NATIVE_VERSION "\",\"lock_sha256\":", file);
         if (plan->lock_sha[0]) sdk_test_string(file, plan->lock_sha); else fputs("null", file);
+        fputs(",\"workspace_revision\":", file); sdk_test_string(file, plan->revision);
         fputs(",\"plan_hash\":", file); sdk_test_string(file, plan->hash);
         fprintf(file, ",\"status\":\"%s\",\"duration_ms\":%" PRId64 ",\"selected\":%d,\"executed\":%d,\"passed\":%d,\"failed\":%d,\"cases\":[",
                 cancelled ? "cancelled" : count == 0 ? "empty" : failed ? "failed" : "passed", duration, plan->count, count, count - failed, failed);

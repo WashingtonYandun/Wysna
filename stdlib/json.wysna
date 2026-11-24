@@ -145,16 +145,18 @@ fn string_less(left: str, right: str) -> bool {
     return len(left) < len(right)
 }
 
+fn stringify_scalar(value: Value) -> str ! JsonError {
+    match value {
+        Value.Null => { return "null" },
+        Value.Bool(flag) => { return if flag { "true" } else { "false" } },
+        Value.Number(raw) => { return validate_number(raw)? },
+        Value.String(text) => { return quote_string(text) },
+        _ => { return Err(error(0, "expected JSON scalar")) },
+    }
+}
+
 fn stringify_value(value: Value) -> str ! JsonError {
     return match value {
-        Value.Null => "null",
-        Value.Bool(flag) => if flag {
-            "true"
-        } else {
-            "false"
-        },
-        Value.Number(raw) => validate_number(raw)?,
-        Value.String(text) => quote_string(text),
         Value.Array(values) => {
             let mut parts: list[str] = []
             for index in 0..len(values) {
@@ -177,11 +179,31 @@ fn stringify_value(value: Value) -> str ! JsonError {
             }
             "{" + join_strings(parts, ",") + "}"
         },
+        _ => stringify_scalar(value)?,
     }
 }
 
 pub fn stringify(value: Value) -> str ! JsonError {
     return stringify_value(value)
+}
+
+# Preserve dictionary insertion order when canonical key ordering is unnecessary.
+pub fn stringify_ordered(value: Value) -> str ! JsonError {
+    return match value {
+        Value.Array(items) => {
+            let mut parts: list[str] = []
+            for item in items { parts.append(stringify_ordered(item)?) }
+            "[" + join_strings(parts, ",") + "]"
+        },
+        Value.Object(fields) => {
+            let mut parts: list[str] = []
+            for (key, item) in dict_items(fields) {
+                parts.append(quote_string(key) + ":" + stringify_ordered(item)?)
+            }
+            "{" + join_strings(parts, ",") + "}"
+        },
+        _ => stringify_scalar(value)?,
+    }
 }
 
 pub fn error(offset: int, message: str) -> JsonError {

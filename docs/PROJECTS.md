@@ -245,10 +245,11 @@ El hash debe corresponder a la misma selección y al mismo estado del lock. Si s
 usa `--frozen` al listar, también debe usarse al ejecutar. `--list` no compila ni
 ejecuta las entradas. Devuelve `wysna.project-test-plan/1` en `result`, con IDs,
 rutas relativas, SHA-256 de cada entrada y su timeout. El hash cubre el manifiesto, el lock, la huella de la implementación del SDK,
-los casos seleccionados y los archivos `.wysna` del proyecto. El conjunto es
-conservador e incluye dependencias locales y helpers de pruebas. `--list`
+los casos seleccionados, los archivos `.wysna` y los manifiestos de las
+dependencias locales. El conjunto incluye los helpers de pruebas. `--list`
 identifica una revisión y el árbol puede seguir cambiando durante una ejecución. Un
-hash obsoleto devuelve `W5005` y código 2 antes de iniciar los casos.
+hash obsoleto devuelve `W5005` y código 2 antes de iniciar los casos. El
+reporte de ejecución incluye el mismo `workspace_revision` del plan.
 
 Los casos declarados conservan el orden del manifiesto. `--discover` añade, en
 orden de ruta, archivos `tests/**/test_*.wysna` y `tests/**/*_test.wysna`; no añade

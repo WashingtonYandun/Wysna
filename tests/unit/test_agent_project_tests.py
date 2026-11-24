@@ -68,9 +68,12 @@ def test_stale_plan_never_starts_the_selected_entry(tmp_path):
 
 def test_test_plan_covers_transitive_project_sources(tmp_path):
     root = project(tmp_path, 'import "helper.wysna" as helper\nprint(helper.value())\n')
-    helper = root / 'tests/helper.wysna'
+    helper = root / 'src/helper.wysna'
     helper.write_text('pub fn value() -> int { 1 }\n', encoding='utf-8')
     _, original = machine(root, '--list')
+    verified, report = machine(root, '--expect-plan-hash', original['result']['plan_hash'])
+    assert verified.returncode == 0, report
+    assert report['result']['workspace_revision'] == original['result']['workspace_revision']
     helper.write_text('pub fn value() -> int { 2 }\n', encoding='utf-8')
     result, payload = machine(root, '--expect-plan-hash', original['result']['plan_hash'])
     assert result.returncode == 2
@@ -213,10 +216,14 @@ def test_native_listing_matches_seed_and_preserves_path_encoding(native_sdk, tmp
 @pytest.mark.skipif(os.name == 'nt', reason='POSIX test compiler shim; real Windows SDK acceptance covers execution')
 def test_native_machine_execution_reports_and_diagnostics(native_sdk, tmp_path):
     root = project(tmp_path, 'print("a\\0b")\neprint("details")\n')
+    listed, plan = native_machine(native_sdk, root, '--case', 'test:example', '--list')
+    assert listed.returncode == 0, plan
     result, payload = native_machine(native_sdk, root, '--case', 'test:example',
+                                     '--expect-plan-hash', plan['result']['plan_hash'],
                                      '--report-json', 'test.json', '--report-junit', 'test.xml')
     assert result.returncode == 0, payload
     report = payload['result']
+    assert report['workspace_revision'] == plan['result']['workspace_revision']
     assert report['cases'][0]['stdout'] == 'a\0b\n'
     assert json.loads((root / 'test.json').read_text()) == report
     assert ET.parse(root / 'test.xml').find('testcase/system-out').text == 'a\ufffdb\n'

@@ -29,7 +29,7 @@ def _snapshot_digest(rows):
 
 
 def project_source_snapshot(root):
-    """Hash a conservative set of all project source inputs, including test helpers."""
+    """Hash project sources, test helpers and dependency manifests conservatively."""
     hashes = []
     for directory, children, files in os.walk(root):
         folder = Path(directory)
@@ -39,7 +39,7 @@ def project_source_snapshot(root):
             path = folder / name
             if path.is_symlink():
                 raise ManifestError(f"project source snapshot does not follow symbolic links: '{path}'")
-            if name in files and path.suffix == '.wysna' and path.is_file():
+            if name in files and (path.suffix == '.wysna' or name == 'wysna.toml') and path.is_file():
                 hashes.append((path.relative_to(root).as_posix(), hashlib.sha256(path.read_bytes()).hexdigest()))
     hashes.sort()
     return hashes
@@ -48,6 +48,10 @@ def project_source_snapshot(root):
 def _seed_sdk_fingerprint():
     root = Path(get_repo_root())
     rows = []
+    for name in ('main.py', 'wysna_entry.py'):
+        entry = root / name
+        if entry.is_file():
+            rows.append((name, hashlib.sha256(entry.read_bytes()).hexdigest()))
     for folder, pattern in ((root / 'src', '*.py'), (root / 'runtime', '*.py'), (root / 'stdlib', '*.wysna')):
         for path in sorted(folder.rglob(pattern)):
             if path.is_file():

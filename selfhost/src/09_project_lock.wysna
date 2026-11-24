@@ -78,7 +78,8 @@ fn proj_snapshot_paths(state: ProjectLockState, root: str, relative: str, source
             if kind == "l" {
                 state.fail("W5002", "project input '" + root + "/" + path + "' is a symlink")
             }
-            if kind == "f" and (not source_only or proj_str_ends_with(path, ".wysna")) {
+            let workspace_manifest = source_only and skip_generated and name == "wysna.toml"
+            if kind == "f" and (not source_only or workspace_manifest or proj_str_ends_with(path, ".wysna")) {
                 result.append(path)
             }
         }

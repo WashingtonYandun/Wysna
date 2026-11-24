@@ -1,10 +1,11 @@
 """Keep patch previews and test plans bound to the same checked source revision."""
+import json
+
 import pytest
 
 from error.Error import WysnaError
-from project.Resolver import ProjectResolver
-from project.Testing import build_test_plan
-from tests.unit.test_agent_project_tests import project
+from tests.unit.test_agent_project_tests import machine, project
+from tests.unit.test_project_scaffold import run_cli
 from tooling import SourceWrite
 from tooling.WorkspacePatch import plan_workspace_patch
 
@@ -28,16 +29,29 @@ def test_workspace_patch_checks_and_applies_all_edits_together(tmp_path):
     baseline = [file.read_bytes() for file in (provider, app)]
     with pytest.raises(WysnaError):
         plan_workspace_patch(manifest, request[:1])
-    preview = plan_workspace_patch(manifest, request)
+    request[0]['source'] += 'pub fn compatible() -> int { 2 }\n'
+    (root / 'tests/example.wysna').write_text(
+        'import "provider.wysna" as source\nprint(source.compatible())\n', encoding='utf-8')
+    edit_file = root / 'changes.json'
+    edit_file.write_text(json.dumps(request), encoding='utf-8')
+    args = ['patch', '--manifest', str(manifest), '--edits', str(edit_file), '--output-format=json-v1']
+    previewed = run_cli(root, *args)
+    assert previewed.returncode == 0, previewed.stderr + previewed.stdout
+    preview = json.loads(previewed.stdout)['result']
     assert preview['selected_test_ids'] == ['test:example']
-    assert preview['tests'][0]['impact_status'] == 'uncertain'
+    assert preview['tests'][0]['impact_status'] == 'affected'
     assert [file.read_bytes() for file in (provider, app)] == baseline
-    applied = plan_workspace_patch(manifest, request, expected_hash=preview['plan_hash'], apply=True)
-    assert applied['written']
+    applied = run_cli(root, *args, '--expect-plan-hash', preview['plan_hash'], '--apply')
+    assert applied.returncode == 0, applied.stderr + applied.stdout
+    assert json.loads(applied.stdout)['result']['written']
     assert provider.read_text() == request[0]['source']
     assert app.read_text() == request[1]['source']
-    _, test_plan = build_test_plan(ProjectResolver.load(manifest))
-    assert test_plan['workspace_revision'] == preview['workspace_revision_after']
+    listed, test_plan = machine(root, '--list')
+    assert listed.returncode == 0, test_plan
+    assert test_plan['result']['workspace_revision'] == preview['workspace_revision_after']
+    executed, report = machine(root, '--expect-plan-hash', test_plan['result']['plan_hash'])
+    assert executed.returncode == 0, report
+    assert report['result']['cases'][0]['stdout'] == '2\n'
 
 
 def test_stale_workspace_leaves_every_file_unmodified(tmp_path):

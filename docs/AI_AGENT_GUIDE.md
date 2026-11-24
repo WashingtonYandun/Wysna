@@ -106,6 +106,57 @@ and file permissions. External editors that write directly without using Wysna t
 not hold the cooperative lock; optimistic revision verification still rejects stale snapshots
 detected before replacement.
 
+### Invocar una herramienta con un contrato tipado
+
+Declara la herramienta y su identidad versionada en un módulo:
+
+```wysna
+struct AgentTool { id: str, version: int }
+
+@AgentTool(id: "ops.summarize", version: 1)
+pub fn summarize(count: int) -> int {
+    return count + 1
+}
+```
+
+Genera un adaptador y ejecútalo con un argumento JSON:
+
+```sh
+wysna schema src/tools.wysna --function summarize --emit-tool -o adapter.wysna --output-format=json-v1
+wysna run adapter.wysna --sandbox --allow=arguments,stdio --timeout-ms 5000 -- '{"count":2}'
+```
+
+El adaptador valida los tipos, rechaza campos adicionales en los argumentos y
+en los structs decodificados, y limita la entrada JSON a 65 536 bytes, 32
+niveles y 4096 nodos. La salida incluye la identidad y la versión del contrato:
+
+```json
+{"schema_version":"wysna.agent-tool-result/1","id":"ops.summarize","version":1,"status":"ok","value":3}
+```
+
+`status` puede ser `ok`, `error` para un valor de una unión de error, o
+`invalid_input` para un fallo de validación. `encoding_error` indica que
+el resultado no pudo serializarse como JSON. Los fallos de ejecución del
+proceso se manejan por separado. El exportador comprueba el adaptador
+con los permisos `arguments` y `stdio`, y exige una función pública, pura,
+síncrona y concreta. La inicialización del módulo también debe estar libre
+de efectos sobre el entorno. Los parámetros, resultados y errores deben poder
+representarse mediante los códecs estándar. Los structs y enums del
+contrato deben ser públicos. El archivo generado usa rutas absolutas al
+código fuente y se debe regenerar si cambia la ubicación del proyecto.
+`-o` exige un archivo nuevo.
+
+### Migrar la visibilidad
+
+Usa `pub` y `priv` para indicar visibilidad explícita. Las declaraciones sin
+modificador mantienen sus valores predeterminados. Los archivos con las
+grafías anteriores reciben `W0006` y una corrección mecánica:
+
+```sh
+wysna fix src/tools.wysna --output-format=json-v1
+wysna fix src/tools.wysna --apply --output-format=json-v1
+```
+
 ## Agent-First Imports & Token Optimization
 
 When generating Wysna code, agents should prefer the selective `from ... use { ... }` syntax over namespace qualification:

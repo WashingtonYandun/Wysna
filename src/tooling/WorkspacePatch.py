@@ -23,7 +23,7 @@ def _load_edits(root, files, request):
             raise ValueError('Workspace edit path and source must be strings')
         relative = PurePosixPath(name)
         if (relative.is_absolute() or '..' in relative.parts or relative.as_posix() != name
-                or name not in files or name in seen):
+                or relative.suffix != '.wysna' or name not in files or name in seen):
             raise ValueError(f'Workspace edit must identify one existing project source: {name!r}')
         seen.add(name)
         path = root / name

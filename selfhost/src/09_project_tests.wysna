@@ -4,12 +4,14 @@ class ProjectTestPlan {
     cases: list[ProjectTestCase]
     hashes: list[str]
     lock_sha: str
+    revision: str
     hash: str
     json: str
-    fn init(cases: list[ProjectTestCase], hashes: list[str], lock_sha: str, hash: str, json: str) {
+    fn init(cases: list[ProjectTestCase], hashes: list[str], lock_sha: str, revision: str, hash: str, json: str) {
         this.cases = cases
         this.hashes = hashes
         this.lock_sha = lock_sha
+        this.revision = revision
         this.hash = hash
         this.json = json
     }
@@ -18,7 +20,7 @@ class ProjectTestPlan {
 fn proj_empty_test_plan() -> ProjectTestPlan {
     let cases: list[ProjectTestCase] = []
     let hashes: list[str] = []
-    return ProjectTestPlan(cases, hashes, "", "", "")
+    return ProjectTestPlan(cases, hashes, "", "", "", "")
 }
 
 fn proj_plan_encode(value: str) -> str {
@@ -110,7 +112,7 @@ fn proj_test_plan(m: ProjectManifest, discover: bool, filter: str, has_filter: b
     let hash = diag_sha256_hex("{" + snapshot + "}")
     let payload = "{\"schema_version\":\"wysna.project-test-plan/1\",\"project\":" + diag_json_quote(m.name) + "," + snapshot +
         ",\"selected\":" + str(len(selected)) + ",\"plan_hash\":" + diag_json_quote(hash) + "}"
-    return ProjectTestPlan(selected, hashes, lock_sha, hash, payload)
+    return ProjectTestPlan(selected, hashes, lock_sha, revision_sha, hash, payload)
 }
 
 fn proj_test_report_path(m: ProjectManifest, value: str, json_mode: bool) -> str {
