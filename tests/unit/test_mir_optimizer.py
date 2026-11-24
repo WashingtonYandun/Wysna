@@ -8,6 +8,7 @@ from hir.HirBuilder import HirBuilder
 from mir.Lowering import Lowering
 from mir.Nodes import Operation, Terminator, dump
 from mir.Optimizer import (
+    eliminate_dead_functions,
     eliminate_unreachable_blocks,
     simplify_branches,
     eliminate_empty_trampolines,
@@ -177,6 +178,43 @@ print(read("wysna"), compute(10))
         second = optimize(optimized, interner)
         self.assertEqual(dump(second), first_dump)
         Verifier(interner).verify(second)
+
+    def test_dead_function_and_extern_tree_shaking(self):
+        from dataclasses import replace
+        from mir.CCodeGen import CCodeGen
+        source = """
+fn unused_helper(x: int) -> int { x * 3 }
+fn live_closure_target(x: int) -> int { x + 1 }
+fn live_helper(x: int, f: fn(int) -> int) -> int { f(x) }
+class Base {
+    fn speak(self) -> int { 7 }
+}
+let b = Base()
+print(live_helper(41, live_closure_target), b.speak())
+"""
+        module, interner = lower_mir(source, optimize_mir=True)
+        module.externs['unused_ext'] = {
+            'native': 'unused_ext',
+            'params': [],
+            'return_type': TYPE_INT,
+            'signature': {'params': [], 'return_type': 'int'},
+        }
+        pruned = eliminate_dead_functions(module)
+        pruned_names = {fn.name for fn in pruned.functions}
+        self.assertNotIn('wysna_fn_unused_helper', pruned_names)
+        self.assertIn('wysna_fn_live_helper', pruned_names)
+        self.assertIn('wysna_fn_live_closure_target', pruned_names)
+        self.assertIn('wysna_method_Base__speak', pruned_names)
+        self.assertNotIn('unused_ext', pruned.externs)
+        Verifier(interner).verify(pruned)
+
+        emitted = CCodeGen(interner).generate(module)
+        self.assertNotIn('wysna_fn_unused_helper', emitted)
+        self.assertIn('wysna_fn_live_closure_target', emitted)
+
+        lib_mod = replace(module, library_mode=True)
+        unpruned = eliminate_dead_functions(lib_mod)
+        self.assertEqual({fn.name for fn in unpruned.functions}, {fn.name for fn in module.functions})
 
 
 if __name__ == '__main__':

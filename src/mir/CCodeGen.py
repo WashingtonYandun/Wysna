@@ -5,6 +5,7 @@ from codegen.CStrings import quote
 from common.Telemetry import CodegenTelemetry
 from mir.AsyncLowering import build_cps_plan
 from mir.Nodes import Place
+from mir.Optimizer import eliminate_dead_functions
 from mir.Verifier import Verifier
 from compiler.StdlibIdentity import stdlib_declaration
 
@@ -17,6 +18,7 @@ class CCodeGen:
 
     def generate(self, module):
         Verifier(self.interner).verify(module)
+        module = eliminate_dead_functions(module)
         self.literal_counter = 0
         self.module = module
         self.functions = {function.name: function for function in module.functions}

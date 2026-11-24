@@ -903,5 +903,69 @@ main()
         assert ok, detail
 
 
+def test_algorithms_sort_sizes_edge_cases_and_stability_across_four_engines():
+    selfhost_bin = ensure_selfhost_compiler_binary(str(ROOT))
+    source = '''import "std/algorithms" as alg
+struct Pair { key: int, seq: int }
+fn is_sorted(xs: list[int]) -> bool {
+    let mut i = 1
+    while i < len(xs) {
+        if xs[i] < xs[i - 1] { return false }
+        i = i + 1
+    }
+    return true
+}
+fn main() -> unit {
+    for n in [0, 1, 2, 15, 16, 17, 64, 100] {
+        let mut rev: list[int] = []
+        let mut fwd: list[int] = []
+        let mut same: list[int] = []
+        let mut k = 0
+        while k < n {
+            rev.append(n - 1 - k)
+            fwd.append(k)
+            same.append(7)
+            k = k + 1
+        }
+        let s_rev = alg.sort[int](rev, |a: int, b: int| { a < b })
+        let s_fwd = alg.sort[int](fwd, |a: int, b: int| { a < b })
+        let s_same = alg.sort[int](same, |a: int, b: int| { a < b })
+        if len(s_rev) != n or not is_sorted(s_rev) or not is_sorted(s_fwd) or not is_sorted(s_same) {
+            print("FAIL-SIZE", n)
+            return
+        }
+        if n > 0 and (s_rev[0] != 0 or s_rev[n - 1] != n - 1) {
+            print("FAIL-ENDS", n)
+            return
+        }
+    }
+    let mut items: list[Pair] = []
+    for idx in 0..33 {
+        items.append(Pair { key: 5 - (idx % 6), seq: idx })
+    }
+    let ordered = alg.sort[Pair](items, |left: Pair, right: Pair| { left.key < right.key })
+    let mut stable = len(ordered) == 33
+    for i in 1..len(ordered) {
+        let prev = ordered[i - 1]
+        let cur = ordered[i]
+        if cur.key < prev.key or (cur.key == prev.key and cur.seq <= prev.seq) {
+            stable = false
+        }
+    }
+    print("SORT-OK", stable, ordered[0].key, ordered[0].seq, ordered[32].key, ordered[32].seq)
+}
+main()
+'''
+    expected = 'SORT-OK true 0 5 5 30\n'
+    with tempfile.TemporaryDirectory() as directory:
+        results = [
+            run_engine(engine, source, 'algorithms-sort-matrix', selfhost_bin, directory,
+                       sanitize=os.environ.get('WYSNA_SANITIZE') == '1')
+            for engine in ('interpreter', 'ast', 'hir', 'selfhost')
+        ]
+        ok, detail = compare(results, expected)
+        assert ok, detail
+
+
 if __name__ == '__main__':
     run_toolkit_tests()

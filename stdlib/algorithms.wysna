@@ -19,45 +19,103 @@ pub fn sort[T](values: list[T], before: fn(T, T) -> bool) -> list[T] {
     if count < 2 {
         return values
     }
-    return sort_range[T](values, before, 0, count)
-}
-
-fn sort_range[T](values: list[T], before: fn(T, T) -> bool, first: int, end: int) -> list[T] {
-    let count = end - first
-    if count == 1 {
-        return [values[first]]
-    }
-    if count == 2 {
-        let left = values[first]
-        let right = values[first + 1]
-        return if before(right, left) { [right, left] } else { [left, right] }
-    }
-    let middle = first + count / 2
-    let left = sort_range[T](values, before, first, middle)
-    let right = sort_range[T](values, before, middle, end)
-    let left_count = len(left)
-    let right_count = len(right)
-    let mut result: list[T] = []
-    let mut i = 0
-    let mut j = 0
-    while i < left_count and j < right_count {
-        if before(right[j], left[i]) {
-            result.append(right[j])
-            j = j + 1
-        } else {
-            result.append(left[i])
+    let mut src = slice(values, 0, count)
+    let run_size = 16
+    let mut start = 0
+    while start < count {
+        let mut end = start + run_size
+        if end > count { end = count }
+        let mut i = start + 1
+        while i < end {
+            let key = src[i]
+            let mut j = i
+            while j > start and before(key, src[j - 1]) {
+                src[j] = src[j - 1]
+                j = j - 1
+            }
+            src[j] = key
             i = i + 1
         }
+        start = start + run_size
     }
-    while i < left_count {
-        result.append(left[i])
-        i = i + 1
+    if count <= run_size {
+        return src
     }
-    while j < right_count {
-        result.append(right[j])
-        j = j + 1
+    let mut dst = slice(values, 0, count)
+    let mut width = run_size
+    while true {
+        let mut left = 0
+        while left < count {
+            let mut mid = left + width
+            if mid > count { mid = count }
+            let mut right = left + width * 2
+            if right > count { right = count }
+            let mut i = left
+            let mut j = mid
+            let mut k = left
+            while i < mid and j < right {
+                if before(src[j], src[i]) {
+                    dst[k] = src[j]
+                    j = j + 1
+                } else {
+                    dst[k] = src[i]
+                    i = i + 1
+                }
+                k = k + 1
+            }
+            while i < mid {
+                dst[k] = src[i]
+                i = i + 1
+                k = k + 1
+            }
+            while j < right {
+                dst[k] = src[j]
+                j = j + 1
+                k = k + 1
+            }
+            left = left + width * 2
+        }
+        let next_width = width * 2
+        if next_width >= count {
+            return dst
+        }
+        left = 0
+        while left < count {
+            let mut mid = left + next_width
+            if mid > count { mid = count }
+            let mut right = left + next_width * 2
+            if right > count { right = count }
+            let mut i = left
+            let mut j = mid
+            let mut k = left
+            while i < mid and j < right {
+                if before(dst[j], dst[i]) {
+                    src[k] = dst[j]
+                    j = j + 1
+                } else {
+                    src[k] = dst[i]
+                    i = i + 1
+                }
+                k = k + 1
+            }
+            while i < mid {
+                src[k] = dst[i]
+                i = i + 1
+                k = k + 1
+            }
+            while j < right {
+                src[k] = dst[j]
+                j = j + 1
+                k = k + 1
+            }
+            left = left + next_width * 2
+        }
+        width = next_width * 2
+        if width >= count {
+            return src
+        }
     }
-    return result
+    return src
 }
 
 pub fn filter[T](values: list[T], predicate: fn(T) -> bool) -> list[T] {
