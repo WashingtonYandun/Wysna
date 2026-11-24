@@ -53,6 +53,10 @@ fn proj_lock_host_text(state: ProjectLockState, path: str, operation: str) -> st
 }
 
 fn proj_lock_paths(state: ProjectLockState, root: str, relative: str, source_only: bool) -> list[str] {
+    return proj_snapshot_paths(state, root, relative, source_only, not source_only)
+}
+
+fn proj_snapshot_paths(state: ProjectLockState, root: str, relative: str, source_only: bool, skip_generated: bool) -> list[str] {
     let directory = if relative == "" { root } else { root + "/" + relative }
     let entries = proj_lock_host_text(state, directory, "entries")
     let ignored: list[str] = [".git", ".wysna_cache", "__pycache__", ".pytest_cache", "build", "dist"]
@@ -66,10 +70,10 @@ fn proj_lock_paths(state: ProjectLockState, root: str, relative: str, source_onl
         let name = slice(entries, start, i)
         i = i + 1
         let path = if relative == "" { name } else { relative + "/" + name }
-        if not source_only and relative == "" and tool_str_contains(ignored, name) { continue }
+        if skip_generated and relative == "" and tool_str_contains(ignored, name) { continue }
 
         if kind == "d" {
-            for nested in proj_lock_paths(state, root, path, source_only) { result.append(nested) }
+            for nested in proj_snapshot_paths(state, root, path, source_only, skip_generated) { result.append(nested) }
         } elif source_only or (name != "wysna.lock" and name != "wysna.lock.tmp") {
             if kind == "l" {
                 state.fail("W5002", "project input '" + root + "/" + path + "' is a symlink")

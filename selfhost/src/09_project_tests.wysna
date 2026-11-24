@@ -85,8 +85,28 @@ fn proj_test_plan(m: ProjectManifest, discover: bool, filter: str, has_filter: b
         rows.append("{\"id\":" + diag_json_quote("test:" + tc.name) + ",\"name\":" + diag_json_quote(tc.name) +
             ",\"entry\":" + diag_json_quote(tc.entry) + ",\"entry_sha256\":" + diag_json_quote(sha) + ",\"timeout_ms\":" + str(tc.timeout_ms) + "}")
     }
-    let snapshot = "\"manifest_sha256\":" + diag_json_quote(m.manifest_sha256) + ",\"lock_sha256\":" +
-        (if lock_sha == "" { "null" } else { diag_json_quote(lock_sha) }) + (",\"toolchain\":\"" + tool_compiler_version() + "\",\"cases\":[") + join_strings(rows, ",") + "]"
+    let workspace_paths = tool_sort_strings(proj_snapshot_paths(state, m.root, "", true, true))
+    proj_lock_verify_collisions(state, workspace_paths)
+    let mut source_rows: list[str] = []
+    for path in workspace_paths {
+        let sha = proj_lock_host_text(state, m.root + "/" + path, "hash")
+        source_rows.append("[" + diag_json_quote(path) + "," + diag_json_quote(sha) + "]")
+    }
+    let workspace_sha = diag_sha256_hex("[" + join_strings(source_rows, ",") + "]")
+    let engine = env("WYSNA_SELFHOST_COMPILER") else { args()[0] }
+    let mut sdk_rows: list[str] = [proj_lock_host_text(state, engine, "hash")]
+    let stdlib_root = lsp_stdlib_root_arg()
+    if stdlib_root != "" {
+        for path in tool_sort_strings(proj_lock_paths(state, stdlib_root, "", true)) {
+            sdk_rows.append(diag_json_quote(path) + ":" + proj_lock_host_text(state, stdlib_root + "/" + path, "hash"))
+        }
+    }
+    let sdk_sha = diag_sha256_hex(join_strings(sdk_rows, "\n"))
+    let revision = "\"manifest_sha256\":" + diag_json_quote(m.manifest_sha256) + ",\"lock_sha256\":" +
+        (if lock_sha == "" { "null" } else { diag_json_quote(lock_sha) }) + ",\"toolchain\":\"" + tool_compiler_version() +
+        "\",\"sdk_fingerprint\":" + diag_json_quote(sdk_sha) + ",\"workspace_sha256\":" + diag_json_quote(workspace_sha)
+    let revision_sha = diag_sha256_hex("{" + revision + "}")
+    let snapshot = revision + ",\"workspace_revision\":" + diag_json_quote(revision_sha) + ",\"cases\":[" + join_strings(rows, ",") + "]"
     let hash = diag_sha256_hex("{" + snapshot + "}")
     let payload = "{\"schema_version\":\"wysna.project-test-plan/1\",\"project\":" + diag_json_quote(m.name) + "," + snapshot +
         ",\"selected\":" + str(len(selected)) + ",\"plan_hash\":" + diag_json_quote(hash) + "}"

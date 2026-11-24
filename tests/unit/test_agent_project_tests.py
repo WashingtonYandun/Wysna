@@ -66,6 +66,17 @@ def test_stale_plan_never_starts_the_selected_entry(tmp_path):
     assert not (root / 'executed.txt').exists()
 
 
+def test_test_plan_covers_transitive_project_sources(tmp_path):
+    root = project(tmp_path, 'import "helper.wysna" as helper\nprint(helper.value())\n')
+    helper = root / 'tests/helper.wysna'
+    helper.write_text('pub fn value() -> int { 1 }\n', encoding='utf-8')
+    _, original = machine(root, '--list')
+    helper.write_text('pub fn value() -> int { 2 }\n', encoding='utf-8')
+    result, payload = machine(root, '--expect-plan-hash', original['result']['plan_hash'])
+    assert result.returncode == 2
+    assert payload['diagnostics'][0]['code'] == 'W5005'
+
+
 def test_discovery_is_opt_in_and_has_stable_ids(tmp_path):
     root = project(tmp_path)
     (root / 'tests/z_test.wysna').write_text('print(42)\n')
@@ -190,7 +201,11 @@ def test_native_listing_matches_seed_and_preserves_path_encoding(native_sdk, tmp
     _, seed = machine(root, '--list', '--discover', '--frozen')
     result, native = native_machine(native_sdk, root, '--list', '--discover', '--frozen')
     assert result.returncode == 0, native
-    assert native['result'] == seed['result']
+    agree = ('schema_version', 'project', 'manifest_sha256', 'lock_sha256', 'toolchain',
+             'workspace_sha256', 'cases', 'selected')
+    assert {key: native['result'][key] for key in agree} == {key: seed['result'][key] for key in agree}
+    assert len(native['result']['sdk_fingerprint']) == len(seed['result']['sdk_fingerprint']) == 64
+    assert native['result']['plan_hash'] != seed['result']['plan_hash']
     stale, error = native_machine(native_sdk, root, '--expect-plan-hash', '0' * 64)
     assert stale.returncode == 2 and error['diagnostics'][0]['code'] == 'W5005'
 
