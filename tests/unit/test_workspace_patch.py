@@ -51,7 +51,7 @@ def test_workspace_patch_checks_and_applies_all_edits_together(tmp_path):
     assert test_plan['result']['workspace_revision'] == preview['workspace_revision_after']
     executed, report = machine(root, '--expect-plan-hash', test_plan['result']['plan_hash'])
     assert executed.returncode == 0, report
-    assert report['result']['cases'][0]['stdout'] == '2\n'
+    assert report['result']['cases'][0]['stdout'].splitlines() == ['2']
 
 
 def test_stale_workspace_leaves_every_file_unmodified(tmp_path):
