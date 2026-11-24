@@ -546,8 +546,17 @@ class Lowering:
             self.current.operations[-1].data['inclusive'] = node.inclusive
             return result
         if isinstance(node, H.HirFieldRead):
-            value = self.expr(node.object)
-            entry = self.interner.get_entry(node.object.type_id)
+            receiver = node.object
+            value = None
+            # A direct read owns its result and never consumes the receiver.
+            if isinstance(receiver, (H.HirLocalRef, H.HirThisRef)):
+                candidate = self.lookup(receiver) if isinstance(receiver, H.HirLocalRef) else self.receiver
+                slot = self.slot_by_id[candidate]
+                if slot.ownership != 'global' and slot.type_id == receiver.type_id:
+                    value = candidate
+            if value is None:
+                value = self.expr(receiver)
+            entry = self.interner.get_entry(receiver.type_id)
             if entry is not None and entry.tag == 'tuple' and node.field_name.isdigit():
                 return self.op('tuple_get', self.slot(type_id), [value], {'index': int(node.field_name)}, node=node)
             index, _ = self.field_index(node.object.type_id, node.field_name, node)

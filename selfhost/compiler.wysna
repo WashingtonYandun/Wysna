@@ -8653,7 +8653,10 @@ fn mir_field_index(record: MirRecord, name: str, source: Token) -> int {
     return -1
 }
 fn mir_member(context: MirBuilder, node: CheckedNode) -> int {
-    let value = mir_expression(context, node.children[0])
+    let receiver = context.program.nodes[node.children[0]]
+    # Field loads own their result; the local receiver remains live.
+    let slot = if receiver.kind == "binding" { mir_local_slot(context, receiver.binding) } else { -1 }
+    let value = if slot >= 0 { slot } else { mir_expression(context, node.children[0]) }
     if context.current < 0 { return -1 }
     if context.types[context.slots[value].type_id].kind == "tuple" {
         return mir_op(context, "tuple_get", mir_type(context, node.type_id, node.source), [value], "", mir_literal_int(int(node.text)), node.source)
@@ -9393,13 +9396,17 @@ fn mir_c_function_adapters(module: MirModule) -> str {
     return out
 }
 # Lower session-owned checked nodes to explicit CFG, storage and cleanup.
+fn mir_local_slot(context: MirBuilder, symbol: int) -> int {
+    for binding in context.bindings { if binding.symbol == symbol { return binding.slot } }
+    return -1
+}
+
 fn mir_lookup(context: MirBuilder, symbol: int, source: Token) -> int {
-    for binding in context.bindings {
-        if binding.symbol == symbol {
-            let value = mir_op(context, "clone", context.slots[binding.slot].type_id, [binding.slot], "", mir_literal_unit(), source)
-            context.slots[value].origin = binding.slot
-            return value
-        }
+    let slot = mir_local_slot(context, symbol)
+    if slot >= 0 {
+        let value = mir_op(context, "clone", context.slots[slot].type_id, [slot], "", mir_literal_unit(), source)
+        context.slots[value].origin = slot
+        return value
     }
     for i in 0..len(context.globals) {
         let global = context.globals[i]

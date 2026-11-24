@@ -41,7 +41,10 @@ fn mir_field_index(record: MirRecord, name: str, source: Token) -> int {
     return -1
 }
 fn mir_member(context: MirBuilder, node: CheckedNode) -> int {
-    let value = mir_expression(context, node.children[0])
+    let receiver = context.program.nodes[node.children[0]]
+    # Field loads own their result; the local receiver remains live.
+    let slot = if receiver.kind == "binding" { mir_local_slot(context, receiver.binding) } else { -1 }
+    let value = if slot >= 0 { slot } else { mir_expression(context, node.children[0]) }
     if context.current < 0 { return -1 }
     if context.types[context.slots[value].type_id].kind == "tuple" {
         return mir_op(context, "tuple_get", mir_type(context, node.type_id, node.source), [value], "", mir_literal_int(int(node.text)), node.source)
