@@ -82,18 +82,32 @@ def apply_edits(source, chosen):
 def fix_source(path, source, *, include_maybe=False, service=None):
     """Compute the fix plan and corrected text without touching the filesystem."""
     service = service or CompilerService()
-    diagnostics = collect_diagnostics(path, source, service=service)
     allowed = ("machine", "maybe") if include_maybe else ("machine",)
-    chosen, skipped = plan_edits(diagnostics, source, allowed)
-    fixed = apply_edits(source, chosen) if chosen else source
-    remaining = collect_diagnostics(path, fixed, service=service) if chosen else diagnostics
+    applied_all = []
+    skipped_all = []
+    current = source
+    diagnostics = collect_diagnostics(path, current, service=service)
+    diag_before = len(diagnostics)
+    passes = 0
+    while passes < 64 and diagnostics:
+        chosen, skipped = plan_edits(diagnostics, current, allowed)
+        skipped_all.extend(skipped)
+        if not chosen:
+            break
+        fixed = apply_edits(current, chosen)
+        if fixed == current:
+            break
+        applied_all.extend({"code": item["code"], "description": item["description"]} for item in chosen)
+        current = fixed
+        passes += 1
+        diagnostics = collect_diagnostics(path, current, service=service)
     return {
-        "applied": [{"code": item["code"], "description": item["description"]} for item in chosen],
-        "skipped": skipped,
-        "changed": fixed != source,
-        "fixed_source": fixed,
-        "remaining_diagnostics": remaining,
-        "diagnostics_before": len(diagnostics),
+        "applied": applied_all,
+        "skipped": skipped_all,
+        "changed": current != source,
+        "fixed_source": current,
+        "remaining_diagnostics": diagnostics,
+        "diagnostics_before": diag_before,
     }
 
 

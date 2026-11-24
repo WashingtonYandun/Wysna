@@ -860,5 +860,143 @@ def test_mcp_check_handles_w6001_and_w6002_warnings(tmp_path):
     assert all(diag["severity"] == "warning" for diag in payload["diagnostics"])
 
 
+def test_native_else_if_across_seed_and_selfhost(tmp_path):
+    from compiler.Bootstrap import ensure_selfhost_compiler_binary
+
+    source = (
+        "fn classify(x: int) -> str {\n"
+        "    if x > 10 {\n"
+        "        return \"big\"\n"
+        "    } else if x > 0 {\n"
+        "        return \"pos\"\n"
+        "    }\n"
+        "    else if x == 0 {\n"
+        "        return \"zero\"\n"
+        "    } else {\n"
+        "        return \"neg\"\n"
+        "    }\n"
+        "}\n"
+        "fn main() {\n"
+        "    let label = if true { \"a\" } else if false { \"b\" } else { \"c\" }\n"
+        "    print(classify(12), classify(3), classify(0), classify(-2), label)\n"
+        "}\n"
+    )
+    target = tmp_path / "else_if.wysna"
+    target.write_text(source, encoding="utf-8")
+
+    seed_run = run_cli("run", target)
+    assert seed_run.returncode == 0, seed_run.stderr
+    assert seed_run.stdout.strip() == "big pos zero neg a"
+
+    stage2 = ensure_selfhost_compiler_binary(str(ROOT))
+    sh_check = subprocess.run(
+        [stage2, "check", "--output-format=json-v1", str(target)],
+        capture_output=True, text=True, timeout=60,
+    )
+    assert sh_check.returncode == 0, sh_check.stdout + sh_check.stderr
+    sh_c = tmp_path / "else_if_sh.c"
+    sh_bin = tmp_path / "else_if_sh"
+    subprocess.run([stage2, str(target), str(sh_c)], check=True, timeout=60)
+    cc_cmd = ["cc", "-std=c99", f"-I{ROOT}", str(sh_c), "-lm", "-o", str(sh_bin)]
+    subprocess.run(cc_cmd, check=True, timeout=60)
+    sh_run = subprocess.run([str(sh_bin)], capture_output=True, text=True, check=True, timeout=30)
+    assert sh_run.stdout.strip() == "big pos zero neg a"
+
+
+def test_fix_mechanical_operators_and_class_pub_parity(tmp_path):
+    from compiler.Bootstrap import ensure_selfhost_compiler_binary
+
+    broken = (
+        "class FlagBox {\n"
+        "    pub value: bool\n"
+        "    pub fn init(value: bool) { this.value = value }\n"
+        "    pub fn matches(other: bool, alt: bool) -> bool {\n"
+        "        if (this.value && other) || !alt {\n"
+        "            return true\n"
+        "        }\n"
+        "        return !this.value && (other||alt)\n"
+        "    }\n"
+        "}\n"
+        "fn neg_return(x: bool) -> bool {\n"
+        "    return !x\n"
+        "}\n"
+        "fn many_fixes(a: bool, b: bool) -> bool {\n"
+        "    let c1 = a && b && a && b\n"
+        "    let c2 = !a || !b || (a && b)\n"
+        "    return c1 && c2 && !(!a)\n"
+        "}\n"
+        "pub fn main() {\n"
+        "    let f = FlagBox(true)\n"
+        "    print(f.matches(true, true), neg_return(false), many_fixes(true, false))\n"
+        "}\n"
+    )
+    seed_res = fix_source(str(tmp_path / "seed_fix.wysna"), broken)
+    assert seed_res["changed"] is True
+    assert seed_res["remaining_diagnostics"] == []
+    assert len(seed_res["applied"]) >= 10
+
+    stage2 = ensure_selfhost_compiler_binary(str(ROOT))
+    sh_target = tmp_path / "selfhost_fix.wysna"
+    sh_target.write_text(broken, encoding="utf-8")
+    sh_fix = subprocess.run(
+        [stage2, "fix", "--apply", "--output-format=json-v1", str(sh_target)],
+        capture_output=True, text=True, timeout=120,
+    )
+    assert sh_fix.returncode == 0, sh_fix.stdout + sh_fix.stderr
+    payload = json.loads(sh_fix.stdout)
+    assert payload["status"] == "ok"
+    assert payload["result"]["changed"] is True
+    assert payload["result"]["remaining_diagnostics"] == []
+    sh_check = subprocess.run(
+        [stage2, "check", "--output-format=json-v1", str(sh_target)],
+        capture_output=True, text=True, timeout=60,
+    )
+    assert sh_check.returncode == 0, sh_check.stdout + sh_check.stderr
+    assert collect_diagnostics(str(sh_target), sh_target.read_text(encoding="utf-8")) == []
+
+
+def test_fix_safety_guards_preserve_closures_error_unions_and_top_level_pub(tmp_path):
+    from compiler.Bootstrap import ensure_selfhost_compiler_binary
+
+    valid = (
+        "struct E { msg: str }\n"
+        "pub fn apply(f: fn() -> int) -> int { return f() }\n"
+        "pub fn check_err(ok: bool, x: int, y: int) -> str ! E {\n"
+        "    let a = apply(|| => 1)\n"
+        "    let b = apply(|| { return 2 })\n"
+        "    if !ok || x != y {\n"
+        "        return Err(E { msg: \"bad\" })\n"
+        "    }\n"
+        "    return str(a + b)\n"
+        "}\n"
+        "pub fn main() {\n"
+        "    let out = check_err(true, 1, 1) else err { \"err\" }\n"
+        "    print(out)\n"
+        "}\n"
+    )
+    fixed = fix_source(str(tmp_path / "guards.wysna"), valid)
+    assert fixed["changed"] is True
+    assert fixed["remaining_diagnostics"] == []
+    text = fixed["fixed_source"]
+    assert "apply(|| => 1)" in text
+    assert "apply(|| { return 2 })" in text
+    assert "-> str ! E {" in text
+    assert "x != y" in text
+    assert "pub fn apply" in text and "pub fn check_err" in text and "pub fn main" in text
+    assert "if not ok or x != y" in text
+
+    stage2 = ensure_selfhost_compiler_binary(str(ROOT))
+    sh_target = tmp_path / "guards_sh.wysna"
+    sh_target.write_text(valid, encoding="utf-8")
+    sh_fix = subprocess.run(
+        [stage2, "fix", "--apply", "--output-format=json-v1", str(sh_target)],
+        capture_output=True, text=True, timeout=60,
+    )
+    assert sh_fix.returncode == 0, sh_fix.stdout + sh_fix.stderr
+    sh_text = sh_target.read_text(encoding="utf-8")
+    assert sh_text == text
+
+
+
 
 

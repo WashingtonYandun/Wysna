@@ -367,6 +367,218 @@ def _synthesize_unwrap_fixes(error, filename, source):
     }]
 
 
+_BINARY_LEFT_DISALLOWED = frozenset({
+    "return", "if", "elif", "else", "while", "for", "match",
+    "and", "or", "not", "in", "let", "mut",
+})
+_UNARY_BANG_LEFT_KEYWORDS = frozenset({
+    "if", "elif", "while", "return", "and", "or", "not", "in", "else",
+})
+
+
+def _is_ascii_ident_byte(byte_val):
+    return (
+        byte_val == 95
+        or 48 <= byte_val <= 57
+        or 65 <= byte_val <= 90
+        or 97 <= byte_val <= 122
+    )
+
+
+def _pad_binary_keyword(src_bytes, start, end, keyword):
+    prev_b = src_bytes[start - 1:start] if start > 0 else b""
+    next_b = src_bytes[end:end + 1] if end < len(src_bytes) else b""
+    prefix = "" if (start == 0 or prev_b in (b" ", b"\t", b"\r", b"\n", b"(", b"[", b",")) else " "
+    suffix = "" if (end >= len(src_bytes) or next_b in (b" ", b"\t", b"\r", b"\n", b")", b"]", b",", b";")) else " "
+    return prefix + keyword + suffix
+
+
+def _is_inside_class_body(src_bytes, target_byte):
+    """Return True iff target_byte lies inside an unclosed `class { ... }` body."""
+    brace_stack = []
+    in_string = False
+    escaped = False
+    in_comment = False
+    header_kw = ""
+    i = 0
+    while i < target_byte:
+        b = src_bytes[i]
+        if in_comment:
+            if b == 10:
+                in_comment = False
+            i += 1
+            continue
+        if in_string:
+            if escaped:
+                escaped = False
+            elif b == 92:
+                escaped = True
+            elif b == 34:
+                in_string = False
+            i += 1
+            continue
+        if b == 35:
+            in_comment = True
+            i += 1
+            continue
+        if b == 34:
+            in_string = True
+            i += 1
+            continue
+        if _is_ascii_ident_byte(b):
+            j = i
+            while j < target_byte and _is_ascii_ident_byte(src_bytes[j]):
+                j += 1
+            word = src_bytes[i:j].decode("ascii", "ignore")
+            if header_kw == "" and word not in ("pub", "public", "private", "async"):
+                header_kw = word
+            elif word in ("fn", "struct", "enum", "interface", "class"):
+                header_kw = word
+            i = j
+            continue
+        if b == 123:  # '{'
+            brace_stack.append(header_kw == "class")
+            header_kw = ""
+        elif b == 125:  # '}'
+            if brace_stack:
+                brace_stack.pop()
+            header_kw = ""
+        elif b in (59, 61):  # ';', '='
+            header_kw = ""
+        elif b == 10 and header_kw not in ("class", "struct", "enum", "interface"):
+            header_kw = ""
+        i += 1
+    return bool(brace_stack and brace_stack[-1])
+
+
+def _synthesize_syntax_fixes(code, message, filename, source, primary_span):
+    """Build deterministic machine fixes for common foreign-syntax slips."""
+    if not filename or source is None or primary_span is None:
+        return []
+    sb = primary_span.get("start_byte")
+    eb = primary_span.get("end_byte")
+    sha = primary_span.get("source_sha256")
+    if not isinstance(sb, int) or not isinstance(eb, int) or not sha:
+        return []
+    try:
+        src_bytes = source.encode("utf-8")
+    except UnicodeEncodeError:
+        return []
+    n = len(src_bytes)
+
+    def make_fix(description, start, end, replacement):
+        return [{
+            "description": description,
+            "applicability": "machine",
+            "edits": [{
+                "source_id": filename,
+                "source_sha256": sha,
+                "start_byte": start,
+                "end_byte": end,
+                "replacement": replacement,
+            }],
+        }]
+
+    if code == "W0001" and 0 <= sb and sb + 2 <= n and src_bytes[sb:sb + 2] == b"&&":
+        return make_fix("replace '&&' with 'and'", sb, sb + 2, _pad_binary_keyword(src_bytes, sb, sb + 2, "and"))
+
+    if code == "W0006" and (
+        "Expected '{'" in message
+        or "Expected ')'" in message
+        or "expected LBRACE" in message
+        or "expected RPAREN" in message
+    ):
+        pipe_start = -1
+        if 0 <= sb and sb + 2 <= n and src_bytes[sb:sb + 2] == b"||":
+            pipe_start = sb
+        elif sb >= 1 and sb + 1 <= n and src_bytes[sb - 1:sb + 1] == b"||":
+            pipe_start = sb - 1
+        else:
+            j = sb
+            while j > 0 and src_bytes[j - 1:j] in (b" ", b"\t"):
+                j -= 1
+            if j >= 2 and src_bytes[j - 2:j] == b"||":
+                pipe_start = j - 2
+        if pipe_start >= 0:
+            left_end = pipe_start
+            while left_end > 0 and src_bytes[left_end - 1:left_end] in (b" ", b"\t"):
+                left_end -= 1
+            left_ok = False
+            if left_end > 0:
+                lb = src_bytes[left_end - 1]
+                if lb in (41, 93, 34, 39) or (48 <= lb <= 57):  # ), ], ", ', 0-9
+                    left_ok = True
+                elif _is_ascii_ident_byte(lb):
+                    wstart = left_end - 1
+                    while wstart > 0 and _is_ascii_ident_byte(src_bytes[wstart - 1]):
+                        wstart -= 1
+                    word = src_bytes[wstart:left_end].decode("ascii", "ignore")
+                    left_ok = word not in _BINARY_LEFT_DISALLOWED
+            right_start = pipe_start + 2
+            while right_start < n and src_bytes[right_start:right_start + 1] in (b" ", b"\t"):
+                right_start += 1
+            right_ok = (
+                right_start < n
+                and src_bytes[right_start:right_start + 1] not in (b"\r", b"\n", b"{", b",", b")", b"]")
+                and src_bytes[right_start:right_start + 2] not in (b"=>", b"->")
+            )
+            if left_ok and right_ok:
+                return make_fix(
+                    "replace '||' with 'or'",
+                    pipe_start,
+                    pipe_start + 2,
+                    _pad_binary_keyword(src_bytes, pipe_start, pipe_start + 2, "or"),
+                )
+
+    bang_pos = -1
+    if code in ("W0001", "W0006") and 0 <= sb and sb + 1 <= n and src_bytes[sb:sb + 1] == b"!":
+        if sb + 1 >= n or src_bytes[sb + 1:sb + 2] != b"=":
+            bang_pos = sb
+    elif code == "W2004" and 0 <= sb <= eb <= n and src_bytes[sb:eb] == b"return" and "found 'unit'" in message:
+        k = eb
+        while k < n and src_bytes[k:k + 1] in (b" ", b"\t"):
+            k += 1
+        if k < n and src_bytes[k:k + 1] == b"!" and (k + 1 >= n or src_bytes[k + 1:k + 2] != b"="):
+            bang_pos = k
+    if bang_pos >= 0:
+        left_end = bang_pos
+        while left_end > 0 and src_bytes[left_end - 1:left_end] in (b" ", b"\t", b"\r", b"\n"):
+            left_end -= 1
+        prefix_ok = False
+        if left_end == 0:
+            prefix_ok = True
+        elif src_bytes[left_end - 1:left_end] in (
+            b"(", b"[", b"{", b",", b"=", b":", b";", b"<", b"+", b"-", b"*", b"/", b"%", b"!",
+        ):
+            prefix_ok = True
+        elif left_end >= 2 and src_bytes[left_end - 2:left_end] == b"=>":
+            prefix_ok = True
+        elif _is_ascii_ident_byte(src_bytes[left_end - 1]):
+            wstart = left_end - 1
+            while wstart > 0 and _is_ascii_ident_byte(src_bytes[wstart - 1]):
+                wstart -= 1
+            word = src_bytes[wstart:left_end].decode("ascii", "ignore")
+            prefix_ok = word in _UNARY_BANG_LEFT_KEYWORDS
+        if prefix_ok:
+            prev_b = src_bytes[bang_pos - 1:bang_pos] if bang_pos > 0 else b""
+            prefix = "" if (bang_pos == 0 or prev_b in (b" ", b"\t", b"\r", b"\n", b"(", b"[", b"{", b",")) else " "
+            next_ws = bang_pos + 1 < n and src_bytes[bang_pos + 1:bang_pos + 2] in (b" ", b"\t")
+            return make_fix(
+                "replace '!' with 'not'",
+                bang_pos,
+                bang_pos + 1,
+                prefix + ("not" if next_ws else "not "),
+            )
+
+    if code == "W0006" and 0 <= sb and sb + 3 <= n and src_bytes[sb:sb + 3] == b"pub":
+        left_ok = sb == 0 or not _is_ascii_ident_byte(src_bytes[sb - 1])
+        right_ok = sb + 3 >= n or not _is_ascii_ident_byte(src_bytes[sb + 3])
+        if left_ok and right_ok and _is_inside_class_body(src_bytes, sb):
+            return make_fix("replace 'pub' with 'public' inside class", sb, sb + 3, "public")
+
+    return []
+
+
 def diagnostic_from_error(error, source_by_file=None, *, span_cache=None):
     """Adapt a legacy compiler diagnostic without inventing an unknown range."""
     source_by_file = source_by_file or {}
@@ -379,25 +591,34 @@ def diagnostic_from_error(error, source_by_file=None, *, span_cache=None):
     if getattr(error, "help", None):
         data["help"] = error.help
 
+    primary_span = _primary_span(
+        filename,
+        getattr(error, "line", None),
+        getattr(error, "col", None),
+        source,
+        has_location=getattr(error, "has_location", True),
+        explicit_start_byte=getattr(error, "start_byte", None),
+        explicit_end_byte=getattr(error, "end_byte", None),
+        span_cache=span_cache,
+    )
     fixes = _resolve_fixes(getattr(error, "fixes", None), filename, source)
     if not fixes and data.get("unwrap_hint") == "?" and source is not None and filename:
         fixes = _synthesize_unwrap_fixes(error, filename, source)
+    if not fixes and primary_span is not None and source is not None and filename:
+        fixes = _synthesize_syntax_fixes(
+            getattr(error, "code", "W9999"),
+            getattr(error, "message", str(error)),
+            filename,
+            source,
+            primary_span,
+        )
 
     return {
         "code": getattr(error, "code", "W9999"),
         "severity": getattr(error, "severity", "error"),
         "stage": getattr(error, "stage", "internal"),
         "message": getattr(error, "message", str(error)),
-        "primary_span": _primary_span(
-            filename,
-            getattr(error, "line", None),
-            getattr(error, "col", None),
-            source,
-            has_location=getattr(error, "has_location", True),
-            explicit_start_byte=getattr(error, "start_byte", None),
-            explicit_end_byte=getattr(error, "end_byte", None),
-            span_cache=span_cache,
-        ),
+        "primary_span": primary_span,
         "related": _resolve_related(getattr(error, "related", None), filename, source_by_file, span_cache),
         "data": data,
         "fixes": fixes,

@@ -37,13 +37,14 @@ SYSTEM_PROMPT = (
 
 Key Wysna Grammar and Rules:
 1. Entrypoint: `fn main() -> unit { ... }`
-2. Functions: `fn name(param: type) -> ret_type { ... }` (public functions use `pub fn`)
+2. Functions: `fn name(param: type) -> ret_type { ... }` (top-level exports use `pub fn`; class members use `public`/`private`, not `pub`)
 3. Variables:
    - `let x = 10` (immutable)
    - `let mut y = 20` (mutable)
 4. Types: `int`, `float`, `str`, `bool`, `unit`, `list[T]`, `dict[K, V]`, `tuple[T1, T2]`, `T?` (nullable), `T ! E` (error union)
-5. Control Flow:
-   - `if cond { ... } else { ... }`
+5. Control Flow & Boolean Operators:
+   - `if cond { ... } elif other { ... } else { ... }` (`else if` is also accepted)
+   - Logical operators: `and`, `or`, `not` (never `&&`, `||`, `!`)
    - `for item in list_expr { ... }` (for dicts iterate with `for k, v in d.items()` or `for k in d.keys()`)
    - `for i in 0..limit { ... }` (exclusive) or `1..=limit` (inclusive)
    - `while cond { ... }`
@@ -69,7 +70,7 @@ Key Wysna Grammar and Rules:
    - `import "std/io" as io`: `read_line() -> Line ! IoError`, `read_all() -> str ! IoError`, `flush() -> unit ! IoError`
    - `import "std/fs" as fs`: `exists`, `is_dir`, `is_file`, `list_dir`, `mkdir_all`, `copy`, `rename`, `remove_file`
    - `import "std/path" as path`: `join`, `basename`, `dirname`, `ext`
-   - `import "std/csv" as csv`: `parse_rows(text) -> list[list[str]] ! CsvError`, `parse_records(text) -> list[dict[str, str]] ! CsvError`, `stringify(rows)`
+   - `import "std/csv" as csv`: `parse(text) -> list[list[str]] ! CsvError`, `parse_records(text) -> list[dict[str, str]] ! CsvError`, `stringify(rows)`
    - `import "std/process" as proc`: `run(exe, argv, timeout_ms)`, `capture(exe, argv, timeout_ms, max_output_bytes) -> ProcessOutput ! ProcessError`
    - `import "std/json" as json`, `import "std/http" as http`, `from "std/algorithms" use { map, filter, fold, any, all, sort }`
 11. Comments:

@@ -20,7 +20,7 @@ fn sem_skip_newlines_before_branch(context: SemanticContext) {
     while sem_is(context, "NEWLINE") { sem_take(context) }
     let mut branch = sem_is(context, "ELIF")
     if sem_is(context, "ELSE") {
-        if context.tokens[context.pos + 1].kind == "LBRACE" or context.tokens[context.pos + 1].kind == "IDENT" and context.tokens[context.pos + 2].kind == "LBRACE" { branch = true }
+        if (context.pos + 1 < len(context.tokens) and context.tokens[context.pos + 1].kind == "IF") or context.tokens[context.pos + 1].kind == "LBRACE" or context.tokens[context.pos + 1].kind == "IDENT" and context.tokens[context.pos + 2].kind == "LBRACE" { branch = true }
     }
     if not branch { context.pos = saved }
 }
@@ -2152,8 +2152,10 @@ fn sem_if(context: SemanticContext, statement: bool) -> SemValue {
         elif not first.terminates and first.type_id != context.unit_type { branch_expected = first.type_id }
     }
     sem_skip_newlines_before_branch(context)
-    while sem_is(context, "ELIF") {
-        sources.append(sem_take(context))
+    while sem_is(context, "ELIF") or (sem_is(context, "ELSE") and context.pos + 1 < len(context.tokens) and context.tokens[context.pos + 1].kind == "IF") {
+        let branch_tok = sem_take(context)
+        if branch_tok.kind == "ELSE" { let _else_if_tok = sem_take(context) }
+        sources.append(branch_tok)
         context.initialized = initial
         context.expected_type = -1
         let condition_source = sem_at(context)
