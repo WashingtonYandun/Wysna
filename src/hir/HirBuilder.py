@@ -38,6 +38,8 @@ BUILTIN_NAMES = {
     "weak", "upgrade", "print", "eprint", "len", "range", "ord", "chr", "slice", "str", "int", "u8", "float", "bool",
     "join_strings", "bytes", "args", "env", "unix_time", "exit", "enumerate", "dict_items", "read_file", "write_file",
     "contract_assert", "__wysna_contract_assert", "__wysna_json_parse", "__wysna_json_parse_int",
+    "__wysna_json_get_int", "__wysna_json_get_bool", "__wysna_json_get_str",
+    "__wysna_json_get_float", "__wysna_json_quote_str",
 }
 
 

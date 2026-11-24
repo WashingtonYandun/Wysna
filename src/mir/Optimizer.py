@@ -1,7 +1,7 @@
 """MIR optimization passes: CFG simplification, constant folding, move coalescing, dead op cleanup, and ownership optimizations."""
 from collections import deque
 from checker.TypeInterner import TYPE_BOOL, TYPE_INT
-from mir.Nodes import Operation, Terminator
+from mir.Nodes import Module, Operation, Terminator
 from mir.Ownership import optimize_interprocedural_cow, optimize_local_cow_uniqueness, optimize_parameter_reads
 from mir.Verifier import Verifier
 
@@ -518,6 +518,52 @@ def optimize_cfg(module, interner=None):
     if interner is not None:
         Verifier(interner).verify(module)
     return module
+
+
+def eliminate_dead_functions(module):
+    """Return a module view with unreachable functions and unused externs pruned."""
+    if module.library_mode or module.exports:
+        return module
+    by_name = {function.name: function for function in module.functions}
+    if 'wysna_program' not in by_name:
+        return module
+    reachable = set()
+    used_externs = set()
+    queue = deque(['wysna_program'])
+    for layout in module.layouts.values():
+        if layout.kind == 'class':
+            for mname, method in layout.methods.items():
+                owner = method[0]
+                queue.append(f'wysna_method_{owner}__{mname}')
+    while queue:
+        fname = queue.popleft()
+        if fname in reachable:
+            continue
+        if fname in module.externs:
+            used_externs.add(fname)
+            continue
+        fn = by_name.get(fname)
+        if fn is None:
+            continue
+        reachable.add(fname)
+        for block in fn.blocks:
+            for op in block.operations:
+                if op.opcode in ('call', 'function'):
+                    callee = op.data.get('name')
+                    if callee and callee not in reachable:
+                        queue.append(callee)
+    return Module(
+        file=module.file,
+        arena_id=module.arena_id,
+        functions=[function for function in module.functions if function.name in reachable],
+        globals=module.globals,
+        layouts=module.layouts,
+        virtual_slots=module.virtual_slots,
+        externs={name: ext for name, ext in module.externs.items() if name in used_externs},
+        exports=module.exports,
+        library_mode=module.library_mode,
+        enum_count=module.enum_count,
+    )
 
 
 def optimize(module, interner):

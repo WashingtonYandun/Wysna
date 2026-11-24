@@ -103,6 +103,67 @@ class ReleaseFastPathTests(unittest.TestCase):
             run = subprocess.run([str(binary)], cwd=ROOT, env=env, capture_output=True, text=True, timeout=10)
             self.assertEqual(run.returncode, 0, f"Execution failed: code={run.returncode}, err={run.stderr}")
 
+    def test_release_graph_uses_zero_temporary_mallocs_under_depth_64(self):
+        compiler = compiler_command()
+        with tempfile.TemporaryDirectory(prefix="wysna-release-zero-malloc-") as tmpdir:
+            temp = Path(tmpdir)
+            main_c = temp / "test_zero_malloc.c"
+            binary = temp / executable_name("test_zero_malloc")
+
+            main_c.write_text(
+                '#include <assert.h>\n'
+                '#include <stdlib.h>\n'
+                'static size_t g_malloc_calls = 0;\n'
+                'static void* counted_malloc(size_t sz) { g_malloc_calls++; return malloc(sz); }\n'
+                '#define malloc counted_malloc\n'
+                '#include "runtime/wysna_runtime.h"\n'
+                '#undef malloc\n\n'
+                'int main(int argc, char** argv) {\n'
+                '    wysna_init_args(argc, argv);\n'
+                '    const char* s_keys[2] = {"a", "b"};\n'
+                '    WVal s_vals[2] = {wysna_int(1), wysna_copy_str("long_string_value")};\n'
+                '    WVal st = wysna_make_struct("LeafStruct", 2, s_keys, s_vals);\n'
+                '    wysna_release(s_vals[1]);\n'
+                '    WVal inner_tup_elems[2] = {wysna_int(7), st};\n'
+                '    WVal tup = wysna_make_tuple(2, inner_tup_elems);\n'
+                '    wysna_release(st);\n'
+                '    WVal dk = wysna_copy_str("nested_dict_key");\n'
+                '    WVal dv = wysna_enum_payload("BoxEnum", "Wrap", tup);\n'
+                '    WVal dict = wysna_make_dict(1, &dk, &dv);\n'
+                '    wysna_release(dk);\n'
+                '    wysna_release(dv);\n'
+                '    WVal root = dict;\n'
+                '    for (int i = 0; i < 40; i++) {\n'
+                '        WVal next = wysna_make_list(1, &root);\n'
+                '        wysna_release(root);\n'
+                '        root = next;\n'
+                '    }\n'
+                '    size_t before_release = g_malloc_calls;\n'
+                '    wysna_release(root);\n'
+                '    assert(g_malloc_calls == before_release);\n'
+                '    assert(wysna_g_alloc_count == wysna_g_free_count && wysna_g_live_objects == 0);\n'
+                '    wysna_runtime_cleanup();\n'
+                '    return 0;\n'
+                '}\n',
+                encoding="utf-8"
+            )
+
+            math_flags = [] if os.name == "nt" else ["-lm"]
+            cmd = compiler + [
+                "-std=c99",
+                "-O2",
+                "-fsanitize=address,undefined",
+                f"-I{ROOT}",
+                str(main_c),
+            ] + math_flags + ["-o", str(binary)]
+
+            build = subprocess.run(cmd, cwd=ROOT, capture_output=True, text=True, timeout=60)
+            self.assertEqual(build.returncode, 0, f"Compilation failed: {build.stderr}")
+
+            env = dict(os.environ, WYSNA_MEM_CHECK="1")
+            run = subprocess.run([str(binary)], cwd=ROOT, env=env, capture_output=True, text=True, timeout=10)
+            self.assertEqual(run.returncode, 0, f"Execution failed: code={run.returncode}, err={run.stderr}")
+
 
 if __name__ == "__main__":
     unittest.main()

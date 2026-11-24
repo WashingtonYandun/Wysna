@@ -832,5 +832,140 @@ fn main() -> unit {
         assert ok, detail
 
 
+def test_json_extractors_quoting_and_key_cache_across_four_engines():
+    selfhost_bin = ensure_selfhost_compiler_binary(str(ROOT))
+    source = '''import "std/json"
+fn main() -> unit {
+    let payload = "[{\\"categoryName\\":\\"alpha\\",\\"long_field_name\\":true,\\"float_metric\\":-12.5e1,\\"score\\":42,\\"short\\":\\"ok\\"},{\\"categoryName\\":\\"beta\\",\\"long_field_name\\":false,\\"float_metric\\":0.25,\\"score\\":-7,\\"short\\":\\"\\\\n\\"}]"
+    let rows = json.parse(payload) else err { print("PARSE-FAIL", err.message) return }
+    let items = json.to_array(rows) else err { print("ARR-FAIL", err.message) return }
+    for item in items {
+        let s = json.get_str(item, "categoryName") else _e { "err" }
+        let b = json.get_bool(item, "long_field_name") else _e { false }
+        let f = json.get_float(item, "float_metric") else _e { -999.0 }
+        let i = json.get_int(item, "score") else _e { -999 }
+        let sh = json.get_str(item, "short") else _e { "err" }
+        print(s, b, f, i, len(sh))
+    }
+    let tricky = json.object({
+        "long_key_exceeding_sixty_four_bytes_for_cache_fallback_verification_12345": json.from_int(9),
+        "bad_int": json.Value.Number("01"),
+        "bad_float": json.Value.Number(".5"),
+        "overflow_float": json.Value.Number("1e500"),
+        "wrong_bool": json.from_str("true"),
+    })
+    json.get_int(tricky, "bad_int") else err { print("BAD-INT", err.offset, err.message) 0 }
+    json.get_float(tricky, "bad_float") else err { print("BAD-FLOAT", err.offset, err.message) 0.0 }
+    let ov = json.get_float(tricky, "overflow_float") else err {
+        print("OVR-ERR", err.message)
+        -1.0
+    }
+    print("OVR-FLOAT", ov > 1000000.0)
+    json.get_bool(tricky, "wrong_bool") else err { print("BAD-BOOL", err.offset, err.message) false }
+    json.get_str(tricky, "missing_k") else err { print("MISS-STR", err.offset, err.message) "" }
+    json.get_int(json.from_int(1), "k") else err { print("NOT-OBJ", err.offset, err.message) 0 }
+    let mut over_1mib_digits = "1"
+    for _step in 0..21 {
+        over_1mib_digits = over_1mib_digits + over_1mib_digits
+    }
+    let big_obj = json.object({"huge": json.Value.Number(over_1mib_digits)})
+    json.get_int(big_obj, "huge") else err { print("BIG-INT", err.message) 0 }
+    json.get_float(big_obj, "huge") else err { print("BIG-FLOAT", err.message) 0.0 }
+    let ctrl = "" + chr(0) + chr(8) + chr(9) + chr(10) + chr(12) + chr(13) + "\\"" + "\\\\" + "café"
+    let quoted = json.stringify(json.from_str(ctrl)) else err { print("STR-FAIL", err.message) "" }
+    print(quoted)
+    let roundtrip = json.stringify(json.object({"plain": json.from_str(""), "x": json.from_str("hi")})) else err { "" }
+    print(roundtrip)
+}
+main()
+'''
+    expected = (
+        "alpha true -125.0 42 2\n"
+        "beta false 0.25 -7 1\n"
+        "BAD-INT 1 bad_int: leading zero in number\n"
+        "BAD-FLOAT 0 bad_float: expected JSON value\n"
+        "OVR-FLOAT true\n"
+        "BAD-BOOL 0 wrong_bool: expected JSON boolean, found JSON string\n"
+        "MISS-STR 0 missing_k: missing required JSON field\n"
+        "NOT-OBJ 0 k: expected JSON object, found JSON number\n"
+        "BIG-INT huge: maximum JSON input byte limit exceeded\n"
+        "BIG-FLOAT huge: maximum JSON input byte limit exceeded\n"
+        "\"\\u0000\\b\\t\\n\\f\\r\\\"\\\\café\"\n"
+        "{\"plain\":\"\",\"x\":\"hi\"}\n"
+    )
+    with tempfile.TemporaryDirectory() as directory:
+        results = [
+            run_engine(engine, source, 'json-opt2-matrix', selfhost_bin, directory,
+                       sanitize=(os.environ.get('WYSNA_SANITIZE') == '1' or engine == 'hir'))
+            for engine in ('interpreter', 'ast', 'hir', 'selfhost')
+        ]
+        ok, detail = compare(results, expected)
+        assert ok, detail
+
+
+def test_algorithms_sort_sizes_edge_cases_and_stability_across_four_engines():
+    selfhost_bin = ensure_selfhost_compiler_binary(str(ROOT))
+    source = '''import "std/algorithms" as alg
+struct Pair { key: int, seq: int }
+fn is_sorted(xs: list[int]) -> bool {
+    let mut i = 1
+    while i < len(xs) {
+        if xs[i] < xs[i - 1] { return false }
+        i = i + 1
+    }
+    return true
+}
+fn main() -> unit {
+    for n in [0, 1, 2, 15, 16, 17, 64, 100] {
+        let mut rev: list[int] = []
+        let mut fwd: list[int] = []
+        let mut same: list[int] = []
+        let mut k = 0
+        while k < n {
+            rev.append(n - 1 - k)
+            fwd.append(k)
+            same.append(7)
+            k = k + 1
+        }
+        let s_rev = alg.sort[int](rev, |a: int, b: int| { a < b })
+        let s_fwd = alg.sort[int](fwd, |a: int, b: int| { a < b })
+        let s_same = alg.sort[int](same, |a: int, b: int| { a < b })
+        if len(s_rev) != n or not is_sorted(s_rev) or not is_sorted(s_fwd) or not is_sorted(s_same) {
+            print("FAIL-SIZE", n)
+            return
+        }
+        if n > 0 and (s_rev[0] != 0 or s_rev[n - 1] != n - 1) {
+            print("FAIL-ENDS", n)
+            return
+        }
+    }
+    let mut items: list[Pair] = []
+    for idx in 0..33 {
+        items.append(Pair { key: 5 - (idx % 6), seq: idx })
+    }
+    let ordered = alg.sort[Pair](items, |left: Pair, right: Pair| { left.key < right.key })
+    let mut stable = len(ordered) == 33
+    for i in 1..len(ordered) {
+        let prev = ordered[i - 1]
+        let cur = ordered[i]
+        if cur.key < prev.key or (cur.key == prev.key and cur.seq <= prev.seq) {
+            stable = false
+        }
+    }
+    print("SORT-OK", stable, ordered[0].key, ordered[0].seq, ordered[32].key, ordered[32].seq)
+}
+main()
+'''
+    expected = 'SORT-OK true 0 5 5 30\n'
+    with tempfile.TemporaryDirectory() as directory:
+        results = [
+            run_engine(engine, source, 'algorithms-sort-matrix', selfhost_bin, directory,
+                       sanitize=os.environ.get('WYSNA_SANITIZE') == '1')
+            for engine in ('interpreter', 'ast', 'hir', 'selfhost')
+        ]
+        ok, detail = compare(results, expected)
+        assert ok, detail
+
+
 if __name__ == '__main__':
     run_toolkit_tests()

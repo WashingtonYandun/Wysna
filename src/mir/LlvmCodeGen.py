@@ -7,6 +7,7 @@ from mir.LlvmText import quote_bytes
 from mir.LlvmManaged import ManagedEmission, DECLARATIONS as MANAGED_DECLARATIONS
 from mir.LlvmAbi import SCALAR_TYPES, is_managed
 from mir.AsyncLowering import build_cps_plan
+from mir.Optimizer import eliminate_dead_functions
 from mir.LlvmProfile import (verify_profile, CONVERSIONS, ABI_VERSION, VALUE_BYTES,
                              LITERAL_BYTES, ALIGNMENT, PROFILE)
 
@@ -48,6 +49,7 @@ class LlvmCodeGen:
         verify_profile(module, self.interner)
         if debug_info is not None:
             debug_info.require_owner(module)
+        module = eliminate_dead_functions(module)
         self.debug_info = debug_info
         self.module = module
         self.triple = triple

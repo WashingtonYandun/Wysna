@@ -110,40 +110,8 @@ pub fn at(value: Value, index: int) -> Value? {
     }
 }
 
-fn escape_character(codepoint: int) -> str {
-    if codepoint == 34 { return "\\\"" }
-    if codepoint == 92 { return "\\\\" }
-    if codepoint == 8 { return "\\b" }
-    if codepoint == 12 { return "\\f" }
-    if codepoint == 10 { return "\\n" }
-    if codepoint == 13 { return "\\r" }
-    if codepoint == 9 { return "\\t" }
-    let hex = "0123456789abcdef"
-    return "\\u00" + hex[codepoint / 16] + hex[codepoint % 16]
-}
-
 fn quote_string(value: str) -> str {
-    let size = len(value)
-    let mut parts: list[str] = []
-    let mut span_start = 0
-    for index in 0..size {
-        let character = value[index]
-        let codepoint = ord(character)
-        if codepoint < 32 or codepoint == 34 or codepoint == 92 {
-            if index > span_start {
-                parts.append(slice(value, span_start, index))
-            }
-            parts.append(escape_character(codepoint))
-            span_start = index + 1
-        }
-    }
-    if span_start == 0 {
-        return "\"" + value + "\""
-    }
-    if span_start < size {
-        parts.append(slice(value, span_start, size))
-    }
-    return "\"" + join_strings(parts, "") + "\""
+    return __wysna_json_quote_str(value)
 }
 
 fn validate_number(raw: str) -> str ! JsonError {
@@ -353,7 +321,7 @@ fn convert_field[T](field: Value, key: str, convert: fn(Value) -> T ! JsonError)
     }
 }
 
-pub fn get_str(value: Value, key: str) -> str ! JsonError {
+fn get_str_fallback(value: Value, key: str) -> str ! JsonError {
     match value {
         Value.Object(fields) => {
             match fields.get(key) {
@@ -375,7 +343,13 @@ pub fn get_str(value: Value, key: str) -> str ! JsonError {
     }
 }
 
-pub fn get_int(value: Value, key: str) -> int ! JsonError {
+pub fn get_str(value: Value, key: str) -> str ! JsonError {
+    return __wysna_json_get_str(value, key) else _msg {
+        return get_str_fallback(value, key)
+    }
+}
+
+fn get_int_fallback(value: Value, key: str) -> int ! JsonError {
     match value {
         Value.Object(fields) => {
             match fields.get(key) {
@@ -385,10 +359,8 @@ pub fn get_int(value: Value, key: str) -> int ! JsonError {
                 Some(field) => {
                     match field {
                         Value.Number(raw) => {
-                            return __wysna_json_parse_int(raw) else _msg {
-                                return parse_int_with_diagnostics(raw) else issue {
-                                    return Err(error(issue.offset, field_label(key) + ": " + issue.message))
-                                }
+                            return parse_int_with_diagnostics(raw) else issue {
+                                return Err(error(issue.offset, field_label(key) + ": " + issue.message))
                             }
                         },
                         _ => {
@@ -406,7 +378,13 @@ pub fn get_int(value: Value, key: str) -> int ! JsonError {
     }
 }
 
-pub fn get_float(value: Value, key: str) -> float ! JsonError {
+pub fn get_int(value: Value, key: str) -> int ! JsonError {
+    return __wysna_json_get_int(value, key) else _msg {
+        return get_int_fallback(value, key)
+    }
+}
+
+fn get_float_fallback(value: Value, key: str) -> float ! JsonError {
     match value {
         Value.Object(fields) => {
             match fields.get(key) {
@@ -436,7 +414,13 @@ pub fn get_float(value: Value, key: str) -> float ! JsonError {
     }
 }
 
-pub fn get_bool(value: Value, key: str) -> bool ! JsonError {
+pub fn get_float(value: Value, key: str) -> float ! JsonError {
+    return __wysna_json_get_float(value, key) else _msg {
+        return get_float_fallback(value, key)
+    }
+}
+
+fn get_bool_fallback(value: Value, key: str) -> bool ! JsonError {
     match value {
         Value.Object(fields) => {
             match fields.get(key) {
@@ -455,6 +439,12 @@ pub fn get_bool(value: Value, key: str) -> bool ! JsonError {
             let issue = type_mismatch(value, "object")
             return Err(error(issue.offset, field_label(key) + ": " + issue.message))
         },
+    }
+}
+
+pub fn get_bool(value: Value, key: str) -> bool ! JsonError {
+    return __wysna_json_get_bool(value, key) else _msg {
+        return get_bool_fallback(value, key)
     }
 }
 

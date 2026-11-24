@@ -191,6 +191,13 @@ fn mir_c_operation(module: MirModule, function: MirFunction, operation: MirOpera
             }
             return mir_c_write(function, result, "wysna_int(" + start_val + " + (int64_t)" + counter + ")", false)
         }
+        let res_tid = function.slots[result].type_id
+        let src_tid = function.slots[operation.args[0]].type_id
+        if module.types[src_tid].kind == "list" and (res_tid == 3 or res_tid == 4 or res_tid == 2) {
+            let helper = if res_tid == 3 { "wysna_list_iteration_get_int_at" } elif res_tid == 4 { "wysna_list_iteration_get_float_at" } else { "wysna_list_iteration_get_bool_at" }
+            let value = helper + "(" + arguments[0] + ", " + counter + ", " + escape_c_str(operation.source.file) + ", " + str(operation.source.line) + ", " + str(operation.source.col) + ")"
+            return mir_c_write_consume(function, result, value, false)
+        }
         let value = "wysna_list_iteration_get_owned_at(" + arguments[0] + ", " + counter + ", " + escape_c_str(operation.source.file) + ", " + str(operation.source.line) + ", " + str(operation.source.col) + ")"
         return mir_c_write_consume(function, result, value, true)
     }
@@ -322,6 +329,17 @@ fn mir_c_operation(module: MirModule, function: MirFunction, operation: MirOpera
             for external in module.externs { if external.name == name { found = true boxed = true } }
             if not found { report_error_at("W9999", operation.source, "verified MIR call target missing during C99 emission") }
         } elif name == "wysna_builtin_print" or name == "wysna_builtin_eprint" { arguments = [str(len(arguments)), mir_c_array(arguments)] }
+        if kind == "runtime" and name == "wysna_index_get_owned_at" and len(operation.args) == 2 {
+            let recv_tid = function.slots[operation.args[0]].type_id
+            let idx_tid = function.slots[operation.args[1]].type_id
+            let res_tid = function.slots[result].type_id
+            if module.types[recv_tid].kind == "list" and idx_tid == 3 and (res_tid == 3 or res_tid == 4 or res_tid == 2) {
+                let helper = if res_tid == 3 { "wysna_list_get_int_at" } elif res_tid == 4 { "wysna_list_get_float_at" } else { "wysna_list_get_bool_at" }
+                let raw_idx = if not mir_value_storage(idx_tid) { mir_c_name(operation.args[1]) } else { "wysna_as_int(" + arguments[1] + ")" }
+                let call_expr = helper + "(" + arguments[0] + ", " + raw_idx + ", " + escape_c_str(operation.source.file) + ", " + str(operation.source.line) + ", " + str(operation.source.col) + ")"
+                return mir_c_write_consume(function, result, call_expr, false)
+            }
+        }
         if name == "wysna_div_at" or name == "wysna_mod_at" or name == "wysna_index_get_owned_at" or name == "wysna_builtin_contract_assert_at" {
             arguments.append(escape_c_str(operation.source.file))
             arguments.append(str(operation.source.line))
@@ -582,30 +600,103 @@ fn mir_c_function(module: MirModule, function: MirFunction) -> str {
     parts.append("}\n")
     return join_strings(parts, "")
 }
+fn mir_prune_dead_functions(module: MirModule) -> MirModule {
+    let mut fn_index: dict[str, int] = {}
+    for i in 0..len(module.functions) {
+        fn_index[module.functions[i].name] = i
+    }
+    if not fn_index.contains("wysna_program") {
+        return module
+    }
+    let mut ext_names: dict[str, bool] = {}
+    for external in module.externs {
+        ext_names[external.name] = true
+    }
+    let mut queue: list[str] = ["wysna_program"]
+    for record in module.records {
+        if module.types[record.type_id].kind == "class" {
+            for method in record.methods {
+                queue.append(method.target)
+            }
+        }
+    }
+    let mut reachable: dict[str, bool] = {}
+    let mut reachable_extern: dict[str, bool] = {}
+    let mut cursor = 0
+    while cursor < len(queue) {
+        let fname = queue[cursor]
+        cursor = cursor + 1
+        if reachable.contains(fname) {
+            continue
+        }
+        if ext_names.contains(fname) {
+            reachable_extern[fname] = true
+            continue
+        }
+        if not fn_index.contains(fname) {
+            continue
+        }
+        reachable[fname] = true
+        let fn_ = module.functions[fn_index[fname]]
+        for block in fn_.blocks {
+            for op in block.operations {
+                if (op.opcode == "call" or op.opcode == "function") and len(op.name) > 0 {
+                    if not reachable.contains(op.name) {
+                        queue.append(op.name)
+                    }
+                }
+            }
+        }
+    }
+    let mut pruned_fns: list[MirFunction] = []
+    for function in module.functions {
+        if reachable.contains(function.name) {
+            pruned_fns.append(function)
+        }
+    }
+    let mut pruned_externs: list[MirExtern] = []
+    for external in module.externs {
+        if reachable_extern.contains(external.name) {
+            pruned_externs.append(external)
+        }
+    }
+    return MirModule {
+        file: module.file,
+        functions: pruned_fns,
+        globals: module.globals,
+        records: module.records,
+        virtual_slots: module.virtual_slots,
+        externs: pruned_externs,
+        types: module.types,
+        source: module.source
+    }
+}
+
 fn mir_emit_c(module: MirModule) -> str {
     mir_verify(module)
+    let active = mir_prune_dead_functions(module)
     let mut parts: list[str] = []
-    for external in module.externs { if external.native == "wysna_host_http_request" { parts.append("#define WYSNA_HAS_HTTP 1\n") } }
+    for external in active.externs { if external.native == "wysna_host_http_request" { parts.append("#define WYSNA_HAS_HTTP 1\n") } }
     parts.append("#include \"runtime/wysna_runtime.h\"\n/* Verified Compiler MIR: explicit CFG and ownership. */\n")
-    for record in module.records {
+    for record in active.records {
         if len(record.fields) > 0 {
             let mut kparts: list[str] = []
             for field in record.fields { kparts.append(escape_c_str(field.name)) }
             parts.append("static const char* const wysna_rec_keys_" + str(record.type_id) + "[" + str(len(record.fields)) + "] = { " + join_strings(kparts, ", ") + " };\n")
         }
-        if module.types[record.type_id].kind == "class" { parts.append("static const WClassVTable wysna_vtable_" + module.types[record.type_id].name + ";\n") }
+        if active.types[record.type_id].kind == "class" { parts.append("static const WClassVTable wysna_vtable_" + active.types[record.type_id].name + ";\n") }
     }
-    for global in module.globals { parts.append("static WVal " + global.name + ";\n") }
-    for function in module.functions { parts.append(mir_c_signature(function) + ";\n") }
-    parts.append(mir_c_externs(module))
-    parts.append(mir_c_function_adapters(module))
-    for function in module.functions { parts.append(mir_c_function(module, function)) }
-    parts.append(mir_c_vtables(module))
+    for global in active.globals { parts.append("static WVal " + global.name + ";\n") }
+    for function in active.functions { parts.append(mir_c_signature(function) + ";\n") }
+    parts.append(mir_c_externs(active))
+    parts.append(mir_c_function_adapters(active))
+    for function in active.functions { parts.append(mir_c_function(active, function)) }
+    parts.append(mir_c_vtables(active))
     let mut returned = 1
-    for function in module.functions { if function.name == "wysna_program" { returned = function.return_type } }
+    for function in active.functions { if function.name == "wysna_program" { returned = function.return_type } }
     parts.append("int main(int argc, char** argv) {\n    wysna_init_args(argc, argv);\n    WVal result = " + mir_c_box("wysna_program()", returned) + ";\n")
     parts.append("    int status = wysna_entry_status(result);\n    wysna_release(result);\n")
-    for global in module.globals { parts.append("    wysna_release(" + global.name + ");\n") }
+    for global in active.globals { parts.append("    wysna_release(" + global.name + ");\n") }
     parts.append("    wysna_runtime_cleanup();\n    return status;\n}\n")
     return join_strings(parts, "")
 }

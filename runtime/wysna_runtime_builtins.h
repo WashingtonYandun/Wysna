@@ -570,6 +570,7 @@ WYSNA_RT_FN int wysna_entry_status(WVal value) {
 #ifdef _WIN32
 WYSNA_RT_FN void wysna_init_args(int argc, char** argv) {
     wysna_runtime_init_telemetry();
+    wysna_init_quotas();
     (void)argc; (void)argv;
     typedef LPWSTR* (WINAPI *pfnCommandLineToArgvW)(LPCWSTR, int*);
     HMODULE hShell = LoadLibraryA("shell32.dll");
@@ -623,6 +624,7 @@ WYSNA_RT_FN void wysna_init_args(int argc, char** argv) {
 #else
 WYSNA_RT_FN void wysna_init_args(int argc, char** argv) {
     wysna_runtime_init_telemetry();
+    wysna_init_quotas();
     wysna_g_argc = argc;
     wysna_g_argv = argv;
 }
