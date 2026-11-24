@@ -189,7 +189,7 @@ static inline void wysna_format_object_leave(WFormatObjects* set, WStructBuf* ob
     set->count--;
 }
 
-static inline char* wysna_to_cstr(WVal v, bool quote_str) {
+WYSNA_RT_FN char* wysna_to_cstr(WVal v, bool quote_str) {
     WFormatObjects active_objects = {0};
     WFormatTask local_tasks[64];
     WFormatTask* tasks = local_tasks;

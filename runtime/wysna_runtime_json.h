@@ -541,7 +541,7 @@ static inline WVal wysna_json_read_value(WysnaJsonCtx* ctx) {
     return wysna_unit();
 }
 
-static inline WVal wysna_builtin_json_parse(
+WYSNA_RT_FN WVal wysna_builtin_json_parse(
     WVal source,
     WVal max_bytes_v,
     WVal max_depth_v,
@@ -626,7 +626,7 @@ static inline WVal wysna_builtin_json_parse(
     return wysna_ok(root);
 }
 
-static inline WVal wysna_builtin_json_parse_int(WVal raw_val) {
+WYSNA_RT_FN WVal wysna_builtin_json_parse_int(WVal raw_val) {
     char scratch[7];
     size_t slen = 0;
     const unsigned char* s = (const unsigned char*)wysna_str_bytes(raw_val, scratch, &slen);

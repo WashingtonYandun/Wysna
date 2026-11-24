@@ -553,7 +553,7 @@ static void wysna_md5_compute(const uint8_t* data, size_t len, uint8_t out[16]) 
 /* -------------------------------------------------------------------------
  * Host ABI Functions
  * ------------------------------------------------------------------------- */
-static inline int64_t wysna_host_crypto_sha256(void* input_handle, void* output_handle) {
+WYSNA_RT_FN int64_t wysna_host_crypto_sha256(void* input_handle, void* output_handle) {
     WysnaHostEntry* input = wysna_host_find(input_handle, 1);
     WysnaHostEntry* output = wysna_host_find(output_handle, 1);
     if (!input || !output) return -1;
@@ -571,7 +571,7 @@ static inline int64_t wysna_host_crypto_sha256(void* input_handle, void* output_
     return 0;
 }
 
-static inline int64_t wysna_host_crypto_hmac_sha256(void* key_handle, void* msg_handle, void* output_handle) {
+WYSNA_RT_FN int64_t wysna_host_crypto_hmac_sha256(void* key_handle, void* msg_handle, void* output_handle) {
     WysnaHostEntry* key = wysna_host_find(key_handle, 1);
     WysnaHostEntry* msg = wysna_host_find(msg_handle, 1);
     WysnaHostEntry* output = wysna_host_find(output_handle, 1);
@@ -592,7 +592,7 @@ static inline int64_t wysna_host_crypto_hmac_sha256(void* key_handle, void* msg_
     return 0;
 }
 
-static inline int64_t wysna_host_crypto_sha512(void* input_handle, void* output_handle) {
+WYSNA_RT_FN int64_t wysna_host_crypto_sha512(void* input_handle, void* output_handle) {
     WysnaHostEntry* input = wysna_host_find(input_handle, 1);
     WysnaHostEntry* output = wysna_host_find(output_handle, 1);
     if (!input || !output) return -1;
@@ -610,7 +610,7 @@ static inline int64_t wysna_host_crypto_sha512(void* input_handle, void* output_
     return 0;
 }
 
-static inline int64_t wysna_host_crypto_hmac_sha512(void* key_handle, void* msg_handle, void* output_handle) {
+WYSNA_RT_FN int64_t wysna_host_crypto_hmac_sha512(void* key_handle, void* msg_handle, void* output_handle) {
     WysnaHostEntry* key = wysna_host_find(key_handle, 1);
     WysnaHostEntry* msg = wysna_host_find(msg_handle, 1);
     WysnaHostEntry* output = wysna_host_find(output_handle, 1);
@@ -631,7 +631,7 @@ static inline int64_t wysna_host_crypto_hmac_sha512(void* key_handle, void* msg_
     return 0;
 }
 
-static inline int64_t wysna_host_crypto_md5(void* input_handle, void* output_handle) {
+WYSNA_RT_FN int64_t wysna_host_crypto_md5(void* input_handle, void* output_handle) {
     WysnaHostEntry* input = wysna_host_find(input_handle, 1);
     WysnaHostEntry* output = wysna_host_find(output_handle, 1);
     if (!input || !output) return -1;
@@ -649,7 +649,7 @@ static inline int64_t wysna_host_crypto_md5(void* input_handle, void* output_han
     return 0;
 }
 
-static inline int64_t wysna_host_crypto_random_bytes(void* output_handle, int64_t count) {
+WYSNA_RT_FN int64_t wysna_host_crypto_random_bytes(void* output_handle, int64_t count) {
     if (count <= 0 || count > (1024 * 1024 * 64)) return -1;
     WysnaHostEntry* output = wysna_host_find(output_handle, 1);
     if (!output) return -1;
@@ -666,7 +666,7 @@ static inline int64_t wysna_host_crypto_random_bytes(void* output_handle, int64_
     return 0;
 }
 
-static inline int64_t wysna_host_crypto_constant_time_compare(void* a_handle, void* b_handle) {
+WYSNA_RT_FN int64_t wysna_host_crypto_constant_time_compare(void* a_handle, void* b_handle) {
     WysnaHostEntry* a = wysna_host_find(a_handle, 1);
     WysnaHostEntry* b = wysna_host_find(b_handle, 1);
     if (!a || !b) return -1;
@@ -845,7 +845,7 @@ static inline int wysna_aead_store(WysnaHostEntry* output, const uint8_t* data, 
 }
 
 /* Returns 0 on success (ciphertext || 16-byte tag in output), -1 on invalid arguments. */
-static inline int64_t wysna_host_crypto_chacha20_poly1305_seal(void* key_handle, void* nonce_handle, void* aad_handle,
+WYSNA_RT_FN int64_t wysna_host_crypto_chacha20_poly1305_seal(void* key_handle, void* nonce_handle, void* aad_handle,
                                                               void* plain_handle, void* output_handle) {
     WysnaHostEntry* key = wysna_host_find(key_handle, 1);
     WysnaHostEntry* nonce = wysna_host_find(nonce_handle, 1);
@@ -873,7 +873,7 @@ static inline int64_t wysna_host_crypto_chacha20_poly1305_seal(void* key_handle,
 }
 
 /* Returns 0 on success, -1 on invalid arguments, -2 when authentication fails (output untouched). */
-static inline int64_t wysna_host_crypto_chacha20_poly1305_open(void* key_handle, void* nonce_handle, void* aad_handle,
+WYSNA_RT_FN int64_t wysna_host_crypto_chacha20_poly1305_open(void* key_handle, void* nonce_handle, void* aad_handle,
                                                               void* sealed_handle, void* output_handle) {
     WysnaHostEntry* key = wysna_host_find(key_handle, 1);
     WysnaHostEntry* nonce = wysna_host_find(nonce_handle, 1);

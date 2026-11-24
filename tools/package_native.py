@@ -57,6 +57,8 @@ def assemble(output, cache, *, source_commit=None):
                                                   ("stdlib", ('.wysna',)))
                      for path in sorted((ROOT / directory).iterdir())
                      if path.is_file() and path.suffix in suffixes}
+    runtime_lib_source = ROOT / "runtime/wysna_runtime_lib.c"
+    source_inputs["runtime/wysna_runtime_lib.c"] = sha256(runtime_lib_source)
     driver_digest = source_inputs['packaging/native/driver.c']
     platform_digest = source_inputs['packaging/native/platform.h']
     output.parent.mkdir(parents=True, exist_ok=True)
@@ -83,9 +85,31 @@ def assemble(output, cache, *, source_commit=None):
             shutil.copy2(source, stage / "stdlib" / source.name)
         environment = dict(os.environ, ZIG_LOCAL_CACHE_DIR=str(directory / "zig-local"),
                            ZIG_GLOBAL_CACHE_DIR=str(cache / "zig-global"))
-        base = [str(zig), "cc", "-target", component["target"], "-std=c99", "-O2", "-mcpu=baseline", "-I" + str(ROOT)]
+        (stage / "lib").mkdir()
+        rt_base = [str(zig), "cc", "-target", component["target"], "-std=c99", "-mcpu=baseline",
+                   "-ffunction-sections", "-fdata-sections", "-I" + str(ROOT)]
+        if host.endswith("-linux"):
+            rt_base += ["-pthread", "-DWYSNA_LINK_PTHREAD"]
+        for profile_name, profile_flags in (("dev", ["-O0", "-g"]),
+                                            ("release", ["-O2", "-fno-sanitize=undefined"]),
+                                            ("size", ["-Os", "-fno-sanitize=undefined"])):
+            obj_path = directory / f"wysna_runtime_{profile_name}.o"
+            archive_path = stage / "lib" / f"libwysna_runtime_{profile_name}.a"
+            print("Compiling SDK runtime archive: " + archive_path.name, file=sys.stderr, flush=True)
+            built_rt = subprocess.run(
+                rt_base + profile_flags + ["-c", str(runtime_lib_source), "-o", str(obj_path)],
+                capture_output=True, text=True, timeout=SDK_COMPONENT_BUILD_TIMEOUT_SECONDS, env=environment)
+            if built_rt.returncode:
+                raise RuntimeError("Native SDK runtime archive compilation failed (" + profile_name + "):\n" + built_rt.stderr)
+            archived_rt = subprocess.run(
+                [str(zig), "ar", "rcs", str(archive_path), str(obj_path)],
+                capture_output=True, text=True, timeout=SDK_COMPONENT_BUILD_TIMEOUT_SECONDS, env=environment)
+            if archived_rt.returncode:
+                raise RuntimeError("Native SDK runtime archive creation failed (" + profile_name + "):\n" + archived_rt.stderr)
+        base = [str(zig), "cc", "-target", component["target"], "-std=c99", "-O2", "-fno-sanitize=undefined", "-mcpu=baseline", "-I" + str(ROOT)]
         stack_flags = native_stack_link_args(base)
         base += stack_flags
+        release_archive = stage / "lib" / "libwysna_runtime_release.a"
         for source, target in [(ROOT / "packaging/native/driver.c", stage / ("bin/wysna" + suffix)),
                                (compiler.parent / "compiler2.c", stage / ("libexec/wysna-compiler" + suffix))]:
             defines = ['-DWYSNA_NATIVE_TARGET="' + component["target"] + '"',
@@ -93,7 +117,18 @@ def assemble(output, cache, *, source_commit=None):
             print("Compiling SDK component: " + target.name, file=sys.stderr, flush=True)
             if stack_flags and source.name == "driver.c":
                 defines.append('-DWYSNA_NATIVE_STACK_LINK_ARGUMENT="' + stack_flags[0] + '"')
-            built = subprocess.run(base + defines + [str(source), "-lc", "-lm", "-o", str(target)],
+            extra_compile = []
+            extra_link = []
+            if source.name != "driver.c":
+                extra_compile = ["-DWYSNA_RUNTIME_LINKED", "-ffunction-sections", "-fdata-sections"]
+                if host.endswith("-linux"):
+                    extra_compile += ["-pthread", "-DWYSNA_LINK_PTHREAD"]
+                extra_link = [str(release_archive)]
+                if host.endswith("-macos"):
+                    extra_link.append("-Wl,-dead_strip")
+                elif host.endswith("-linux"):
+                    extra_link.append("-Wl,--gc-sections")
+            built = subprocess.run(base + defines + extra_compile + [str(source)] + extra_link + ["-lc", "-lm", "-o", str(target)],
                                    capture_output=True, text=True, timeout=SDK_COMPONENT_BUILD_TIMEOUT_SECONDS, env=environment)
             if built.returncode:
                 raise RuntimeError("Native SDK compilation failed for " + source.name + ":\n" + built.stderr)

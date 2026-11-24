@@ -3,7 +3,7 @@
 #ifndef WYSNA_HOST_SYSTEM_H
 #define WYSNA_HOST_SYSTEM_H
 
-static inline int64_t wysna_host_wall_ms(void) {
+WYSNA_RT_FN int64_t wysna_host_wall_ms(void) {
 #ifdef WYSNA_DENY_CAP_CLOCK
     wysna_sandbox_deny("clock");
     return -1;
@@ -32,7 +32,7 @@ static inline int64_t wysna_host_wall_ms(void) {
 }
 
 /* Blocking sleep. Returns 0 on success, -1 for a negative duration. */
-static inline int64_t wysna_host_sleep(int64_t ms) {
+WYSNA_RT_FN int64_t wysna_host_sleep(int64_t ms) {
 #ifdef WYSNA_DENY_CAP_CLOCK
     (void)ms;
     wysna_sandbox_deny("clock");
@@ -43,7 +43,7 @@ static inline int64_t wysna_host_sleep(int64_t ms) {
     return 0;
 }
 
-static inline int64_t wysna_host_stdout_flush(void) {
+WYSNA_RT_FN int64_t wysna_host_stdout_flush(void) {
 #ifdef WYSNA_DENY_CAP_STDIO
     wysna_sandbox_deny("stdio");
     return -1;
@@ -53,7 +53,7 @@ static inline int64_t wysna_host_stdout_flush(void) {
 
 /* Reads one line from stdin into the buffer (without the line terminator).
  * Returns 1 when a line was produced, 0 on end of input with no data, -1 on failure. */
-static inline int64_t wysna_host_stdin_read_line(void* output_handle) {
+WYSNA_RT_FN int64_t wysna_host_stdin_read_line(void* output_handle) {
 #ifdef WYSNA_DENY_CAP_STDIO
     (void)output_handle;
     wysna_sandbox_deny("stdio");
@@ -81,7 +81,7 @@ static inline int64_t wysna_host_stdin_read_line(void* output_handle) {
 }
 
 /* Reads the remainder of stdin into the buffer. Returns the byte count or -1. */
-static inline int64_t wysna_host_stdin_read_all(void* output_handle) {
+WYSNA_RT_FN int64_t wysna_host_stdin_read_all(void* output_handle) {
 #ifdef WYSNA_DENY_CAP_STDIO
     (void)output_handle;
     wysna_sandbox_deny("stdio");
@@ -100,7 +100,7 @@ static inline int64_t wysna_host_stdin_read_all(void* output_handle) {
 }
 
 /* Writes the working directory into the buffer. Returns the byte count or -1. */
-static inline int64_t wysna_host_getcwd(void* output_handle) {
+WYSNA_RT_FN int64_t wysna_host_getcwd(void* output_handle) {
 #ifdef WYSNA_DENY_CAP_ENVIRONMENT
     (void)output_handle;
     wysna_sandbox_deny("environment");
@@ -133,7 +133,7 @@ static inline int64_t wysna_host_getcwd(void* output_handle) {
 
 /* Reads exact `count` bytes from stdin into `output_handle`.
  * Returns `count` on full read, 0 on clean EOF at byte 0, -1 on short read/error. */
-static inline int64_t wysna_host_stdin_read_exact(void* output_handle, int64_t count) {
+WYSNA_RT_FN int64_t wysna_host_stdin_read_exact(void* output_handle, int64_t count) {
 #ifdef WYSNA_DENY_CAP_STDIO
     (void)output_handle; (void)count;
     wysna_sandbox_deny("stdio");
@@ -165,7 +165,7 @@ static inline int64_t wysna_host_stdin_read_exact(void* output_handle, int64_t c
 }
 
 /* Writes raw bytes from `input_handle` to stdout without appending a newline. */
-static inline int64_t wysna_host_stdout_write_raw(void* input_handle) {
+WYSNA_RT_FN int64_t wysna_host_stdout_write_raw(void* input_handle) {
 #ifdef WYSNA_DENY_CAP_STDIO
     (void)input_handle;
     wysna_sandbox_deny("stdio");
@@ -184,7 +184,7 @@ static inline int64_t wysna_host_stdout_write_raw(void* input_handle) {
 }
 
 /* Writes the current executable's path into `output_handle`. Returns byte length or -1. */
-static inline int64_t wysna_host_self_executable(void* output_handle) {
+WYSNA_RT_FN int64_t wysna_host_self_executable(void* output_handle) {
 #ifdef WYSNA_DENY_CAP_ENVIRONMENT
     (void)output_handle;
     wysna_sandbox_deny("environment");

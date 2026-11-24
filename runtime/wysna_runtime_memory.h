@@ -43,7 +43,7 @@ static inline void wysna_cycle_buffer_purple(WWeakControl* ctrl) {
     if (wysna_runtime_context.multi_threaded) wysna_spinlock_release(&wysna_runtime_context.runtime_lock);
 }
 
-static inline WVal wysna_clone(WVal v) {
+WYSNA_RT_FN WVal wysna_clone_heap(WVal v) {
     if (wysna_is_immediate(v)) return v;
     uint32_t hi = wysna_hi(v);
     if (hi == WVAL_HI_STR_PTR) {
@@ -141,6 +141,11 @@ static inline WVal wysna_clone(WVal v) {
     return v;
 }
 
+static inline WVal wysna_clone(WVal v) {
+    if (W_LIKELY(wysna_is_immediate(v))) return v;
+    return wysna_clone_heap(v);
+}
+
 /*
  * Releasing a deeply nested value must not recurse: a 100k-deep list, tuple, enum
  * payload chain or struct overflowed the C stack and died with SIGSEGV while
@@ -187,7 +192,14 @@ static inline bool wysna_is_leaf(WVal value) {
     return false;
 }
 
+WYSNA_RT_FN void wysna_release_heap(WVal v);
+
 static inline void wysna_release(WVal v) {
+    if (W_LIKELY(wysna_is_immediate(v))) return;
+    wysna_release_heap(v);
+}
+
+WYSNA_RT_FN void wysna_release_heap(WVal v) {
     if (wysna_is_immediate(v)) return;
     switch (wysna_hi(v)) {
         case WVAL_HI_STR_PTR:
@@ -618,14 +630,14 @@ static WVal* wysna_release_deferred(WVal* slot, int32_t* produced) {
 }
 
 /* Consumes the environment; invocation borrows function, environment and arguments. */
-static inline WVal wysna_function_new(WInvoke invoke, WVal environment) {
+WYSNA_RT_FN WVal wysna_function_new(WInvoke invoke, WVal environment) {
     WFunctionBuf* function = (WFunctionBuf*)wysna_alloc_safe(sizeof(WFunctionBuf));
     function->kind = W_FUNCTION; function->refcount = 1; function->invoke = invoke; function->environment = environment;
     wysna_mem_on_alloc();
     return wysna_make_hi_ptr(WVAL_HI_EXT, function);
 }
 
-static inline WVal wysna_call(WVal function, int32_t argc, const WVal* argv) {
+WYSNA_RT_FN WVal wysna_call(WVal function, int32_t argc, const WVal* argv) {
     WFunctionBuf* fn = wysna_as_function(function);
     if (!fn) {
         wysna_runtime_fail_unlocated("W4003", "Indirect call requires function");
@@ -633,13 +645,13 @@ static inline WVal wysna_call(WVal function, int32_t argc, const WVal* argv) {
     return fn->invoke(fn->environment, argc, argv);
 }
 
-static WVal wysna_discard_result_value(WVal value) {
+WYSNA_RT_FN WVal wysna_discard_result_value(WVal value) {
     if (wysna_is_err(value)) return value;
     wysna_release(value);
     return wysna_ok(wysna_unit());
 }
 
-static inline void wysna_release_array(int32_t count, WVal* arr) {
+WYSNA_RT_FN void wysna_release_array(int32_t count, WVal* arr) {
     for (int32_t i = 0; i < count; i++) {
         wysna_release(arr[i]);
     }
@@ -670,7 +682,7 @@ static inline WVal wysna_peek_optional(WVal value) {
     return value;
 }
 
-static inline WVal wysna_unwrap_optional(WVal value) {
+WYSNA_RT_FN WVal wysna_unwrap_optional(WVal value) {
     WEnumBuf* en = wysna_as_enum(value);
     if (en && strcmp(en->enum_name, "Option") == 0 &&
         strcmp(en->variant, "Some") == 0 && en->has_payload) {
@@ -679,7 +691,7 @@ static inline WVal wysna_unwrap_optional(WVal value) {
     return wysna_clone(value);
 }
 
-static inline WVal wysna_unwrap_ok(WVal v) {
+WYSNA_RT_FN WVal wysna_unwrap_ok(WVal v) {
     if (wysna_is_ok(v)) {
         WBoxBuf* bx = wysna_as_box(v);
         if (bx) return wysna_clone(bx->val);
@@ -687,14 +699,14 @@ static inline WVal wysna_unwrap_ok(WVal v) {
     return wysna_clone(v);
 }
 
-static inline WVal wysna_unwrap_success(WVal value) {
+WYSNA_RT_FN WVal wysna_unwrap_success(WVal value) {
     WEnumBuf* en = wysna_as_enum(value);
     if (en && strcmp(en->enum_name, "Option") == 0)
         return wysna_unwrap_optional(value);
     return wysna_unwrap_ok(value);
 }
 
-static inline WVal wysna_unwrap_err(WVal v) {
+WYSNA_RT_FN WVal wysna_unwrap_err(WVal v) {
     if (wysna_is_err(v)) {
         WBoxBuf* bx = wysna_as_box(v);
         if (bx) return wysna_clone(bx->val);
@@ -718,7 +730,7 @@ static inline WVal wysna_peek_err(WVal v) {
     return wysna_none();
 }
 
-static inline bool wysna_is_enum_variant(WVal value, const char* enum_name, const char* variant) {
+WYSNA_RT_FN bool wysna_is_enum_variant(WVal value, const char* enum_name, const char* variant) {
     if (enum_name && wysna_builtin_name(enum_name, "Result")) {
         if (variant && strcmp(variant, "Ok") == 0) return wysna_is_ok(value);
         if (variant && strcmp(variant, "Err") == 0) return wysna_is_err(value);
@@ -732,13 +744,13 @@ static inline bool wysna_is_enum_variant(WVal value, const char* enum_name, cons
         strcmp(en->enum_name, enum_name) == 0 && strcmp(en->variant, variant) == 0;
 }
 
-static inline WVal wysna_peek_enum_payload(WVal value) {
+WYSNA_RT_FN WVal wysna_peek_enum_payload(WVal value) {
     WEnumBuf* en = wysna_as_enum(value);
     if (en && en->has_payload) return en->payload;
     wysna_runtime_fail_unlocated("W4003", "enum payload access on invalid value");
 }
 
-static inline void wysna_list_detach(WVal* v) {
+WYSNA_RT_FN void wysna_list_detach(WVal* v) {
     WListBuf* old_b = wysna_as_list(*v);
     if (!old_b) return;
     int32_t rc = wysna_rc_load(&old_b->refcount);
@@ -774,7 +786,7 @@ static inline void wysna_list_detach(WVal* v) {
 }
 
 /* Dense insertion-order entries with an open-addressed lookup index. */
-static inline bool wysna_eq(WVal a, WVal b);
+WYSNA_RT_FN bool wysna_eq(WVal a, WVal b);
 static inline uint64_t wysna_key_hash_bytes(const unsigned char* data, size_t length, uint64_t hash) {
     for (size_t i = 0; i < length; i++) { hash ^= data[i]; hash *= UINT64_C(1099511628211); }
     return hash;
@@ -784,7 +796,7 @@ static inline uint64_t wysna_mix64(uint64_t number) {
     number ^= number >> 27; number *= UINT64_C(0x94d049bb133111eb);
     return number ^ (number >> 31);
 }
-static inline uint32_t wysna_str_hash32(WVal value) {
+WYSNA_RT_FN uint32_t wysna_str_hash32(WVal value) {
     if (wysna_tag(value) != W_STR) return 0;
     uint32_t hi = wysna_hi(value);
     if (hi == WVAL_HI_SSO_SHORT || hi == WVAL_HI_SSO_6) {
@@ -813,7 +825,7 @@ static inline uint32_t wysna_str_hash32(WVal value) {
     }
     return h32;
 }
-static inline uint64_t wysna_key_hash(WVal value) {
+WYSNA_RT_FN uint64_t wysna_key_hash(WVal value) {
     WTag tag = wysna_tag(value);
     uint64_t hash = UINT64_C(14695981039346656037) ^ (uint64_t)tag;
     if (tag == W_STR) return (uint64_t)wysna_str_hash32(value);
@@ -852,7 +864,7 @@ static inline uint64_t wysna_key_hash(WVal value) {
     }
     return hash;
 }
-static inline int32_t wysna_dict_probe(WDictBuf* dict, WVal key, uint64_t* out_hash, uint32_t* out_slot) {
+WYSNA_RT_FN int32_t wysna_dict_probe(WDictBuf* dict, WVal key, uint64_t* out_hash, uint32_t* out_slot) {
     if (!dict || dict->bucket_count == 0) return -1;
     uint32_t mask = (uint32_t)dict->bucket_count - 1;
     uint64_t full_hash = wysna_key_hash(key);
@@ -888,27 +900,27 @@ static inline int32_t wysna_dict_probe(WDictBuf* dict, WVal key, uint64_t* out_h
     if (out_slot) *out_slot = slot;
     return -1;
 }
-static inline int32_t wysna_dict_find(WDictBuf* dict, WVal key) {
+WYSNA_RT_FN int32_t wysna_dict_find(WDictBuf* dict, WVal key) {
     if (!dict || dict->len == 0 || dict->bucket_count == 0) return -1;
     return wysna_dict_probe(dict, key, NULL, NULL);
 }
-static inline void wysna_dict_index_entry_hashed(WDictBuf* dict, int32_t index, uint64_t full_hash) {
+WYSNA_RT_FN void wysna_dict_index_entry_hashed(WDictBuf* dict, int32_t index, uint64_t full_hash) {
     uint32_t mask = (uint32_t)dict->bucket_count - 1;
     uint32_t slot = (uint32_t)full_hash & mask;
     while (dict->buckets[slot] >= 0) slot = (slot + 1) & mask;
     dict->buckets[slot] = index;
 }
-static inline void wysna_dict_index_entry(WDictBuf* dict, int32_t index) {
+WYSNA_RT_FN void wysna_dict_index_entry(WDictBuf* dict, int32_t index) {
     wysna_dict_index_entry_hashed(dict, index, wysna_key_hash(dict->keys[index]));
 }
-static inline void wysna_dict_reindex(WDictBuf* dict, int32_t capacity) {
+WYSNA_RT_FN void wysna_dict_reindex(WDictBuf* dict, int32_t capacity) {
     free(dict->buckets);
     dict->bucket_count = capacity;
     dict->buckets = (int32_t*)wysna_alloc_safe(sizeof(int32_t) * (size_t)capacity);
     for (int32_t i = 0; i < capacity; i++) dict->buckets[i] = -1;
     for (int32_t i = 0; i < dict->len; i++) wysna_dict_index_entry(dict, i);
 }
-static inline void wysna_dict_insert_owned(WDictBuf* d, WVal owned_key, WVal owned_val) {
+WYSNA_RT_FN void wysna_dict_insert_owned(WDictBuf* d, WVal owned_key, WVal owned_val) {
     uint64_t full_hash = 0;
     uint32_t slot = 0;
     int32_t found = wysna_dict_probe(d, owned_key, &full_hash, &slot);
@@ -941,7 +953,7 @@ static inline void wysna_dict_insert_owned(WDictBuf* d, WVal owned_key, WVal own
     }
 }
 
-static inline void wysna_dict_detach(WVal* v) {
+WYSNA_RT_FN void wysna_dict_detach(WVal* v) {
     WDictBuf* old_b = wysna_as_dict(*v);
     if (!old_b) return;
     int32_t rc = wysna_rc_load(&old_b->refcount);
@@ -973,7 +985,7 @@ static inline void wysna_dict_detach(WVal* v) {
     wysna_release(wysna_make_hi_ptr(WVAL_HI_DICT, old_b));
 }
 
-static inline void wysna_struct_detach(WVal* v) {
+WYSNA_RT_FN void wysna_struct_detach(WVal* v) {
     if (wysna_hi(*v) != WVAL_HI_STRUCT) return;
     WStructBuf* old_b = wysna_as_struct(*v);
     if (!old_b) return;
@@ -1315,7 +1327,7 @@ static void wysna_cycle_scrub_slot(WVal* slot, void* ctx) {
     }
 }
 
-static inline int64_t wysna_collect_cycles(void) {
+WYSNA_RT_FN int64_t wysna_collect_cycles(void) {
     /* Identity-bearing objects and their cycle graph are confined to the owner. */
     if (wysna_worker_depth > 0) return 0;
     if (wysna_runtime_context.collecting_cycles || !wysna_runtime_context.purple_head) return 0;

@@ -6,7 +6,7 @@
 #endif
 
 /* Indexing & Member Access */
-static inline WVal wysna_index_get(WVal obj, WVal idx) {
+WYSNA_RT_FN WVal wysna_index_get(WVal obj, WVal idx) {
     uint32_t hi = wysna_hi(obj);
     if (hi == WVAL_HI_LIST) {
         WListBuf* b = wysna_as_list(obj);
@@ -45,22 +45,22 @@ static inline WVal wysna_index_get(WVal obj, WVal idx) {
     wysna_runtime_fail_unlocated("W4003", "Cannot index object of tag %d", wysna_tag(obj));
 }
 
-static inline WVal wysna_index_get_owned(WVal object, WVal index) {
+WYSNA_RT_FN WVal wysna_index_get_owned(WVal object, WVal index) {
     WVal value = wysna_index_get(object, index);
     return wysna_tag(object) == W_STR ? value : wysna_clone(value);
 }
 
-static inline WVal wysna_index_get_at(WVal object, WVal index, const char* file, int32_t line, int32_t col) {
+WYSNA_RT_FN WVal wysna_index_get_at(WVal object, WVal index, const char* file, int32_t line, int32_t col) {
     wysna_runtime_set_position(file, line, col);
     return wysna_index_get(object, index);
 }
 
-static inline WVal wysna_index_get_owned_at(WVal object, WVal index, const char* file, int32_t line, int32_t col) {
+WYSNA_RT_FN WVal wysna_index_get_owned_at(WVal object, WVal index, const char* file, int32_t line, int32_t col) {
     wysna_runtime_set_position(file, line, col);
     return wysna_index_get_owned(object, index);
 }
 
-static inline WVal* wysna_index_ref(WVal* obj, WVal idx) {
+WYSNA_RT_FN WVal* wysna_index_ref(WVal* obj, WVal idx) {
     uint32_t hi = wysna_hi(*obj);
     if (hi == WVAL_HI_LIST) {
         wysna_list_detach(obj);
@@ -110,12 +110,12 @@ static inline WVal* wysna_index_ref(WVal* obj, WVal idx) {
     wysna_runtime_fail_unlocated("W4003", "Cannot index-assign non-collection");
 }
 
-static inline WVal* wysna_index_ref_at(WVal* obj, WVal idx, const char* file, int32_t line, int32_t col) {
+WYSNA_RT_FN WVal* wysna_index_ref_at(WVal* obj, WVal idx, const char* file, int32_t line, int32_t col) {
     wysna_runtime_set_position(file, line, col);
     return wysna_index_ref(obj, idx);
 }
 
-static inline WVal wysna_index_store_at(WVal* object, WVal index, WVal value,
+WYSNA_RT_FN WVal wysna_index_store_at(WVal* object, WVal index, WVal value,
                                         const char* file, int32_t line, int32_t col) {
     wysna_runtime_set_position(file, line, col);
     WListBuf* list = wysna_as_list(*object);
@@ -132,7 +132,7 @@ static inline WVal wysna_index_store_at(WVal* object, WVal index, WVal value,
     return wysna_assign(wysna_index_ref(object, index), value);
 }
 
-static inline WVal wysna_member_get(WVal obj, const char* prop) {
+WYSNA_RT_FN WVal wysna_member_get(WVal obj, const char* prop) {
     WStructBuf* st = wysna_as_struct(obj);
     if (st) {
         for (int32_t i = 0; i < st->len; i++) {
@@ -144,7 +144,7 @@ static inline WVal wysna_member_get(WVal obj, const char* prop) {
     return wysna_none();
 }
 
-static inline WVal* wysna_member_ref(WVal* obj, const char* prop) {
+WYSNA_RT_FN WVal* wysna_member_ref(WVal* obj, const char* prop) {
     uint32_t hi = wysna_hi(*obj);
     if (hi == WVAL_HI_STRUCT) {
         wysna_struct_detach(obj);
@@ -166,7 +166,7 @@ static inline WVal* wysna_member_ref(WVal* obj, const char* prop) {
 }
 
 /* Static types do not authorize dereferencing an uninitialized default value. */
-static inline WVal wysna_tuple_get_at(WVal value, int32_t index,
+WYSNA_RT_FN WVal wysna_tuple_get_at(WVal value, int32_t index,
                                      const char* file, int32_t line, int32_t col) {
     wysna_runtime_set_position(file, line, col);
     WTupleBuf* t = wysna_as_tuple(value);
@@ -174,31 +174,31 @@ static inline WVal wysna_tuple_get_at(WVal value, int32_t index,
     if (index < 0 || index >= t->len) wysna_runtime_fail("W4002", "Tuple index out of bounds");
     return t->items[index];
 }
-static inline WVal wysna_tuple_get_owned_at(WVal value, int32_t index,
+WYSNA_RT_FN WVal wysna_tuple_get_owned_at(WVal value, int32_t index,
                                            const char* file, int32_t line, int32_t col) {
     return wysna_clone(wysna_tuple_get_at(value, index, file, line, col));
 }
-static inline int32_t wysna_list_iteration_length_at(WVal value,
+WYSNA_RT_FN int32_t wysna_list_iteration_length_at(WVal value,
                                                     const char* file, int32_t line, int32_t col) {
     wysna_runtime_set_position(file, line, col);
     WListBuf* b = wysna_as_list(value);
     if (!b) wysna_runtime_fail("W4003", "For loop requires a list value");
     return b->len;
 }
-static inline WVal wysna_list_iteration_get_at(WVal value, int32_t index,
+WYSNA_RT_FN WVal wysna_list_iteration_get_at(WVal value, int32_t index,
                                               const char* file, int32_t line, int32_t col) {
     int32_t length = wysna_list_iteration_length_at(value, file, line, col);
     if (index < 0 || index >= length)
         wysna_runtime_fail("W4002", "List index out of bounds");
     return wysna_list_load(wysna_as_list(value), index);
 }
-static inline WVal wysna_list_iteration_get_owned_at(WVal value, int32_t index,
+WYSNA_RT_FN WVal wysna_list_iteration_get_owned_at(WVal value, int32_t index,
                                                     const char* file, int32_t line, int32_t col) {
     return wysna_clone(wysna_list_iteration_get_at(value, index, file, line, col));
 }
 
 /* W03: Unboxed scalar list accessors (zero retain/release, zero allocation) */
-static inline int64_t wysna_list_get_int_at(WVal obj, int64_t idx,
+WYSNA_RT_FN int64_t wysna_list_get_int_at(WVal obj, int64_t idx,
                                             const char* file, int32_t line, int32_t col) {
     wysna_runtime_set_position(file, line, col);
     WListBuf* b = wysna_as_list(obj);
@@ -208,7 +208,7 @@ static inline int64_t wysna_list_get_int_at(WVal obj, int64_t idx,
     return wysna_as_int(wysna_list_load(b, (int32_t)idx));
 }
 
-static inline double wysna_list_get_float_at(WVal obj, int64_t idx,
+WYSNA_RT_FN double wysna_list_get_float_at(WVal obj, int64_t idx,
                                              const char* file, int32_t line, int32_t col) {
     wysna_runtime_set_position(file, line, col);
     WListBuf* b = wysna_as_list(obj);
@@ -218,7 +218,7 @@ static inline double wysna_list_get_float_at(WVal obj, int64_t idx,
     return wysna_as_float(wysna_list_load(b, (int32_t)idx));
 }
 
-static inline bool wysna_list_get_bool_at(WVal obj, int64_t idx,
+WYSNA_RT_FN bool wysna_list_get_bool_at(WVal obj, int64_t idx,
                                           const char* file, int32_t line, int32_t col) {
     wysna_runtime_set_position(file, line, col);
     WListBuf* b = wysna_as_list(obj);
@@ -228,17 +228,17 @@ static inline bool wysna_list_get_bool_at(WVal obj, int64_t idx,
     return wysna_as_bool(wysna_list_load(b, (int32_t)idx));
 }
 
-static inline int64_t wysna_list_iteration_get_int_at(WVal value, int32_t index,
+WYSNA_RT_FN int64_t wysna_list_iteration_get_int_at(WVal value, int32_t index,
                                                       const char* file, int32_t line, int32_t col) {
     return wysna_as_int(wysna_list_iteration_get_at(value, index, file, line, col));
 }
 
-static inline double wysna_list_iteration_get_float_at(WVal value, int32_t index,
+WYSNA_RT_FN double wysna_list_iteration_get_float_at(WVal value, int32_t index,
                                                        const char* file, int32_t line, int32_t col) {
     return wysna_as_float(wysna_list_iteration_get_at(value, index, file, line, col));
 }
 
-static inline bool wysna_list_iteration_get_bool_at(WVal value, int32_t index,
+WYSNA_RT_FN bool wysna_list_iteration_get_bool_at(WVal value, int32_t index,
                                                     const char* file, int32_t line, int32_t col) {
     return wysna_as_bool(wysna_list_iteration_get_at(value, index, file, line, col));
 }
@@ -251,7 +251,7 @@ static inline WVal wysna_field_get_at(WVal object, int32_t index) {
     return st->vals[index];
 }
 
-static inline WVal* wysna_field_ref_at(WVal* object, int32_t index) {
+WYSNA_RT_FN WVal* wysna_field_ref_at(WVal* object, int32_t index) {
     WStructBuf* st = wysna_as_struct(*object);
     if (!st || index < 0 || index >= st->len)
         wysna_runtime_fail("W4003", "Invalid physical field destination");
@@ -265,10 +265,10 @@ static inline WVal* wysna_field_ref_at(WVal* object, int32_t index) {
 static inline WVal wysna_not(WVal value) { return wysna_bool(!wysna_as_bool(value)); }
 static inline WVal wysna_equal(WVal left, WVal right) { return wysna_bool(wysna_eq(left, right)); }
 static inline WVal wysna_not_equal(WVal left, WVal right) { return wysna_bool(!wysna_eq(left, right)); }
-static inline WVal wysna_enum_payload_owned(WVal value) { return wysna_clone(wysna_peek_enum_payload(value)); }
+WYSNA_RT_FN WVal wysna_enum_payload_owned(WVal value) { return wysna_clone(wysna_peek_enum_payload(value)); }
 
 /* Methods on List / Dict */
-static inline WVal wysna_list_append(WVal* list_val, WVal item) {
+WYSNA_RT_FN WVal wysna_list_append(WVal* list_val, WVal item) {
     if (wysna_hi(*list_val) != WVAL_HI_LIST) wysna_runtime_fail("W4003", "List intrinsic requires list receiver");
     wysna_list_detach(list_val);
     WListBuf* b = wysna_as_list(*list_val);
@@ -290,7 +290,7 @@ static inline WVal wysna_list_append(WVal* list_val, WVal item) {
     return wysna_unit();
 }
 
-static inline WVal wysna_list_pop(WVal* list_val) {
+WYSNA_RT_FN WVal wysna_list_pop(WVal* list_val) {
     if (wysna_hi(*list_val) != WVAL_HI_LIST) wysna_runtime_fail("W4003", "List intrinsic requires list receiver");
     wysna_list_detach(list_val);
     WListBuf* b = wysna_as_list(*list_val);
@@ -301,12 +301,12 @@ static inline WVal wysna_list_pop(WVal* list_val) {
     return wysna_list_load(b, b->len);
 }
 
-static inline WVal wysna_list_pop_at(WVal* list_val, const char* file, int32_t line, int32_t col) {
+WYSNA_RT_FN WVal wysna_list_pop_at(WVal* list_val, const char* file, int32_t line, int32_t col) {
     wysna_runtime_set_position(file, line, col);
     return wysna_list_pop(list_val);
 }
 
-static inline WVal wysna_list_clear(WVal* list_val) {
+WYSNA_RT_FN WVal wysna_list_clear(WVal* list_val) {
     if (wysna_hi(*list_val) != WVAL_HI_LIST) wysna_runtime_fail("W4003", "List intrinsic requires list receiver");
     wysna_list_detach(list_val);
     WListBuf* b = wysna_as_list(*list_val);
@@ -320,7 +320,7 @@ static inline WVal wysna_list_clear(WVal* list_val) {
     return wysna_unit();
 }
 
-static inline WVal wysna_dict_get(WVal dict_val, WVal key) {
+WYSNA_RT_FN WVal wysna_dict_get(WVal dict_val, WVal key) {
     /* The optional lookup: unlike `d[k]`, an absent key is `none`, not W4002. */
     WDictBuf* d = wysna_as_dict(dict_val);
     if (!d || d->len == 0) return wysna_none();
@@ -329,19 +329,19 @@ static inline WVal wysna_dict_get(WVal dict_val, WVal key) {
     return wysna_enum_payload("Option", "Some", wysna_clone(d->vals[found]));
 }
 
-static inline WVal wysna_dict_keys(WVal dict_val) {
+WYSNA_RT_FN WVal wysna_dict_keys(WVal dict_val) {
     WDictBuf* d = wysna_as_dict(dict_val);
     if (!d) wysna_runtime_fail("W4003", "Dictionary intrinsic requires dict receiver");
     return wysna_make_list(d->len, d->keys);
 }
 
-static inline WVal wysna_dict_values(WVal dict_val) {
+WYSNA_RT_FN WVal wysna_dict_values(WVal dict_val) {
     WDictBuf* d = wysna_as_dict(dict_val);
     if (!d) wysna_runtime_fail("W4003", "Dictionary intrinsic requires dict receiver");
     return wysna_make_list(d->len, d->vals);
 }
 
-static inline WVal wysna_dict_clear(WVal* dict_val) {
+WYSNA_RT_FN WVal wysna_dict_clear(WVal* dict_val) {
     if (wysna_hi(*dict_val) != WVAL_HI_DICT) wysna_runtime_fail("W4003", "Dictionary intrinsic requires dict receiver");
     wysna_dict_detach(dict_val);
     WDictBuf* d = wysna_as_dict(*dict_val);
@@ -354,7 +354,7 @@ static inline WVal wysna_dict_clear(WVal* dict_val) {
     return wysna_unit();
 }
 
-static inline WVal wysna_dict_remove(WVal* dict_val, WVal key) {
+WYSNA_RT_FN WVal wysna_dict_remove(WVal* dict_val, WVal key) {
     if (wysna_hi(*dict_val) != WVAL_HI_DICT) wysna_runtime_fail("W4003", "Dictionary intrinsic requires dict receiver");
     WDictBuf* probe = wysna_as_dict(*dict_val);
     if (!probe || probe->len == 0) return wysna_none();
@@ -378,7 +378,7 @@ static inline WVal wysna_dict_remove(WVal* dict_val, WVal key) {
     return wysna_enum_payload("Option", "Some", removed_val);
 }
 
-static inline WVal wysna_copy_str_n(const char* data, size_t length) {
+WYSNA_RT_FN WVal wysna_copy_str_n(const char* data, size_t length) {
     if (!data || length == 0) return wysna_sso_from_n("", 0);
     if (length <= 6) return wysna_sso_from_n(data, length);
     char* copy = (char*)wysna_alloc_safe(length + 1);
@@ -391,7 +391,7 @@ static inline bool wysna_is_ascii_ws(unsigned char c) {
     return c == ' ' || (c >= 9 && c <= 13);
 }
 
-static inline WVal wysna_str_trim(WVal s) {
+WYSNA_RT_FN WVal wysna_str_trim(WVal s) {
     char sb[7];
     size_t len = 0;
     const char* data = wysna_str_bytes(s, sb, &len);
@@ -402,7 +402,7 @@ static inline WVal wysna_str_trim(WVal s) {
     return wysna_copy_str_n(data + start, end - start);
 }
 
-static inline WVal wysna_str_to_lower(WVal s) {
+WYSNA_RT_FN WVal wysna_str_to_lower(WVal s) {
     char sb[7];
     size_t len = 0;
     const char* data = wysna_str_bytes(s, sb, &len);
@@ -416,7 +416,7 @@ static inline WVal wysna_str_to_lower(WVal s) {
     return wysna_owned_str_n(out, len);
 }
 
-static inline WVal wysna_str_to_upper(WVal s) {
+WYSNA_RT_FN WVal wysna_str_to_upper(WVal s) {
     char sb[7];
     size_t len = 0;
     const char* data = wysna_str_bytes(s, sb, &len);
@@ -430,7 +430,7 @@ static inline WVal wysna_str_to_upper(WVal s) {
     return wysna_owned_str_n(out, len);
 }
 
-static inline WVal wysna_str_starts_with(WVal s, WVal prefix) {
+WYSNA_RT_FN WVal wysna_str_starts_with(WVal s, WVal prefix) {
     char sbs[7], sbp[7];
     size_t slen = 0, plen = 0;
     const char* sd = wysna_str_bytes(s, sbs, &slen);
@@ -438,7 +438,7 @@ static inline WVal wysna_str_starts_with(WVal s, WVal prefix) {
     return wysna_bool(plen <= slen && (plen == 0 || memcmp(sd, pd, plen) == 0));
 }
 
-static inline WVal wysna_str_ends_with(WVal s, WVal suffix) {
+WYSNA_RT_FN WVal wysna_str_ends_with(WVal s, WVal suffix) {
     char sbs[7], sbp[7];
     size_t slen = 0, plen = 0;
     const char* sd = wysna_str_bytes(s, sbs, &slen);
@@ -446,7 +446,7 @@ static inline WVal wysna_str_ends_with(WVal s, WVal suffix) {
     return wysna_bool(plen <= slen && (plen == 0 || memcmp(sd + slen - plen, pd, plen) == 0));
 }
 
-static inline WVal wysna_str_split(WVal s, WVal sep) {
+WYSNA_RT_FN WVal wysna_str_split(WVal s, WVal sep) {
     char sbs[7], sbsep[7];
     size_t slen = 0, seplen = 0;
     const char* sd = wysna_str_bytes(s, sbs, &slen);
@@ -492,7 +492,7 @@ static inline WVal wysna_str_split(WVal s, WVal sep) {
     return wysna_make_hi_ptr(WVAL_HI_LIST, b);
 }
 
-static inline WVal wysna_str_replace(WVal s, WVal old_sub, WVal new_sub) {
+WYSNA_RT_FN WVal wysna_str_replace(WVal s, WVal old_sub, WVal new_sub) {
     char sbs[7], sbo[7], sbn[7];
     size_t slen = 0, olen = 0, nlen = 0;
     const char* sd = wysna_str_bytes(s, sbs, &slen);
@@ -524,7 +524,7 @@ static inline WVal wysna_str_replace(WVal s, WVal old_sub, WVal new_sub) {
     return wysna_owned_str_n(out, out_len);
 }
 
-static inline WVal wysna_contains(WVal container, WVal item) {
+WYSNA_RT_FN WVal wysna_contains(WVal container, WVal item) {
     uint32_t hi = wysna_hi(container);
     if (hi == WVAL_HI_LIST) {
         WListBuf* b = wysna_as_list(container);

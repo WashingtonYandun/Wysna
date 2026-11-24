@@ -15,14 +15,14 @@ typedef struct {
 #endif
 } WysnaProcessCancellation;
 
-static inline void wysna_host_process_request_cancel(WysnaProcessCancellation* cancellation, int signal) {
+WYSNA_RT_FN void wysna_host_process_request_cancel(WysnaProcessCancellation* cancellation, int signal) {
 #ifdef _WIN32
     InterlockedExchange(&cancellation->requested, signal);
 #else
     cancellation->requested = signal;
 #endif
 }
-static inline int wysna_host_process_cancelled(WysnaProcessCancellation* cancellation) {
+WYSNA_RT_FN int wysna_host_process_cancelled(WysnaProcessCancellation* cancellation) {
     if (!cancellation) return 0;
 #ifdef _WIN32
     return (int)InterlockedCompareExchange(&cancellation->requested, 0, 0);
@@ -140,7 +140,7 @@ static wchar_t* wysna_host_process_quote(const wchar_t* value) {
     return quoted;
 }
 
-static int64_t wysna_host_process_run_cancellable(void* executable_handle, void* arguments_handle, int64_t timeout_ms, WysnaProcessCancellation* cancellation) {
+WYSNA_RT_FN int64_t wysna_host_process_run_cancellable(void* executable_handle, void* arguments_handle, int64_t timeout_ms, WysnaProcessCancellation* cancellation) {
 #ifdef WYSNA_DENY_CAP_PROCESSES
     (void)executable_handle; (void)arguments_handle; (void)timeout_ms; (void)cancellation;
     wysna_sandbox_deny("processes");
@@ -273,12 +273,12 @@ static int64_t wysna_host_process_run_cancellable(void* executable_handle, void*
     return (int64_t)exit_code;
 }
 
-static int64_t wysna_host_process_capture_cancellable(void* executable_handle, void* arguments_handle,
+WYSNA_RT_FN int64_t wysna_host_process_capture_cancellable(void* executable_handle, void* arguments_handle,
                                           int64_t timeout_ms, int64_t max_output_bytes,
                                           void* stdout_handle, void* stderr_handle, WysnaProcessCancellation* cancellation) {
 #ifdef WYSNA_DENY_CAP_PROCESSES
     (void)executable_handle; (void)arguments_handle; (void)timeout_ms;
-    (void)max_output_bytes; (void)stdout_handle; (void)stderr_handle;
+    (void)max_output_bytes; (void)stdout_handle; (void)stderr_handle; (void)cancellation;
     wysna_sandbox_deny("processes");
     return -1;
 #endif
@@ -437,7 +437,7 @@ static int64_t wysna_host_process_capture_cancellable(void* executable_handle, v
     return (int64_t)exit_code;
 }
 #else
-static int64_t wysna_host_process_run_cancellable(void* executable_handle, void* arguments_handle, int64_t timeout_ms, WysnaProcessCancellation* cancellation) {
+WYSNA_RT_FN int64_t wysna_host_process_run_cancellable(void* executable_handle, void* arguments_handle, int64_t timeout_ms, WysnaProcessCancellation* cancellation) {
 #ifdef WYSNA_DENY_CAP_PROCESSES
     (void)executable_handle; (void)arguments_handle; (void)timeout_ms; (void)cancellation;
     wysna_sandbox_deny("processes");
@@ -531,12 +531,12 @@ static int64_t wysna_host_process_run_cancellable(void* executable_handle, void*
     return wysna_host_process_error(EIO);
 }
 
-static int64_t wysna_host_process_capture_cancellable(void* executable_handle, void* arguments_handle,
+WYSNA_RT_FN int64_t wysna_host_process_capture_cancellable(void* executable_handle, void* arguments_handle,
                                           int64_t timeout_ms, int64_t max_output_bytes,
                                           void* stdout_handle, void* stderr_handle, WysnaProcessCancellation* cancellation) {
 #ifdef WYSNA_DENY_CAP_PROCESSES
     (void)executable_handle; (void)arguments_handle; (void)timeout_ms;
-    (void)max_output_bytes; (void)stdout_handle; (void)stderr_handle;
+    (void)max_output_bytes; (void)stdout_handle; (void)stderr_handle; (void)cancellation;
     wysna_sandbox_deny("processes");
     return -1;
 #endif
@@ -692,13 +692,13 @@ static int64_t wysna_host_process_capture_cancellable(void* executable_handle, v
     return wysna_host_process_error(EIO);
 }
 #endif
-static int64_t wysna_host_process_capture(void* executable, void* arguments,
+WYSNA_RT_FN int64_t wysna_host_process_capture(void* executable, void* arguments,
                                           int64_t timeout_ms, int64_t max_output_bytes,
                                           void* stdout_handle, void* stderr_handle) {
     return wysna_host_process_capture_cancellable(executable, arguments, timeout_ms, max_output_bytes,
                                                  stdout_handle, stderr_handle, NULL);
 }
-static int64_t wysna_host_process_run(void* executable, void* arguments, int64_t timeout_ms) {
+WYSNA_RT_FN int64_t wysna_host_process_run(void* executable, void* arguments, int64_t timeout_ms) {
     return wysna_host_process_run_cancellable(executable, arguments, timeout_ms, NULL);
 }
 #endif /* !__wasi__ */

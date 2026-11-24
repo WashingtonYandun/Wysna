@@ -6,7 +6,7 @@
 #endif
 
 /* Standard Built-ins */
-static inline WVal wysna_builtin_print(int32_t argc, const WVal* argv) {
+WYSNA_RT_FN WVal wysna_builtin_print(int32_t argc, const WVal* argv) {
 #ifdef WYSNA_DENY_CAP_STDIO
     (void)argc; (void)argv;
     wysna_sandbox_deny("stdio");
@@ -38,7 +38,7 @@ static inline WVal wysna_builtin_print(int32_t argc, const WVal* argv) {
     return wysna_unit();
 }
 
-static inline WVal wysna_builtin_eprint(int32_t argc, const WVal* argv) {
+WYSNA_RT_FN WVal wysna_builtin_eprint(int32_t argc, const WVal* argv) {
 #ifdef WYSNA_DENY_CAP_STDIO
     (void)argc; (void)argv;
     wysna_sandbox_deny("stdio");
@@ -83,7 +83,7 @@ static inline WVal wysna_builtin_eprint(int32_t argc, const WVal* argv) {
     return wysna_unit();
 }
 
-static inline WVal wysna_builtin_exit(WVal code) {
+WYSNA_RT_FN WVal wysna_builtin_exit(WVal code) {
 #ifdef WYSNA_DENY_CAP_PROCESS_CONTROL
     (void)code;
     wysna_sandbox_deny("process-control");
@@ -95,7 +95,7 @@ static inline WVal wysna_builtin_exit(WVal code) {
     return wysna_unit();
 }
 
-static inline WVal wysna_builtin_len(WVal v) {
+WYSNA_RT_FN WVal wysna_builtin_len(WVal v) {
     switch (wysna_tag(v)) {
         case W_LIST:  return wysna_int(wysna_as_list(v)->len);
         case W_DICT:  return wysna_int(wysna_as_dict(v)->len);
@@ -105,7 +105,7 @@ static inline WVal wysna_builtin_len(WVal v) {
     }
 }
 
-static inline WVal wysna_builtin_str(WVal v) {
+WYSNA_RT_FN WVal wysna_builtin_str(WVal v) {
     WTag tag = wysna_tag(v);
     if (tag == W_STR) return wysna_clone(v);
     if (tag == W_BOOL) return wysna_bool(false).bits == v.bits ? wysna_sso_from_n("false", 5) : wysna_sso_from_n("true", 4);
@@ -130,7 +130,7 @@ static inline const char* wysna_conversion_end(const char* end) {
     return end;
 }
 
-static inline WVal wysna_builtin_u8(WVal value) {
+WYSNA_RT_FN WVal wysna_builtin_u8(WVal value) {
     if (wysna_tag(value) != W_INT) {
         wysna_runtime_fail("W4003", "u8() expects one int");
     }
@@ -139,13 +139,13 @@ static inline WVal wysna_builtin_u8(WVal value) {
     return wysna_enum_payload("Option", "Some", wysna_int(number));
 }
 
-static inline uint8_t wysna_consume_u8(WVal value) {
+WYSNA_RT_FN uint8_t wysna_consume_u8(WVal value) {
     uint8_t result = wysna_as_u8(value);
     wysna_release(value);
     return result;
 }
 
-static inline WVal wysna_builtin_int(WVal v) {
+WYSNA_RT_FN WVal wysna_builtin_int(WVal v) {
     WTag tag = wysna_tag(v);
     if (tag == W_BOOL) return wysna_int(wysna_as_bool(v) ? 1 : 0);
     if (tag == W_INT) return wysna_clone(v);
@@ -207,7 +207,7 @@ static inline bool wysna_float_text_valid(const char* text, size_t length) {
     return position == end;
 }
 
-static inline WVal wysna_builtin_float(WVal v) {
+WYSNA_RT_FN WVal wysna_builtin_float(WVal v) {
     WTag t = wysna_tag(v);
     if (t == W_BOOL) return wysna_float(wysna_as_bool(v) ? 1.0 : 0.0);
     if (t == W_FLOAT) return v;
@@ -227,7 +227,7 @@ static inline WVal wysna_builtin_float(WVal v) {
     return wysna_unit();
 }
 
-static inline WVal wysna_builtin_ord(WVal v) {
+WYSNA_RT_FN WVal wysna_builtin_ord(WVal v) {
     if (wysna_tag(v) != W_STR) {
         wysna_runtime_fail_unlocated("W4003", "ord() expects non-empty str");
     }
@@ -245,7 +245,7 @@ static inline WVal wysna_builtin_ord(WVal v) {
     return wysna_int(cp);
 }
 
-static inline WVal wysna_builtin_chr(WVal v) {
+WYSNA_RT_FN WVal wysna_builtin_chr(WVal v) {
     if (wysna_tag(v) != W_INT) {
         wysna_runtime_fail_unlocated("W4003", "chr() expects int");
     }
@@ -275,7 +275,7 @@ static inline WVal wysna_builtin_chr(WVal v) {
     return wysna_sso_from_n(small, len);
 }
 
-static inline WVal wysna_builtin_slice(WVal s, WVal start, WVal end) {
+WYSNA_RT_FN WVal wysna_builtin_slice(WVal s, WVal start, WVal end) {
     int64_t start_i = wysna_as_int(start);
     int64_t end_i = wysna_as_int(end);
     WTag st_tag = wysna_tag(s);
@@ -316,7 +316,7 @@ static inline WVal wysna_builtin_slice(WVal s, WVal start, WVal end) {
 }
 
 /* A two-pass string builder: one allocation and one copy per input byte. */
-static inline WVal wysna_builtin_join_strings(WVal parts, WVal separator) {
+WYSNA_RT_FN WVal wysna_builtin_join_strings(WVal parts, WVal separator) {
     if (wysna_tag(parts) != W_LIST || wysna_tag(separator) != W_STR)
         wysna_runtime_fail("W4003", "join_strings requires list[str] and str");
     WListBuf* p_list = wysna_as_list(parts);
@@ -366,7 +366,7 @@ static inline WVal wysna_builtin_join_strings(WVal parts, WVal separator) {
     return wysna_owned_str_n(data, length);
 }
 
-static inline WVal wysna_builtin_bytes(WVal s) {
+WYSNA_RT_FN WVal wysna_builtin_bytes(WVal s) {
     if (wysna_tag(s) != W_STR) {
         wysna_runtime_fail_unlocated("W4003", "bytes() expects str");
     }
@@ -386,7 +386,7 @@ static inline WVal wysna_builtin_bytes(WVal s) {
     return wysna_make_hi_ptr(WVAL_HI_LIST, b);
 }
 
-static inline WVal wysna_builtin_enumerate(WVal list_val) {
+WYSNA_RT_FN WVal wysna_builtin_enumerate(WVal list_val) {
     if (wysna_tag(list_val) != W_LIST) {
         wysna_runtime_fail_unlocated("W4003", "enumerate() expects list");
     }
@@ -405,7 +405,7 @@ static inline WVal wysna_builtin_enumerate(WVal list_val) {
     return wysna_make_hi_ptr(WVAL_HI_LIST, b);
 }
 
-static inline WVal wysna_builtin_dict_items(WVal dict_val) {
+WYSNA_RT_FN WVal wysna_builtin_dict_items(WVal dict_val) {
     if (wysna_tag(dict_val) != W_DICT) {
         wysna_runtime_fail_unlocated("W4003", "dict_items() expects dict");
     }
@@ -451,7 +451,7 @@ static inline FILE* wysna_builtin_fopen(const char* path, const char* mode) {
 #endif
 }
 
-static inline WVal wysna_builtin_read_file(WVal path) {
+WYSNA_RT_FN WVal wysna_builtin_read_file(WVal path) {
 #ifdef WYSNA_DENY_CAP_FILESYSTEM_READ
     (void)path;
     wysna_sandbox_deny("filesystem.read");
@@ -497,7 +497,7 @@ static inline WVal wysna_builtin_read_file(WVal path) {
     return wysna_ok(wysna_owned_str_n(data, length));
 }
 
-static inline WVal wysna_builtin_write_file(WVal path, WVal content) {
+WYSNA_RT_FN WVal wysna_builtin_write_file(WVal path, WVal content) {
 #ifdef WYSNA_DENY_CAP_FILESYSTEM_WRITE
     (void)path; (void)content;
     wysna_sandbox_deny("filesystem.write");
@@ -557,7 +557,7 @@ static inline void wysna_report_entrypoint_error(WVal error) {
     free(rendered);
 }
 
-static inline int wysna_entry_status(WVal value) {
+WYSNA_RT_FN int wysna_entry_status(WVal value) {
     if (wysna_is_err(value)) {
         wysna_report_entrypoint_error(wysna_as_box(value)->val);
         return 1;
@@ -568,7 +568,7 @@ static inline int wysna_entry_status(WVal value) {
 
 
 #ifdef _WIN32
-static inline void wysna_init_args(int argc, char** argv) {
+WYSNA_RT_FN void wysna_init_args(int argc, char** argv) {
     wysna_runtime_init_telemetry();
     (void)argc; (void)argv;
     typedef LPWSTR* (WINAPI *pfnCommandLineToArgvW)(LPCWSTR, int*);
@@ -621,14 +621,14 @@ static inline void wysna_init_args(int argc, char** argv) {
     }
 }
 #else
-static inline void wysna_init_args(int argc, char** argv) {
+WYSNA_RT_FN void wysna_init_args(int argc, char** argv) {
     wysna_runtime_init_telemetry();
     wysna_g_argc = argc;
     wysna_g_argv = argv;
 }
 #endif
 
-static inline WVal wysna_builtin_args(void) {
+WYSNA_RT_FN WVal wysna_builtin_args(void) {
 #ifdef WYSNA_DENY_CAP_ARGUMENTS
     wysna_sandbox_deny("arguments");
     return wysna_unit();
@@ -646,7 +646,7 @@ static inline WVal wysna_builtin_args(void) {
     return wysna_make_hi_ptr(WVAL_HI_LIST, b);
 }
 
-static inline WVal wysna_builtin_env(WVal name) {
+WYSNA_RT_FN WVal wysna_builtin_env(WVal name) {
 #ifdef WYSNA_DENY_CAP_ENVIRONMENT
     (void)name;
     wysna_sandbox_deny("environment");
@@ -714,7 +714,7 @@ static inline WVal wysna_builtin_env(WVal name) {
 #endif
 }
 
-static inline WVal wysna_builtin_unix_time(void) {
+WYSNA_RT_FN WVal wysna_builtin_unix_time(void) {
 #ifdef WYSNA_DENY_CAP_CLOCK
     wysna_sandbox_deny("clock");
     return wysna_int(0);
@@ -724,7 +724,7 @@ static inline WVal wysna_builtin_unix_time(void) {
     return wysna_int((int64_t)current);
 }
 
-static inline WVal wysna_builtin_contract_assert(WVal cond, WVal msg) {
+WYSNA_RT_FN WVal wysna_builtin_contract_assert(WVal cond, WVal msg) {
     if (wysna_tag(cond) != W_BOOL || !wysna_as_bool(cond)) {
         char msg_buf[7];
         const char* text = (wysna_tag(msg) == W_STR) ? wysna_str_bytes(msg, msg_buf, NULL) : "Contract violation";
@@ -733,7 +733,7 @@ static inline WVal wysna_builtin_contract_assert(WVal cond, WVal msg) {
     return wysna_unit();
 }
 
-static inline WVal wysna_builtin_contract_assert_at(WVal cond, WVal msg, const char* file, int32_t line, int32_t col) {
+WYSNA_RT_FN WVal wysna_builtin_contract_assert_at(WVal cond, WVal msg, const char* file, int32_t line, int32_t col) {
     if (wysna_tag(cond) != W_BOOL || !wysna_as_bool(cond)) {
         wysna_runtime_set_position(file, line, col);
         char msg_buf[7];

@@ -121,7 +121,7 @@ static inline void wysna_worker_copy_clear(WysnaWorkerCopy* memo) {
     memo->capacity = memo->count = 0;
 }
 
-static inline WVal wysna_worker_snapshot(WVal value) {
+WYSNA_RT_FN WVal wysna_worker_snapshot(WVal value) {
     WysnaWorkerCopy memo = {0};
     WVal copied = wysna_worker_copy_value(&memo, value, 0);
     wysna_worker_copy_clear(&memo);

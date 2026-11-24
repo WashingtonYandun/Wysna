@@ -6,7 +6,7 @@
 #endif
 
 /* Binary Operations */
-static inline WVal wysna_add(WVal a, WVal b) {
+WYSNA_RT_FN WVal wysna_add(WVal a, WVal b) {
     WTag ta = wysna_tag(a);
     WTag tb = wysna_tag(b);
     if (ta == W_INT && tb == W_INT) return wysna_int((int64_t)((uint64_t)wysna_as_int(a) + (uint64_t)wysna_as_int(b)));
@@ -33,7 +33,7 @@ static inline WVal wysna_add(WVal a, WVal b) {
     wysna_runtime_fail_unlocated("W4003", "Invalid operand types for addition (tags %d, %d)", ta, tb);
 }
 
-static inline WVal wysna_sub(WVal a, WVal b) {
+WYSNA_RT_FN WVal wysna_sub(WVal a, WVal b) {
     WTag ta = wysna_tag(a);
     WTag tb = wysna_tag(b);
     if (ta == W_INT && tb == W_INT) return wysna_int((int64_t)((uint64_t)wysna_as_int(a) - (uint64_t)wysna_as_int(b)));
@@ -41,7 +41,7 @@ static inline WVal wysna_sub(WVal a, WVal b) {
     wysna_runtime_fail_unlocated("W4003", "Invalid operand types for subtraction (tags %d, %d)", ta, tb);
 }
 
-static inline WVal wysna_mul(WVal a, WVal b) {
+WYSNA_RT_FN WVal wysna_mul(WVal a, WVal b) {
     WTag ta = wysna_tag(a);
     WTag tb = wysna_tag(b);
     if (ta == W_INT && tb == W_INT) return wysna_int((int64_t)((uint64_t)wysna_as_int(a) * (uint64_t)wysna_as_int(b)));
@@ -75,7 +75,7 @@ static inline int64_t wysna_mod_i64_at(int64_t ai, int64_t bi, const char* file,
     return ai % bi;
 }
 
-static inline WVal wysna_div(WVal a, WVal b) {
+WYSNA_RT_FN WVal wysna_div(WVal a, WVal b) {
     WTag ta = wysna_tag(a);
     WTag tb = wysna_tag(b);
     if (ta == W_INT && tb == W_INT) {
@@ -94,12 +94,12 @@ static inline WVal wysna_div(WVal a, WVal b) {
     wysna_runtime_fail_unlocated("W4003", "Invalid operand types for division (tags %d, %d)", ta, tb);
 }
 
-static inline WVal wysna_div_at(WVal a, WVal b, const char* file, int32_t line, int32_t col) {
+WYSNA_RT_FN WVal wysna_div_at(WVal a, WVal b, const char* file, int32_t line, int32_t col) {
     wysna_runtime_set_position(file, line, col);
     return wysna_div(a, b);
 }
 
-static inline WVal wysna_mod(WVal a, WVal b) {
+WYSNA_RT_FN WVal wysna_mod(WVal a, WVal b) {
     WTag ta = wysna_tag(a);
     WTag tb = wysna_tag(b);
     if (ta == W_INT && tb == W_INT) {
@@ -112,12 +112,12 @@ static inline WVal wysna_mod(WVal a, WVal b) {
     wysna_runtime_fail_unlocated("W4003", "Invalid operand types for modulo (tags %d, %d)", ta, tb);
 }
 
-static inline WVal wysna_mod_at(WVal a, WVal b, const char* file, int32_t line, int32_t col) {
+WYSNA_RT_FN WVal wysna_mod_at(WVal a, WVal b, const char* file, int32_t line, int32_t col) {
     wysna_runtime_set_position(file, line, col);
     return wysna_mod(a, b);
 }
 
-static inline WVal wysna_neg(WVal a) {
+WYSNA_RT_FN WVal wysna_neg(WVal a) {
     WTag ta = wysna_tag(a);
     if (ta == W_INT) return wysna_int((int64_t)(0ULL - (uint64_t)wysna_as_int(a)));
     if (ta == W_FLOAT) return wysna_float(-wysna_as_float(a));
@@ -137,7 +137,7 @@ static inline int wysna_string_compare(WVal a, WVal b) {
     return (la < lb) ? -1 : ((la > lb) ? 1 : 0);
 }
 
-static inline WVal wysna_lt(WVal a, WVal b) {
+WYSNA_RT_FN WVal wysna_lt(WVal a, WVal b) {
     WTag ta = wysna_tag(a);
     WTag tb = wysna_tag(b);
     if (ta == W_INT && tb == W_INT) return wysna_bool(wysna_as_int(a) < wysna_as_int(b));
@@ -146,7 +146,7 @@ static inline WVal wysna_lt(WVal a, WVal b) {
     wysna_runtime_fail_unlocated("W4003", "Invalid operand types for comparison (tags %d, %d)", ta, tb);
 }
 
-static inline WVal wysna_le(WVal a, WVal b) {
+WYSNA_RT_FN WVal wysna_le(WVal a, WVal b) {
     WTag ta = wysna_tag(a);
     WTag tb = wysna_tag(b);
     if (ta == W_INT && tb == W_INT) return wysna_bool(wysna_as_int(a) <= wysna_as_int(b));
@@ -155,7 +155,7 @@ static inline WVal wysna_le(WVal a, WVal b) {
     wysna_runtime_fail_unlocated("W4003", "Invalid operand types for comparison (tags %d, %d)", ta, tb);
 }
 
-static inline WVal wysna_gt(WVal a, WVal b) {
+WYSNA_RT_FN WVal wysna_gt(WVal a, WVal b) {
     WTag ta = wysna_tag(a);
     WTag tb = wysna_tag(b);
     if (ta == W_INT && tb == W_INT) return wysna_bool(wysna_as_int(a) > wysna_as_int(b));
@@ -164,7 +164,7 @@ static inline WVal wysna_gt(WVal a, WVal b) {
     wysna_runtime_fail_unlocated("W4003", "Invalid operand types for comparison (tags %d, %d)", ta, tb);
 }
 
-static inline WVal wysna_ge(WVal a, WVal b) {
+WYSNA_RT_FN WVal wysna_ge(WVal a, WVal b) {
     WTag ta = wysna_tag(a);
     WTag tb = wysna_tag(b);
     if (ta == W_INT && tb == W_INT) return wysna_bool(wysna_as_int(a) >= wysna_as_int(b));

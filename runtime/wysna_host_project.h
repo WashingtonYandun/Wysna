@@ -17,8 +17,9 @@ static bool wysna_project_append_entry(WysnaHostEntry* output, char kind, const 
 }
 #endif
 
-static int64_t wysna_host_project_entries(void* path_handle, void* output_handle) {
+WYSNA_RT_FN int64_t wysna_host_project_entries(void* path_handle, void* output_handle) {
 #ifdef WYSNA_DENY_CAP_FILESYSTEM_READ
+    (void)path_handle; (void)output_handle;
     wysna_sandbox_deny("filesystem.read");
     return -1;
 #elif defined(__wasi__)
@@ -97,7 +98,7 @@ static int64_t wysna_host_project_entries(void* path_handle, void* output_handle
 #endif
 }
 
-static int64_t wysna_host_project_path_key(void* input_handle, void* output_handle) {
+WYSNA_RT_FN int64_t wysna_host_project_path_key(void* input_handle, void* output_handle) {
     WysnaHostEntry* output = wysna_host_find(output_handle, 1);
     if (!output || output->length) return wysna_host_errno(EINVAL);
     void* normalized_handle = wysna_host_buffer_new();
@@ -130,7 +131,7 @@ static int64_t wysna_host_project_path_key(void* input_handle, void* output_hand
     return status ? -1 : (int64_t)output->length;
 }
 
-static int64_t wysna_host_project_file_sha256(void* path_handle, void* output_handle) {
+WYSNA_RT_FN int64_t wysna_host_project_file_sha256(void* path_handle, void* output_handle) {
     WysnaHostEntry* output = wysna_host_find(output_handle, 1);
     if (!output || output->length) return wysna_host_errno(EINVAL);
     void* handle = wysna_host_file_open(path_handle, 0);

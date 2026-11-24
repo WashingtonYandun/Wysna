@@ -14,14 +14,22 @@
 #include <stdlib.h>
 #include <stdint.h>
 #include <stdbool.h>
+#include <stddef.h>
 #include <string.h>
 #include <inttypes.h>
-#include <float.h>
 #include <math.h>
+#include <stdarg.h>
+#ifdef W_OK
+#undef W_OK
+#endif
+
+#if defined(WYSNA_RUNTIME_LINKED) && !defined(WYSNA_RUNTIME_IMPL) && !defined(WYSNA_HAS_HTTP) && !defined(W_STRING_METRICS) && !defined(WYSNA_DEFAULT_MAX_STEPS) && !defined(WYSNA_DEFAULT_MAX_HEAP_BYTES) && !defined(WYSNA_SANDBOX_ENFORCED)
+#include "wysna_sdk_abi.h"
+#else
+#include <float.h>
 #include <errno.h>
 #include <ctype.h>
 #include <time.h>
-#include <stdarg.h>
 #ifdef _WIN32
 #ifndef WIN32_LEAN_AND_MEAN
 #define WIN32_LEAN_AND_MEAN
@@ -47,5 +55,6 @@
 #include "wysna_runtime_json.h"
 
 #include "wysna_host.h"
+#endif
 
 #endif /* WYSNA_RUNTIME_H */
