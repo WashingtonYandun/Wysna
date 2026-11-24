@@ -223,6 +223,24 @@ static inline void wysna_dispose_enum(WEnumBuf* en) {
     wysna_mem_on_free();
 }
 
+static inline void wysna_dispose_struct(WStructBuf* st) {
+    wysna_rc_store(&st->refcount, -1);
+#if !defined(WYSNA_HAS_ASAN)
+    if (W_LIKELY(st->vtable == (const WClassVTable*)(uintptr_t)1 &&
+                 wysna_runtime_context.quotas_initialized &&
+                 !wysna_runtime_context.multi_threaded &&
+                 wysna_runtime_context.max_heap_bytes == 0 &&
+                 wysna_runtime_context.struct_pool_len < 32)) {
+        st->refcount = 0;
+        wysna_runtime_context.struct_pool[wysna_runtime_context.struct_pool_len++] = st;
+        wysna_mem_on_free();
+        return;
+    }
+#endif
+    free(st);
+    wysna_mem_on_free();
+}
+
 WYSNA_RT_FN void wysna_release_heap(WVal v);
 
 static inline void wysna_release(WVal v) {
@@ -310,9 +328,7 @@ WYSNA_RT_FN void wysna_release_heap(WVal v) {
                         int32_t len = st->len;
                         WVal leaf_vals[8];
                         for (int32_t i = 0; i < len; i++) leaf_vals[i] = st->vals[i];
-                        st->refcount = -1;
-                        free(st);
-                        wysna_mem_on_free();
+                        wysna_dispose_struct(st);
                         for (int32_t i = 0; i < len; i++) wysna_release(leaf_vals[i]);
                     }
                     return;
@@ -555,8 +571,7 @@ static void wysna_release_graph(WVal v) {
                 for (int32_t i = 0; i < st->len; i++) {
                     wysna_release_work_push(&work, &count, &capacity, &heap_work, st->vals[i]);
                 }
-                free(st);
-                wysna_mem_on_free();
+                wysna_dispose_struct(st);
             }
         } else if (hi == WVAL_HI_TUPLE) {
             WTupleBuf* t = wysna_as_tuple(current);
@@ -671,16 +686,17 @@ static inline WVal wysna_peek_optional(WVal value) {
     return value;
 }
 
-WYSNA_RT_FN WVal wysna_unwrap_optional(WVal value) {
+static inline WVal wysna_unwrap_optional(WVal value) {
     WEnumBuf* en = wysna_as_enum(value);
-    if (en && strcmp(en->enum_name, "Option") == 0 &&
+    if (en && en->enum_name && en->variant &&
+        strcmp(en->enum_name, "Option") == 0 &&
         strcmp(en->variant, "Some") == 0 && en->has_payload) {
         return wysna_clone(en->payload);
     }
     return wysna_clone(value);
 }
 
-WYSNA_RT_FN WVal wysna_unwrap_ok(WVal v) {
+static inline WVal wysna_unwrap_ok(WVal v) {
     if (wysna_is_ok(v)) {
         WBoxBuf* bx = wysna_as_box(v);
         if (bx) return wysna_clone(bx->val);
@@ -695,7 +711,7 @@ WYSNA_RT_FN WVal wysna_unwrap_success(WVal value) {
     return wysna_unwrap_ok(value);
 }
 
-WYSNA_RT_FN WVal wysna_unwrap_err(WVal v) {
+static inline WVal wysna_unwrap_err(WVal v) {
     if (wysna_is_err(v)) {
         WBoxBuf* bx = wysna_as_box(v);
         if (bx) return wysna_clone(bx->val);
@@ -777,7 +793,12 @@ WYSNA_RT_FN void wysna_list_detach(WVal* v) {
 }
 
 /* Dense insertion-order entries with an open-addressed lookup index. */
-WYSNA_RT_FN bool wysna_eq(WVal a, WVal b);
+WYSNA_RT_FN bool wysna_eq_slow(WVal a, WVal b);
+static inline bool wysna_eq(WVal a, WVal b) {
+    if (W_LIKELY(a.bits == b.bits && !wysna_is_double(a))) return true;
+    if (wysna_hi(a) == WVAL_HI_INT && wysna_hi(b) == WVAL_HI_INT) return false;
+    return wysna_eq_slow(a, b);
+}
 static inline uint64_t wysna_key_hash_bytes(const unsigned char* data, size_t length, uint64_t hash) {
     for (size_t i = 0; i < length; i++) { hash ^= data[i]; hash *= UINT64_C(1099511628211); }
     return hash;

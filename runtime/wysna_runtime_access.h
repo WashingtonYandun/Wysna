@@ -191,6 +191,32 @@ static inline int32_t wysna_list_iteration_length_at(WVal value,
     if (W_UNLIKELY(!b)) wysna_list_iteration_fail_at("W4003", "For loop requires a list value", file, line, col);
     return b->len;
 }
+
+static inline WListBuf* wysna_list_iter_begin_at(WVal value,
+                                                 const char* file, int32_t line, int32_t col) {
+    WListBuf* b = wysna_as_list(value);
+    if (W_UNLIKELY(!b)) wysna_list_iteration_fail_at("W4003", "For loop requires a list value", file, line, col);
+    return b;
+}
+
+static inline int64_t wysna_list_len_i64(WVal value) {
+    WListBuf* b = wysna_as_list(value);
+    if (W_UNLIKELY(!b)) wysna_runtime_fail("W4003", "len() expected list value");
+    return (int64_t)b->len;
+}
+
+static inline int64_t wysna_dict_len_i64(WVal value) {
+    WDictBuf* d = wysna_as_dict(value);
+    if (W_UNLIKELY(!d)) wysna_runtime_fail("W4003", "len() expected dict value");
+    return (int64_t)d->len;
+}
+
+static inline int64_t wysna_tuple_len_i64(WVal value) {
+    WTupleBuf* t = wysna_as_tuple(value);
+    if (W_UNLIKELY(!t)) wysna_runtime_fail("W4003", "len() expected tuple value");
+    return (int64_t)t->len;
+}
+
 static inline WVal wysna_list_iteration_get_at(WVal value, int32_t index,
                                                const char* file, int32_t line, int32_t col) {
     WListBuf* b = wysna_as_list(value);
@@ -272,17 +298,10 @@ static inline WVal wysna_not_equal(WVal left, WVal right) { return wysna_bool(!w
 WYSNA_RT_FN WVal wysna_enum_payload_owned(WVal value) { return wysna_clone(wysna_peek_enum_payload(value)); }
 
 /* Methods on List / Dict */
-WYSNA_RT_FN WVal wysna_list_append(WVal* list_val, WVal item) {
+WYSNA_RT_FN WVal wysna_list_append_slow(WVal* list_val, WVal item) {
     if (W_UNLIKELY(wysna_hi(*list_val) != WVAL_HI_LIST)) wysna_runtime_fail("W4003", "List intrinsic requires list receiver");
-    WListBuf* b = wysna_as_list(*list_val);
-    if (W_LIKELY(wysna_rc_load(&b->refcount) == 1 && b->len < b->cap && !wysna_list_is_u8(b) &&
-                 (wysna_hi(item) == WVAL_HI_INT || wysna_is_double(item) ||
-                  item.bits == WVAL_TRUE_BITS || item.bits == WVAL_FALSE_BITS))) {
-        b->data[b->len++] = item;
-        return wysna_unit();
-    }
     wysna_list_detach(list_val);
-    b = wysna_as_list(*list_val);
+    WListBuf* b = wysna_as_list(*list_val);
     if (b->len >= b->cap) {
         if (b->cap > INT32_MAX / 2) wysna_runtime_fail("W4003", "List too large");
         b->cap = b->cap > 0 ? b->cap * 2 : 4;
@@ -299,6 +318,77 @@ WYSNA_RT_FN WVal wysna_list_append(WVal* list_val, WVal item) {
     }
     b->data[b->len++] = wysna_is_immediate(item) ? item : wysna_clone(item);
     return wysna_unit();
+}
+
+static inline WVal wysna_list_append(WVal* list_val, WVal item) {
+    if (W_UNLIKELY(wysna_hi(*list_val) != WVAL_HI_LIST)) {
+        wysna_runtime_fail("W4003", "List intrinsic requires list receiver");
+    }
+    WListBuf* b = wysna_as_list(*list_val);
+    if (W_LIKELY(wysna_rc_load(&b->refcount) == 1 && b->len < b->cap && !wysna_list_is_u8(b))) {
+        if (W_LIKELY(wysna_hi(item) == WVAL_HI_INT || wysna_is_double(item) ||
+                     item.bits == WVAL_TRUE_BITS || item.bits == WVAL_FALSE_BITS)) {
+            b->data[b->len++] = item;
+            return wysna_unit();
+        }
+        b->scalar_only = false;
+        b->data[b->len++] = wysna_is_immediate(item) ? item : wysna_clone(item);
+        return wysna_unit();
+    }
+    return wysna_list_append_slow(list_val, item);
+}
+
+WYSNA_RT_FN void wysna_list_set_slow_at(WVal* list_val, int64_t idx, WVal owned_val,
+                                        const char* file, int32_t line, int32_t col) {
+    if (W_UNLIKELY(wysna_hi(*list_val) != WVAL_HI_LIST)) {
+        wysna_release(owned_val);
+        wysna_runtime_set_position(file, line, col);
+        wysna_runtime_fail("W4003", "List write requires list receiver");
+    }
+    WListBuf* probe = wysna_as_list(*list_val);
+    if (W_UNLIKELY(!probe || idx < 0 || idx >= probe->len)) {
+        int32_t len = probe ? probe->len : 0;
+        wysna_release(owned_val);
+        wysna_runtime_set_position(file, line, col);
+        wysna_runtime_fail("W4002",
+                           "List index %" PRId64 " out of bounds for length %d", idx, len);
+    }
+    wysna_list_detach(list_val);
+    WListBuf* b = wysna_as_list(*list_val);
+    if (wysna_list_is_u8(b)) {
+        uint8_t byte_val = wysna_as_u8(owned_val);
+        wysna_release(owned_val);
+        ((uint8_t*)b->data)[idx] = byte_val;
+        return;
+    }
+    if (W_UNLIKELY(!(wysna_hi(owned_val) == WVAL_HI_INT || wysna_is_double(owned_val) ||
+                     owned_val.bits == WVAL_TRUE_BITS || owned_val.bits == WVAL_FALSE_BITS))) {
+        b->scalar_only = false;
+    }
+    WVal old = b->data[idx];
+    b->data[idx] = owned_val;
+    wysna_release(old);
+}
+
+static inline void wysna_list_set_at(WVal* list_val, int64_t idx, WVal owned_val,
+                                     const char* file, int32_t line, int32_t col) {
+    WListBuf* b = wysna_as_list(*list_val);
+    if (W_LIKELY(b && wysna_rc_load(&b->refcount) == 1 && !wysna_list_is_u8(b) &&
+                 idx >= 0 && idx < b->len)) {
+        if (W_LIKELY(wysna_hi(owned_val) == WVAL_HI_INT || wysna_is_double(owned_val) ||
+                     owned_val.bits == WVAL_TRUE_BITS || owned_val.bits == WVAL_FALSE_BITS)) {
+            WVal old = b->data[idx];
+            b->data[idx] = owned_val;
+            if (W_UNLIKELY(!wysna_is_immediate(old))) wysna_release(old);
+            return;
+        }
+        b->scalar_only = false;
+        WVal old = b->data[idx];
+        b->data[idx] = owned_val;
+        wysna_release(old);
+        return;
+    }
+    wysna_list_set_slow_at(list_val, idx, owned_val, file, line, col);
 }
 
 WYSNA_RT_FN WVal wysna_list_pop(WVal* list_val) {
@@ -338,6 +428,78 @@ WYSNA_RT_FN WVal wysna_dict_get(WVal dict_val, WVal key) {
     int32_t found = wysna_dict_find(d, key);
     if (found < 0) return wysna_none();
     return wysna_enum_payload("Option", "Some", wysna_clone(d->vals[found]));
+}
+
+WYSNA_RT_FN bool wysna_dict_contains_i64_slow(WDictBuf* d, int64_t key) {
+    if (!d || d->len == 0 || d->bucket_count == 0) return false;
+    return wysna_dict_find(d, wysna_borrow_int(key)) >= 0;
+}
+
+static inline bool wysna_dict_contains_i64(WVal dict_val, int64_t key) {
+    WDictBuf* d = wysna_as_dict(dict_val);
+    if (W_UNLIKELY(!d || d->len == 0 || d->bucket_count == 0)) return false;
+    if (W_LIKELY(wysna_int_fits_48(key))) {
+        uint64_t full_hash = (UINT64_C(14695981039346656037) ^ (uint64_t)W_INT) ^ wysna_mix64((uint64_t)key);
+        uint32_t mask = (uint32_t)d->bucket_count - 1;
+        uint32_t slot = (uint32_t)full_hash & mask;
+        WVal target = wysna_int_inline(key);
+        while (d->buckets[slot] >= 0) {
+            int32_t idx = d->buckets[slot];
+            WVal k = d->keys[idx];
+            if (W_LIKELY(k.bits == target.bits)) return true;
+            if (W_UNLIKELY(wysna_hi(k) == WVAL_HI_EXT)) return wysna_dict_contains_i64_slow(d, key);
+            slot = (slot + 1) & mask;
+        }
+        return false;
+    }
+    return wysna_dict_contains_i64_slow(d, key);
+}
+
+WYSNA_RT_FN void wysna_dict_set_i64_slow_at(WVal* dict_val, int64_t key, WVal owned_val,
+                                            const char* file, int32_t line, int32_t col) {
+    if (W_UNLIKELY(wysna_hi(*dict_val) != WVAL_HI_DICT)) {
+        wysna_release(owned_val);
+        wysna_runtime_set_position(file, line, col);
+        wysna_runtime_fail("W4003", "Dictionary write requires dict receiver");
+    }
+    wysna_dict_detach(dict_val);
+    WDictBuf* d = wysna_as_dict(*dict_val);
+    wysna_dict_insert_owned(d, wysna_int(key), owned_val);
+}
+
+static inline void wysna_dict_set_i64_at(WVal* dict_val, int64_t key, WVal owned_val,
+                                         const char* file, int32_t line, int32_t col) {
+    WDictBuf* d = wysna_as_dict(*dict_val);
+    if (W_LIKELY(d && d->bucket_count > 0 && wysna_rc_load(&d->refcount) == 1 && wysna_int_fits_48(key))) {
+        uint64_t full_hash = (UINT64_C(14695981039346656037) ^ (uint64_t)W_INT) ^ wysna_mix64((uint64_t)key);
+        uint32_t mask = (uint32_t)d->bucket_count - 1;
+        uint32_t slot = (uint32_t)full_hash & mask;
+        WVal target = wysna_int_inline(key);
+        bool fallback = false;
+        while (d->buckets[slot] >= 0) {
+            int32_t idx = d->buckets[slot];
+            WVal k = d->keys[idx];
+            if (W_LIKELY(k.bits == target.bits)) {
+                WVal old = d->vals[idx];
+                d->vals[idx] = owned_val;
+                if (W_UNLIKELY(!wysna_is_immediate(old))) wysna_release(old);
+                return;
+            }
+            if (W_UNLIKELY(wysna_hi(k) == WVAL_HI_EXT)) {
+                fallback = true;
+                break;
+            }
+            slot = (slot + 1) & mask;
+        }
+        if (!fallback && (int64_t)(d->len + 1) * 2 < d->bucket_count && d->len < d->cap) {
+            int32_t idx = d->len++;
+            d->keys[idx] = target;
+            d->vals[idx] = owned_val;
+            d->buckets[slot] = idx;
+            return;
+        }
+    }
+    wysna_dict_set_i64_slow_at(dict_val, key, owned_val, file, line, col);
 }
 
 WYSNA_RT_FN WVal wysna_dict_keys(WVal dict_val) {
@@ -556,9 +718,16 @@ WYSNA_RT_FN WVal wysna_contains(WVal container, WVal item) {
         const char* hay = wysna_str_bytes(container, sbh, &hlen);
         const char* needle = wysna_str_bytes(item, sbn, &nlen);
         if (nlen == 0) return wysna_bool(true);
+        if (nlen == 1) return wysna_bool(memchr(hay, (unsigned char)needle[0], hlen) != NULL);
         if (nlen > hlen) return wysna_bool(false);
-        for (size_t i = 0; i <= hlen - nlen; i++) {
-            if (memcmp(hay + i, needle, nlen) == 0) return wysna_bool(true);
+        const char* pos = hay;
+        const char* limit = hay + (hlen - nlen) + 1;
+        unsigned char first = (unsigned char)needle[0];
+        while (pos < limit) {
+            const char* match = (const char*)memchr(pos, first, (size_t)(limit - pos));
+            if (!match) return wysna_bool(false);
+            if (memcmp(match + 1, needle + 1, nlen - 1) == 0) return wysna_bool(true);
+            pos = match + 1;
         }
         return wysna_bool(false);
     }

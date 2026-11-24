@@ -61,15 +61,15 @@ WYSNA_RT_FN WVal wysna_list_slice(const WListBuf* input, int32_t start, int32_t 
     return wysna_make_hi_ptr(WVAL_HI_LIST, output);
 }
 
-WYSNA_RT_FN int32_t wysna_range_count_i64(int64_t s, int64_t e, bool inclusive) {
+static inline int32_t wysna_range_count_i64(int64_t s, int64_t e, bool inclusive) {
     if (inclusive) {
-        if (e == INT64_MAX) {
+        if (W_UNLIKELY(e == INT64_MAX)) {
             wysna_runtime_fail_unlocated("W4003", "Range bound overflow at INT64_MAX");
         }
         e++;
     }
     uint64_t diff = e > s ? (uint64_t)e - (uint64_t)s : 0;
-    if (diff > 100000000ULL) {
+    if (W_UNLIKELY(diff > 100000000ULL)) {
         wysna_runtime_fail_unlocated("W4003", "Range length %" PRIu64 " exceeds maximum list capacity", diff);
     }
     return (int32_t)diff;
@@ -206,14 +206,31 @@ static inline size_t wysna_struct_vals_offset(void) {
 }
 
 WYSNA_RT_FN WVal wysna_make_struct_static(const char* name, int32_t count, const char* const* keys, const WVal* vals) {
-    int32_t cap = count > 0 ? count : 1;
     size_t vals_offset = wysna_struct_vals_offset();
-    size_t vals_size = sizeof(WVal) * (size_t)cap;
-    size_t total = vals_offset + vals_size;
-    WStructBuf* st = (WStructBuf*)wysna_alloc_safe(total);
+    bool pooled_cap = false;
+    WStructBuf* st = NULL;
+    if (count <= 4) {
+#if !defined(WYSNA_HAS_ASAN)
+        if (W_LIKELY(wysna_runtime_context.quotas_initialized &&
+                     !wysna_runtime_context.multi_threaded &&
+                     wysna_runtime_context.max_heap_bytes == 0)) {
+            pooled_cap = true;
+            if (wysna_runtime_context.struct_pool_len > 0) {
+                st = wysna_runtime_context.struct_pool[--wysna_runtime_context.struct_pool_len];
+            } else {
+                st = (WStructBuf*)wysna_alloc_safe(vals_offset + sizeof(WVal) * 4u);
+            }
+        }
+#endif
+    }
+    if (!st) {
+        int32_t cap = count > 0 ? count : 1;
+        size_t total = vals_offset + sizeof(WVal) * (size_t)cap;
+        st = (WStructBuf*)wysna_alloc_safe(total);
+    }
     st->refcount = 1;
     st->control = NULL;
-    st->vtable = NULL;
+    st->vtable = pooled_cap ? (const WClassVTable*)(uintptr_t)1 : NULL;
     st->name = name;
     st->len = count;
     st->keys = (const char**)keys;
