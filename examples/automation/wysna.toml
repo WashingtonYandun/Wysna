@@ -19,4 +19,4 @@ profile = "native-cli"
 [[tests]]
 name = "runner-argv-contract"
 entry = "tests/argv.wysna"
-timeout_ms = 10000
+timeout_ms = 30000

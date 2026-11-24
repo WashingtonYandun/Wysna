@@ -1,0 +1,30 @@
+import "std/json"
+import "std/async" as tasks
+
+fn score(value: int) -> int ! str {
+    if value < 0 or value > 1000000 { return Err("item_out_of_range") }
+    return value * value
+}
+
+pub fn evaluate(payload: str) -> str ! str {
+    let document = json.parse_with_limits(payload, 16384, 6, 1024) else error { return Err("invalid_json") }
+    let encoded = json.to_array(document) else error { return Err("expected_array") }
+    if len(encoded) > 128 { return Err("batch_too_large") }
+
+    let mut inputs: list[int] = []
+    for field in encoded {
+        inputs.append(json.to_int(field) else error { return Err("expected_integer") })
+    }
+
+    let outcomes = tasks.run_group(inputs, 2, 1000, false, score) else error { return Err("group_configuration") }
+    let mut items: list[json.Value] = []
+    for outcome in outcomes {
+        match outcome {
+            Completed(value) => items.append(json.object({"status": json.string("completed"), "value": json.from_int(value)})),
+            Failed(reason) => items.append(json.object({"status": json.string("failed"), "reason": json.string(reason)})),
+            Cancelled => items.append(json.object({"status": json.string("cancelled")})),
+            DeadlineExceeded => items.append(json.object({"status": json.string("deadline_exceeded")})),
+        }
+    }
+    return json.stringify(json.array(items)) else error { return Err("encoding_failed") }
+}

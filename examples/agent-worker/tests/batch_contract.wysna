@@ -1,0 +1,5 @@
+import "batch.wysna"
+
+print(batch.evaluate("[2,-1,3]") else error { error })
+print(batch.evaluate("[true]") else error { error })
+print(batch.evaluate("[]") else error { error })
