@@ -27,6 +27,14 @@ fn array_size(value: json.Value) -> int {
     return len(rows)
 }
 
+fn report_integer(raw: str, label: str) -> unit {
+    let value = json.to_int(json.Value.Number(raw)) else issue {
+        print(label, issue.offset, issue.message)
+        return
+    }
+    print(label, value)
+}
+
 fn main() -> unit {
     let decoded = json.parse("{\"name\":\"Wysna\",\"items\":[true,false,null],\"number\":-12.5e+2,\"unicode\":\"\\uD83D\\uDE00\",\"text\":\"line\\nnext\\t\\\"\"}") else error {
         print("parse error", error.offset, error.message)
@@ -78,6 +86,21 @@ fn main() -> unit {
         too_deep = too_deep + "]"
     }
     report_invalid(too_deep, "deep")
+    let mut many_digits = "9"
+    for digit_round in 0..13 {
+        many_digits = many_digits + many_digits
+    }
+    report_integer(many_digits, "large integer")
+    let mut padding = " "
+    for padding_round in 0..20 {
+        padding = padding + padding
+    }
+    report_integer(padding + "1", "integer byte limit")
+    let mixed = json.stringify(json.string("pré\n中" + chr(1) + "post")) else issue {
+        print("encoding failed", issue.message)
+        return
+    }
+    print(mixed)
 }
 
 main()

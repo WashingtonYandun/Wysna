@@ -20,3 +20,6 @@ byte ceiling error 0 max_input_bytes must be between 1 and 16777216
 depth ceiling error 0 max_depth must be between 1 and 32
 node ceiling error 0 max_nodes must be between 1 and 100000
 deep 33 maximum JSON nesting depth is 32
+large integer 18 integer overflow
+integer byte limit 1048576 maximum JSON input byte limit exceeded
+"pré\n中\u0001post"

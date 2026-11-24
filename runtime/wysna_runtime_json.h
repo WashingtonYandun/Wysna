@@ -630,6 +630,10 @@ WYSNA_RT_FN WVal wysna_builtin_json_parse_int(WVal raw_val) {
     char scratch[7];
     size_t slen = 0;
     const unsigned char* s = (const unsigned char*)wysna_str_bytes(raw_val, scratch, &slen);
+    /* Value.Number is public, so the integer fast path must enforce parse's byte limit. */
+    if (slen > 1048576u) {
+        return wysna_err(wysna_copy_str("maximum JSON input byte limit exceeded"));
+    }
     const unsigned char* end = s + slen;
     while (s < end && (*s == ' ' || *s == '\t' || *s == '\r' || *s == '\n')) s++;
     while (end > s && (end[-1] == ' ' || end[-1] == '\t' || end[-1] == '\r' || end[-1] == '\n')) end--;
