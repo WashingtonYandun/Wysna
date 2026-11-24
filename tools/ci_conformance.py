@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 """Run declared compiler coverage; the release profile rejects unsupported rows."""
+import concurrent.futures
 import json
 import hashlib
 import os
@@ -186,6 +187,48 @@ def bootstrap_binary(output):
     return binary
 
 
+_USAGE = 'Usage: ci_conformance.py [--sanitize] [--profile=integration|release] [--matrix] [--jobs=N]'
+
+
+def _parse_positive_int(raw):
+    try:
+        value = int(raw)
+    except ValueError as error:
+        raise SystemExit(_USAGE) from error
+    if value < 1:
+        raise SystemExit(_USAGE)
+    return value
+
+
+def _resolve_jobs(arguments):
+    jobs_arg = None
+    valid_flags = ('--sanitize', '--profile=release', '--profile=integration', '--matrix')
+    for arg in arguments:
+        if arg.startswith('--jobs='):
+            jobs_arg = _parse_positive_int(arg.split('=', 1)[1])
+        elif arg not in valid_flags:
+            raise SystemExit(_USAGE)
+    if jobs_arg is not None:
+        return jobs_arg
+    env_jobs = os.environ.get('WYSNA_CI_JOBS', '').strip()
+    if env_jobs:
+        return _parse_positive_int(env_jobs)
+    cap = 2 if '--sanitize' in arguments else 4
+    return min(cap, max(1, os.cpu_count() or 2))
+
+
+def _run_fixture(path, selfhost_bin, directory, sanitize, strict, is_negative):
+    label = path.relative_to(ROOT).as_posix()
+    expected = None if is_negative else path.with_suffix('.expected').read_text()
+    if not is_negative and expected is None:
+        raise RuntimeError(f'Missing expected output: {label}')
+    ok, detail, report = verify_case(
+        path.read_text(), label, selfhost_bin, directory, expected,
+        sanitize, strict, is_negative,
+    )
+    return label, ok, detail, report
+
+
 def main():
     arguments = sys.argv[1:]
     if '--matrix' in arguments:
@@ -194,9 +237,7 @@ def main():
 
     sanitize = '--sanitize' in arguments
     profile = 'release' if '--profile=release' in arguments else 'integration'
-    valid_flags = ('--sanitize', '--profile=release', '--profile=integration', '--matrix')
-    if any(arg not in valid_flags for arg in arguments):
-        raise SystemExit('Usage: ci_conformance.py [--sanitize] [--profile=integration|release] [--matrix]')
+    jobs = _resolve_jobs(arguments)
     artifacts = Path(os.environ.get('WYSNA_CI_ARTIFACTS', ROOT / '.wysna_cache/ci-artifacts'))
     artifacts.mkdir(parents=True, exist_ok=True)
     compiler = subprocess.run(shlex.split(os.environ.get('CC', 'cc')) + ['--version'],
@@ -206,7 +247,7 @@ def main():
     (artifacts / 'environment.json').write_text(json.dumps({
         'sha': sha, 'python': sys.version, 'platform': sys.platform,
         'compiler': compiler.stdout, 'profile': profile, 'sanitize': sanitize,
-        'compile_timeout_seconds': 120, 'run_timeout_seconds': 30}, indent=2))
+        'jobs': jobs, 'compile_timeout_seconds': 120, 'run_timeout_seconds': 30}, indent=2))
     # This subprocess is bounded separately because it builds the compiler itself.
     bootstrap = execute([sys.executable, '-c',
         'import json; from compiler.Bootstrap import ensure_selfhost_compiler_binary; '
@@ -226,25 +267,37 @@ def main():
     passed = 0
     feature_coverage = {}
     coverage = {engine: {'passed': 0, 'failed': 0, 'unsupported': 0} for engine in ENGINES}
+    negative_set = set(negatives)
+    strict = profile == 'release'
+
+    def _record_outcome(outcome):
+        nonlocal passed
+        label, ok, detail, report = outcome
+        passed += int(ok)
+        feature_rows = feature_coverage.setdefault(report['feature'], {
+            engine: {'passed': 0, 'failed': 0, 'unsupported': 0} for engine in ENGINES})
+        for engine in ENGINES:
+            if engine in report['unsupported']:
+                state = 'unsupported'
+            else:
+                state = next(row['status'] for row in report['results'] if row['engine'] == engine)
+            coverage[engine][state] += 1
+            feature_rows[engine][state] += 1
+        print(f"  [{'PASS' if ok else 'FAIL'}] {label}" + ('' if ok else ': ' + detail), flush=True)
+
     with tempfile.TemporaryDirectory(prefix='wysna-ci-') as directory:
-        for path in fixtures:
-            label = path.relative_to(ROOT).as_posix()
-            expected = path.with_suffix('.expected').read_text() if path in positives else None
-            if path in positives and expected is None:
-                raise RuntimeError(f'Missing expected output: {label}')
-            ok, detail, report = verify_case(path.read_text(), label, selfhost_bin, directory, expected,
-                                sanitize, profile == 'release', path in negatives)
-            passed += int(ok)
-            feature_rows = feature_coverage.setdefault(report['feature'], {
-                engine: {'passed': 0, 'failed': 0, 'unsupported': 0} for engine in ENGINES})
-            for engine in ENGINES:
-                if engine in report['unsupported']:
-                    state = 'unsupported'
-                else:
-                    state = next(row['status'] for row in report['results'] if row['engine'] == engine)
-                coverage[engine][state] += 1
-                feature_rows[engine][state] += 1
-            print(f"  [{'PASS' if ok else 'FAIL'}] {label}" + ('' if ok else ': ' + detail), flush=True)
+        workers = min(jobs, len(fixtures))
+        if workers <= 1:
+            for path in fixtures:
+                _record_outcome(_run_fixture(path, selfhost_bin, directory, sanitize, strict, path in negative_set))
+        else:
+            with concurrent.futures.ThreadPoolExecutor(max_workers=workers) as pool:
+                futures = [
+                    pool.submit(_run_fixture, path, selfhost_bin, directory, sanitize, strict, path in negative_set)
+                    for path in fixtures
+                ]
+                for future in futures:
+                    _record_outcome(future.result())
     unchanged = provenance == source_fingerprint()
     summary = {'provenance': provenance, 'source_unchanged': unchanged, 'profile': profile, 'passed_cases': passed, 'total_cases': len(fixtures),
                'coverage': coverage, 'features': feature_coverage, 'support_files': support_files,
