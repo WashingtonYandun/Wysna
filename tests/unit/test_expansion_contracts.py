@@ -34,7 +34,7 @@ def run_expansion_tests():
         'tests/regressions/nul_string.wysna': '3 [97, 0, 98] false\n1\n',
         'tests/generic_oop/repository.wysna': '42 hello\n',
         'tests/generic_oop/modules/main.wysna': '42 hello\n',
-        'tests/stdlib/basic.wysna': '[3, 1, 2, 1] [1, 1, 2, 3] [2, 2, 4, 6]\none, two ["a", "b"]\n3 7\n',
+        'tests/stdlib/basic.wysna': (ROOT / 'tests/stdlib/basic.expected').read_text(encoding='utf-8'),
         'examples/algorithms/two_sum.wysna': '[1, 2]\n',
     }
     with tempfile.TemporaryDirectory(prefix='wysna-expansion-') as temporary:

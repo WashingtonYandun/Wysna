@@ -8,3 +8,15 @@ print(original, ordered, doubled)
 print(text.join(["one", "two"], ", "), text.lines("a\r\nb\n"))
 let decoded = utf8.decode(utf8.encode("á\0😀")) else err { "invalid" }
 print(len(decoded), len(utf8.encode(decoded)))
+
+struct Ranked { key: int, ordinal: int }
+let ranks = [
+    Ranked { key: 2, ordinal: 0 },
+    Ranked { key: 1, ordinal: 1 },
+    Ranked { key: 2, ordinal: 2 },
+    Ranked { key: 1, ordinal: 3 },
+    Ranked { key: 2, ordinal: 4 },
+]
+let sorted_ranks = algorithms.sort[Ranked](ranks, |left: Ranked, right: Ranked| => left.key < right.key)
+let ordinals = |entry: Ranked| => entry.ordinal
+print(algorithms.map[Ranked, int](sorted_ranks, ordinals), algorithms.map[Ranked, int](ranks, ordinals))

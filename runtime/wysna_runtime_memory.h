@@ -869,14 +869,18 @@ WYSNA_RT_FN int32_t wysna_dict_probe(WDictBuf* dict, WVal key, uint64_t* out_has
     uint32_t mask = (uint32_t)dict->bucket_count - 1;
     uint64_t full_hash = wysna_key_hash(key);
     if (out_hash) *out_hash = full_hash;
-    WTag key_tag = wysna_tag(key);
+    bool inline_integer = wysna_hi(key) == WVAL_HI_INT;
+    WTag key_tag = inline_integer ? W_INT : wysna_tag(key);
     uint32_t kh = (key_tag == W_STR) ? (uint32_t)full_hash : 0;
     uint32_t slot = (uint32_t)full_hash & mask;
     while (dict->buckets[slot] >= 0) {
         int32_t index = dict->buckets[slot];
         WVal candidate = dict->keys[index];
         if (candidate.bits == key.bits && !wysna_is_double(key)) return index;
-        if (wysna_tag(candidate) == key_tag) {
+        /* A different inline integer cannot be equal. Boxed keys still use
+           the usual numeric comparison. */
+        if (!(inline_integer && wysna_hi(candidate) == WVAL_HI_INT) &&
+            wysna_tag(candidate) == key_tag) {
             if (key_tag == W_INT) {
                 if (wysna_as_int(candidate) == wysna_as_int(key)) return index;
             } else if (key_tag == W_STR) {
