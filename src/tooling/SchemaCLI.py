@@ -687,13 +687,13 @@ def _schema_type_nodes(nodes):
             pending.extend(child for child in vars(item).values() if isinstance(child, (Node, list, tuple)))
 
 
-def _schema_projection(service, checked, selected):
+def _schema_projection(service, checked, declarations, selected):
     linked = service.link(checked).body
     entry = checked.source.file
     records = {item.name: item for item in linked if isinstance(item, (StructDecl, EnumDecl))}
     functions = {item.name: item for item in linked if isinstance(item, FnDecl) and item.source_file == entry}
     projected = [functions[item.name] for item in selected]
-    source_names = {item.name for item in checked.ast.body if isinstance(item, (StructDecl, EnumDecl))}
+    source_names = {item.name for item in declarations if isinstance(item, (StructDecl, EnumDecl))}
     reachable = {name: item for name, item in records.items()
                  if item.source_file == entry and name in source_names}
     pending = [*[function.return_type for function in projected],
@@ -730,7 +730,7 @@ def generate_schemas(path, source=None, *, include_all=False, function_name=None
     effect_by_name = {row["name"]: row for row in explain_report.get("functions", ())}
 
     lines = source.splitlines()
-    declarations = checked.ast.body
+    declarations = service.parse(source, checked.source.file).program.body
     fn_decls = [d for d in declarations if isinstance(d, FnDecl)]
 
     if function_name is not None:
@@ -747,7 +747,7 @@ def generate_schemas(path, source=None, *, include_all=False, function_name=None
             non_main = [d for d in fn_decls if d.name != "main"]
             selected_fns = non_main if non_main else fn_decls
 
-    projected, records = _schema_projection(service, checked, selected_fns)
+    projected, records = _schema_projection(service, checked, declarations, selected_fns)
     known_defs = {item.name for item in records}
     defs = {}
     source_lines = {checked.source.file: lines}
