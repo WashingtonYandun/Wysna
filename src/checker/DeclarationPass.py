@@ -310,7 +310,13 @@ def resolve_declaration_signatures(checker: "TypeChecker", program: Program) -> 
                     )
                 p_types = [checker._resolve_type_node(p.type_ann) for p in m.params]
                 r_type = checker._resolve_type_node(m.return_type)
-                intf_type.methods[m.name] = FunctionType(params=p_types, ret=r_type)
+                fn_t = FunctionType(params=p_types, ret=r_type)
+                fn_t.param_names = [p.name for p in m.params]
+                fn_t.decl_file = checker.file
+                fn_t.decl_line = m.line
+                fn_t.decl_col = m.col
+                fn_t.decl_name = f"{stmt.name}.{m.name}"
+                intf_type.methods[m.name] = fn_t
 
         elif isinstance(stmt, ClassDecl):
             for m in stmt.methods:
@@ -339,6 +345,9 @@ def resolve_declaration_signatures(checker: "TypeChecker", program: Program) -> 
             checker.class_decls[stmt.name] = stmt
             cls_type = checker.global_scope.lookup_type(stmt.name)
             assert isinstance(cls_type, ClassType)
+            cls_type.decl_file = checker.file
+            cls_type.decl_line = stmt.line
+            cls_type.decl_col = stmt.col
 
             if stmt.superclass is not None:
                 sup_t = checker._lookup_type_name(stmt.superclass) if isinstance(stmt.superclass, str) else None
@@ -423,6 +432,11 @@ def resolve_declaration_signatures(checker: "TypeChecker", program: Program) -> 
                 p_types = [checker._resolve_type_node(p.type_ann) for p in m.params]
                 r_type = checker._resolve_type_node(m.return_type)
                 fn_t = FunctionType(params=p_types, ret=r_type, is_async=getattr(m, "is_async", False))
+                fn_t.param_names = [p.name for p in m.params]
+                fn_t.decl_file = checker.file
+                fn_t.decl_line = m.line
+                fn_t.decl_col = m.col
+                fn_t.decl_name = f"{stmt.name}.{m.name}"
                 if m.name == "init":
                     cls_type.init_type = fn_t
                 else:
@@ -446,6 +460,11 @@ def resolve_declaration_signatures(checker: "TypeChecker", program: Program) -> 
                 ret_type = checker._resolve_type_node(stmt.return_type)
                 fn_type = FunctionType(params=param_types, ret=ret_type, is_async=getattr(stmt, "is_async", False))
                 fn_type.static_attributes = attributes
+                fn_type.param_names = [p.name for p in stmt.params]
+                fn_type.decl_file = checker.file
+                fn_type.decl_line = stmt.line
+                fn_type.decl_col = stmt.col
+                fn_type.decl_name = stmt.name
                 checker.global_scope.define_symbol(
                     Symbol(stmt.name, fn_type, is_mut=False, kind="fn", line=stmt.line, col=stmt.col),
                     file=checker.file

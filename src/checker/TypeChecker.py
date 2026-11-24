@@ -792,6 +792,8 @@ class TypeChecker:
         return None
 
     def _check_class_instantiation(self, class_t: ClassType, args: List[Expr], line: int, col: int) -> ClassType:
+        from checker.Suggestions import _clean_symbol_name, annotate_type_mismatch
+
         init_fn: Optional[FunctionType] = None
         curr_c: Optional[ClassType] = class_t
         while curr_c is not None:
@@ -799,35 +801,71 @@ class TypeChecker:
                 init_fn = curr_c.init_type
                 break
             curr_c = curr_c.superclass
+        clean_cls = _clean_symbol_name(class_t.name)
         if init_fn is not None:
             expected_params = init_fn.params
+            param_names = list(getattr(init_fn, "param_names", ()))
+            decl_file = getattr(init_fn, "decl_file", None)
+            decl_line = getattr(init_fn, "decl_line", None)
+            decl_col = getattr(init_fn, "decl_col", None)
             if len(args) != len(expected_params):
-                raise TypeError(
+                err = TypeError(
                     message=f"Constructor of '{class_t.name}' expects {len(expected_params)} arguments, found {len(args)}",
                     line=line,
                     col=col,
                     file=self.file,
                     code="W2005"
+                ).with_data(
+                    kind="arity_mismatch",
+                    expected_arity=len(expected_params),
+                    found_arity=len(args),
+                    callee=f"{clean_cls}.init",
                 )
+                if decl_file and isinstance(decl_line, int) and isinstance(decl_col, int):
+                    err.with_related("declared here", file=decl_file, line=decl_line, col=decl_col)
+                raise err
             for i, (a_expr, p_type) in enumerate(zip(args, expected_params)):
                 a_type = self._check_expr(a_expr)
                 if not self.type_relations.is_assignable(a_type, p_type):
-                    raise TypeError(
-                        message=f"Constructor argument {i + 1} type mismatch: expected '{p_type}', found '{a_type}'",
-                        line=a_expr.line,
-                        col=a_expr.col,
-                        file=self.file,
-                        code="W2001"
+                    p_name = param_names[i] if i < len(param_names) else None
+                    err = annotate_type_mismatch(
+                        TypeError(
+                            message=f"Constructor argument {i + 1} type mismatch: expected '{p_type}', found '{a_type}'",
+                            line=a_expr.line,
+                            col=a_expr.col,
+                            file=self.file,
+                            code="W2001"
+                        ),
+                        str(p_type),
+                        str(a_type),
+                        context="argument",
+                        argument_index=i + 1,
+                        parameter_name=p_name,
+                        callee=f"{clean_cls}.init",
                     )
+                    if decl_file and isinstance(decl_line, int) and isinstance(decl_col, int):
+                        err.with_related("declared here", file=decl_file, line=decl_line, col=decl_col)
+                    raise err
         else:
             if len(args) != 0:
-                raise TypeError(
+                err = TypeError(
                     message=f"Default constructor of '{class_t.name}' takes 0 arguments, found {len(args)}",
                     line=line,
                     col=col,
                     file=self.file,
                     code="W2005"
+                ).with_data(
+                    kind="arity_mismatch",
+                    expected_arity=0,
+                    found_arity=len(args),
+                    callee=clean_cls,
                 )
+                c_file = getattr(class_t, "decl_file", None)
+                c_line = getattr(class_t, "decl_line", None)
+                c_col = getattr(class_t, "decl_col", None)
+                if c_file and isinstance(c_line, int) and isinstance(c_col, int):
+                    err.with_related("declared here", file=c_file, line=c_line, col=c_col)
+                raise err
         return class_t
 
 

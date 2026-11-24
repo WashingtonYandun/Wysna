@@ -114,6 +114,10 @@ _SCALAR_CASTS = {
 }
 
 
+def _clean_symbol_name(text: str) -> str:
+    return _MANGLED_SYMBOL.sub(lambda match: match.group(2), text)
+
+
 def _annotate_mismatch(error, expected: str, found: str):
     expected = _demangle_type_text(expected)
     found = _demangle_type_text(found)
@@ -131,6 +135,24 @@ def _annotate_mismatch(error, expected: str, found: str):
                 f"'?' can return early and requires {requirement} on the enclosing function. "
                 "Use 'else' for a local fallback."
             )
+    return error
+
+
+def annotate_type_mismatch(error, expected: str, found: str, **extra):
+    """Attach canonical mismatch facts plus call/context metadata."""
+    _annotate_mismatch(error, expected, found)
+    cleaned = {}
+    for key, value in extra.items():
+        if value is None:
+            continue
+        if key == "callee" and isinstance(value, str):
+            cleaned[key] = _clean_symbol_name(value)
+        elif isinstance(value, str):
+            cleaned[key] = _demangle_type_text(value)
+        else:
+            cleaned[key] = value
+    if cleaned:
+        error.with_data(**cleaned)
     return error
 
 

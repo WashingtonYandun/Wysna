@@ -384,6 +384,41 @@ fn sem_require_at(context: SemanticContext, source: int, target: int, code: str,
         report_error_at(code, location, "incompatible types: expected '" + sem_diagnostic_type(context, target, 0) + "', found '" + sem_diagnostic_type(context, source, 0) + "'")
     }
 }
+fn sem_callee_clean_name(fn_rec: SemFunction) -> str {
+    let raw = if fn_rec.declaration_name != "" { fn_rec.declaration_name } else { fn_rec.name }
+    return sem_demangle_name(raw)
+}
+fn sem_fn_related_json(context: SemanticContext, fn_idx: int) -> str {
+    if fn_idx < 0 or fn_idx >= len(context.functions) { return "[]" }
+    let src_tok = context.functions[fn_idx].source
+    if src_tok.file == "" or src_tok.line < 1 or src_tok.col < 1 { return "[]" }
+    return "[" + diag_related_record_json("declared here", src_tok.file, src_tok.line, src_tok.col) + "]"
+}
+fn sem_require_at_call(context: SemanticContext, source: int, target: int, code: str, location: Token, callee_fn_idx: int, arg_index: int) {
+    if not sem_assignable(context, source, target) {
+        let exp_str = sem_diagnostic_type(context, target, 0)
+        let found_str = sem_diagnostic_type(context, source, 0)
+        let msg = "incompatible types: expected '" + exp_str + "', found '" + found_str + "'"
+        let mut data = "{\"kind\":\"type_mismatch\",\"context\":\"argument\",\"expected\":" + diag_json_quote(exp_str) + ",\"found\":" + diag_json_quote(found_str) + ",\"argument_index\":" + str(arg_index + 1)
+        if callee_fn_idx >= 0 and callee_fn_idx < len(context.functions) {
+            let fn_rec = context.functions[callee_fn_idx]
+            if arg_index >= 0 and arg_index < len(fn_rec.params) {
+                data = data + ",\"parameter_name\":" + diag_json_quote(fn_rec.params[arg_index])
+            }
+            let cname = sem_callee_clean_name(fn_rec)
+            if cname != "" {
+                data = data + ",\"callee\":" + diag_json_quote(cname)
+            }
+        }
+        let req = fix_propagation_requirement(exp_str, found_str)
+        if req != "" {
+            let help = "'?' can return early and requires " + req + " on the enclosing function. Use 'else' for a local fallback."
+            data = data + ",\"unwrap_hint\":\"?\",\"help\":" + diag_json_quote(help)
+        }
+        data = data + "}"
+        report_error_at_full(code, location, msg, data, sem_fn_related_json(context, callee_fn_idx))
+    }
+}
 fn sem_source_at(context: SemanticContext, sources: list[Token], index: int) -> Token {
     if index >= 0 and index < len(sources) { return sources[index] }
     return sem_at(context)
@@ -786,15 +821,20 @@ fn sem_builtin(name: str) -> bool {
     if name == "u8" or name == "__wysna_json_parse" or name == "__wysna_json_parse_int" or name == "__wysna_json_get_int" or name == "__wysna_json_get_bool" or name == "__wysna_json_get_str" or name == "__wysna_json_get_float" or name == "__wysna_json_quote_str" { return true }
     return name == "join_strings" or name == "print" or name == "eprint" or name == "len" or name == "int" or name == "float" or name == "str" or name == "ord" or name == "chr" or name == "bytes" or name == "slice" or name == "args" or name == "env" or name == "unix_time" or name == "exit" or name == "enumerate" or name == "dict_items" or name == "read_file" or name == "write_file" or name == "Some" or name == "Ok" or name == "Err" or name == "weak" or name == "upgrade" or name == "contract_assert"
 }
+fn sem_arity_data_json(expected_arity: int, found_arity: int, callee: str) -> str {
+    let mut data = "{\"kind\":\"arity_mismatch\",\"expected_arity\":" + str(expected_arity) + ",\"found_arity\":" + str(found_arity)
+    if callee != "" { data = data + ",\"callee\":" + diag_json_quote(callee) }
+    return data + "}"
+}
 fn sem_call_builtin(context: SemanticContext, name: str, args: list[int], sources: list[Token], discard: bool) -> int {
     let count = len(args)
     if name == "print" or name == "eprint" { return context.unit_type }
     if name == "contract_assert" {
-        if count != 2 { sem_error(context, "W2005", "contract_assert arity") }
+        if count != 2 { report_error_at_full("W2005", sem_at(context), "contract_assert arity", sem_arity_data_json(2, count, "contract_assert"), "[]") }
         return context.unit_type
     }
     if name == "args" or name == "unix_time" {
-        if count != 0 { sem_error(context, "W2005", name + " arity") }
+        if count != 0 { report_error_at_full("W2005", sem_at(context), name + " arity", sem_arity_data_json(0, count, name), "[]") }
         if name == "unix_time" { return context.integer_type }
         return sem_wrap(context, "list", context.string_type)
     }
@@ -802,7 +842,7 @@ fn sem_call_builtin(context: SemanticContext, name: str, args: list[int], source
     if name == "slice" { arity = 3 }
     if name == "write_file" or name == "join_strings" or name == "__wysna_json_get_int" or name == "__wysna_json_get_bool" or name == "__wysna_json_get_str" or name == "__wysna_json_get_float" { arity = 2 }
     if name == "__wysna_json_parse" { arity = 6 }
-    if count != arity { sem_error(context, "W2005", "builtin arity: " + name) }
+    if count != arity { report_error_at_full("W2005", sem_at(context), "builtin arity: " + name, sem_arity_data_json(arity, count, name), "[]") }
     if name == "join_strings" {
         if count != 2 { sem_error(context, "W2005", "join_strings arity") }
         sem_require_at(context, args[0], sem_wrap(context, "list", context.string_type), "W2001", sem_source_at(context, sources, 0))
@@ -912,6 +952,9 @@ fn sem_call_builtin(context: SemanticContext, name: str, args: list[int], source
     return context.unit_type
 }
 fn sem_check_call(context: SemanticContext, signature: int, args: list[int], sources: list[Token], discard: bool) -> int {
+    return sem_check_call_with_callee(context, signature, args, sources, discard, -1, sem_at(context))
+}
+fn sem_check_call_with_callee(context: SemanticContext, signature: int, args: list[int], sources: list[Token], discard: bool, callee_fn_idx: int, call_token: Token) -> int {
     let unification = SemUnification()
     let type_ = context.types[signature]
     if type_.kind == "builtin" { return sem_call_builtin(context, type_.name, args, sources, discard) }
@@ -922,11 +965,11 @@ fn sem_check_call(context: SemanticContext, signature: int, args: list[int], sou
         let owner = slice(type_.name, 0, separator)
         let variant = slice(type_.name, separator + 1, len(type_.name))
         if owner == "Option" and variant == "Some" {
-            if len(args) != 1 { sem_error(context, "W2005", "Option.Some arity") }
+            if len(args) != 1 { report_error_at_full("W2005", call_token, "Option.Some arity", sem_arity_data_json(1, len(args), "Option.Some"), "[]") }
             return sem_wrap(context, "optional", args[0])
         }
         if owner == "Result" and (variant == "Ok" or variant == "Err") {
-            if len(args) != 1 { sem_error(context, "W2005", "Result constructor arity") }
+            if len(args) != 1 { report_error_at_full("W2005", call_token, "Result constructor arity", sem_arity_data_json(1, len(args), owner + "." + variant), "[]") }
             if context.expected_type >= 0 and sem_kind(context, context.expected_type) == "result" {
                 let expected = context.types[context.expected_type]
                 if variant == "Ok" { if not discard or expected.args[0] != context.unit_type { sem_require_at(context, args[0], expected.args[0], "W2001", sem_source_at(context, sources, 0)) } }
@@ -940,7 +983,10 @@ fn sem_check_call(context: SemanticContext, signature: int, args: list[int], sou
         let generic = sem_generic_type(context, owner)
         let mut payload_types: list[int] = []
         for i in 1..len(type_.args) { payload_types.append(type_.args[i]) }
-        if len(args) != len(payload_types) { sem_error(context, "W2005", "enum constructor arity: " + owner + "." + variant) }
+        if len(args) != len(payload_types) {
+            let ctor_label = sem_demangle_name(owner) + "." + variant
+            report_error_at_full("W2005", call_token, "enum constructor arity: " + owner + "." + variant, sem_arity_data_json(len(payload_types), len(args), ctor_label), "[]")
+        }
         if generic >= 0 and len(context.types[target].args) == 0 {
             let empty_names: list[str] = []
             let empty_types: list[int] = []
@@ -974,7 +1020,9 @@ fn sem_check_call(context: SemanticContext, signature: int, args: list[int], sou
         if len(type_.args) == 1 { target = type_.args[0] explicit = true }
         let mut fields: list[int] = []
         for i in 0..len(context.fields) { if context.fields[i].owner == type_.name { fields.append(i) } }
-        if len(args) != len(fields) { sem_error(context, "W2005", "struct constructor arity: " + type_.name) }
+        if len(args) != len(fields) {
+            report_error_at_full("W2005", call_token, "struct constructor arity: " + type_.name, sem_arity_data_json(len(fields), len(args), sem_demangle_name(type_.name)), "[]")
+        }
         let empty_names: list[str] = []
         let empty_types: list[int] = []
         unification.names = empty_names
@@ -1011,14 +1059,23 @@ fn sem_check_call(context: SemanticContext, signature: int, args: list[int], sou
             let owner_type = context.types[owner_type_id]
             let generic = sem_generic_type(context, owner_type.name)
             if generic >= 0 { selected = sem_substitute_type(context, selected, context.generic_types[generic].params, owner_type.args) }
-            sem_check_call(context, selected, args, sources, false)
+            sem_check_call_with_callee(context, selected, args, sources, false, method, call_token)
         }
-        elif len(args) != 0 { sem_error(context, "W2005", "constructor arity") }
+        elif len(args) != 0 {
+            report_error_at_full("W2005", call_token, "constructor arity", sem_arity_data_json(0, len(args), sem_demangle_name(context.types[target].name)), "[]")
+        }
         return target
     }
     if type_.kind == "dependent" and sem_defer(context, "call", [signature]) { return signature }
-    if type_.kind != "function" { sem_error(context, "W2005", "value is not callable") }
-    if len(type_.args) != len(args) + 1 { sem_error(context, "W2005", "call arity") }
+    if type_.kind != "function" {
+        let not_callable_data = "{\"kind\":\"not_callable\",\"found\":" + diag_json_quote(sem_diagnostic_type(context, signature, 0)) + "}"
+        report_error_at_full("W2005", call_token, "value is not callable", not_callable_data, "[]")
+    }
+    let expected_arity = if len(type_.args) > 0 { len(type_.args) - 1 } else { 0 }
+    if len(type_.args) != len(args) + 1 {
+        let cname = if callee_fn_idx >= 0 and callee_fn_idx < len(context.functions) { sem_callee_clean_name(context.functions[callee_fn_idx]) } else { "" }
+        report_error_at_full("W2005", call_token, "call arity", sem_arity_data_json(expected_arity, len(args), cname), sem_fn_related_json(context, callee_fn_idx))
+    }
     let empty_names: list[str] = []
     let empty_types: list[int] = []
     unification.names = empty_names
@@ -1026,7 +1083,7 @@ fn sem_check_call(context: SemanticContext, signature: int, args: list[int], sou
     for i in 0..len(args) { sem_unify_type(context, unification, type_.args[i], args[i]) }
     for i in 0..len(args) {
         let expected = sem_substitute_type(context, type_.args[i], unification.names, unification.types)
-        sem_require_at(context, args[i], expected, "W2001", sem_source_at(context, sources, i))
+        sem_require_at_call(context, args[i], expected, "W2001", sem_source_at(context, sources, i), callee_fn_idx, i)
     }
     return sem_substitute_type(context, type_.args[len(args)], unification.names, unification.types)
 }
@@ -1811,14 +1868,17 @@ fn sem_expression(context: SemanticContext, minimum: int, allow_struct: bool) ->
                     }
                 }
             }
+            let mut callee_fn_idx = -1
             let mut call_was_symbolic_async = false
             if len(callee.root) >= 3 and slice(callee.root, 0, 3) == "fn:" {
-                let fn_idx = sem_function(context, slice(callee.root, 3, len(callee.root)))
-                if fn_idx >= 0 and context.functions[fn_idx].is_async and sem_symbolic(context, callee.type_id) {
+                callee_fn_idx = sem_function(context, slice(callee.root, 3, len(callee.root)))
+                if callee_fn_idx >= 0 and context.functions[callee_fn_idx].is_async and sem_symbolic(context, callee.type_id) {
                     call_was_symbolic_async = true
                 }
+            } elif callee.root == "#method" and active_method_template >= 0 {
+                callee_fn_idx = active_method_template
             }
-            let mut actual = sem_check_call(context, left.type_id, args, arg_sources, statement)
+            let mut actual = sem_check_call_with_callee(context, left.type_id, args, arg_sources, statement, callee_fn_idx, call_token)
             if call_was_symbolic_async and not sem_symbolic(context, actual) {
                 actual = sem_resolve_async_task_type(context, actual)
             }

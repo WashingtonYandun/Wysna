@@ -29,11 +29,32 @@ from checker.WysnaType import (
     GenericFnTemplate,
 )
 from error.Error import TypeError
-from checker.Suggestions import suggest_mutable
+from checker.Suggestions import _clean_symbol_name, _demangle_type_text, annotate_type_mismatch, suggest_mutable
 
 if TYPE_CHECKING:
     from checker.TypeChecker import TypeChecker
 
+
+
+def _call_metadata(expr: CallExpr, callee_t: FunctionType):
+    decl_name = getattr(callee_t, "decl_name", None)
+    if not decl_name:
+        if isinstance(expr.callee, IdentExpr):
+            decl_name = expr.callee.name
+        elif isinstance(expr.callee, MemberExpr):
+            decl_name = expr.callee.property
+    clean_name = _clean_symbol_name(decl_name) if decl_name else None
+    param_names = list(getattr(callee_t, "param_names", ()))
+    decl_file = getattr(callee_t, "decl_file", None)
+    decl_line = getattr(callee_t, "decl_line", None)
+    decl_col = getattr(callee_t, "decl_col", None)
+    return clean_name, param_names, decl_file, decl_line, decl_col
+
+
+def _attach_decl_related(error: TypeError, decl_file, decl_line, decl_col) -> TypeError:
+    if decl_file and isinstance(decl_line, int) and isinstance(decl_col, int):
+        error.with_related("declared here", line=decl_line, col=decl_col, file=decl_file)
+    return error
 
 
 @dataclass(frozen=True)
@@ -228,7 +249,7 @@ def check_call_expr(checker: "TypeChecker", expr: CallExpr, is_statement_context
             col=expr.col,
             file=checker.file,
             code="W2005"
-        )
+        ).with_data(kind="not_callable", found=_demangle_type_text(str(callee_t)))
 
 
     if not isinstance(expr.callee, (IdentExpr, MemberExpr)):
@@ -264,25 +285,42 @@ def check_call_expr(checker: "TypeChecker", expr: CallExpr, is_statement_context
             else callee_t.ret
         )
 
+    callee_name, param_names, decl_file, decl_line, decl_col = _call_metadata(expr, callee_t)
     if len(expr.args) != len(callee_t.params):
-        raise TypeError(
+        err = TypeError(
             message=f"Expected {len(callee_t.params)} arguments, found {len(expr.args)}",
             line=expr.line,
             col=expr.col,
             file=checker.file,
             code="W2005"
+        ).with_data(
+            kind="arity_mismatch",
+            expected_arity=len(callee_t.params),
+            found_arity=len(expr.args),
+            **({"callee": callee_name} if callee_name else {}),
         )
+        raise _attach_decl_related(err, decl_file, decl_line, decl_col)
 
     for i, (a_expr, p_type) in enumerate(zip(expr.args, callee_t.params)):
         a_type = checker._check_payload(a_expr, p_type)
         if not checker.type_relations.is_assignable(a_type, p_type):
-            raise TypeError(
-                message=f"Argument {i + 1} type mismatch: expected '{p_type}', found '{a_type}'",
-                line=a_expr.line,
-                col=a_expr.col,
-                file=checker.file,
-                code="W2001"
+            param_name = param_names[i] if i < len(param_names) else None
+            err = annotate_type_mismatch(
+                TypeError(
+                    message=f"Argument {i + 1} type mismatch: expected '{p_type}', found '{a_type}'",
+                    line=a_expr.line,
+                    col=a_expr.col,
+                    file=checker.file,
+                    code="W2001"
+                ),
+                str(p_type),
+                str(a_type),
+                context="argument",
+                argument_index=i + 1,
+                parameter_name=param_name,
+                callee=callee_name,
             )
+            raise _attach_decl_related(err, decl_file, decl_line, decl_col)
         checker._mark_result_lift(a_expr, p_type, force=True)
     return (
         resolve_async_call_return(checker, callee_t.ret, expr.line, expr.col)
@@ -632,7 +670,7 @@ def check_builtin_call(checker: "TypeChecker", expr: CallExpr) -> Optional[Wysna
     name = expr.callee.name
     if name == "len":
         if len(expr.args) != 1:
-            raise TypeError(message="len() takes exactly 1 argument", line=expr.line, col=expr.col, file=checker.file, code="W2005")
+            raise TypeError(message="len() takes exactly 1 argument", line=expr.line, col=expr.col, file=checker.file, code="W2005").with_data(kind="arity_mismatch", expected_arity=1, found_arity=len(expr.args), callee="len")
         a_t = checker._check_expr(expr.args[0])
         if not (isinstance(a_t, (ListType, DictType, TupleType)) or a_t == StrType):
             raise TypeError(message=f"len() expects list, dict, or str, found '{a_t}'", line=expr.line, col=expr.col, file=checker.file, code="W2001")
@@ -640,13 +678,13 @@ def check_builtin_call(checker: "TypeChecker", expr: CallExpr) -> Optional[Wysna
 
     if name == "str":
         if len(expr.args) != 1:
-            raise TypeError(message="str() takes exactly 1 argument", line=expr.line, col=expr.col, file=checker.file, code="W2005")
+            raise TypeError(message="str() takes exactly 1 argument", line=expr.line, col=expr.col, file=checker.file, code="W2005").with_data(kind="arity_mismatch", expected_arity=1, found_arity=len(expr.args), callee="str")
         checker._check_expr(expr.args[0])
         return StrType
 
     if name == "int":
         if len(expr.args) != 1:
-            raise TypeError(message="int() takes exactly 1 argument", line=expr.line, col=expr.col, file=checker.file, code="W2005")
+            raise TypeError(message="int() takes exactly 1 argument", line=expr.line, col=expr.col, file=checker.file, code="W2005").with_data(kind="arity_mismatch", expected_arity=1, found_arity=len(expr.args), callee="int")
         a_t = checker._check_expr(expr.args[0])
         if a_t not in (IntType, U8Type, FloatType, BoolType, StrType):
             raise TypeError(message=f"int() expects int, float, or str, found '{a_t}'", line=expr.line, col=expr.col, file=checker.file, code="W2001")
@@ -654,7 +692,7 @@ def check_builtin_call(checker: "TypeChecker", expr: CallExpr) -> Optional[Wysna
 
     if name == "float":
         if len(expr.args) != 1:
-            raise TypeError(message="float() takes exactly 1 argument", line=expr.line, col=expr.col, file=checker.file, code="W2005")
+            raise TypeError(message="float() takes exactly 1 argument", line=expr.line, col=expr.col, file=checker.file, code="W2005").with_data(kind="arity_mismatch", expected_arity=1, found_arity=len(expr.args), callee="float")
         a_t = checker._check_expr(expr.args[0])
         if a_t not in (IntType, U8Type, FloatType, BoolType, StrType):
             raise TypeError(message=f"float() expects int, float, or str, found '{a_t}'", line=expr.line, col=expr.col, file=checker.file, code="W2001")
@@ -666,7 +704,7 @@ def check_builtin_call(checker: "TypeChecker", expr: CallExpr) -> Optional[Wysna
         # because the result type depends on the argument type.
         if len(expr.args) != 3:
             raise TypeError(message="slice() takes exactly 3 arguments (value, start, end)",
-                            line=expr.line, col=expr.col, file=checker.file, code="W2005")
+                            line=expr.line, col=expr.col, file=checker.file, code="W2005").with_data(kind="arity_mismatch", expected_arity=3, found_arity=len(expr.args), callee="slice")
         a_t = checker._check_expr(expr.args[0])
         for index in (1, 2):
             b_t = checker._check_expr(expr.args[index])
@@ -685,7 +723,7 @@ def check_builtin_call(checker: "TypeChecker", expr: CallExpr) -> Optional[Wysna
 
     if name == "enumerate":
         if len(expr.args) != 1:
-            raise TypeError(message="enumerate() takes exactly 1 argument", line=expr.line, col=expr.col, file=checker.file, code="W2005")
+            raise TypeError(message="enumerate() takes exactly 1 argument", line=expr.line, col=expr.col, file=checker.file, code="W2005").with_data(kind="arity_mismatch", expected_arity=1, found_arity=len(expr.args), callee="enumerate")
         a_t = checker._check_expr(expr.args[0])
         if not isinstance(a_t, ListType):
             raise TypeError(message=f"enumerate() expects list, found '{a_t}'", line=expr.line, col=expr.col, file=checker.file, code="W2001")
@@ -693,7 +731,7 @@ def check_builtin_call(checker: "TypeChecker", expr: CallExpr) -> Optional[Wysna
 
     if name == "dict_items":
         if len(expr.args) != 1:
-            raise TypeError(message="dict_items() takes exactly 1 argument", line=expr.line, col=expr.col, file=checker.file, code="W2005")
+            raise TypeError(message="dict_items() takes exactly 1 argument", line=expr.line, col=expr.col, file=checker.file, code="W2005").with_data(kind="arity_mismatch", expected_arity=1, found_arity=len(expr.args), callee="dict_items")
         a_t = checker._check_expr(expr.args[0])
         if not isinstance(a_t, DictType):
             raise TypeError(message=f"dict_items() expects dict, found '{a_t}'", line=expr.line, col=expr.col, file=checker.file, code="W2001")
@@ -773,10 +811,25 @@ def infer_type_arguments(checker: "TypeChecker", template, parameters, expr: Cal
     """Infer one complete substitution from positional declaration/argument pairs."""
     resolver = unify_checker or checker
     if len(expr.args) != len(parameters):
-        raise TypeError(
+        clean_name = _clean_symbol_name(template.name)
+        err = TypeError(
             message=f"Expected {len(parameters)} arguments for {description} '{template.name}', found {len(expr.args)}",
             line=expr.line, col=expr.col, file=checker.file, code="W2005",
+        ).with_data(
+            kind="arity_mismatch",
+            expected_arity=len(parameters),
+            found_arity=len(expr.args),
+            callee=clean_name,
         )
+        decl = getattr(template, "ast_decl", None)
+        if decl is not None:
+            _attach_decl_related(
+                err,
+                getattr(decl, "source_file", None) or resolver.file,
+                getattr(decl, "line", None),
+                getattr(decl, "col", None),
+            )
+        raise err
     type_parameters = {parameter.name if hasattr(parameter, "name") else str(parameter)
                        for parameter in template.type_params}
     bindings: Dict[str, WysnaType] = {}

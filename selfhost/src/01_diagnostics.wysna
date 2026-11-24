@@ -174,15 +174,27 @@ fn diag_primary_span_json(file: str, line: int, col: int, src: str) -> str {
     return "{\"source_id\":" + diag_json_quote(file) + ",\"source_sha256\":" + diag_json_quote(sha) + ",\"start_byte\":" + str(start_byte) + ",\"end_byte\":" + str(end_byte) + "}"
 }
 
+fn diag_related_record_json(message: str, file: str, line: int, col: int) -> str {
+    let src = if file != "" and file != "<stdin>" and file != "<unknown>" and file != "<cli>" {
+        diag_read_snippet_source(file)
+    } else { "" }
+    let span_json = diag_primary_span_json(file, line, col, src)
+    return "{\"message\":" + diag_json_quote(message) + ",\"line\":" + str(line) + ",\"col\":" + str(col) + ",\"span\":" + span_json + "}"
+}
+
 fn diag_record_json(code: str, stage: str, severity: str, msg: str, file: str, line: int, col: int, src: str) -> str {
     let data_json = if stage == "type" { fix_mismatch_data_json(msg) } else { "{}" }
-    return diag_record_json_data(code, stage, severity, msg, file, line, col, src, data_json)
+    return diag_record_json_full(code, stage, severity, msg, file, line, col, src, data_json, "[]")
 }
 
 fn diag_record_json_data(code: str, stage: str, severity: str, msg: str, file: str, line: int, col: int, src: str, data_json: str) -> str {
+    return diag_record_json_full(code, stage, severity, msg, file, line, col, src, data_json, "[]")
+}
+
+fn diag_record_json_full(code: str, stage: str, severity: str, msg: str, file: str, line: int, col: int, src: str, data_json: str, related_json: str) -> str {
     let span_json = diag_primary_span_json(file, line, col, src)
     let fixes_json = if span_json != "null" { fix_diagnostic_edits_json(code, msg, file, src, line, col) } else { "[]" }
-    return "{\"code\":" + diag_json_quote(code) + ",\"severity\":" + diag_json_quote(severity) + ",\"stage\":" + diag_json_quote(stage) + ",\"message\":" + diag_json_quote(msg) + ",\"primary_span\":" + span_json + ",\"related\":[],\"data\":" + data_json + ",\"fixes\":" + fixes_json + "}"
+    return "{\"code\":" + diag_json_quote(code) + ",\"severity\":" + diag_json_quote(severity) + ",\"stage\":" + diag_json_quote(stage) + ",\"message\":" + diag_json_quote(msg) + ",\"primary_span\":" + span_json + ",\"related\":" + related_json + ",\"data\":" + data_json + ",\"fixes\":" + fixes_json + "}"
 }
 
 fn diag_tool_envelope_json(command: str, status: str, exit_code: int, diagnostics_json: str, result_key: str, result_json: str, artifacts_json: str) -> str {
@@ -336,10 +348,14 @@ fn diag_render_source_excerpt(src: str, target_line: int, target_col: int) -> st
 }
 
 fn diag_emit_and_exit(file: str, code: str, line: int, col: int, msg: str) -> unit {
-    diag_emit_and_exit_data(file, code, line, col, msg, "")
+    diag_emit_and_exit_full(file, code, line, col, msg, "", "[]")
 }
 
 fn diag_emit_and_exit_data(file: str, code: str, line: int, col: int, msg: str, data: str) -> unit {
+    diag_emit_and_exit_full(file, code, line, col, msg, data, "[]")
+}
+
+fn diag_emit_and_exit_full(file: str, code: str, line: int, col: int, msg: str, data: str, related_json: str) -> unit {
     let mode = diag_cli_json_mode()
     let mut src = ""
     if file != "" and file != "<stdin>" and file != "<unknown>" and file != "<cli>" {
@@ -352,7 +368,10 @@ fn diag_emit_and_exit_data(file: str, code: str, line: int, col: int, msg: str, 
         exit(1)
     }
     let stage = diag_stage_for_code(code)
-    let diag_json = if data == "" { diag_record_json(code, stage, "error", msg, file, line, col, src) } else { diag_record_json_data(code, stage, "error", msg, file, line, col, src, data) }
+    let eff_data = if data == "" {
+        if stage == "type" { fix_mismatch_data_json(msg) } else { "{}" }
+    } else { data }
+    let diag_json = diag_record_json_full(code, stage, "error", msg, file, line, col, src, eff_data, related_json)
     if mode == "array" { diag_write_output("[" + diag_json + "]"); exit(1) }
     if mode == "check-json" {
         diag_write_output(("{\"schema_version\":\"wysna.cli.result/1\",\"compiler_version\":\"" + tool_compiler_version() + "\",\"command\":\"check\",\"ok\":false,\"exit_code\":1,\"diagnostics\":[") + diag_json + "],\"data\":null}")

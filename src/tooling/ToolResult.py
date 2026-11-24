@@ -522,13 +522,19 @@ def _synthesize_syntax_fixes(code, message, filename, source, primary_span):
 
 def diagnostic_from_error(error, source_by_file=None, *, span_cache=None):
     """Adapt a legacy compiler diagnostic without inventing an unknown range."""
+    from checker.Suggestions import _clean_symbol_name, _demangle_type_text, enrich_from_message
+
     source_by_file = source_by_file or {}
     filename = getattr(error, "file", None)
     source = source_for_file(source_by_file, filename)
     if getattr(error, "stage", None) == "type" and not getattr(error, "data", None):
-        from checker.Suggestions import enrich_from_message
         enrich_from_message(error)
     data = dict(getattr(error, "data", None) or {})
+    for key in ("expected", "found"):
+        if isinstance(data.get(key), str):
+            data[key] = _demangle_type_text(data[key])
+    if isinstance(data.get("callee"), str):
+        data["callee"] = _clean_symbol_name(data["callee"])
     if getattr(error, "help", None):
         data["help"] = error.help
 
