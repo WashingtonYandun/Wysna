@@ -46,10 +46,10 @@ def test_workspace_patch_checks_and_applies_all_edits_together(tmp_path):
     assert json.loads(applied.stdout)['result']['written']
     assert provider.read_text() == request[0]['source']
     assert app.read_text() == request[1]['source']
-    listed, test_plan = machine(root, '--list')
+    listed, test_plan = machine(root, '--engine=seed', '--list')
     assert listed.returncode == 0, test_plan
     assert test_plan['result']['workspace_revision'] == preview['workspace_revision_after']
-    executed, report = machine(root, '--expect-plan-hash', test_plan['result']['plan_hash'])
+    executed, report = machine(root, '--engine=seed', '--expect-plan-hash', test_plan['result']['plan_hash'])
     assert executed.returncode == 0, report
     assert report['result']['cases'][0]['stdout'] == '2\n'
 
