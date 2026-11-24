@@ -10498,9 +10498,7 @@ fn mir_c_write_consume(function: MirFunction, id: int, value: str, boxed: bool) 
 }
 fn mir_c_array(values: list[str]) -> str {
     if len(values) == 0 { return "NULL" }
-    let mut out = "(WVal[]){"
-    for i in 0..len(values) { if i > 0 { out = out + ", " } out = out + values[i] }
-    return out + "}"
+    return "(WVal[]){" + join_strings(values, ", ") + "}"
 }
 fn mir_c_signature(function: MirFunction) -> str {
     let mut out = "static " + mir_c_type(function.return_type) + " " + function.name + "("
