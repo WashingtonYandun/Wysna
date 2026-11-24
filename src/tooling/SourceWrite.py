@@ -1,4 +1,5 @@
 """Consistent, lock-serialized, atomic source file writes for CLI and MCP tools."""
+from contextlib import ExitStack
 import hashlib
 import os
 from pathlib import Path
@@ -65,34 +66,72 @@ def write_verified_source(
                 stage=stage,
             )
 
-        descriptor = None
-        temporary_path = None
+        temporary = _stage_source(target, new_bytes, current_stat.st_mode)
         try:
-            descriptor, temporary_path = tempfile.mkstemp(
-                prefix=f".{target.name}.",
-                suffix=".tmp",
-                dir=str(target.parent),
-            )
-            view = memoryview(new_bytes)
-            written = 0
-            while written < len(new_bytes):
-                chunk = os.write(descriptor, view[written:])
-                if chunk <= 0:
-                    raise OSError("short write while staging verified source")
-                written += chunk
-            os.fsync(descriptor)
-            os.close(descriptor)
-            descriptor = None
-            if os.name != "nt":
-                os.chmod(temporary_path, stat.S_IMODE(current_stat.st_mode))
-            os.replace(temporary_path, target)
-            temporary_path = None
+            os.replace(temporary, target)
         finally:
-            if descriptor is not None:
-                os.close(descriptor)
-            if temporary_path is not None:
-                try:
-                    os.unlink(temporary_path)
-                except FileNotFoundError:
-                    pass
+            temporary.unlink(missing_ok=True)
     return hashlib.sha256(new_bytes).hexdigest()
+
+
+def _stage_source(target: Path, data: bytes, mode: int) -> Path:
+    descriptor, filename = tempfile.mkstemp(prefix=f".{target.name}.", suffix=".tmp", dir=target.parent)
+    temporary = Path(filename)
+    try:
+        with os.fdopen(descriptor, "wb") as staged:
+            staged.write(data)
+            staged.flush()
+            os.fsync(staged.fileno())
+        if os.name != "nt":
+            temporary.chmod(stat.S_IMODE(mode))
+        return temporary
+    except BaseException:
+        temporary.unlink(missing_ok=True)
+        raise
+
+
+def write_verified_sources(edits, verify_revision):
+    """Stage a batch under the same per-file locks used by patch and fix."""
+    ordered = sorted(edits, key=lambda edit: str(edit[0]))
+    with ExitStack() as locks, ExitStack() as cleanup:
+        for path, _, _ in ordered:
+            locks.enter_context(cache_lock(_lock_path_for(path), timeout=30))
+        verify_revision()
+        staged = []
+        retained = set()
+
+        def remove_backup(path):
+            if path not in retained:
+                path.unlink(missing_ok=True)
+
+        for path, before, after in ordered:
+            mode = path.stat().st_mode
+            backup = _stage_source(path, before, mode)
+            cleanup.callback(remove_backup, backup)
+            candidate = _stage_source(path, after, mode)
+            cleanup.callback(candidate.unlink, missing_ok=True)
+            staged.append((path, before, after, backup, candidate))
+        verify_revision()
+        applied = []
+        try:
+            for path, before, after, backup, candidate in staged:
+                if path.read_bytes() != before:
+                    raise WysnaError(f"Source changed before workspace apply: '{path}'",
+                                     file=str(path), code="W5005", stage="patch")
+                os.replace(candidate, path)
+                applied.append((path, after, backup))
+        except BaseException as error:
+            rollback_failures = []
+            for path, after, backup in reversed(applied):
+                try:
+                    if path.read_bytes() == after:
+                        os.replace(backup, path)
+                    else:
+                        retained.add(backup)
+                        rollback_failures.append(f"{path} (backup {backup})")
+                except OSError:
+                    retained.add(backup)
+                    rollback_failures.append(f"{path} (backup {backup})")
+            if rollback_failures:
+                raise OSError("Workspace apply failed and could not restore: " + ", ".join(rollback_failures)) from error
+            raise

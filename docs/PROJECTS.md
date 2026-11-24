@@ -282,3 +282,28 @@ eliminado después del caso. No es un sandbox: el programa mantiene el acceso al
 host que tenga el proceso. Seed y el SDK nativo admiten este flujo; el SDK no
 requiere Python. `wysna skills project-tests --output-format=json-v1` expone las
 instrucciones al agente desde la herramienta instalada.
+
+### Cambios coordinados con el mismo plan de pruebas
+
+En la CLI Seed, `wysna patch --manifest wysna.toml --edits changes.json --output-format=json-v1`
+previsualiza un lote de reemplazos. `changes.json` contiene un array de objetos
+con `path` relativo al proyecto y `source` con el texto completo de cada archivo
+`.wysna` existente. Usa `--discover` y `--frozen` si el plan de pruebas también
+los usa.
+
+La previsualización comprueba los destinos, pruebas y archivos editados en memoria.
+Devuelve diffs y hashes, los IDs de las pruebas seleccionadas y la revisión esperada
+tras aplicar el cambio. Una prueba que carga un archivo editado aparece como
+`affected`. Las demás se incluyen de forma conservadora como `uncertain`.
+
+Para aplicar el lote, usa los mismos argumentos con `--apply --expect-plan-hash HASH`.
+La CLI verifica la revisión bajo los locks de los archivos editados, prepara todos
+los reemplazos y revierte los ya publicados si falla un reemplazo posterior.
+Si un escritor externo impide recuperar el contenido, el error identifica la copia
+conservada. Los lectores externos y las terminaciones abruptas del proceso quedan
+fuera de esta garantía de reversión.
+
+Después de aplicar, ejecuta `wysna project test --engine=seed --list --output-format=json-v1`
+con la misma selección. `result.workspace_revision` debe coincidir con
+`workspace_revision_after` del parche. Ejecuta entonces las pruebas con el
+`--expect-plan-hash` de ese listado, conservando la selección y las opciones.

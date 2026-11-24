@@ -1,6 +1,7 @@
 """Agent-first semantic graph, surgical inspect, checked patch, and versioned skills CLI."""
 import argparse
 import hashlib
+import json
 import os
 from pathlib import Path
 import sys
@@ -388,17 +389,40 @@ def patch_source(
 def run_patch_command(argv) -> int:
     """Apply a hash-verified, typechecked semantic declaration patch."""
     parser = _Parser(prog='wysna patch', description=__doc__)
-    parser.add_argument('source')
-    parser.add_argument('--symbol', required=True, help='Target declaration name or ID (e.g. draw or MyClass.draw)')
+    parser.add_argument('source', nargs='?')
+    parser.add_argument('--symbol', help='Target declaration name or ID (e.g. draw or MyClass.draw)')
     parser.add_argument('--with', dest='replacement_inline', help='Replacement Wysna declaration text')
     parser.add_argument('--with-file', dest='replacement_file', type=Path, help='File containing replacement code')
     parser.add_argument('--expect-graph-hash', help='Require matching graph hash before patching')
     parser.add_argument('--apply', action='store_true', help='Write patched file after typecheck passes')
+    parser.add_argument('--manifest', type=Path)
+    parser.add_argument('--edits', type=Path, help='JSON array of workspace sources to replace together')
+    parser.add_argument('--expect-plan-hash', help='Require an exact inspected workspace edit plan')
+    parser.add_argument('--discover', action='store_true')
+    parser.add_argument('--frozen', action='store_true')
     parser.add_argument('--output-format', choices=('json-v1',))
     json_output = '--output-format=json-v1' in argv or '--output-format' in argv
     try:
         options = parser.parse_args(list(argv))
         json_output = options.output_format == 'json-v1'
+        if options.edits is not None:
+            if options.manifest is None or any((options.source, options.symbol, options.replacement_inline,
+                                                options.replacement_file, options.expect_graph_hash)):
+                raise ValueError('Workspace patch requires --manifest and --edits, without single-source options')
+            from tooling.WorkspacePatch import plan_workspace_patch
+            edits = json.loads(options.edits.read_text(encoding='utf-8'))
+            result = plan_workspace_patch(options.manifest, edits, expected_hash=options.expect_plan_hash,
+                                          apply=options.apply, discover=options.discover, frozen=options.frozen)
+            if json_output:
+                envelope = tool_result('patch', 'ok', 0)
+                envelope['result'] = result
+                write_tool_result(envelope, sys.stdout)
+            else:
+                print(json.dumps(result, ensure_ascii=False, indent=2))
+            return 0
+        if not options.source or not options.symbol or any((options.manifest, options.expect_plan_hash,
+                                                             options.discover, options.frozen)):
+            raise ValueError('Single-source patch requires SOURCE and --symbol')
         if (options.replacement_inline is None) == (options.replacement_file is None):
             raise ValueError('Provide exactly one of --with or --with-file')
         replacement = (
