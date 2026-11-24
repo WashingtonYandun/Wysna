@@ -1,0 +1,8 @@
+[package]
+name = "ledger_bench"
+version = "0.1.0"
+edition = "2024"
+
+[[bin]]
+name = "ledger_bench"
+path = "main.rs"

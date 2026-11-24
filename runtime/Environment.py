@@ -647,10 +647,17 @@ def create_global_environment(stdout: Optional[TextIO] = None,
     def json_parse_int_fn(args_list: List[WysnaValue]) -> WysnaValue:
         if len(args_list) != 1 or not isinstance(args_list[0], WysnaStr):
             raise WysnaRuntimeError("__wysna_json_parse_int() expects (str)")
-        text = args_list[0].value.strip(" \t\r\n")
+        raw = args_list[0].value
+        # Only ASCII text can match the integer grammar below.
+        if len(raw) > 1048576:
+            return WysnaErr(WysnaStr("maximum JSON input byte limit exceeded"))
+        text = raw.strip(" \t\r\n")
         if not text:
             return WysnaErr(WysnaStr("number value must contain one JSON number"))
         if re.fullmatch(r"-?(?:0|[1-9][0-9]*)", text):
+            digits = len(text) - (1 if text.startswith("-") else 0)
+            if digits > 19:
+                return WysnaErr(WysnaStr("integer overflow"))
             val = int(text)
             if val < -9223372036854775808 or val > 9223372036854775807:
                 return WysnaErr(WysnaStr("integer overflow"))

@@ -1,0 +1,8 @@
+import "std/json" as json
+
+fn main() {
+    let input = read_file(args()[1]) else issue { exit(2) return }
+    let encoded = json.stringify(json.string(input)) else issue { exit(2) return }
+    print(encoded)
+}
+main()

@@ -1,0 +1,27 @@
+import "std/json" as json
+
+fn aggregate(source: str) -> unit ! json.JsonError {
+    let records = json.to_array(json.parse(source)?)?
+    let mut accepted = 0
+    let mut rejected = 0
+    let mut total = 0
+    for record in records {
+        let id = json.get_int(record, "id")?
+        let units = json.get_int(record, "units")?
+        let active = json.get_bool(record, "active")?
+        if id > 0 and active and units >= 0 and units <= 1000 {
+            accepted = accepted + 1
+            total = total + units
+        } else {
+            rejected = rejected + 1
+        }
+    }
+    print(accepted, rejected, total)
+}
+
+fn main() {
+    let path = args()[1]
+    let text = read_file(path) else err { exit(2) return }
+    let _ = aggregate(text) else err { exit(2) return }
+}
+main()

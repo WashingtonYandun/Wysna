@@ -110,34 +110,40 @@ pub fn at(value: Value, index: int) -> Value? {
     }
 }
 
-fn quote_string(value: str) -> str {
+fn escape_character(codepoint: int) -> str {
+    if codepoint == 34 { return "\\\"" }
+    if codepoint == 92 { return "\\\\" }
+    if codepoint == 8 { return "\\b" }
+    if codepoint == 12 { return "\\f" }
+    if codepoint == 10 { return "\\n" }
+    if codepoint == 13 { return "\\r" }
+    if codepoint == 9 { return "\\t" }
     let hex = "0123456789abcdef"
-    let mut parts: list[str] = ["\""]
-    for index in 0..len(value) {
+    return "\\u00" + hex[codepoint / 16] + hex[codepoint % 16]
+}
+
+fn quote_string(value: str) -> str {
+    let size = len(value)
+    let mut parts: list[str] = []
+    let mut span_start = 0
+    for index in 0..size {
         let character = value[index]
         let codepoint = ord(character)
-        if character == "\"" {
-            parts.append("\\\"")
-        } elif character == "\\" {
-            parts.append("\\\\")
-        } elif codepoint == 8 {
-            parts.append("\\b")
-        } elif codepoint == 12 {
-            parts.append("\\f")
-        } elif character == "\n" {
-            parts.append("\\n")
-        } elif character == "\r" {
-            parts.append("\\r")
-        } elif character == "\t" {
-            parts.append("\\t")
-        } elif codepoint < 32 {
-            parts.append("\\u00" + hex[codepoint / 16] + hex[codepoint % 16])
-        } else {
-            parts.append(character)
+        if codepoint < 32 or codepoint == 34 or codepoint == 92 {
+            if index > span_start {
+                parts.append(slice(value, span_start, index))
+            }
+            parts.append(escape_character(codepoint))
+            span_start = index + 1
         }
     }
-    parts.append("\"")
-    return join_strings(parts, "")
+    if span_start == 0 {
+        return "\"" + value + "\""
+    }
+    if span_start < size {
+        parts.append(slice(value, span_start, size))
+    }
+    return "\"" + join_strings(parts, "") + "\""
 }
 
 fn validate_number(raw: str) -> str ! JsonError {
@@ -273,21 +279,25 @@ pub fn to_object(value: Value) -> dict[str, Value] ! JsonError {
     }
 }
 
+fn parse_int_with_diagnostics(raw: str) -> int ! JsonError {
+    let validated = validate_number(raw)?
+    for index in 0..len(validated) {
+        let ch = validated[index]
+        if ch == "." or ch == "e" or ch == "E" {
+            return Err(error(index, "expected JSON integer, found JSON number with a fractional or exponent part"))
+        }
+    }
+    let integer = numeric.parse_int(validated) else issue {
+        return Err(error(issue.offset, issue.message))
+    }
+    return Ok(integer)
+}
+
 pub fn to_int(value: Value) -> int ! JsonError {
     match value {
         Value.Number(raw) => {
             return __wysna_json_parse_int(raw) else _msg {
-                let validated = validate_number(raw)?
-                for index in 0..len(validated) {
-                    let ch = validated[index]
-                    if ch == "." or ch == "e" or ch == "E" {
-                        return Err(error(index, "expected JSON integer, found JSON number with a fractional or exponent part"))
-                    }
-                }
-                let integer = numeric.parse_int(validated) else issue {
-                    return Err(error(issue.offset, issue.message))
-                }
-                return Ok(integer)
+                return parse_int_with_diagnostics(raw)
             }
         },
         _ => {
@@ -376,7 +386,7 @@ pub fn get_int(value: Value, key: str) -> int ! JsonError {
                     match field {
                         Value.Number(raw) => {
                             return __wysna_json_parse_int(raw) else _msg {
-                                return to_int(field) else issue {
+                                return parse_int_with_diagnostics(raw) else issue {
                                     return Err(error(issue.offset, field_label(key) + ": " + issue.message))
                                 }
                             }
