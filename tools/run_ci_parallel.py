@@ -48,7 +48,7 @@ def build_tasks(
         if mode == "module":
             commands = [(item, [sys.executable, "-m", item]) for item in items]
         else:
-            cmd = [sys.executable, "-m", "pytest", "-q"]
+            cmd = [sys.executable, "-m", "pytest", "-q", "-p", "no:cacheprovider"]
             if basetemp_root is not None:
                 cmd.append(f"--basetemp={basetemp_root / f'task-{idx}'}")
             cmd.extend(items)
@@ -63,7 +63,7 @@ def build_tasks(
         if mode == "module":
             commands = [(target, [sys.executable, "-m", target])]
         else:
-            cmd = [sys.executable, "-m", "pytest", "-q"]
+            cmd = [sys.executable, "-m", "pytest", "-q", "-p", "no:cacheprovider"]
             if basetemp_root is not None:
                 cmd.append(f"--basetemp={basetemp_root / f'task-{idx}'}")
             cmd.append(target)

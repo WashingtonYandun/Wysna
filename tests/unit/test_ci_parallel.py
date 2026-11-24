@@ -164,6 +164,12 @@ def test_run_ci_parallel_pytest_mode_and_validation(tmp_path: Path):
         assert run_ci_parallel.resolve_jobs(None) == 3
         assert run_ci_parallel.resolve_jobs(2) == 2
 
+    built_tasks = run_ci_parallel.build_tasks("pytest", ["test_g1.py,test_g2.py"], ["test_p1.py"])
+    assert len(built_tasks) == 2
+    for _, _, commands in built_tasks:
+        for _, cmd in commands:
+            assert "-p" in cmd and "no:cacheprovider" in cmd, cmd
+
 
 def test_ci_conformance_resolve_jobs_and_deterministic_order(tmp_path: Path, capsys):
     assert ci_conformance._resolve_jobs(["--profile=release", "--jobs=2"]) == 2
