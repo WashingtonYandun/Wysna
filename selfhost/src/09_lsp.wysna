@@ -1,9 +1,21 @@
 # Native Language Server Protocol (LSP 3.17) server backed by the semantic graph and compiler frontend.
 # Shared host externs, buffer helpers, and LspJson live in 01_tool_common.wysna.
 
+fn lsp_create_workspace() -> str {
+    let nonce = diag_uuid4()
+    if nonce == "native" { return "" }
+    let directory = lsp_tmp_dir() + "/wysna_lsp_" + nonce
+    let path = lsp_buf_from_str(directory)
+    let unused = lsp_buf_from_str("")
+    let status = wysna_host_fs(path, unused, 2)
+    wysna_host_close(path)
+    wysna_host_close(unused)
+    return if status == 0 { directory } else { "" }
+}
+
 fn lsp_next_tmp_path(state: LspServerState, prefix: str, ext: str) -> str {
     state.tmp_seq = state.tmp_seq + 1
-    return lsp_tmp_dir() + "/" + prefix + "_" + str(unix_time()) + "_" + str(state.tmp_seq) + ext
+    return state.tmp_dir + "/" + prefix + "_" + str(state.tmp_seq) + ext
 }
 
 fn lsp_send_message(json_body: str) -> unit {
@@ -225,18 +237,20 @@ class LspServerState {
     stopping: bool
     eof_reached: bool
     tmp_seq: int
+    tmp_dir: str
     diag_tmp_path: str
     self_exe: str
     stdlib_root: str
     workspace_roots: list[str]
 
-    fn init() {
+    fn init(tmp_dir: str) {
         let d0: list[LspDocument] = []
         this.docs = d0
         this.stopping = false
         this.eof_reached = false
         this.tmp_seq = 1
-        this.diag_tmp_path = lsp_tmp_dir() + "/wysna_lsp_diag_" + str(unix_time()) + "_1.json"
+        this.tmp_dir = tmp_dir
+        this.diag_tmp_path = tmp_dir + "/diagnostics.json"
         this.self_exe = lsp_self_exe_path()
         this.stdlib_root = lsp_stdlib_root_arg()
         let roots: list[str] = []
@@ -686,6 +700,7 @@ fn lsp_recheck_dependents(state: LspServerState, exclude_uri: str) -> unit {
 fn lsp_cleanup(state: LspServerState) -> unit {
     lsp_remove_file(state.diag_tmp_path)
     for d in state.docs { lsp_remove_file(d.tmp_path) }
+    lsp_remove_file(state.tmp_dir)
 }
 
 fn lsp_range_offset(src: str, range_: LspJson, endpoint: str) -> int {
@@ -1191,7 +1206,12 @@ fn lsp_dispatch_message(state: LspServerState, msg: LspJson) -> bool {
 }
 
 fn lsp_serve() -> unit {
-    let state = LspServerState()
+    let tmp_dir = lsp_create_workspace()
+    if tmp_dir == "" {
+        lsp_send_message("{\"jsonrpc\":\"2.0\",\"method\":\"window/logMessage\",\"params\":{\"type\":1,\"message\":\"Could not create LSP workspace\"}}")
+        exit(2)
+    }
+    let state = LspServerState(tmp_dir)
     while not state.eof_reached {
         let payload = lsp_read_frame_clean(state)
         if state.eof_reached { break }
