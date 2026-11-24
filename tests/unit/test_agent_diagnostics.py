@@ -240,7 +240,7 @@ def test_mcp_lists_only_static_tools(tmp_path):
 
     assert tools == {"wysna_check", "wysna_fix", "wysna_fmt", "wysna_explain", "wysna_schema",
                      "wysna_api", "wysna_capabilities", "wysna_graph", "wysna_inspect",
-                     "wysna_patch", "wysna_skills"}
+                     "wysna_patch", "wysna_project_check", "wysna_project_test", "wysna_skills"}
     assert not any("run" in name for name in tools)
 
 

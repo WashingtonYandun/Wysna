@@ -1183,119 +1183,15 @@ fn tool_node_source_text(graph: ToolGraph, n: ToolGraphNode) -> str {
     return slice(file_src, n.start_char, n.end_char)
 }
 
-fn tool_handle_inspect(args: list[str], json_mode: bool) -> unit {
-    let mut file = ""
-    let mut symbol = ""
-    let mut with_deps = false
-    let mut has_max_bytes = false
-    let mut max_bytes = 0
-    let mut source_offset = 0
-    let mut index_offset = 0
-    let mut i = 1
-    while i < len(args) {
-        let a = args[i]
-        if a == "--output-format=json-v1" {
-            i = i + 1
-        } elif a == "--output-format" and i + 1 < len(args) {
-            i = i + 2
-        } elif (a == "--symbol" or a == "-s") and i + 1 < len(args) {
-            symbol = args[i + 1]
-            i = i + 2
-        } elif a == "--with-deps" {
-            with_deps = true
-            i = i + 1
-        } elif a == "--max-bytes" and i + 1 < len(args) {
-            let parsed = lsp_parse_int(args[i + 1], -999999)
-            if parsed < 1 { report_error("<cli>", "W5002", 1, 1, "--max-bytes must be a positive integer") }
-            has_max_bytes = true
-            max_bytes = parsed
-            i = i + 2
-        } elif len(a) > 12 and slice(a, 0, 12) == "--max-bytes=" {
-            let parsed = lsp_parse_int(slice(a, 12, len(a)), -999999)
-            if parsed < 1 { report_error("<cli>", "W5002", 1, 1, "--max-bytes must be a positive integer") }
-            has_max_bytes = true
-            max_bytes = parsed
-            i = i + 1
-        } elif a == "--source-offset" and i + 1 < len(args) {
-            let parsed = lsp_parse_int(args[i + 1], -999999)
-            if parsed < 0 { report_error("<cli>", "W5002", 1, 1, "--source-offset must be a non-negative integer") }
-            source_offset = parsed
-            i = i + 2
-        } elif len(a) > 16 and slice(a, 0, 16) == "--source-offset=" {
-            let parsed = lsp_parse_int(slice(a, 16, len(a)), -999999)
-            if parsed < 0 { report_error("<cli>", "W5002", 1, 1, "--source-offset must be a non-negative integer") }
-            source_offset = parsed
-            i = i + 1
-        } elif a == "--offset" and i + 1 < len(args) {
-            let parsed = lsp_parse_int(args[i + 1], -999999)
-            if parsed < 0 { report_error("<cli>", "W5002", 1, 1, "--offset must be a non-negative integer") }
-            index_offset = parsed
-            i = i + 2
-        } elif len(a) > 9 and slice(a, 0, 9) == "--offset=" {
-            let parsed = lsp_parse_int(slice(a, 9, len(a)), -999999)
-            if parsed < 0 { report_error("<cli>", "W5002", 1, 1, "--offset must be a non-negative integer") }
-            index_offset = parsed
-            i = i + 1
-        } elif len(a) > 0 and a[0] != "-" and file == "" {
-            file = a
-            i = i + 1
-        } else {
-            report_error("<cli>", "W5002", 1, 1, "unknown option for inspect: " + a)
-        }
-    }
-    if file == "" { report_error("<cli>", "W5002", 1, 1, "inspect requires a source file path") }
-    let loaded = module_read_text_or_overlay(file)
-    if loaded[0] != "1" {
-        report_error(file, "W5003", 1, 1, "cannot read input file: " + file)
-    }
-    let src = loaded[1]
-    let graph = tool_build_graph(src, file)
+struct ToolInspectItemResult {
+    payload_json: str,
+    included: list[ToolGraphNode],
+    used_bytes: int,
+    truncated: bool,
+}
+
+fn tool_inspect_build_item(graph: ToolGraph, n: ToolGraphNode, with_deps: bool, has_max_bytes: bool, max_bytes: int, source_offset: int) -> ToolInspectItemResult {
     let budget_max_json = if has_max_bytes { str(max_bytes) } else { "null" }
-    if symbol == "" {
-        let total_syms = len(graph.nodes)
-        let clamped_off = if index_offset < total_syms { index_offset } else { total_syms }
-        let mut syms: list[str] = ["["]
-        let mut used_bytes = 0
-        let mut next_idx = clamped_off
-        let mut truncated = false
-        let mut scount = 0
-        for idx in clamped_off..total_syms {
-            let n = graph.nodes[idx]
-            let row = "{\"id\":" + diag_json_quote(n.id) + ",\"name\":" + diag_json_quote(n.name) + ",\"qualified_name\":" + diag_json_quote(n.qualified_name) + ",\"kind\":" + diag_json_quote(n.kind) + ",\"file\":" + diag_json_quote(n.file) + ",\"line\":" + str(n.line) + ",\"end_line\":" + str(n.end_line) + ",\"signature\":" + diag_json_quote(n.signature) + "}"
-            let row_bytes = len(bytes(row))
-            if has_max_bytes and used_bytes + row_bytes > max_bytes {
-                truncated = true
-                break
-            }
-            if scount > 0 { syms.append(",") }
-            scount = scount + 1
-            syms.append(row)
-            used_bytes = used_bytes + row_bytes
-            next_idx = idx + 1
-        }
-        syms.append("]")
-        let remaining = total_syms - next_idx
-        let omitted_json = if truncated and remaining > 0 {
-            "[{\"kind\":\"symbol_index\",\"omitted_count\":" + str(remaining) + ",\"next_offset\":" + str(next_idx) + ",\"ref\":{\"command\":\"inspect\",\"offset\":" + str(next_idx) + "}}]"
-        } else { "[]" }
-        let trunc_str = if truncated and remaining > 0 { "true" } else { "false" }
-        let om_count = if truncated and remaining > 0 { remaining } else { 0 }
-        let budget_json = "{\"max_bytes\":" + budget_max_json + ",\"used_bytes\":" + str(used_bytes) + ",\"offset\":" + str(clamped_off) + ",\"total_symbols\":" + str(total_syms) + ",\"truncated\":" + trunc_str + ",\"omitted_count\":" + str(om_count) + "}"
-        let bounds = tool_boundaries_for_nodes_json(graph.nodes)
-        let res_json = "{\"schema_version\":\"wysna.inspect/1\",\"file\":" + diag_json_quote(graph.entry_file) + ",\"graph_hash\":" + diag_json_quote(graph.graph_hash) + ",\"symbols\":" + join_strings(syms, "") + ",\"budget\":" + budget_json + ",\"omitted\":" + omitted_json + ",\"analysis_boundaries\":" + bounds + "}"
-        if json_mode {
-            diag_write_output(diag_tool_envelope_json("inspect", "ok", 0, "[]", "result", res_json, "[]"))
-        } else {
-            print("Symbols in " + file + " (" + graph.graph_hash + "):")
-            for idx in clamped_off..next_idx {
-                let n = graph.nodes[idx]
-                print("  [" + n.kind + "] " + n.qualified_name + " (L" + str(n.line) + "-" + str(n.end_line) + ")")
-            }
-        }
-        exit(0)
-    }
-    let n_idx = tool_require_symbol(graph, symbol, "inspect", json_mode)
-    let n = graph.nodes[n_idx]
     let full_src = tool_node_source_text(graph, n)
     let sliced = tool_utf8_slice_budget(full_src, source_offset, has_max_bytes, max_bytes)
     let decl_src = sliced[0]
@@ -1341,17 +1237,226 @@ fn tool_handle_inspect(args: list[str], json_mode: bool) -> unit {
         deps_p.append("]")
         deps_json = join_strings(deps_p, "")
     }
-    let trunc_sym = if len(omitted_rows) > 0 { "true" } else { "false" }
+    let has_om = len(omitted_rows) > 0
+    let trunc_sym = if has_om { "true" } else { "false" }
     let budget_json = "{\"max_bytes\":" + budget_max_json + ",\"used_bytes\":" + str(used_bytes) + ",\"source_offset\":" + str(clamped_src_off) + ",\"source_total_bytes\":" + str(src_total) + ",\"truncated\":" + trunc_sym + ",\"omitted_count\":" + str(len(omitted_rows)) + "}"
     let omitted_json = "[" + join_strings(omitted_rows, ",") + "]"
+    let impact_json = tool_impact_json(graph, n.id)
     let call_res_json = tool_call_resolution_json(n)
-    let bounds_json = tool_boundaries_for_nodes_json(included_nodes)
-    let res_json = "{\"schema_version\":\"wysna.inspect/1\",\"file\":" + diag_json_quote(n.file) + ",\"graph_hash\":" + diag_json_quote(graph.graph_hash) + ",\"node\":" + tool_node_json(n) + ",\"source\":" + diag_json_quote(decl_src) + ",\"dependencies\":" + deps_json + ",\"call_resolution\":" + call_res_json + ",\"budget\":" + budget_json + ",\"omitted\":" + omitted_json + ",\"analysis_boundaries\":" + bounds_json + "}"
+    let body = "\"node\":" + tool_node_json(n) + ",\"source\":" + diag_json_quote(decl_src) + ",\"dependencies\":" + deps_json + ",\"impact\":" + impact_json + ",\"call_resolution\":" + call_res_json + ",\"budget\":" + budget_json + ",\"omitted\":" + omitted_json
+    return ToolInspectItemResult { payload_json: body, included: included_nodes, used_bytes: used_bytes, truncated: has_om }
+}
+
+fn tool_inspect_split_csv(raw_csv: str) -> list[str] {
+    let mut dst: list[str] = []
+    let mut part = ""
+    for i in 0..len(raw_csv) + 1 {
+        if i == len(raw_csv) or raw_csv[i] == "," {
+            let trimmed = lsp_trim(part)
+            if trimmed != "" { dst.append(trimmed) }
+            part = ""
+        } else {
+            part = part + raw_csv[i]
+        }
+    }
+    return dst
+}
+
+fn tool_handle_inspect(args: list[str], json_mode: bool) -> unit {
+    let mut file = ""
+    let mut sym_args: list[str] = []
+    let mut csv_syms: list[str] = []
+    let mut has_symbols_flag = false
+    let mut with_deps = false
+    let mut has_max_bytes = false
+    let mut max_bytes = 0
+    let mut source_offset = 0
+    let mut index_offset = 0
+    let mut i = 1
+    while i < len(args) {
+        let a = args[i]
+        if a == "--output-format=json-v1" {
+            i = i + 1
+        } elif a == "--output-format" and i + 1 < len(args) {
+            i = i + 2
+        } elif (a == "--symbol" or a == "-s") and i + 1 < len(args) {
+            sym_args.append(args[i + 1])
+            i = i + 2
+        } elif a == "--symbols" and i + 1 < len(args) {
+            has_symbols_flag = true
+            for s in tool_inspect_split_csv(args[i + 1]) { csv_syms.append(s) }
+            i = i + 2
+        } elif len(a) > 10 and slice(a, 0, 10) == "--symbols=" {
+            has_symbols_flag = true
+            for s in tool_inspect_split_csv(slice(a, 10, len(a))) { csv_syms.append(s) }
+            i = i + 1
+        } elif a == "--with-deps" {
+            with_deps = true
+            i = i + 1
+        } elif a == "--max-bytes" and i + 1 < len(args) {
+            let parsed = lsp_parse_int(args[i + 1], -999999)
+            if parsed < 1 { report_error("<cli>", "W5002", 1, 1, "--max-bytes must be a positive integer") }
+            has_max_bytes = true
+            max_bytes = parsed
+            i = i + 2
+        } elif len(a) > 12 and slice(a, 0, 12) == "--max-bytes=" {
+            let parsed = lsp_parse_int(slice(a, 12, len(a)), -999999)
+            if parsed < 1 { report_error("<cli>", "W5002", 1, 1, "--max-bytes must be a positive integer") }
+            has_max_bytes = true
+            max_bytes = parsed
+            i = i + 1
+        } elif a == "--source-offset" and i + 1 < len(args) {
+            let parsed = lsp_parse_int(args[i + 1], -999999)
+            if parsed < 0 { report_error("<cli>", "W5002", 1, 1, "--source-offset must be a non-negative integer") }
+            source_offset = parsed
+            i = i + 2
+        } elif len(a) > 16 and slice(a, 0, 16) == "--source-offset=" {
+            let parsed = lsp_parse_int(slice(a, 16, len(a)), -999999)
+            if parsed < 0 { report_error("<cli>", "W5002", 1, 1, "--source-offset must be a non-negative integer") }
+            source_offset = parsed
+            i = i + 1
+        } elif a == "--offset" and i + 1 < len(args) {
+            let parsed = lsp_parse_int(args[i + 1], -999999)
+            if parsed < 0 { report_error("<cli>", "W5002", 1, 1, "--offset must be a non-negative integer") }
+            index_offset = parsed
+            i = i + 2
+        } elif len(a) > 9 and slice(a, 0, 9) == "--offset=" {
+            let parsed = lsp_parse_int(slice(a, 9, len(a)), -999999)
+            if parsed < 0 { report_error("<cli>", "W5002", 1, 1, "--offset must be a non-negative integer") }
+            index_offset = parsed
+            i = i + 1
+        } elif len(a) > 0 and a[0] != "-" and file == "" {
+            file = a
+            i = i + 1
+        } else {
+            report_error("<cli>", "W5002", 1, 1, "unknown option for inspect: " + a)
+        }
+    }
+    if has_symbols_flag and len(sym_args) > 0 {
+        report_error("<cli>", "W5002", 1, 1, "inspect cannot combine --symbol and --symbols")
+    }
+    if has_symbols_flag and len(csv_syms) == 0 {
+        report_error("<cli>", "W5002", 1, 1, "inspect --symbols must list at least one symbol")
+    }
+    if file == "" { report_error("<cli>", "W5002", 1, 1, "inspect requires a source file path") }
+    let loaded = module_read_text_or_overlay(file)
+    if loaded[0] != "1" {
+        report_error(file, "W5003", 1, 1, "cannot read input file: " + file)
+    }
+    let src = loaded[1]
+    let graph = tool_build_graph(src, file)
+    let budget_max_json = if has_max_bytes { str(max_bytes) } else { "null" }
+    let mut batch_syms: list[str] = []
+    let mut single_symbol = ""
+    if has_symbols_flag {
+        batch_syms = csv_syms
+    } elif len(sym_args) > 1 {
+        batch_syms = sym_args
+    } elif len(sym_args) == 1 {
+        single_symbol = sym_args[0]
+    }
+    if single_symbol == "" and len(batch_syms) == 0 {
+        let total_syms = len(graph.nodes)
+        let clamped_off = if index_offset < total_syms { index_offset } else { total_syms }
+        let mut syms: list[str] = ["["]
+        let mut used_bytes = 0
+        let mut next_idx = clamped_off
+        let mut truncated = false
+        let mut scount = 0
+        for idx in clamped_off..total_syms {
+            let n = graph.nodes[idx]
+            let row = "{\"id\":" + diag_json_quote(n.id) + ",\"name\":" + diag_json_quote(n.name) + ",\"qualified_name\":" + diag_json_quote(n.qualified_name) + ",\"kind\":" + diag_json_quote(n.kind) + ",\"file\":" + diag_json_quote(n.file) + ",\"line\":" + str(n.line) + ",\"end_line\":" + str(n.end_line) + ",\"signature\":" + diag_json_quote(n.signature) + "}"
+            let row_bytes = len(bytes(row))
+            if has_max_bytes and used_bytes + row_bytes > max_bytes {
+                truncated = true
+                break
+            }
+            if scount > 0 { syms.append(",") }
+            scount = scount + 1
+            syms.append(row)
+            used_bytes = used_bytes + row_bytes
+            next_idx = idx + 1
+        }
+        syms.append("]")
+        let remaining = total_syms - next_idx
+        let omitted_json = if truncated and remaining > 0 {
+            "[{\"kind\":\"symbol_index\",\"omitted_count\":" + str(remaining) + ",\"next_offset\":" + str(next_idx) + ",\"ref\":{\"command\":\"inspect\",\"offset\":" + str(next_idx) + "}}]"
+        } else { "[]" }
+        let trunc_str = if truncated and remaining > 0 { "true" } else { "false" }
+        let om_count = if truncated and remaining > 0 { remaining } else { 0 }
+        let budget_json = "{\"max_bytes\":" + budget_max_json + ",\"used_bytes\":" + str(used_bytes) + ",\"offset\":" + str(clamped_off) + ",\"total_symbols\":" + str(total_syms) + ",\"truncated\":" + trunc_str + ",\"omitted_count\":" + str(om_count) + "}"
+        let bounds = tool_boundaries_for_nodes_json(graph.nodes)
+        let summary_json = "{\"nodes\":" + str(len(graph.nodes)) + ",\"edges\":" + str(len(graph.edges)) + "}"
+        let res_json = "{\"schema_version\":\"wysna.inspect/1\",\"file\":" + diag_json_quote(graph.entry_file) + ",\"graph_hash\":" + diag_json_quote(graph.graph_hash) + ",\"summary\":" + summary_json + ",\"symbols\":" + join_strings(syms, "") + ",\"budget\":" + budget_json + ",\"omitted\":" + omitted_json + ",\"analysis_boundaries\":" + bounds + "}"
+        if json_mode {
+            diag_write_output(diag_tool_envelope_json("inspect", "ok", 0, "[]", "result", res_json, "[]"))
+        } else {
+            print("Symbols in " + file + " (" + graph.graph_hash + "):")
+            for idx in clamped_off..next_idx {
+                let n = graph.nodes[idx]
+                print("  [" + n.kind + "] " + n.qualified_name + " (L" + str(n.line) + "-" + str(n.end_line) + ")")
+            }
+        }
+        exit(0)
+    }
+    if len(batch_syms) > 0 {
+        let mut target_idxs: list[int] = []
+        for req_sym in batch_syms {
+            target_idxs.append(tool_require_symbol(graph, req_sym, "inspect", json_mode))
+        }
+        let mut item_rows: list[str] = []
+        let mut batch_omitted: list[str] = []
+        let mut included_nodes: list[ToolGraphNode] = []
+        let mut total_used = 0
+        let mut any_trunc = false
+        for bi in 0..len(target_idxs) {
+            let tn = graph.nodes[target_idxs[bi]]
+            let mut rem_budget = 0
+            if has_max_bytes {
+                rem_budget = max_bytes - total_used
+                if rem_budget <= 0 {
+                    for ri in bi..len(target_idxs) {
+                        let rn = graph.nodes[target_idxs[ri]]
+                        batch_omitted.append("{\"kind\":\"symbol\",\"symbol_id\":" + diag_json_quote(rn.id) + ",\"name\":" + diag_json_quote(rn.name) + ",\"ref\":{\"command\":\"inspect\",\"symbol\":" + diag_json_quote(rn.id) + "}}")
+                    }
+                    any_trunc = true
+                    break
+                }
+            }
+            let item = tool_inspect_build_item(graph, tn, with_deps, has_max_bytes, rem_budget, if bi == 0 { source_offset } else { 0 })
+            item_rows.append("{" + item.payload_json + "}")
+            total_used = total_used + item.used_bytes
+            for inc in item.included { included_nodes.append(inc) }
+            if item.truncated { any_trunc = true }
+            if item.truncated and has_max_bytes and total_used >= max_bytes {
+                for ri in (bi + 1)..len(target_idxs) {
+                    let rn = graph.nodes[target_idxs[ri]]
+                    batch_omitted.append("{\"kind\":\"symbol\",\"symbol_id\":" + diag_json_quote(rn.id) + ",\"name\":" + diag_json_quote(rn.name) + ",\"ref\":{\"command\":\"inspect\",\"symbol\":" + diag_json_quote(rn.id) + "}}")
+                }
+                break
+            }
+        }
+        let trunc_b = if any_trunc or len(batch_omitted) > 0 { "true" } else { "false" }
+        let b_budget_json = "{\"max_bytes\":" + budget_max_json + ",\"used_bytes\":" + str(total_used) + ",\"requested_count\":" + str(len(target_idxs)) + ",\"returned_count\":" + str(len(item_rows)) + ",\"truncated\":" + trunc_b + ",\"omitted_count\":" + str(len(batch_omitted)) + "}"
+        let bounds_json = tool_boundaries_for_nodes_json(included_nodes)
+        let res_json = "{\"schema_version\":\"wysna.inspect/1\",\"mode\":\"batch\",\"file\":" + diag_json_quote(graph.entry_file) + ",\"graph_hash\":" + diag_json_quote(graph.graph_hash) + ",\"items\":[" + join_strings(item_rows, ",") + "],\"budget\":" + b_budget_json + ",\"omitted\":[" + join_strings(batch_omitted, ",") + "],\"analysis_boundaries\":" + bounds_json + "}"
+        if json_mode {
+            diag_write_output(diag_tool_envelope_json("inspect", "ok", 0, "[]", "result", res_json, "[]"))
+        } else {
+            print("Inspect Batch (" + str(len(item_rows)) + ") " + graph.graph_hash)
+        }
+        exit(0)
+    }
+    let n_idx = tool_require_symbol(graph, single_symbol, "inspect", json_mode)
+    let n = graph.nodes[n_idx]
+    let single = tool_inspect_build_item(graph, n, with_deps, has_max_bytes, max_bytes, source_offset)
+    let bounds_json = tool_boundaries_for_nodes_json(single.included)
+    let res_json = "{\"schema_version\":\"wysna.inspect/1\",\"file\":" + diag_json_quote(n.file) + ",\"graph_hash\":" + diag_json_quote(graph.graph_hash) + "," + single.payload_json + ",\"analysis_boundaries\":" + bounds_json + "}"
     if json_mode {
         diag_write_output(diag_tool_envelope_json("inspect", "ok", 0, "[]", "result", res_json, "[]"))
     } else {
         print(n.id + " (" + graph.graph_hash + ") lines " + str(n.line) + "-" + str(n.end_line) + ":")
-        print(decl_src)
+        print(tool_node_source_text(graph, n))
     }
     exit(0)
 }

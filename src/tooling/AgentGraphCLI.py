@@ -203,10 +203,112 @@ def _validate_positive_int(value: int | None, flag: str) -> int | None:
     return value
 
 
+def _inspect_single_node(
+    checked,
+    full_graph: dict,
+    node: dict,
+    *,
+    with_deps: bool,
+    max_bytes: int | None,
+    source_offset: int,
+    nodes_by_id: dict,
+) -> tuple[dict, list[dict], int]:
+    snap = checked.sources.get(node['file'])
+    text = snap.text if snap is not None else ''
+    raw_bytes = text.encode('utf-8')
+    full_snippet = raw_bytes[node['start_byte']:node['end_byte']].decode('utf-8', errors='replace')
+    snippet, clamped_start, source_used, source_total = _utf8_slice_budget(full_snippet, source_offset, max_bytes)
+    next_source_offset = clamped_start + source_used
+    used_bytes = source_used
+    omitted = []
+    if next_source_offset < source_total:
+        omitted.append({
+            'kind': 'source_slice',
+            'symbol_id': node['id'],
+            'file': node['file'],
+            'start_byte': node['start_byte'] + next_source_offset,
+            'end_byte': node['end_byte'],
+            'omitted_bytes': source_total - next_source_offset,
+            'ref': {
+                'command': 'inspect',
+                'symbol': node['id'],
+                'source_offset': next_source_offset,
+            },
+        })
+
+    blast = compute_blast_radius(full_graph, node['id'])
+    included_nodes = [node]
+    call_resolution = node.get('call_resolution') or {
+        'resolved_calls': list(node.get('calls', [])),
+        'uncertain_calls': [],
+        'complete': not bool(node.get('indirect_call', False)),
+    }
+
+    deps = []
+    if with_deps:
+        dep_ids = []
+        for field_name in ('implements', 'super_class', 'uses_types', 'calls', 'instantiates'):
+            value = node.get(field_name)
+            if isinstance(value, str) and value:
+                dep_ids.append(value)
+            elif isinstance(value, list):
+                dep_ids.extend(value)
+        for dep_id in sorted(set(dep_ids)):
+            if dep_id not in nodes_by_id or dep_id == node['id']:
+                continue
+            dep = nodes_by_id[dep_id]
+            dep_entry = {
+                'id': dep['id'],
+                'name': dep['name'],
+                'kind': dep['kind'],
+                'signature': dep.get('signature', f"{dep['kind']} {dep['name']}"),
+                'file': dep['file'],
+                'line': dep['line'],
+            }
+            dep_bytes = len(json.dumps(dep_entry, ensure_ascii=False, separators=(',', ':')).encode('utf-8'))
+            if max_bytes is not None and used_bytes + dep_bytes > max_bytes:
+                omitted.append({
+                    'kind': 'dependency',
+                    'symbol_id': dep['id'],
+                    'name': dep['name'],
+                    'signature': dep_entry['signature'],
+                    'file': dep['file'],
+                    'line': dep['line'],
+                    'estimated_bytes': dep_bytes,
+                    'ref': {
+                        'command': 'inspect',
+                        'symbol': dep['id'],
+                    },
+                })
+                continue
+            deps.append(dep_entry)
+            included_nodes.append(dep)
+            used_bytes += dep_bytes
+
+    payload = {
+        'node': node,
+        'source': snippet,
+        'dependencies': deps,
+        'impact': blast,
+        'call_resolution': call_resolution,
+        'budget': {
+            'max_bytes': max_bytes,
+            'used_bytes': used_bytes,
+            'source_offset': clamped_start,
+            'source_total_bytes': source_total,
+            'truncated': bool(omitted),
+            'omitted_count': len(omitted),
+        },
+        'omitted': omitted,
+    }
+    return payload, included_nodes, used_bytes
+
+
 def inspect_source(
     path: str,
     *,
     symbol: str | None = None,
+    symbols: list[str] | None = None,
     with_deps: bool = False,
     max_bytes: int | None = None,
     source_offset: int = 0,
@@ -215,10 +317,16 @@ def inspect_source(
     manifest: Path | None = None,
     frozen: bool = False,
 ) -> dict:
-    """Return compact declaration index or surgical symbol slice + graph context."""
+    """Return compact declaration index, single symbol slice, or bounded batch of symbols."""
     max_bytes = _validate_positive_int(max_bytes, '--max-bytes')
     source_offset = _validate_non_negative_int(source_offset, '--source-offset')
     offset = _validate_non_negative_int(offset, '--offset')
+
+    if symbols is not None:
+        if symbol is not None:
+            raise WysnaError('inspect cannot combine --symbol and --symbols', code='W5002', stage='usage')
+        if not isinstance(symbols, list) or not symbols or any(not isinstance(s, str) or not s.strip() for s in symbols):
+            raise WysnaError('inspect --symbols must be a non-empty list of symbol names', code='W5002', stage='usage')
 
     source_path = Path(path)
     if service is None:
@@ -228,11 +336,13 @@ def inspect_source(
         checked = service.check_file(source_path)
 
     full_graph = service.graph(checked)
-    if symbol is None:
+    nodes_by_id = {n['id']: n for n in full_graph['nodes']}
+    if symbol is None and symbols is None:
         all_symbols = [
             {
                 'id': node['id'],
                 'name': node['name'],
+                'qualified_name': node.get('qualified_name', node['name']),
                 'kind': node['kind'],
                 'file': node['file'],
                 'line': node['line'],
@@ -267,6 +377,7 @@ def inspect_source(
             })
         result = {
             'schema_version': 'wysna.inspect/1',
+            'file': str(source_path.resolve()),
             'graph_hash': full_graph['graph_hash'],
             'summary': full_graph['summary'],
             'symbols': selected,
@@ -285,6 +396,77 @@ def inspect_source(
             result['project'] = resolver.lock_data()
         return result
 
+    if symbols is not None:
+        resolved_nodes = []
+        for req_sym in symbols:
+            target_node = resolve_graph_symbol(full_graph, req_sym, 'inspect')
+            if target_node is None:
+                raise WysnaError(
+                    f"Unknown symbol '{req_sym}'",
+                    file=str(source_path.resolve()),
+                    code='W1001',
+                    stage='inspect',
+                )
+            resolved_nodes.append(target_node)
+
+        items = []
+        omitted = []
+        included_nodes = []
+        used_bytes = 0
+        for idx, target_node in enumerate(resolved_nodes):
+            remaining_budget = None if max_bytes is None else max(0, max_bytes - used_bytes)
+            if remaining_budget is not None and remaining_budget == 0:
+                for rem_node in resolved_nodes[idx:]:
+                    omitted.append({
+                        'kind': 'symbol',
+                        'symbol_id': rem_node['id'],
+                        'name': rem_node['name'],
+                        'ref': {'command': 'inspect', 'symbol': rem_node['id']},
+                    })
+                break
+            item_payload, item_nodes, item_used = _inspect_single_node(
+                checked,
+                full_graph,
+                target_node,
+                with_deps=with_deps,
+                max_bytes=remaining_budget,
+                source_offset=source_offset if idx == 0 else 0,
+                nodes_by_id=nodes_by_id,
+            )
+            used_bytes += item_used
+            included_nodes.extend(item_nodes)
+            items.append(item_payload)
+            if item_payload['omitted'] and max_bytes is not None and used_bytes >= max_bytes:
+                for rem_node in resolved_nodes[idx + 1:]:
+                    omitted.append({
+                        'kind': 'symbol',
+                        'symbol_id': rem_node['id'],
+                        'name': rem_node['name'],
+                        'ref': {'command': 'inspect', 'symbol': rem_node['id']},
+                    })
+                break
+
+        result = {
+            'schema_version': 'wysna.inspect/1',
+            'mode': 'batch',
+            'file': str(source_path.resolve()),
+            'graph_hash': full_graph['graph_hash'],
+            'items': items,
+            'budget': {
+                'max_bytes': max_bytes,
+                'used_bytes': used_bytes,
+                'requested_count': len(resolved_nodes),
+                'returned_count': len(items),
+                'truncated': bool(omitted) or any(bool(item['omitted']) for item in items),
+                'omitted_count': len(omitted),
+            },
+            'omitted': omitted,
+            'analysis_boundaries': analysis_boundaries_for_nodes(included_nodes),
+        }
+        if resolver is not None:
+            result['project'] = resolver.lock_data()
+        return result
+
     node = resolve_graph_symbol(full_graph, symbol, 'inspect')
     if node is None:
         raise WysnaError(
@@ -294,98 +476,22 @@ def inspect_source(
             stage='inspect',
         )
 
-    snap = checked.sources.get(node['file'])
-    text = snap.text if snap is not None else ''
-    raw_bytes = text.encode('utf-8')
-    full_snippet = raw_bytes[node['start_byte']:node['end_byte']].decode('utf-8', errors='replace')
-    snippet, clamped_start, source_used, source_total = _utf8_slice_budget(full_snippet, source_offset, max_bytes)
-    next_source_offset = clamped_start + source_used
-    used_bytes = source_used
-    omitted = []
-    if next_source_offset < source_total:
-        omitted.append({
-            'kind': 'source_slice',
-            'symbol_id': node['id'],
-            'file': node['file'],
-            'start_byte': node['start_byte'] + next_source_offset,
-            'end_byte': node['end_byte'],
-            'omitted_bytes': source_total - next_source_offset,
-            'ref': {
-                'command': 'inspect',
-                'symbol': node['id'],
-                'source_offset': next_source_offset,
-            },
-        })
-
-    blast = compute_blast_radius(full_graph, node['id'])
-    nodes_by_id = {n['id']: n for n in full_graph['nodes']}
-    included_nodes = [node]
-    call_resolution = node.get('call_resolution') or {
-        'resolved_calls': list(node.get('calls', [])),
-        'uncertain_calls': [],
-        'complete': not bool(node.get('indirect_call', False)),
-    }
-
+    item_payload, included_nodes, _used = _inspect_single_node(
+        checked,
+        full_graph,
+        node,
+        with_deps=with_deps,
+        max_bytes=max_bytes,
+        source_offset=source_offset,
+        nodes_by_id=nodes_by_id,
+    )
     result = {
         'schema_version': 'wysna.inspect/1',
+        'file': node['file'],
         'graph_hash': full_graph['graph_hash'],
-        'symbol': node,
-        'source': snippet,
-        'impact': blast,
-        'call_resolution': call_resolution,
+        **item_payload,
+        'analysis_boundaries': analysis_boundaries_for_nodes(included_nodes),
     }
-    if with_deps:
-        dep_ids = []
-        for field_name in ('implements', 'super_class', 'uses_types', 'calls', 'instantiates'):
-            value = node.get(field_name)
-            if isinstance(value, str) and value:
-                dep_ids.append(value)
-            elif isinstance(value, list):
-                dep_ids.extend(value)
-        deps = []
-        for dep_id in sorted(set(dep_ids)):
-            if dep_id not in nodes_by_id or dep_id == node['id']:
-                continue
-            dep = nodes_by_id[dep_id]
-            dep_entry = {
-                'id': dep['id'],
-                'name': dep['name'],
-                'kind': dep['kind'],
-                'signature': dep.get('signature', f"{dep['kind']} {dep['name']}"),
-                'file': dep['file'],
-                'line': dep['line'],
-            }
-            dep_bytes = len(json.dumps(dep_entry, ensure_ascii=False, separators=(',', ':')).encode('utf-8'))
-            if max_bytes is not None and used_bytes + dep_bytes > max_bytes:
-                omitted.append({
-                    'kind': 'dependency',
-                    'symbol_id': dep['id'],
-                    'name': dep['name'],
-                    'signature': dep_entry['signature'],
-                    'file': dep['file'],
-                    'line': dep['line'],
-                    'estimated_bytes': dep_bytes,
-                    'ref': {
-                        'command': 'inspect',
-                        'symbol': dep['id'],
-                    },
-                })
-                continue
-            deps.append(dep_entry)
-            included_nodes.append(dep)
-            used_bytes += dep_bytes
-        result['dependencies'] = deps
-
-    result['budget'] = {
-        'max_bytes': max_bytes,
-        'used_bytes': used_bytes,
-        'source_offset': clamped_start,
-        'source_total_bytes': source_total,
-        'truncated': bool(omitted),
-        'omitted_count': len(omitted),
-    }
-    result['omitted'] = omitted
-    result['analysis_boundaries'] = analysis_boundaries_for_nodes(included_nodes)
     if resolver is not None:
         result['project'] = resolver.lock_data()
     return result
@@ -395,7 +501,8 @@ def run_inspect_command(argv) -> int:
     """Extract a surgical, token-efficient symbol slice with its graph dependencies."""
     parser = _Parser(prog='wysna inspect', description=__doc__)
     parser.add_argument('source')
-    parser.add_argument('--symbol', help='Target function, class, interface, struct, enum, or Class.method')
+    parser.add_argument('--symbol', action='append', help='Target function, class, interface, struct, enum, or Class.method (repeatable)')
+    parser.add_argument('--symbols', help='Comma-separated symbol list for batch inspect')
     parser.add_argument('--with-deps', action='store_true', help='Include signatures of referenced symbols')
     parser.add_argument('--max-bytes', type=int, help='Maximum UTF-8 byte budget for returned source/context')
     parser.add_argument('--source-offset', type=int, default=0, help='UTF-8 byte offset within target symbol source')
@@ -407,9 +514,28 @@ def run_inspect_command(argv) -> int:
     try:
         options = parser.parse_args(list(argv))
         json_output = options.output_format == 'json-v1'
+        sym_list = list(options.symbol or [])
+        if options.symbols is not None:
+            if sym_list:
+                raise WysnaError('inspect cannot combine --symbol and --symbols', code='W5002', stage='usage')
+            parsed_csv = [item.strip() for item in options.symbols.split(',') if item.strip()]
+            if not parsed_csv:
+                raise WysnaError('inspect --symbols must list at least one symbol', code='W5002', stage='usage')
+            single_symbol = None
+            batch_symbols = parsed_csv
+        elif len(sym_list) > 1:
+            single_symbol = None
+            batch_symbols = sym_list
+        elif len(sym_list) == 1:
+            single_symbol = sym_list[0]
+            batch_symbols = None
+        else:
+            single_symbol = None
+            batch_symbols = None
         payload = inspect_source(
             options.source,
-            symbol=options.symbol,
+            symbol=single_symbol,
+            symbols=batch_symbols,
             with_deps=options.with_deps,
             max_bytes=options.max_bytes,
             source_offset=options.source_offset,
@@ -426,8 +552,14 @@ def run_inspect_command(argv) -> int:
                 print(f"Inspect Index hash={payload['graph_hash']}")
                 for sym in payload['symbols']:
                     print(f"  {sym['id']} ({sym['line']}-{sym['end_line']}): {sym['signature']}")
+            elif 'items' in payload:
+                print(f"Inspect Batch ({len(payload['items'])}) hash={payload['graph_hash']}")
+                for item in payload['items']:
+                    sym = item['node']
+                    print(f"{sym['id']} ({sym['file']}:{sym['line']}-{sym['end_line']})")
+                    print(item['source'])
             else:
-                sym = payload['symbol']
+                sym = payload['node']
                 print(f"{sym['id']} ({sym['file']}:{sym['line']}-{sym['end_line']}) hash={payload['graph_hash']}")
                 print(payload['source'])
                 print(f"# impact: {payload['impact']['impact_count']} dependent(s)")
