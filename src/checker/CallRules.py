@@ -721,6 +721,31 @@ def check_builtin_call(checker: "TypeChecker", expr: CallExpr) -> Optional[Wysna
         if a_t != StrType:
             raise TypeError(message=f"__wysna_json_parse_int() expects str, found '{a_t}'", line=expr.args[0].line, col=expr.args[0].col, file=checker.file, code="W2001")
         return ResultType(IntType, StrType)
+
+    if name == "__wysna_json_quote_str":
+        if len(expr.args) != 1:
+            raise TypeError(message="__wysna_json_quote_str() takes exactly 1 argument", line=expr.line, col=expr.col, file=checker.file, code="W2005")
+        a_t = checker._check_expr(expr.args[0])
+        if a_t != StrType:
+            raise TypeError(message=f"__wysna_json_quote_str() expects str, found '{a_t}'", line=expr.args[0].line, col=expr.args[0].col, file=checker.file, code="W2001")
+        return StrType
+
+    json_getter_returns = {
+        "__wysna_json_get_int": IntType,
+        "__wysna_json_get_bool": BoolType,
+        "__wysna_json_get_str": StrType,
+        "__wysna_json_get_float": FloatType,
+    }
+    if name in json_getter_returns:
+        if len(expr.args) != 2:
+            raise TypeError(message=f"{name}() takes exactly 2 arguments", line=expr.line, col=expr.col, file=checker.file, code="W2005")
+        obj_t = checker._check_expr(expr.args[0])
+        key_t = checker._check_expr(expr.args[1])
+        if not isinstance(obj_t, EnumType):
+            raise TypeError(message=f"{name}() argument 0 expects enum Value, found '{obj_t}'", line=expr.args[0].line, col=expr.args[0].col, file=checker.file, code="W2001")
+        if key_t != StrType:
+            raise TypeError(message=f"{name}() argument 1 expects str, found '{key_t}'", line=expr.args[1].line, col=expr.args[1].col, file=checker.file, code="W2001")
+        return ResultType(json_getter_returns[name], StrType)
     return None
 
 

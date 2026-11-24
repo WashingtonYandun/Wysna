@@ -139,5 +139,10 @@ def create_global_scope() -> Scope:
     scope.define_symbol(Symbol("upgrade", FunctionType([AnyType()], AnyType()), kind="builtin"))
     scope.define_symbol(Symbol("__wysna_json_parse", FunctionType([StrType, IntType, IntType, IntType, AnyType(), AnyType()], AnyType()), kind="builtin"))
     scope.define_symbol(Symbol("__wysna_json_parse_int", FunctionType([StrType], ResultType(IntType, StrType)), kind="builtin"))
+    scope.define_symbol(Symbol("__wysna_json_get_int", FunctionType([AnyType(), StrType], ResultType(IntType, StrType)), kind="builtin"))
+    scope.define_symbol(Symbol("__wysna_json_get_bool", FunctionType([AnyType(), StrType], ResultType(BoolType, StrType)), kind="builtin"))
+    scope.define_symbol(Symbol("__wysna_json_get_str", FunctionType([AnyType(), StrType], ResultType(StrType, StrType)), kind="builtin"))
+    scope.define_symbol(Symbol("__wysna_json_get_float", FunctionType([AnyType(), StrType], ResultType(FloatType, StrType)), kind="builtin"))
+    scope.define_symbol(Symbol("__wysna_json_quote_str", FunctionType([StrType], StrType), kind="builtin"))
     return scope
 

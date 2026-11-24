@@ -16,6 +16,8 @@ RUNTIME = {
     'wysna_builtin_args', 'wysna_builtin_env', 'wysna_builtin_unix_time', 'wysna_builtin_exit', 'wysna_builtin_enumerate', 'wysna_builtin_dict_items',
     'wysna_builtin_read_file', 'wysna_builtin_write_file', 'wysna_builtin_join_strings', 'wysna_builtin_weak_owned',
     'wysna_builtin_json_parse', 'wysna_builtin_json_parse_int',
+    'wysna_builtin_json_get_int', 'wysna_builtin_json_get_bool', 'wysna_builtin_json_get_str',
+    'wysna_builtin_json_get_float', 'wysna_builtin_json_quote_str',
     'wysna_builtin_upgrade', 'wysna_builtin_contract_assert_at', 'wysna_await', 'wysna_contains',
     'wysna_str_trim', 'wysna_str_split', 'wysna_str_to_lower', 'wysna_str_to_upper',
     'wysna_str_starts_with', 'wysna_str_ends_with', 'wysna_str_replace',
@@ -27,12 +29,15 @@ RUNTIME_ARITIES = {
                      'wysna_builtin_str', 'wysna_builtin_int', 'wysna_builtin_u8', 'wysna_builtin_float', 'wysna_builtin_ord',
                      'wysna_builtin_chr', 'wysna_builtin_bytes', 'wysna_builtin_exit', 'wysna_builtin_enumerate',
                      'wysna_builtin_dict_items', 'wysna_builtin_read_file', 'wysna_builtin_weak_owned',
-                     'wysna_builtin_upgrade', 'wysna_builtin_env', 'wysna_builtin_json_parse_int', 'wysna_await',
+                     'wysna_builtin_upgrade', 'wysna_builtin_env', 'wysna_builtin_json_parse_int',
+                     'wysna_builtin_json_quote_str', 'wysna_await',
                      'wysna_str_trim', 'wysna_str_to_lower', 'wysna_str_to_upper'), 1),
     **dict.fromkeys(('wysna_add', 'wysna_sub', 'wysna_mul', 'wysna_div_at', 'wysna_mod_at', 'wysna_lt', 'wysna_le',
                      'wysna_gt', 'wysna_ge', 'wysna_equal', 'wysna_not_equal', 'wysna_make_range',
                      'wysna_index_get_owned_at', 'wysna_dict_get', 'wysna_builtin_write_file',
                      'wysna_builtin_join_strings', 'wysna_builtin_contract_assert_at', 'wysna_contains',
+                     'wysna_builtin_json_get_int', 'wysna_builtin_json_get_bool',
+                     'wysna_builtin_json_get_str', 'wysna_builtin_json_get_float',
                      'wysna_str_split', 'wysna_str_starts_with', 'wysna_str_ends_with'), 2),
     'wysna_builtin_slice': 3, 'wysna_str_replace': 3, 'wysna_builtin_args': 0, 'wysna_builtin_unix_time': 0, 'wysna_enum': 0, 'wysna_empty_weak': 0,
     'wysna_builtin_json_parse': 6,
@@ -226,6 +231,18 @@ class Verifier:
             require(returned.tag == 'result' and returned.data == (types[4], types[5]))
         elif name == 'wysna_builtin_json_parse_int':
             require(types == [TYPE_STR] and returned.tag == 'result' and returned.data == (TYPE_INT, TYPE_STR))
+        elif name == 'wysna_builtin_json_quote_str':
+            require(types == [TYPE_STR] and result.type_id == TYPE_STR)
+        elif name in ('wysna_builtin_json_get_int', 'wysna_builtin_json_get_bool',
+                      'wysna_builtin_json_get_str', 'wysna_builtin_json_get_float'):
+            expected_ok = {
+                'wysna_builtin_json_get_int': TYPE_INT,
+                'wysna_builtin_json_get_bool': TYPE_BOOL,
+                'wysna_builtin_json_get_str': TYPE_STR,
+                'wysna_builtin_json_get_float': TYPE_FLOAT,
+            }[name]
+            require(entry(0).tag == 'enum' and types[1] == TYPE_STR
+                    and returned.tag == 'result' and returned.data == (expected_ok, TYPE_STR))
         elif name == 'wysna_builtin_weak_owned':
             require(entry(0).tag == 'class' and returned.tag == 'weak' and returned.data == types[0])
         elif name == 'wysna_empty_weak':

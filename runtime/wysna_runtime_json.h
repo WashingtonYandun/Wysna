@@ -18,6 +18,9 @@ typedef struct {
     WVal val_true;
     WVal val_false;
     WVal proto_err;
+    WVal key_cache[16];
+    uint32_t key_cache_hash[16];
+    uint32_t key_cache_len[16];
     bool failed;
     size_t err_byte_pos;
     char err_msg[128];
@@ -404,6 +407,62 @@ static inline WVal wysna_json_read_array(WysnaJsonCtx* ctx) {
     }
 }
 
+static inline WVal wysna_json_read_object_key(WysnaJsonCtx* ctx) {
+    const unsigned char* p = ctx->cursor;
+    const unsigned char* end = ctx->end;
+    if (p >= end || *p != '"') {
+        if (p < end) p++;
+        wysna_json_fail(ctx, p, "object key must be a string");
+        return wysna_unit();
+    }
+    p++;
+    const unsigned char* span_start = p;
+    while (p < end) {
+        unsigned char c = *p;
+        if (c == '"') {
+            size_t slen = (size_t)(p - span_start);
+            ctx->cursor = p + 1;
+            if (slen <= 6) {
+                return wysna_sso_from_n((const char*)span_start, slen);
+            }
+            if (slen <= 64) {
+                uint32_t h32 = UINT32_C(2166136261);
+                for (size_t k = 0; k < slen; k++) {
+                    h32 ^= span_start[k];
+                    h32 *= UINT32_C(16777619);
+                }
+                uint32_t slot = h32 & 15u;
+                if (ctx->key_cache_len[slot] == (uint32_t)slen &&
+                    ctx->key_cache_hash[slot] == h32 &&
+                    !wysna_is_immediate(ctx->key_cache[slot])) {
+                    WStringBuf* owner = wysna_str_owner(ctx->key_cache[slot]);
+                    if (owner && memcmp(owner->data, span_start, slen) == 0) {
+                        return wysna_clone(ctx->key_cache[slot]);
+                    }
+                }
+                WVal key_val = wysna_copy_str_n((const char*)span_start, slen);
+                (void)wysna_str_hash32(key_val);
+                wysna_release(ctx->key_cache[slot]);
+                ctx->key_cache[slot] = wysna_clone(key_val);
+                ctx->key_cache_hash[slot] = h32;
+                ctx->key_cache_len[slot] = (uint32_t)slen;
+                return key_val;
+            }
+            return wysna_copy_str_n((const char*)span_start, slen);
+        }
+        if (c == '\\') {
+            return wysna_json_read_string(ctx);
+        }
+        if (c < 0x20u) {
+            wysna_json_fail(ctx, p + 1, "unescaped control character in string");
+            return wysna_unit();
+        }
+        p++;
+    }
+    wysna_json_fail(ctx, end, "unterminated string");
+    return wysna_unit();
+}
+
 static inline WVal wysna_json_read_object(WysnaJsonCtx* ctx) {
     ctx->cursor++; /* skip '{' */
     ctx->depth++;
@@ -424,7 +483,7 @@ static inline WVal wysna_json_read_object(WysnaJsonCtx* ctx) {
     d->vals = (WVal*)wysna_alloc_safe(sizeof(WVal) * (size_t)d->cap);
     d->bucket_count = 16;
     d->buckets = (int32_t*)wysna_alloc_safe(sizeof(int32_t) * (size_t)d->bucket_count);
-    for (int32_t i = 0; i < d->bucket_count; i++) d->buckets[i] = -1;
+    memset(d->buckets, -1, sizeof(int32_t) * (size_t)d->bucket_count);
     wysna_mem_on_alloc();
     WVal dict_val = wysna_make_hi_ptr(WVAL_HI_DICT, d);
 
@@ -440,7 +499,7 @@ static inline WVal wysna_json_read_object(WysnaJsonCtx* ctx) {
             wysna_json_fail(ctx, ctx->cursor, "object key must be a string");
             return wysna_unit();
         }
-        WVal key = wysna_json_read_string(ctx);
+        WVal key = wysna_json_read_object_key(ctx);
         if (ctx->failed) {
             wysna_release(dict_val);
             return wysna_unit();
@@ -486,59 +545,68 @@ static inline WVal wysna_json_read_value(WysnaJsonCtx* ctx) {
         return wysna_unit();
     }
     unsigned char ch = *ctx->cursor;
-    if (ch == '"') {
-        if (!wysna_json_reserve_node(ctx)) return wysna_unit();
-        WVal str_val = wysna_json_read_string(ctx);
-        if (ctx->failed) return wysna_unit();
-        return wysna_enum_payload(ctx->enum_name, "String", str_val);
-    }
-    if (ch == '{') {
-        if (!wysna_json_reserve_node(ctx)) return wysna_unit();
-        return wysna_json_read_object(ctx);
-    }
-    if (ch == '[') {
-        if (!wysna_json_reserve_node(ctx)) return wysna_unit();
-        return wysna_json_read_array(ctx);
-    }
-    if (ch == 't') {
-        if (!wysna_json_reserve_node(ctx)) return wysna_unit();
-        if ((size_t)(ctx->end - ctx->cursor) < 4 || memcmp(ctx->cursor, "true", 4) != 0) {
-            wysna_json_fail(ctx, ctx->cursor, "invalid literal");
+    switch (ch) {
+        case '"': {
+            if (!wysna_json_reserve_node(ctx)) return wysna_unit();
+            WVal str_val = wysna_json_read_string(ctx);
+            if (ctx->failed) return wysna_unit();
+            return wysna_enum_payload(ctx->enum_name, "String", str_val);
+        }
+        case '{':
+            if (!wysna_json_reserve_node(ctx)) return wysna_unit();
+            return wysna_json_read_object(ctx);
+        case '[':
+            if (!wysna_json_reserve_node(ctx)) return wysna_unit();
+            return wysna_json_read_array(ctx);
+        case 't': {
+            if (!wysna_json_reserve_node(ctx)) return wysna_unit();
+            if ((size_t)(ctx->end - ctx->cursor) < 4 || memcmp(ctx->cursor, "true", 4) != 0) {
+                wysna_json_fail(ctx, ctx->cursor, "invalid literal");
+                return wysna_unit();
+            }
+            ctx->cursor += 4;
+            if (ctx->val_true.bits == WVAL_UNIT_BITS) {
+                ctx->val_true = wysna_enum_payload(ctx->enum_name, "Bool", wysna_bool(true));
+            }
+            return wysna_clone(ctx->val_true);
+        }
+        case 'f': {
+            if (!wysna_json_reserve_node(ctx)) return wysna_unit();
+            if ((size_t)(ctx->end - ctx->cursor) < 5 || memcmp(ctx->cursor, "false", 5) != 0) {
+                wysna_json_fail(ctx, ctx->cursor, "invalid literal");
+                return wysna_unit();
+            }
+            ctx->cursor += 5;
+            if (ctx->val_false.bits == WVAL_UNIT_BITS) {
+                ctx->val_false = wysna_enum_payload(ctx->enum_name, "Bool", wysna_bool(false));
+            }
+            return wysna_clone(ctx->val_false);
+        }
+        case 'n':
+            if (!wysna_json_reserve_node(ctx)) return wysna_unit();
+            if ((size_t)(ctx->end - ctx->cursor) < 4 || memcmp(ctx->cursor, "null", 4) != 0) {
+                wysna_json_fail(ctx, ctx->cursor, "invalid literal");
+                return wysna_unit();
+            }
+            ctx->cursor += 4;
+            return wysna_clone(ctx->proto_null);
+        case '-':
+        case '0':
+        case '1':
+        case '2':
+        case '3':
+        case '4':
+        case '5':
+        case '6':
+        case '7':
+        case '8':
+        case '9':
+            if (!wysna_json_reserve_node(ctx)) return wysna_unit();
+            return wysna_json_read_number(ctx);
+        default:
+            wysna_json_fail(ctx, ctx->cursor, "expected JSON value");
             return wysna_unit();
-        }
-        ctx->cursor += 4;
-        if (ctx->val_true.bits == WVAL_UNIT_BITS) {
-            ctx->val_true = wysna_enum_payload(ctx->enum_name, "Bool", wysna_bool(true));
-        }
-        return wysna_clone(ctx->val_true);
     }
-    if (ch == 'f') {
-        if (!wysna_json_reserve_node(ctx)) return wysna_unit();
-        if ((size_t)(ctx->end - ctx->cursor) < 5 || memcmp(ctx->cursor, "false", 5) != 0) {
-            wysna_json_fail(ctx, ctx->cursor, "invalid literal");
-            return wysna_unit();
-        }
-        ctx->cursor += 5;
-        if (ctx->val_false.bits == WVAL_UNIT_BITS) {
-            ctx->val_false = wysna_enum_payload(ctx->enum_name, "Bool", wysna_bool(false));
-        }
-        return wysna_clone(ctx->val_false);
-    }
-    if (ch == 'n') {
-        if (!wysna_json_reserve_node(ctx)) return wysna_unit();
-        if ((size_t)(ctx->end - ctx->cursor) < 4 || memcmp(ctx->cursor, "null", 4) != 0) {
-            wysna_json_fail(ctx, ctx->cursor, "invalid literal");
-            return wysna_unit();
-        }
-        ctx->cursor += 4;
-        return wysna_clone(ctx->proto_null);
-    }
-    if (ch == '-' || (ch >= '0' && ch <= '9')) {
-        if (!wysna_json_reserve_node(ctx)) return wysna_unit();
-        return wysna_json_read_number(ctx);
-    }
-    wysna_json_fail(ctx, ctx->cursor, "expected JSON value");
-    return wysna_unit();
 }
 
 WYSNA_RT_FN WVal wysna_builtin_json_parse(
@@ -601,6 +669,11 @@ WYSNA_RT_FN WVal wysna_builtin_json_parse(
     ctx.val_true = wysna_unit();
     ctx.val_false = wysna_unit();
     ctx.proto_err = proto_err;
+    for (int i = 0; i < 16; i++) {
+        ctx.key_cache[i] = wysna_unit();
+        ctx.key_cache_hash[i] = 0;
+        ctx.key_cache_len[i] = 0;
+    }
     ctx.failed = false;
     ctx.err_byte_pos = 0;
     ctx.err_msg[0] = '\0';
@@ -618,6 +691,9 @@ WYSNA_RT_FN WVal wysna_builtin_json_parse(
 
     wysna_release(ctx.val_true);
     wysna_release(ctx.val_false);
+    for (int i = 0; i < 16; i++) {
+        wysna_release(ctx.key_cache[i]);
+    }
 
     if (ctx.failed) {
         int64_t err_off = wysna_json_cp_offset(ctx.base, ctx.err_byte_pos);
@@ -716,6 +792,207 @@ check_frac_or_exp:
         }
     }
     return wysna_err(wysna_copy_str("number value must contain one JSON number"));
+}
+
+static inline bool wysna_json_object_lookup(WVal obj_val, WVal key, WVal* out_field) {
+    WEnumBuf* en = wysna_as_enum(obj_val);
+    if (!en || !en->has_payload || !en->variant ||
+        en->variant[0] != 'O' || strcmp(en->variant, "Object") != 0) {
+        return false;
+    }
+    WDictBuf* d = wysna_as_dict(en->payload);
+    if (!d) return false;
+    int32_t idx = wysna_dict_probe(d, key, NULL, NULL);
+    if (idx < 0) return false;
+    *out_field = d->vals[idx];
+    return true;
+}
+
+WYSNA_RT_FN WVal wysna_builtin_json_get_int(WVal obj_val, WVal key) {
+    WVal field = wysna_unit();
+    if (!wysna_json_object_lookup(obj_val, key, &field)) {
+        return wysna_err(wysna_sso_from_n("", 0));
+    }
+    WEnumBuf* fen = wysna_as_enum(field);
+    if (!fen || !fen->has_payload || !fen->variant ||
+        fen->variant[0] != 'N' || strcmp(fen->variant, "Number") != 0) {
+        return wysna_err(wysna_sso_from_n("", 0));
+    }
+    return wysna_builtin_json_parse_int(fen->payload);
+}
+
+WYSNA_RT_FN WVal wysna_builtin_json_get_bool(WVal obj_val, WVal key) {
+    WVal field = wysna_unit();
+    if (!wysna_json_object_lookup(obj_val, key, &field)) {
+        return wysna_err(wysna_sso_from_n("", 0));
+    }
+    WEnumBuf* fen = wysna_as_enum(field);
+    if (!fen || !fen->has_payload || !fen->variant ||
+        fen->variant[0] != 'B' || strcmp(fen->variant, "Bool") != 0 ||
+        wysna_tag(fen->payload) != W_BOOL) {
+        return wysna_err(wysna_sso_from_n("", 0));
+    }
+    return wysna_ok(wysna_bool(wysna_as_bool(fen->payload)));
+}
+
+WYSNA_RT_FN WVal wysna_builtin_json_get_str(WVal obj_val, WVal key) {
+    WVal field = wysna_unit();
+    if (!wysna_json_object_lookup(obj_val, key, &field)) {
+        return wysna_err(wysna_sso_from_n("", 0));
+    }
+    WEnumBuf* fen = wysna_as_enum(field);
+    if (!fen || !fen->has_payload || !fen->variant ||
+        fen->variant[0] != 'S' || strcmp(fen->variant, "String") != 0 ||
+        wysna_tag(fen->payload) != W_STR) {
+        return wysna_err(wysna_sso_from_n("", 0));
+    }
+    return wysna_ok(wysna_clone(fen->payload));
+}
+
+WYSNA_RT_FN WVal wysna_builtin_json_get_float(WVal obj_val, WVal key) {
+    WVal field = wysna_unit();
+    if (!wysna_json_object_lookup(obj_val, key, &field)) {
+        return wysna_err(wysna_sso_from_n("", 0));
+    }
+    WEnumBuf* fen = wysna_as_enum(field);
+    if (!fen || !fen->has_payload || !fen->variant ||
+        fen->variant[0] != 'N' || strcmp(fen->variant, "Number") != 0 ||
+        wysna_tag(fen->payload) != W_STR) {
+        return wysna_err(wysna_sso_from_n("", 0));
+    }
+    char scratch[7];
+    size_t slen = 0;
+    const unsigned char* s = (const unsigned char*)wysna_str_bytes(fen->payload, scratch, &slen);
+    if (slen > 1048576u) {
+        return wysna_err(wysna_sso_from_n("", 0));
+    }
+    const unsigned char* end = s + slen;
+    while (s < end && (*s == ' ' || *s == '\t' || *s == '\r' || *s == '\n')) s++;
+    while (end > s && (end[-1] == ' ' || end[-1] == '\t' || end[-1] == '\r' || end[-1] == '\n')) end--;
+    if (s >= end) {
+        return wysna_err(wysna_sso_from_n("", 0));
+    }
+
+    const unsigned char* p = s;
+    if (*p == '-') {
+        p++;
+        if (p >= end) return wysna_err(wysna_sso_from_n("", 0));
+    }
+    if (*p == '0') {
+        p++;
+        if (p < end && *p >= '0' && *p <= '9') {
+            return wysna_err(wysna_sso_from_n("", 0));
+        }
+    } else if (*p >= '1' && *p <= '9') {
+        while (p < end && *p >= '0' && *p <= '9') p++;
+    } else {
+        return wysna_err(wysna_sso_from_n("", 0));
+    }
+    if (p < end && *p == '.') {
+        p++;
+        if (p >= end || *p < '0' || *p > '9') {
+            return wysna_err(wysna_sso_from_n("", 0));
+        }
+        while (p < end && *p >= '0' && *p <= '9') p++;
+    }
+    if (p < end && (*p == 'e' || *p == 'E')) {
+        p++;
+        if (p < end && (*p == '+' || *p == '-')) p++;
+        if (p >= end || *p < '0' || *p > '9') {
+            return wysna_err(wysna_sso_from_n("", 0));
+        }
+        while (p < end && *p >= '0' && *p <= '9') p++;
+    }
+    if (p != end) {
+        return wysna_err(wysna_sso_from_n("", 0));
+    }
+
+    size_t tlen = (size_t)(end - s);
+    char stack_buf[128];
+    char* heap_buf = NULL;
+    char* buf = stack_buf;
+    if (tlen >= sizeof(stack_buf)) {
+        heap_buf = (char*)wysna_alloc_safe(tlen + 1);
+        buf = heap_buf;
+    }
+    memcpy(buf, s, tlen);
+    buf[tlen] = '\0';
+
+    errno = 0;
+    char* endptr = NULL;
+    double val = strtod(buf, &endptr);
+    int saved_errno = errno;
+    bool ok = (endptr == buf + tlen) && (saved_errno == 0) && isfinite(val);
+    if (heap_buf) free(heap_buf);
+    if (!ok) {
+        return wysna_err(wysna_sso_from_n("", 0));
+    }
+    return wysna_ok(wysna_float(val));
+}
+
+WYSNA_RT_FN WVal wysna_builtin_json_quote_str(WVal value) {
+    char scratch[7];
+    size_t slen = 0;
+    const unsigned char* s = (const unsigned char*)wysna_str_bytes(value, scratch, &slen);
+    size_t extra = 0;
+    for (size_t i = 0; i < slen; i++) {
+        unsigned char c = s[i];
+        if (c < 0x20u || c == '"' || c == '\\') {
+            switch (c) {
+                case '"':
+                case '\\':
+                case '\b':
+                case '\f':
+                case '\n':
+                case '\r':
+                case '\t':
+                    extra += 1;
+                    break;
+                default:
+                    extra += 5;
+                    break;
+            }
+        }
+    }
+    size_t out_len = slen + extra + 2;
+    char* out = (char*)wysna_alloc_safe(out_len + 1);
+    size_t j = 0;
+    out[j++] = '"';
+    if (extra == 0) {
+        if (slen > 0) {
+            memcpy(out + 1, s, slen);
+            j += slen;
+        }
+    } else {
+        static const char hex[] = "0123456789abcdef";
+        for (size_t i = 0; i < slen; i++) {
+            unsigned char c = s[i];
+            if (c >= 0x20u && c != '"' && c != '\\') {
+                out[j++] = (char)c;
+            } else {
+                out[j++] = '\\';
+                switch (c) {
+                    case '"': out[j++] = '"'; break;
+                    case '\\': out[j++] = '\\'; break;
+                    case '\b': out[j++] = 'b'; break;
+                    case '\f': out[j++] = 'f'; break;
+                    case '\n': out[j++] = 'n'; break;
+                    case '\r': out[j++] = 'r'; break;
+                    case '\t': out[j++] = 't'; break;
+                    default:
+                        out[j++] = 'u';
+                        out[j++] = '0';
+                        out[j++] = '0';
+                        out[j++] = hex[(c >> 4) & 0x0Fu];
+                        out[j++] = hex[c & 0x0Fu];
+                        break;
+                }
+            }
+        }
+    }
+    out[j++] = '"';
+    out[j] = '\0';
+    return wysna_owned_str_n(out, out_len);
 }
 
 #endif /* WYSNA_RUNTIME_JSON_H */

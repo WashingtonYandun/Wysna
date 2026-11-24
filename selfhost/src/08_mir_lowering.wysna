@@ -58,6 +58,11 @@ fn mir_call(context: MirBuilder, node: CheckedNode) -> int {
     if node.text == "contract_assert" or node.text == "__wysna_contract_assert" { return mir_op(context, "runtime", returned, arguments, "wysna_builtin_contract_assert_at", mir_literal_unit(), node.source) }
     if node.text == "__wysna_json_parse" { return mir_op(context, "runtime", returned, arguments, "wysna_builtin_json_parse", mir_literal_unit(), node.source) }
     if node.text == "__wysna_json_parse_int" { return mir_op(context, "runtime", returned, arguments, "wysna_builtin_json_parse_int", mir_literal_unit(), node.source) }
+    if node.text == "__wysna_json_get_int" { return mir_op(context, "runtime", returned, arguments, "wysna_builtin_json_get_int", mir_literal_unit(), node.source) }
+    if node.text == "__wysna_json_get_bool" { return mir_op(context, "runtime", returned, arguments, "wysna_builtin_json_get_bool", mir_literal_unit(), node.source) }
+    if node.text == "__wysna_json_get_str" { return mir_op(context, "runtime", returned, arguments, "wysna_builtin_json_get_str", mir_literal_unit(), node.source) }
+    if node.text == "__wysna_json_get_float" { return mir_op(context, "runtime", returned, arguments, "wysna_builtin_json_get_float", mir_literal_unit(), node.source) }
+    if node.text == "__wysna_json_quote_str" { return mir_op(context, "runtime", returned, arguments, "wysna_builtin_json_quote_str", mir_literal_unit(), node.source) }
     let builtins: list[str] = ["upgrade", "print", "eprint", "int", "u8", "float", "str", "len", "ord", "chr", "slice", "bytes", "args", "env", "unix_time", "join_strings", "enumerate", "dict_items", "read_file", "write_file"]
     for name in builtins { if node.text == name { return mir_op(context, "runtime", returned, arguments, "wysna_builtin_" + name, mir_literal_unit(), node.source) } }
     mir_unsupported(node.source, "builtin call " + node.text)

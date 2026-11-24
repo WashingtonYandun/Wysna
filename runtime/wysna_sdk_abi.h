@@ -501,6 +501,11 @@ extern WVal wysna_builtin_contract_assert_at(WVal cond, WVal msg, const char* fi
 extern WVal wysna_worker_snapshot(WVal value);
 extern WVal wysna_builtin_json_parse(WVal source, WVal max_bytes_v, WVal max_depth_v, WVal max_nodes_v, WVal proto_null, WVal proto_err);
 extern WVal wysna_builtin_json_parse_int(WVal raw_val);
+extern WVal wysna_builtin_json_get_int(WVal obj_val, WVal key);
+extern WVal wysna_builtin_json_get_bool(WVal obj_val, WVal key);
+extern WVal wysna_builtin_json_get_str(WVal obj_val, WVal key);
+extern WVal wysna_builtin_json_get_float(WVal obj_val, WVal key);
+extern WVal wysna_builtin_json_quote_str(WVal value);
 
 extern int64_t wysna_host_last_error(void);
 extern int64_t wysna_host_last_error_domain(void);

@@ -666,6 +666,79 @@ def create_global_environment(stdout: Optional[TextIO] = None,
             return WysnaErr(WysnaStr("expected JSON integer, found JSON number with a fractional or exponent part"))
         return WysnaErr(WysnaStr("number value must contain one JSON number"))
 
+    def _json_lookup_variant(args_list: List[WysnaValue], expected_variant: str) -> Optional[WysnaValue]:
+        if len(args_list) != 2 or not isinstance(args_list[1], WysnaStr):
+            raise WysnaRuntimeError("JSON field getter expects (Value, str)")
+        obj_val = args_list[0]
+        if not (isinstance(obj_val, WysnaEnumValue) and obj_val.variant == "Object" and len(obj_val.payload) == 1):
+            return None
+        fields = obj_val.payload[0]
+        if not isinstance(fields, WysnaDict):
+            return None
+        entry = fields.get(args_list[1].value)
+        if not (isinstance(entry, WysnaEnumValue) and entry.variant == expected_variant and len(entry.payload) == 1):
+            return None
+        return entry.payload[0]
+
+    def json_get_int_fn(args_list: List[WysnaValue]) -> WysnaValue:
+        raw_val = _json_lookup_variant(args_list, "Number")
+        if not isinstance(raw_val, WysnaStr):
+            return WysnaErr(WysnaStr(""))
+        return json_parse_int_fn([raw_val])
+
+    def json_get_bool_fn(args_list: List[WysnaValue]) -> WysnaValue:
+        flag_val = _json_lookup_variant(args_list, "Bool")
+        if not isinstance(flag_val, WysnaBool):
+            return WysnaErr(WysnaStr(""))
+        return WysnaOk(WysnaBool(flag_val.value))
+
+    def json_get_str_fn(args_list: List[WysnaValue]) -> WysnaValue:
+        str_val = _json_lookup_variant(args_list, "String")
+        if not isinstance(str_val, WysnaStr):
+            return WysnaErr(WysnaStr(""))
+        return WysnaOk(WysnaStr(str_val.value))
+
+    def json_get_float_fn(args_list: List[WysnaValue]) -> WysnaValue:
+        raw_val = _json_lookup_variant(args_list, "Number")
+        if not isinstance(raw_val, WysnaStr):
+            return WysnaErr(WysnaStr(""))
+        raw = raw_val.value
+        if len(raw.encode("utf-8")) > 1048576:
+            return WysnaErr(WysnaStr(""))
+        text = raw.strip(" \t\r\n")
+        if not text or not re.fullmatch(r"-?(?:0|[1-9][0-9]*)(?:\.[0-9]+)?(?:[eE][+-]?[0-9]+)?", text):
+            return WysnaErr(WysnaStr(""))
+        try:
+            num = float(text)
+        except ValueError:
+            return WysnaErr(WysnaStr(""))
+        if not math.isfinite(num):
+            return WysnaErr(WysnaStr(""))
+        return WysnaOk(WysnaFloat(num))
+
+    def json_quote_str_fn(args_list: List[WysnaValue]) -> WysnaValue:
+        if len(args_list) != 1 or not isinstance(args_list[0], WysnaStr):
+            raise WysnaRuntimeError("__wysna_json_quote_str() expects (str)")
+        text = args_list[0].value
+        escape_map = {
+            '"': '\\"',
+            "\\": "\\\\",
+            "\b": "\\b",
+            "\f": "\\f",
+            "\n": "\\n",
+            "\r": "\\r",
+            "\t": "\\t",
+        }
+        parts = ['"']
+        for ch in text:
+            code = ord(ch)
+            if code < 32 or ch == '"' or ch == "\\":
+                parts.append(escape_map.get(ch, f"\\u{code:04x}"))
+            else:
+                parts.append(ch)
+        parts.append('"')
+        return WysnaStr("".join(parts))
+
     def some_fn(args: List[WysnaValue]) -> WysnaValue:
         if len(args) != 1:
             raise WysnaRuntimeError("Some() takes exactly 1 argument")
@@ -713,6 +786,11 @@ def create_global_environment(stdout: Optional[TextIO] = None,
     env.declare("__wysna_contract_assert", WysnaNativeFunction("__wysna_contract_assert", contract_assert_fn), is_mut=False)
     env.declare("__wysna_json_parse", WysnaNativeFunction("__wysna_json_parse", json_parse_fn), is_mut=False)
     env.declare("__wysna_json_parse_int", WysnaNativeFunction("__wysna_json_parse_int", json_parse_int_fn), is_mut=False)
+    env.declare("__wysna_json_get_int", WysnaNativeFunction("__wysna_json_get_int", json_get_int_fn), is_mut=False)
+    env.declare("__wysna_json_get_bool", WysnaNativeFunction("__wysna_json_get_bool", json_get_bool_fn), is_mut=False)
+    env.declare("__wysna_json_get_str", WysnaNativeFunction("__wysna_json_get_str", json_get_str_fn), is_mut=False)
+    env.declare("__wysna_json_get_float", WysnaNativeFunction("__wysna_json_get_float", json_get_float_fn), is_mut=False)
+    env.declare("__wysna_json_quote_str", WysnaNativeFunction("__wysna_json_quote_str", json_quote_str_fn), is_mut=False)
 
     env.declare("weak", WysnaNativeFunction("weak", weak_fn), is_mut=False)
     env.declare("upgrade", WysnaNativeFunction("upgrade", upgrade_fn), is_mut=False)

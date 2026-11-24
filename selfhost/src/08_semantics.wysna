@@ -780,7 +780,7 @@ fn sem_collect_record(context: SemanticContext, kind: str) {
     context.type_params = previous_type_params
 }
 fn sem_builtin(name: str) -> bool {
-    if name == "u8" or name == "__wysna_json_parse" or name == "__wysna_json_parse_int" { return true }
+    if name == "u8" or name == "__wysna_json_parse" or name == "__wysna_json_parse_int" or name == "__wysna_json_get_int" or name == "__wysna_json_get_bool" or name == "__wysna_json_get_str" or name == "__wysna_json_get_float" or name == "__wysna_json_quote_str" { return true }
     return name == "join_strings" or name == "print" or name == "eprint" or name == "len" or name == "int" or name == "float" or name == "str" or name == "ord" or name == "chr" or name == "bytes" or name == "slice" or name == "args" or name == "env" or name == "unix_time" or name == "exit" or name == "enumerate" or name == "dict_items" or name == "read_file" or name == "write_file" or name == "Some" or name == "Ok" or name == "Err" or name == "weak" or name == "upgrade" or name == "contract_assert"
 }
 fn sem_call_builtin(context: SemanticContext, name: str, args: list[int], sources: list[Token], discard: bool) -> int {
@@ -797,7 +797,7 @@ fn sem_call_builtin(context: SemanticContext, name: str, args: list[int], source
     }
     let mut arity = 1
     if name == "slice" { arity = 3 }
-    if name == "write_file" or name == "join_strings" { arity = 2 }
+    if name == "write_file" or name == "join_strings" or name == "__wysna_json_get_int" or name == "__wysna_json_get_bool" or name == "__wysna_json_get_str" or name == "__wysna_json_get_float" { arity = 2 }
     if name == "__wysna_json_parse" { arity = 6 }
     if count != arity { sem_error(context, "W2005", "builtin arity: " + name) }
     if name == "join_strings" {
@@ -891,6 +891,19 @@ fn sem_call_builtin(context: SemanticContext, name: str, args: list[int], source
     if name == "__wysna_json_parse_int" {
         sem_require_at(context, first, context.string_type, "W2001", sem_source_at(context, sources, 0))
         return sem_intern(context, "result", "", [context.integer_type, context.string_type])
+    }
+    if name == "__wysna_json_quote_str" {
+        sem_require_at(context, first, context.string_type, "W2001", sem_source_at(context, sources, 0))
+        return context.string_type
+    }
+    if name == "__wysna_json_get_int" or name == "__wysna_json_get_bool" or name == "__wysna_json_get_str" or name == "__wysna_json_get_float" {
+        if kind != "enum" { report_error_at("W2001", sem_source_at(context, sources, 0), name + " expects enum Value") }
+        sem_require_at(context, args[1], context.string_type, "W2001", sem_source_at(context, sources, 1))
+        let mut ok_t = context.integer_type
+        if name == "__wysna_json_get_bool" { ok_t = context.boolean_type }
+        elif name == "__wysna_json_get_str" { ok_t = context.string_type }
+        elif name == "__wysna_json_get_float" { ok_t = context.float_type }
+        return sem_intern(context, "result", "", [ok_t, context.string_type])
     }
     sem_error(context, "W1001", "unknown builtin")
     return context.unit_type

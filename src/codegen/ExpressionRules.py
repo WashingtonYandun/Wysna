@@ -354,9 +354,19 @@ def emit_call_expr(emitter: "CCodeGen", expr: CallExpr, out: List[str]) -> str:
             "read_file": "wysna_builtin_read_file",
             "env": "wysna_builtin_env",
             "__wysna_json_parse_int": "wysna_builtin_json_parse_int",
+            "__wysna_json_quote_str": "wysna_builtin_json_quote_str",
         }
         if fn_name in builtin_1 and len(arg_vals) == 1:
             return emitter._bind_call(f"{builtin_1[fn_name]}({arg_vals[0]})", out)
+
+        json_get_2 = {
+            "__wysna_json_get_int": "wysna_builtin_json_get_int",
+            "__wysna_json_get_bool": "wysna_builtin_json_get_bool",
+            "__wysna_json_get_str": "wysna_builtin_json_get_str",
+            "__wysna_json_get_float": "wysna_builtin_json_get_float",
+        }
+        if fn_name in json_get_2 and len(arg_vals) == 2:
+            return emitter._bind_call(f"{json_get_2[fn_name]}({arg_vals[0]}, {arg_vals[1]})", out)
 
         if fn_name == "__wysna_json_parse" and len(arg_vals) == 6:
             return emitter._bind_call(
