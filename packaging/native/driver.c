@@ -395,9 +395,30 @@ static int64_t sdk_compile_timeout(const SdkOptions* options) {
     return remaining > 0 ? remaining : 1;
 }
 
+static int sdk_generated_needs_header_runtime(const char* path) {
+    FILE* stream = fopen(path, "rb");
+    if (!stream) return 1;
+    char prefix[8193];
+    size_t read_len = fread(prefix, 1, sizeof(prefix) - 1, stream);
+    fclose(stream);
+    prefix[read_len] = '\0';
+    return strstr(prefix, "WYSNA_HAS_HTTP") != NULL ||
+        strstr(prefix, "WYSNA_SANDBOX_ENFORCED") != NULL ||
+        strstr(prefix, "WYSNA_DENY_CAP_") != NULL ||
+        strstr(prefix, "WYSNA_DEFAULT_MAX_") != NULL ||
+        strstr(prefix, "W_STRING_METRICS") != NULL;
+}
+
 static int sdk_build(SdkInvocation* invocation, const SdkOptions* options) {
     if (!sdk_is_file(invocation->zig)) return sdk_error("W5001", "Missing bundled C toolchain; reinstall the SDK", invocation->zig);
     if (!sdk_prepare_cache(invocation)) return sdk_error("W5001", "Cannot configure a writable compiler cache", NULL);
+    const char* archive_rel = "lib/libwysna_runtime_release.a";
+    if (strcmp(options->profile, "dev") == 0) archive_rel = "lib/libwysna_runtime_dev.a";
+    else if (strcmp(options->profile, "size") == 0) archive_rel = "lib/libwysna_runtime_size.a";
+    char archive_path[SDK_PATH_CAP];
+    int use_linked_runtime = !options->wasi && !options->sandbox && !options->allow_caps && !options->deny_caps &&
+        !sdk_generated_needs_header_runtime(invocation->generated) &&
+        sdk_join(archive_path, invocation->root, archive_rel) && sdk_is_file(archive_path);
     const char* arguments[SDK_ARGUMENT_LIMIT]; int count = 0;
     arguments[count++] = "cc";
     arguments[count++] = "-target";
@@ -406,7 +427,15 @@ static int sdk_build(SdkInvocation* invocation, const SdkOptions* options) {
     if (options->wasi) arguments[count++] = "-Wl,-z,stack-size=1048576";
     else arguments[count++] = "-mcpu=baseline";
     if (strcmp(options->profile, "dev") == 0) { arguments[count++] = "-O0"; arguments[count++] = "-g"; }
-    else arguments[count++] = strcmp(options->profile, "size") == 0 ? "-Os" : "-O2";
+    else {
+        arguments[count++] = strcmp(options->profile, "size") == 0 ? "-Os" : "-O2";
+        arguments[count++] = "-fno-sanitize=undefined";
+    }
+    if (use_linked_runtime) {
+        arguments[count++] = "-DWYSNA_RUNTIME_LINKED";
+        arguments[count++] = "-ffunction-sections";
+        arguments[count++] = "-fdata-sections";
+    }
 #ifdef __linux__
     /* Weak references alone cannot pull pthread into the SDK's static musl programs. */
     if (!options->wasi) {
@@ -423,6 +452,14 @@ static int sdk_build(SdkInvocation* invocation, const SdkOptions* options) {
     for (int index = 0; index < options->link_count; index++) {
         if (!sdk_absolute(invocation->scratch, options->links[index], 1) || !sdk_is_file(invocation->scratch)) return sdk_error("W5002", "Invalid link input", options->links[index]);
         arguments[count++] = sdk_owned(invocation, "", invocation->scratch);
+    }
+    if (use_linked_runtime) {
+        arguments[count++] = sdk_owned(invocation, "", archive_path);
+#ifdef __APPLE__
+        arguments[count++] = "-Wl,-dead_strip";
+#elif !defined(_WIN32)
+        arguments[count++] = "-Wl,--gc-sections";
+#endif
     }
     for (int index = 0; index < options->library_dir_count; index++) {
         if (!sdk_absolute(invocation->scratch, options->library_dirs[index], 1) || !sdk_is_directory(invocation->scratch)) return sdk_error("W5002", "Invalid library directory", options->library_dirs[index]);

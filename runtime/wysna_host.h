@@ -75,8 +75,8 @@ static WysnaHostContext wysna_host_context = {NULL, 1, false, 0, 0};
 #define wysna_host_error_code (wysna_host_context.error_code)
 #define wysna_host_error_domain (wysna_host_context.error_domain)
 /* Error codes are captured immediately, before cleanup can overwrite errno. */
-static int64_t wysna_host_last_error(void) { return wysna_host_error_code; }
-static int64_t wysna_host_last_error_domain(void) { return wysna_host_error_domain; }
+WYSNA_RT_FN int64_t wysna_host_last_error(void) { return wysna_host_error_code; }
+WYSNA_RT_FN int64_t wysna_host_last_error_domain(void) { return wysna_host_error_domain; }
 static int64_t wysna_host_errno(int code) {
     wysna_host_error_code = code ? code : EIO; wysna_host_error_domain = 1; return -1;
 }
@@ -86,7 +86,7 @@ static WysnaHostEntry* wysna_host_find(void* handle, int kind) {
         if (entry->id == (uintptr_t)handle && entry->kind == kind) return entry;
     return NULL;
 }
-static int64_t wysna_host_close(void* handle) {
+WYSNA_RT_FN int64_t wysna_host_close(void* handle) {
     WysnaHostEntry** slot = &wysna_host_entries;
     while (*slot && (*slot)->id != (uintptr_t)handle) slot = &(*slot)->next;
     if (!*slot) return 0;
@@ -100,16 +100,16 @@ static int64_t wysna_host_close(void* handle) {
     free(entry);
     return status == 0 ? 0 : wysna_host_errno(close_error);
 }
-static WVal wysna_host_owned_pointer(void* address) {
+WYSNA_RT_FN WVal wysna_host_owned_pointer(void* address) {
     return wysna_managed_pointer(address, wysna_host_close);
 }
-static void* wysna_host_borrow(void* address) { return address; }
-static int64_t wysna_host_active_handles(void) {
+WYSNA_RT_FN void* wysna_host_borrow(void* address) { return address; }
+WYSNA_RT_FN int64_t wysna_host_active_handles(void) {
     int64_t count = 0;
     for (WysnaHostEntry* entry = wysna_host_entries; entry; entry = entry->next) count++;
     return count;
 }
-static int64_t wysna_host_active_bytes(void) {
+WYSNA_RT_FN int64_t wysna_host_active_bytes(void) {
     int64_t count = 0;
     for (WysnaHostEntry* entry = wysna_host_entries; entry; entry = entry->next)
         if (entry->kind == 1) count += (int64_t)entry->capacity;
@@ -130,22 +130,22 @@ static void* wysna_host_new(int kind, void* data) {
     entry->next = wysna_host_entries; wysna_host_entries = entry;
     return (void*)entry->id;
 }
-static void* wysna_host_claim(void* raw) {
+WYSNA_RT_FN void* wysna_host_claim(void* raw) {
     for (WysnaHostEntry* entry = wysna_host_entries; entry; entry = entry->next)
         if (entry->kind == 3 && entry->data == raw) return NULL;
     return wysna_host_new(3, raw);
 }
-static int64_t wysna_host_claim_valid(void* handle) { return wysna_host_find(handle, 3) != NULL; }
-static void* wysna_host_buffer_new(void) { return wysna_host_new(1, NULL); }
-static int64_t wysna_host_buffer_size(void* handle) {
+WYSNA_RT_FN int64_t wysna_host_claim_valid(void* handle) { return wysna_host_find(handle, 3) != NULL; }
+WYSNA_RT_FN void* wysna_host_buffer_new(void) { return wysna_host_new(1, NULL); }
+WYSNA_RT_FN int64_t wysna_host_buffer_size(void* handle) {
     WysnaHostEntry* entry = wysna_host_find(handle, 1);
     return entry ? (int64_t)entry->length : -1;
 }
-static int64_t wysna_host_buffer_get(void* handle, int64_t index) {
+WYSNA_RT_FN int64_t wysna_host_buffer_get(void* handle, int64_t index) {
     WysnaHostEntry* entry = wysna_host_find(handle, 1);
     return entry && index >= 0 && (uint64_t)index < entry->length ? ((unsigned char*)entry->data)[index] : -1;
 }
-static int64_t wysna_host_buffer_append(void* handle, int64_t value) {
+WYSNA_RT_FN int64_t wysna_host_buffer_append(void* handle, int64_t value) {
     WysnaHostEntry* entry = wysna_host_find(handle, 1);
     if (!entry || value < 0 || value > 255) return -1;
     if (entry->length == entry->capacity) {
@@ -195,7 +195,7 @@ static wchar_t* wysna_host_wide(const char* text) {
     return wide;
 }
 #endif
-static void* wysna_host_file_open(void* path_handle, int64_t mode) {
+WYSNA_RT_FN void* wysna_host_file_open(void* path_handle, int64_t mode) {
 #ifdef WYSNA_DENY_CAP_FILESYSTEM_READ
     if (mode == 0) {
         (void)path_handle;
@@ -257,7 +257,7 @@ static void* wysna_host_file_open(void* path_handle, int64_t mode) {
     free(path);
     return file ? wysna_host_new(2, file) : NULL;
 }
-static int64_t wysna_host_file_read(void* file_handle, void* buffer_handle, int64_t count) {
+WYSNA_RT_FN int64_t wysna_host_file_read(void* file_handle, void* buffer_handle, int64_t count) {
 #ifdef WYSNA_DENY_CAP_FILESYSTEM_READ
     (void)file_handle; (void)buffer_handle; (void)count;
     wysna_sandbox_deny("filesystem.read");
@@ -276,7 +276,7 @@ static int64_t wysna_host_file_read(void* file_handle, void* buffer_handle, int6
     buffer->length = fread(buffer->data, 1, (size_t)count, (FILE*)file->data);
     return ferror((FILE*)file->data) ? wysna_host_errno(errno) : (int64_t)buffer->length;
 }
-static int64_t wysna_host_file_write(void* file_handle, void* buffer_handle) {
+WYSNA_RT_FN int64_t wysna_host_file_write(void* file_handle, void* buffer_handle) {
 #ifdef WYSNA_DENY_CAP_FILESYSTEM_WRITE
     (void)file_handle; (void)buffer_handle;
     wysna_sandbox_deny("filesystem.write");
@@ -291,9 +291,9 @@ static int64_t wysna_host_file_write(void* file_handle, void* buffer_handle) {
     if (fflush((FILE*)file->data) != 0) return wysna_host_errno(errno);
     return 0;
 }
-static int64_t wysna_host_is_open(void* handle) { return wysna_host_find(handle, 2) != NULL; }
+WYSNA_RT_FN int64_t wysna_host_is_open(void* handle) { return wysna_host_find(handle, 2) != NULL; }
 /* Operations: exists, size, mkdir, remove, rename, is_dir, is_file. Failures return -1. */
-static int64_t wysna_host_fs(void* first, void* second, int64_t operation) {
+WYSNA_RT_FN int64_t wysna_host_fs(void* first, void* second, int64_t operation) {
 #ifdef WYSNA_DENY_CAP_FILESYSTEM_READ
     if (operation == 0 || operation == 1 || operation == 5 || operation == 6) {
         (void)first; (void)second;
@@ -461,12 +461,12 @@ static WysnaCoroTask* wysna_coro_tasks = NULL;
 static int64_t wysna_coro_next_id = WYSNA_CORO_HANDLE_BASE;
 static volatile int wysna_coro_lock = 0;
 
-static int64_t wysna_host_http_async_poll(int64_t transfer_id);
-static int64_t wysna_host_http_multi_poll(int64_t timeout_ms);
-static inline WVal wysna_await(WVal val);
-static inline int64_t wysna_coro_poll(int64_t handle_id);
-static inline int64_t wysna_coro_tick_all(void);
-static inline WVal wysna_coro_clone_result(int64_t handle_id);
+WYSNA_RT_FN int64_t wysna_host_http_async_poll(int64_t transfer_id);
+WYSNA_RT_FN int64_t wysna_host_http_multi_poll(int64_t timeout_ms);
+WYSNA_RT_FN WVal wysna_await(WVal val);
+WYSNA_RT_FN int64_t wysna_coro_poll(int64_t handle_id);
+WYSNA_RT_FN int64_t wysna_coro_tick_all(void);
+WYSNA_RT_FN WVal wysna_coro_clone_result(int64_t handle_id);
 
 static inline int64_t wysna_host_monotonic_ms_internal(void) {
 #ifdef _WIN32
@@ -490,7 +490,7 @@ static inline int64_t wysna_host_monotonic_ms_internal(void) {
 #endif
 }
 
-static inline int64_t wysna_host_monotonic_ms(void) {
+WYSNA_RT_FN int64_t wysna_host_monotonic_ms(void) {
 #ifdef WYSNA_DENY_CAP_CLOCK
     wysna_sandbox_deny("clock");
     return 0;
@@ -512,7 +512,7 @@ static inline void wysna_host_sleep_ms_internal(int64_t ms) {
 #endif
 }
 
-static inline void wysna_host_sleep_ms(int64_t ms) {
+WYSNA_RT_FN void wysna_host_sleep_ms(int64_t ms) {
 #ifdef WYSNA_DENY_CAP_CLOCK
     (void)ms;
     wysna_sandbox_deny("clock");
@@ -623,7 +623,7 @@ static inline bool wysna_spawn_threads_available(void) {
 #endif
 }
 
-static inline int64_t wysna_async_spawn_handle(WVal fn) {
+WYSNA_RT_FN int64_t wysna_async_spawn_handle(WVal fn) {
     wysna_step_tick();
     if (wysna_worker_depth > 0) wysna_runtime_fail("W4003", "Worker callbacks cannot spawn tasks");
     wysna_runtime_context.host_async_cleanup = wysna_async_shutdown;
@@ -641,6 +641,7 @@ static inline int64_t wysna_async_spawn_handle(WVal fn) {
     int64_t task_id = task->id;
     wysna_spinlock_release(&wysna_spawn_lock);
 
+    wysna_enable_multi_threaded();
     wysna_atomic_add_i64(&wysna_runtime_context.active_workers, 1);
     if (wysna_spawn_threads_available()) {
 #if !defined(_WIN32) && !defined(__wasi__)
@@ -661,7 +662,7 @@ static inline int64_t wysna_async_spawn_handle(WVal fn) {
     return task_id;
 }
 
-static inline int64_t wysna_spawn_poll(int64_t handle_id) {
+WYSNA_RT_FN int64_t wysna_spawn_poll(int64_t handle_id) {
     bool is_done = false;
     bool need_join = false;
 #if defined(_WIN32)
@@ -698,7 +699,7 @@ static inline int64_t wysna_spawn_poll(int64_t handle_id) {
     return is_done ? 1 : 0;
 }
 
-static inline int64_t wysna_spawn_pending_count(void) {
+WYSNA_RT_FN int64_t wysna_spawn_pending_count(void) {
     int64_t pending = 0;
     wysna_spinlock_acquire(&wysna_spawn_lock);
     WysnaSpawnTask* cur = wysna_spawn_tasks;
@@ -710,7 +711,7 @@ static inline int64_t wysna_spawn_pending_count(void) {
     return pending;
 }
 
-static inline WVal wysna_spawn_clone_result(int64_t handle_id) {
+WYSNA_RT_FN WVal wysna_spawn_clone_result(int64_t handle_id) {
     for (;;) {
         int64_t st = wysna_spawn_poll(handle_id);
         if (st < 0) {
@@ -729,7 +730,7 @@ static inline WVal wysna_spawn_clone_result(int64_t handle_id) {
     return out;
 }
 
-static inline WVal wysna_spawn_take_option(WVal handle_val, WVal fallback) {
+WYSNA_RT_FN WVal wysna_spawn_take_option(WVal handle_val, WVal fallback) {
     int64_t handle_id = (wysna_tag(handle_val) == W_INT) ? wysna_as_int(handle_val) : 0;
     if (handle_id >= WYSNA_CORO_HANDLE_BASE) {
         return wysna_enum_payload("Option", "Some", wysna_coro_clone_result(handle_id));
@@ -802,7 +803,7 @@ static inline WVal wysna_coro_spawn_impl(
     return wysna_coro_make_task(tid);
 }
 
-static inline WVal wysna_coro_spawn(
+WYSNA_RT_FN WVal wysna_coro_spawn(
     WysnaCoroStepFn step_fn,
     int64_t slot_count,
     int64_t param_count,
@@ -812,7 +813,7 @@ static inline WVal wysna_coro_spawn(
     return wysna_coro_spawn_impl(step_fn, NULL, slot_count, param_count, param_indices, param_vals);
 }
 
-static inline WVal wysna_coro_spawn_out(
+WYSNA_RT_FN WVal wysna_coro_spawn_out(
     WysnaCoroStepOutFn out_step_fn,
     int64_t slot_count,
     int64_t param_count,
@@ -822,7 +823,7 @@ static inline WVal wysna_coro_spawn_out(
     return wysna_coro_spawn_impl(NULL, out_step_fn, slot_count, param_count, param_indices, param_vals);
 }
 
-static inline bool wysna_coro_try_resolve_await(
+WYSNA_RT_FN bool wysna_coro_try_resolve_await(
     WVal* awaited_box,
     int64_t* out_handle,
     WVal* out_immediate
@@ -947,13 +948,13 @@ static inline WysnaCoroTask* wysna_coro_find(int64_t handle_id) {
     return cur;
 }
 
-static inline int64_t wysna_coro_poll(int64_t handle_id) {
+WYSNA_RT_FN int64_t wysna_coro_poll(int64_t handle_id) {
     WysnaCoroTask* task = wysna_coro_find(handle_id);
     if (!task) return -1;
     return wysna_coro_advance_task(task, NULL);
 }
 
-static inline int64_t wysna_coro_tick_all(void) {
+WYSNA_RT_FN int64_t wysna_coro_tick_all(void) {
     int64_t remaining = 0;
     for (;;) {
         bool progressed = false;
@@ -997,7 +998,7 @@ static inline int64_t wysna_coro_tick_all(void) {
     return remaining;
 }
 
-static inline WVal wysna_coro_clone_result(int64_t handle_id) {
+WYSNA_RT_FN WVal wysna_coro_clone_result(int64_t handle_id) {
     for (;;) {
         int64_t st = wysna_coro_poll(handle_id);
         if (st < 0) {
@@ -1012,7 +1013,7 @@ static inline WVal wysna_coro_clone_result(int64_t handle_id) {
     return wysna_clone(task->result);
 }
 
-static inline int64_t wysna_timer_poll_or_create(int64_t transfer_id) {
+WYSNA_RT_FN int64_t wysna_timer_poll_or_create(int64_t transfer_id) {
 #ifdef WYSNA_DENY_CAP_CLOCK
     (void)transfer_id;
     wysna_sandbox_deny("clock");
@@ -1053,7 +1054,7 @@ static inline int64_t wysna_timer_poll_or_create(int64_t transfer_id) {
     return result;
 }
 
-static inline int64_t wysna_timer_next_wait_ms(int64_t* out_pending) {
+WYSNA_RT_FN int64_t wysna_timer_next_wait_ms(int64_t* out_pending) {
     int64_t now = wysna_host_monotonic_ms_internal();
     int64_t pending = 0;
     int64_t min_rem = INT64_MAX;
@@ -1076,7 +1077,7 @@ static inline int64_t wysna_timer_next_wait_ms(int64_t* out_pending) {
     return pending > 0 ? min_rem : 0;
 }
 
-static inline int64_t wysna_timer_multi_poll(int64_t timeout_ms, bool allow_sleep) {
+WYSNA_RT_FN int64_t wysna_timer_multi_poll(int64_t timeout_ms, bool allow_sleep) {
     int64_t coro_pending = wysna_coro_tick_all();
     int64_t timer_pending = 0;
     int64_t min_rem = wysna_timer_next_wait_ms(&timer_pending);
@@ -1275,7 +1276,7 @@ static int wysna_http_forbidden_header(const unsigned char* name, size_t length)
     return 0;
 }
 
-static int64_t wysna_host_http_request(void* url_handle, void* method_handle,
+WYSNA_RT_FN int64_t wysna_host_http_request(void* url_handle, void* method_handle,
         void* request_headers_handle, void* request_body_handle,
         void* response_headers_handle, void* response_body_handle,
         int64_t timeout_ms, int64_t max_response_bytes) {
@@ -1613,7 +1614,7 @@ static void wysna_async_http_free(WysnaAsyncHttpTransfer* t) {
     free(t);
 }
 
-static int64_t wysna_host_http_async_start(void* url_handle, void* method_handle,
+WYSNA_RT_FN int64_t wysna_host_http_async_start(void* url_handle, void* method_handle,
         void* request_headers_handle, void* request_body_handle,
         int64_t timeout_ms, int64_t max_response_bytes) {
 #ifdef WYSNA_DENY_CAP_NETWORK
@@ -1781,7 +1782,7 @@ static int64_t wysna_host_http_async_start(void* url_handle, void* method_handle
     return transfer->id;
 }
 
-static int64_t wysna_host_http_async_poll(int64_t transfer_id) {
+WYSNA_RT_FN int64_t wysna_host_http_async_poll(int64_t transfer_id) {
     if (transfer_id >= WYSNA_CORO_HANDLE_BASE) {
         return wysna_coro_poll(transfer_id);
     }
@@ -1805,7 +1806,7 @@ static int64_t wysna_host_http_async_poll(int64_t transfer_id) {
     return (int64_t)t->done;
 }
 
-static int64_t wysna_host_http_multi_poll(int64_t timeout_ms) {
+WYSNA_RT_FN int64_t wysna_host_http_multi_poll(int64_t timeout_ms) {
     int64_t coro_pending = wysna_coro_tick_all();
     int64_t timer_pending = 0;
     int64_t min_timer_ms = wysna_timer_next_wait_ms(&timer_pending);
@@ -1836,7 +1837,7 @@ static int64_t wysna_host_http_multi_poll(int64_t timeout_ms) {
     return (int64_t)still_running + timer_pending + wysna_spawn_pending_count() + coro_pending;
 }
 
-static int64_t wysna_host_http_async_finish(int64_t transfer_id, void* response_headers_handle, void* response_body_handle) {
+WYSNA_RT_FN int64_t wysna_host_http_async_finish(int64_t transfer_id, void* response_headers_handle, void* response_body_handle) {
 #ifdef WYSNA_DENY_CAP_NETWORK
     (void)transfer_id; (void)response_headers_handle; (void)response_body_handle;
     wysna_sandbox_deny("network");
@@ -1885,7 +1886,7 @@ static int64_t wysna_host_http_async_finish(int64_t transfer_id, void* response_
     return (int64_t)status;
 }
 
-static int64_t wysna_host_http_async_cancel(int64_t transfer_id) {
+WYSNA_RT_FN int64_t wysna_host_http_async_cancel(int64_t transfer_id) {
     WysnaAsyncHttpTransfer** prev = &wysna_async_http_transfers;
     WysnaAsyncHttpTransfer* t = *prev;
     while (t && t->id != transfer_id) {
@@ -1898,7 +1899,7 @@ static int64_t wysna_host_http_async_cancel(int64_t transfer_id) {
     return 1;
 }
 #else
-static int64_t wysna_host_http_async_start(void* u, void* m, void* h, void* b, int64_t t, int64_t max) {
+WYSNA_RT_FN int64_t wysna_host_http_async_start(void* u, void* m, void* h, void* b, int64_t t, int64_t max) {
 #ifdef WYSNA_DENY_CAP_NETWORK
     (void)u; (void)m; (void)h; (void)b; (void)t; (void)max;
     wysna_sandbox_deny("network");
@@ -1908,7 +1909,7 @@ static int64_t wysna_host_http_async_start(void* u, void* m, void* h, void* b, i
     wysna_host_error_code = ENOSYS; wysna_host_error_domain = 1;
     return -2;
 }
-static int64_t wysna_host_http_async_poll(int64_t id) {
+WYSNA_RT_FN int64_t wysna_host_http_async_poll(int64_t id) {
     if (id >= WYSNA_CORO_HANDLE_BASE) {
         return wysna_coro_poll(id);
     }
@@ -1924,10 +1925,10 @@ static int64_t wysna_host_http_async_poll(int64_t id) {
 #endif
     return -1;
 }
-static int64_t wysna_host_http_multi_poll(int64_t t) {
+WYSNA_RT_FN int64_t wysna_host_http_multi_poll(int64_t t) {
     return wysna_timer_multi_poll(t, true);
 }
-static int64_t wysna_host_http_async_finish(int64_t id, void* h, void* b) {
+WYSNA_RT_FN int64_t wysna_host_http_async_finish(int64_t id, void* h, void* b) {
 #ifdef WYSNA_DENY_CAP_NETWORK
     (void)id; (void)h; (void)b;
     wysna_sandbox_deny("network");
@@ -1937,10 +1938,10 @@ static int64_t wysna_host_http_async_finish(int64_t id, void* h, void* b) {
     wysna_host_error_code = ENOSYS; wysna_host_error_domain = 1;
     return -2;
 }
-static int64_t wysna_host_http_async_cancel(int64_t id) { (void)id; return 0; }
+WYSNA_RT_FN int64_t wysna_host_http_async_cancel(int64_t id) { (void)id; return 0; }
 #endif /* WYSNA_HAS_HTTP && !__wasi__ */
 
-static inline WVal wysna_await(WVal val) {
+WYSNA_RT_FN WVal wysna_await(WVal val) {
     uint32_t hi = wysna_hi(val);
     if (hi == WVAL_HI_STRUCT || hi == WVAL_HI_OBJECT) {
         WStructBuf* st = wysna_as_struct(val);
@@ -2073,11 +2074,11 @@ static inline int32_t wysna_group_status(WysnaTaskGroupState* group) {
     return reason;
 }
 
-static inline bool wysna_group_cancelled(void) {
+WYSNA_RT_FN bool wysna_group_cancelled(void) {
     return wysna_current_group && wysna_group_status(wysna_current_group) != WYSNA_GROUP_RUNNING;
 }
 
-static inline bool wysna_cancel_group(void) {
+WYSNA_RT_FN bool wysna_cancel_group(void) {
     WysnaTaskGroupState* group = wysna_current_group;
     return group && wysna_group_status(group) != WYSNA_GROUP_DEADLINE &&
         wysna_group_stop(group, WYSNA_GROUP_CANCELLED) == WYSNA_GROUP_CANCELLED;
@@ -2205,6 +2206,7 @@ static inline WVal wysna_parallel_map_configured(WVal values, WVal transform,
         cursor += span;
     }
 
+    wysna_enable_multi_threaded();
     wysna_atomic_add_i64(&wysna_runtime_context.active_workers, workers);
 #if !defined(_WIN32) && !defined(__wasi__)
     pthread_t tids[4];
@@ -2250,11 +2252,11 @@ static inline WVal wysna_parallel_map_configured(WVal values, WVal transform,
     return result;
 }
 
-static inline WVal wysna_parallel_map(WVal values, WVal transform) {
+WYSNA_RT_FN WVal wysna_parallel_map(WVal values, WVal transform) {
     return wysna_parallel_map_configured(values, transform, 4, NULL);
 }
 
-static inline WVal wysna_run_task_group(WVal values, int64_t limit, int64_t deadline_ms,
+WYSNA_RT_FN WVal wysna_run_task_group(WVal values, int64_t limit, int64_t deadline_ms,
                                         bool fail_fast, WVal transform) {
     int64_t now = wysna_host_monotonic_ms_internal();
     int64_t deadline = INT64_MAX;
@@ -2263,7 +2265,7 @@ static inline WVal wysna_run_task_group(WVal values, int64_t limit, int64_t dead
     return wysna_parallel_map_configured(values, transform, limit, &group);
 }
 
-static inline WVal wysna_parallel_batch(WVal values, int64_t batch_size, WVal transform) {
+WYSNA_RT_FN WVal wysna_parallel_batch(WVal values, int64_t batch_size, WVal transform) {
     wysna_step_tick();
     WListBuf* list = wysna_as_list(values);
     if (!list) {
@@ -2295,7 +2297,7 @@ static inline WVal wysna_parallel_batch(WVal values, int64_t batch_size, WVal tr
     return result;
 }
 
-static inline WVal wysna_parallel_filter(WVal values, WVal predicate) {
+WYSNA_RT_FN WVal wysna_parallel_filter(WVal values, WVal predicate) {
     wysna_step_tick();
     WListBuf* list = wysna_as_list(values);
     if (!list) {

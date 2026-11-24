@@ -140,7 +140,7 @@ fn worker_children(program: CheckedProgram, node: CheckedNode) -> list[int] {
     return children
 }
 fn worker_pure_builtin(name: str) -> bool {
-    return name == "len" or name == "int" or name == "u8" or name == "float" or name == "str" or name == "bytes" or name == "ord" or name == "chr" or name == "slice" or name == "join_strings" or name == "enumerate" or name == "dict_items" or name == "contract_assert" or name == "Some" or name == "Ok" or name == "Err"
+    return name == "len" or name == "int" or name == "u8" or name == "float" or name == "str" or name == "bytes" or name == "ord" or name == "chr" or name == "slice" or name == "join_strings" or name == "enumerate" or name == "dict_items" or name == "__wysna_json_parse" or name == "__wysna_json_parse_int" or name == "contract_assert" or name == "Some" or name == "Ok" or name == "Err"
 }
 fn worker_global(program: CheckedProgram, binding: int, function: CheckedFunction, source: Token, boundary: Token) {
     if binding >= 0 and program.bindings[binding].global and not worker_has(function.captures, binding) {

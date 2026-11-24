@@ -59,7 +59,9 @@ and `fixes`:
 - `fixes` contains SHA-256-guarded byte-range edits (`applicability: "machine"` or
   `"maybe"`). Run `wysna fix --apply --output-format=json-v1 <file.wysna>` before
   spending an LLM repair turn for automatic repair of identifier/field typos,
-  immutable `let` -> `let mut` bindings, and `str(...)` wrapping on `W2001` string concatenation mismatches.
+  immutable `let` -> `let mut` bindings, `str(...)` wrapping on `W2001` string concatenation mismatches,
+  and foreign operator/visibility slips (`&&` -> `and`, binary `||` -> `or`, prefix `!` -> `not`, class-body `pub` -> `public`).
+  Use `wysna api std/csv --output-format=json-v1` (or `wysna skills stdlib`) to confirm module exports such as `csv.parse`, `csv.parse_records`, and `csv.stringify`.
 
 Re-run the check after editing and require a successful result before building.
 
@@ -120,7 +122,7 @@ from std.text use {
 - **Canonical Formatting:** Multiple symbols must be enclosed in braces `{ ... }` with trailing commas; single symbols can be unbraced (`from std.math use sqrt`).
 - **Disambiguation:** If symbol names clash across imported modules, assign local aliases using `as` (`User as DomainUser`).
 - **Bootstrap Namespace Parity:** Selective `from ... use { ... }` imports (including aliases) and whole-module namespace imports (`import "std/json"`) are both supported across Seed and the self-hosted `native-core-v1` compiler.
-- **Self-Healing Autofix (`wysna fix`):** Automatically repairs immutable assignment targets (`W3001`: `let` -> `let mut`), misnamed class constructors (`W3004`: `fn ClassName` -> `fn init`), scalar string concatenations (`W2001`: `+ scalar` -> `+ str(scalar)`), and high-confidence identifier typos (`W1001`). Pass `--include-maybe` to also apply tentative repairs such as appending `?` on `W2001` optional/result mismatches (`T?` / `T ! E`) when the enclosing function allows propagation (whereas supplying a fallback via `?? <default>` remains an explicit domain decision).
+- **Self-Healing Autofix (`wysna fix`):** Automatically repairs immutable assignment targets (`W3001`: `let` -> `let mut`), misnamed class constructors (`W3004`: `fn ClassName` -> `fn init`), scalar string concatenations (`W2001`: `+ scalar` -> `+ str(scalar)`), high-confidence identifier typos (`W1001`), and common foreign syntax (`&&` -> `and`, binary `||` -> `or`, prefix `!` -> `not`, class-body `pub` -> `public`; `else if` is also accepted alongside canonical `elif`). Pass `--include-maybe` to also apply tentative repairs such as appending `?` on `W2001` optional/result mismatches (`T?` / `T ! E`) when the enclosing function allows propagation (whereas supplying a fallback via `?? <default>` remains an explicit domain decision).
 
 ## Execution Quotas, Effect Cassettes, and First-Class Contracts
 

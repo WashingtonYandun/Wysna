@@ -402,6 +402,263 @@ def create_global_environment(stdout: Optional[TextIO] = None,
             raise WysnaRuntimeError(args_list[1].value, code="W4005")
         return WysnaUnit()
 
+    def json_parse_fn(args_list: List[WysnaValue]) -> WysnaValue:
+        if len(args_list) != 6 or not isinstance(args_list[0], WysnaStr):
+            raise WysnaRuntimeError("__wysna_json_parse() expects (str, int, int, int, Value, JsonError)")
+        source = args_list[0].value
+        max_bytes = args_list[1].value
+        max_depth = args_list[2].value
+        max_nodes = args_list[3].value
+        proto_null = args_list[4]
+        proto_err = args_list[5]
+        enum_name = proto_null.enum_name if isinstance(proto_null, WysnaEnumValue) else "Value"
+        err_name = proto_err.struct_name if isinstance(proto_err, WysnaStructInstance) else "JsonError"
+
+        def make_err(offset: int, message: str) -> WysnaErr:
+            return WysnaErr(WysnaStructInstance(
+                err_name,
+                fields={"offset": WysnaInt(offset), "message": WysnaStr(message)},
+            ))
+
+        if max_bytes < 1 or max_bytes > 16777216:
+            return make_err(0, "max_input_bytes must be between 1 and 16777216")
+        if max_depth < 1 or max_depth > 32:
+            return make_err(0, "max_depth must be between 1 and 32")
+        if max_nodes < 1 or max_nodes > 100000:
+            return make_err(0, "max_nodes must be between 1 and 100000")
+
+        if len(source.encode("utf-8")) > max_bytes:
+            total_bytes = 0
+            for idx, ch in enumerate(source):
+                w = len(ch.encode("utf-8"))
+                if total_bytes + w > max_bytes:
+                    return make_err(idx, "maximum JSON input byte limit exceeded")
+                total_bytes += w
+
+        n = len(source)
+        pos = 0
+        depth = 0
+        node_count = 0
+
+        class _JsonFail(Exception):
+            def __init__(self, offset: int, message: str):
+                self.offset = offset
+                self.message = message
+
+        def skip_space() -> None:
+            nonlocal pos
+            while pos < n and source[pos] in (" ", "\t", "\r", "\n"):
+                pos += 1
+
+        def take() -> str:
+            nonlocal pos
+            if pos >= n:
+                return ""
+            ch = source[pos]
+            pos += 1
+            return ch
+
+        def reserve_node() -> None:
+            nonlocal node_count
+            if node_count >= max_nodes:
+                raise _JsonFail(pos, "maximum JSON value node limit exceeded")
+            node_count += 1
+
+        def read_hex4() -> int:
+            val = 0
+            for _ in range(4):
+                ch = take()
+                if not ch or ch not in "0123456789abcdefABCDEF":
+                    raise _JsonFail(pos, "expected four hexadecimal digits")
+                val = val * 16 + int(ch, 16)
+            return val
+
+        def read_string() -> str:
+            nonlocal pos
+            if take() != '"':
+                raise _JsonFail(pos, "expected string")
+            out: List[str] = []
+            while pos < n and source[pos] != '"':
+                ch = take()
+                if ch == "\\":
+                    esc = take()
+                    simple = {'"': '"', "\\": "\\", "/": "/", "b": "\b", "f": "\f", "n": "\n", "r": "\r", "t": "\t"}
+                    if esc in simple:
+                        out.append(simple[esc])
+                    elif esc == "u":
+                        first = read_hex4()
+                        cp = first
+                        if 0xD800 <= first <= 0xDBFF:
+                            if take() != "\\" or take() != "u":
+                                raise _JsonFail(pos, "high surrogate must be followed by a low surrogate")
+                            second = read_hex4()
+                            if second < 0xDC00 or second > 0xDFFF:
+                                raise _JsonFail(pos, "high surrogate must be followed by a low surrogate")
+                            cp = 0x10000 + ((first - 0xD800) << 10) + (second - 0xDC00)
+                        elif 0xDC00 <= first <= 0xDFFF:
+                            raise _JsonFail(pos, "unexpected low surrogate")
+                        out.append(chr(cp))
+                    else:
+                        raise _JsonFail(pos, "invalid string escape")
+                else:
+                    if ord(ch) < 32:
+                        raise _JsonFail(pos, "unescaped control character in string")
+                    out.append(ch)
+            if pos >= n:
+                raise _JsonFail(pos, "unterminated string")
+            pos += 1
+            return "".join(out)
+
+        def read_number() -> WysnaEnumValue:
+            nonlocal pos
+            start = pos
+            if pos < n and source[pos] == "-":
+                pos += 1
+            if pos < n and source[pos] == "0":
+                pos += 1
+                if pos < n and "0" <= source[pos] <= "9":
+                    raise _JsonFail(pos, "leading zero in number")
+            elif pos < n and "1" <= source[pos] <= "9":
+                while pos < n and "0" <= source[pos] <= "9":
+                    pos += 1
+            else:
+                raise _JsonFail(pos, "expected integer part")
+            if pos < n and source[pos] == ".":
+                pos += 1
+                if pos >= n or not ("0" <= source[pos] <= "9"):
+                    raise _JsonFail(pos, "expected digit after decimal point")
+                while pos < n and "0" <= source[pos] <= "9":
+                    pos += 1
+            if pos < n and source[pos] in ("e", "E"):
+                pos += 1
+                if pos < n and source[pos] in ("+", "-"):
+                    pos += 1
+                if pos >= n or not ("0" <= source[pos] <= "9"):
+                    raise _JsonFail(pos, "expected exponent digits")
+                while pos < n and "0" <= source[pos] <= "9":
+                    pos += 1
+            return WysnaEnumValue(enum_name, "Number", [WysnaStr(source[start:pos])])
+
+        def read_array() -> WysnaEnumValue:
+            nonlocal pos, depth
+            pos += 1
+            depth += 1
+            if depth > max_depth:
+                msg = "maximum JSON nesting depth is 32" if max_depth == 32 else "maximum JSON nesting depth limit exceeded"
+                raise _JsonFail(pos, msg)
+            skip_space()
+            items: List[WysnaValue] = []
+            if pos < n and source[pos] == "]":
+                pos += 1
+                depth -= 1
+                return WysnaEnumValue(enum_name, "Array", [WysnaList(elements=items)])
+            while True:
+                items.append(read_value())
+                skip_space()
+                if pos < n and source[pos] == "]":
+                    pos += 1
+                    depth -= 1
+                    return WysnaEnumValue(enum_name, "Array", [WysnaList(elements=items)])
+                if pos >= n or source[pos] != ",":
+                    raise _JsonFail(pos, "expected ',' or ']'")
+                pos += 1
+                skip_space()
+
+        def read_object() -> WysnaEnumValue:
+            nonlocal pos, depth
+            pos += 1
+            depth += 1
+            if depth > max_depth:
+                msg = "maximum JSON nesting depth is 32" if max_depth == 32 else "maximum JSON nesting depth limit exceeded"
+                raise _JsonFail(pos, msg)
+            skip_space()
+            fields: Dict[Any, WysnaValue] = {}
+            if pos < n and source[pos] == "}":
+                pos += 1
+                depth -= 1
+                return WysnaEnumValue(enum_name, "Object", [WysnaDict(pairs=fields)])
+            while True:
+                if pos >= n or source[pos] != '"':
+                    raise _JsonFail(pos, "object key must be a string")
+                key = read_string()
+                skip_space()
+                if take() != ":":
+                    raise _JsonFail(pos, "expected ':' after object key")
+                skip_space()
+                fields[key] = read_value()
+                skip_space()
+                if pos < n and source[pos] == "}":
+                    pos += 1
+                    depth -= 1
+                    return WysnaEnumValue(enum_name, "Object", [WysnaDict(pairs=fields)])
+                if pos >= n or source[pos] != ",":
+                    raise _JsonFail(pos, "expected ',' or '}'")
+                pos += 1
+                skip_space()
+
+        def read_value() -> WysnaValue:
+            nonlocal pos
+            skip_space()
+            if pos >= n:
+                raise _JsonFail(pos, "expected JSON value")
+            cur = source[pos]
+            if cur == '"':
+                reserve_node()
+                return WysnaEnumValue(enum_name, "String", [WysnaStr(read_string())])
+            if cur == "{":
+                reserve_node()
+                return read_object()
+            if cur == "[":
+                reserve_node()
+                return read_array()
+            if cur == "t":
+                reserve_node()
+                if source[pos:pos + 4] != "true":
+                    raise _JsonFail(pos, "invalid literal")
+                pos += 4
+                return WysnaEnumValue(enum_name, "Bool", [WysnaBool(True)])
+            if cur == "f":
+                reserve_node()
+                if source[pos:pos + 5] != "false":
+                    raise _JsonFail(pos, "invalid literal")
+                pos += 5
+                return WysnaEnumValue(enum_name, "Bool", [WysnaBool(False)])
+            if cur == "n":
+                reserve_node()
+                if source[pos:pos + 4] != "null":
+                    raise _JsonFail(pos, "invalid literal")
+                pos += 4
+                return WysnaEnumValue(enum_name, "Null")
+            if cur == "-" or ("0" <= cur <= "9"):
+                reserve_node()
+                return read_number()
+            raise _JsonFail(pos, "expected JSON value")
+
+        try:
+            skip_space()
+            root = read_value()
+            skip_space()
+            if pos != n:
+                raise _JsonFail(pos, "trailing characters after JSON value")
+            return WysnaOk(root)
+        except _JsonFail as exc:
+            return make_err(exc.offset, exc.message)
+
+    def json_parse_int_fn(args_list: List[WysnaValue]) -> WysnaValue:
+        if len(args_list) != 1 or not isinstance(args_list[0], WysnaStr):
+            raise WysnaRuntimeError("__wysna_json_parse_int() expects (str)")
+        text = args_list[0].value.strip(" \t\r\n")
+        if not text:
+            return WysnaErr(WysnaStr("number value must contain one JSON number"))
+        if re.fullmatch(r"-?(?:0|[1-9][0-9]*)", text):
+            val = int(text)
+            if val < -9223372036854775808 or val > 9223372036854775807:
+                return WysnaErr(WysnaStr("integer overflow"))
+            return WysnaOk(WysnaInt(val))
+        if re.fullmatch(r"-?(?:0|[1-9][0-9]*)(?:\.[0-9]+)?(?:[eE][+-]?[0-9]+)?", text):
+            return WysnaErr(WysnaStr("expected JSON integer, found JSON number with a fractional or exponent part"))
+        return WysnaErr(WysnaStr("number value must contain one JSON number"))
+
     def some_fn(args: List[WysnaValue]) -> WysnaValue:
         if len(args) != 1:
             raise WysnaRuntimeError("Some() takes exactly 1 argument")
@@ -447,6 +704,8 @@ def create_global_environment(stdout: Optional[TextIO] = None,
     env.declare("env", WysnaNativeFunction("env", env_fn), is_mut=False)
     env.declare("unix_time", WysnaNativeFunction("unix_time", unix_time_fn), is_mut=False)
     env.declare("__wysna_contract_assert", WysnaNativeFunction("__wysna_contract_assert", contract_assert_fn), is_mut=False)
+    env.declare("__wysna_json_parse", WysnaNativeFunction("__wysna_json_parse", json_parse_fn), is_mut=False)
+    env.declare("__wysna_json_parse_int", WysnaNativeFunction("__wysna_json_parse_int", json_parse_int_fn), is_mut=False)
 
     env.declare("weak", WysnaNativeFunction("weak", weak_fn), is_mut=False)
     env.declare("upgrade", WysnaNativeFunction("upgrade", upgrade_fn), is_mut=False)

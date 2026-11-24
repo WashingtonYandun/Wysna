@@ -1,9 +1,12 @@
 """Closed static annotations preserve execution and diagnose agent mistakes."""
+from contextlib import ExitStack
 from pathlib import Path
 import json
+import os
 import subprocess
 import sys
 import tempfile
+import time
 import unittest
 
 from compiler.Bootstrap import ensure_selfhost_compiler_binary
@@ -237,13 +240,32 @@ fn consumed_recovery() -> int { let value: int ! str = Ok(1); value else err { o
                 {'jsonrpc': '2.0', 'id': 2, 'method': 'shutdown'},
                 {'jsonrpc': '2.0', 'method': 'exit'},
             ])
-            result = subprocess.run([str(self.compiler), 'lsp'], input=stream, capture_output=True, timeout=60)
-            self.assertEqual(result.returncode, 0, result.stderr)
-            messages = _lsp_read_messages(result.stdout)
-            diagnostics = [d for message in messages if message.get('method') == 'textDocument/publishDiagnostics'
-                           for d in message['params']['diagnostics']]
-            self.assertEqual({d['code'] for d in diagnostics}, {'W6004', 'W6005'}, messages)
-            self.assertTrue(all(d['severity'] == 2 for d in diagnostics))
+            environment = dict(os.environ, TMPDIR=directory)
+            with ExitStack() as cleanup:
+                servers = []
+                for _ in range(2):
+                    server = cleanup.enter_context(subprocess.Popen(
+                        [str(self.compiler), 'lsp'], stdin=subprocess.PIPE, stdout=subprocess.PIPE,
+                        stderr=subprocess.PIPE, env=environment))
+                    cleanup.callback(server.kill)
+                    servers.append(server)
+                deadline = time.monotonic() + 10
+                workspaces = set(Path(directory).glob('wysna_lsp_*'))
+                while len(workspaces) < 2 and time.monotonic() < deadline:
+                    time.sleep(0.01)
+                    workspaces = set(Path(directory).glob('wysna_lsp_*'))
+                self.assertEqual(len(workspaces), 2, workspaces)
+                self.assertTrue(all(path.is_dir() for path in workspaces))
+                for server in servers:
+                    output, error = server.communicate(input=stream, timeout=60)
+                    self.assertEqual(server.returncode, 0, error)
+                    messages = _lsp_read_messages(output)
+                    diagnostics = [diagnostic for message in messages
+                                   if message.get('method') == 'textDocument/publishDiagnostics'
+                                   for diagnostic in message['params']['diagnostics']]
+                    self.assertEqual({item['code'] for item in diagnostics}, {'W6004', 'W6005'}, messages)
+                    self.assertTrue(all(item['severity'] == 2 for item in diagnostics))
+                self.assertFalse(any(Path(directory).glob('wysna_lsp_*')))
 
     def test_formatter_roundtrip_and_explain_codes(self):
         from formatter.Formatter import Formatter

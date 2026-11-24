@@ -181,7 +181,7 @@ static inline size_t wysna_unicode_compose(uint32_t* data, size_t length) {
 }
 
 /* form: 0 = NFC, 1 = NFD. Returns 0 on success, -1 for invalid UTF-8 or handles. */
-static inline int64_t wysna_host_unicode_normalize(void* input_handle, int64_t form, void* output_handle) {
+WYSNA_RT_FN int64_t wysna_host_unicode_normalize(void* input_handle, int64_t form, void* output_handle) {
     WysnaHostEntry* input = wysna_host_find(input_handle, 1);
     WysnaHostEntry* output = wysna_host_find(output_handle, 1);
     if (!input || !output || (form != 0 && form != 1)) return -1;

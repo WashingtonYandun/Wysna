@@ -39,7 +39,7 @@ static char* wysna_host_canonical_path_utf8(const char* path) {
     return realpath(path, NULL);
 #endif
 }
-static int64_t wysna_host_fs_canonical(void* path_handle, void* output_handle) {
+WYSNA_RT_FN int64_t wysna_host_fs_canonical(void* path_handle, void* output_handle) {
     wysna_host_error_code = 0; wysna_host_error_domain = 0;
 #if defined(__wasi__)
     (void)path_handle; (void)output_handle; return wysna_host_errno(ENOSYS);

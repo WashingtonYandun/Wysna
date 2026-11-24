@@ -1285,8 +1285,8 @@ fn tool_skills_topic_content(topic: str) -> str {
     if topic == "overview" { return "# Wysna v0.9.0 — Agent-First Native Language & Toolchain\n- Default workflow uses checked static inspection before execution.\n- Memory model: Atomic ARC + Copy-on-Write (`Weak[C]` breaks strong cycles); workers require closed callbacks and privately owned value graphs; classes and opaque handles cannot cross worker boundaries.\n- Error channel: Recoverable typed values `T ! E`; runtime traps terminate execution. Unwrap with `?` or `else err { fallback }`.\n- Core agent loop: `wysna skills` -> `wysna graph` -> `wysna inspect` -> `wysna patch` -> `wysna fix` -> `wysna check`.\n- Topics available: overview, agent-loop, syntax, graph, patch, project-tests, contracts, stdlib." }
     if topic == "patch" { return "# Checked Semantic Patching (`wysna patch`)\n- Dry-run check in memory (default): validates syntax, types, and interface contracts before disk writes.\n- Optimistic locking: pass `--expect-graph-hash graph:...`; stale hashes fail with `[W5005]`.\n- Target classes, interfaces, structs, enums, functions, or `ClassName.method`." }
     if topic == "project-tests" { return "# Pruebas de proyecto para agentes\n1. Lista sin ejecutar: `wysna project test --discover --list --frozen --output-format=json-v1`.\n2. Usa los IDs exactos de result.cases: `--case test:example`; --filter conserva selección por subcadena.\n3. Ejecuta con `--expect-plan-hash <result.plan_hash> --output-format=json-v1 --report-json tests.json --report-junit tests.xml`.\n4. Lee result.cases[].failure_kind, diagnostics y los hashes de stdout/stderr; no interpretes texto de terminal.\n5. W5005 indica plan obsoleto: vuelve a listar. Una suite vacía devuelve 2; una cancelación devuelve 130.\n6. std/test ofrece igualdad genérica, tolerancia flotante, opcionales y fixture_directory(); los fixtures se eliminan después del caso.\nEl hash cubre manifiesto, lock, versión y entradas seleccionadas, no todos los imports. El SDK native-core-v1 ejecuta estos comandos sin Python.\n7. Dependencias: `wysna packages pack --manifest dependency/wysna.toml -o dependency.tar`; adquiere con `packages fetch --manifest wysna.toml --archive dependency.tar --sha256 <pin> --cache <cache>`, agrega con `packages add alias --path vendor/<pin>` y ejecuta `project lock`.\n8. Restaura con `packages restore --cache <cache>` y verifica con `project test --frozen`; todas las operaciones admiten `--output-format=json-v1`, sin hooks ni registro remoto.\n" }
-    if topic == "stdlib" { return "# Standard Library (18 Modules)\n- Data & Text: `std/math`, `std/text`, `std/bytes`, `std/regex`, `std/collections`, `std/json`, `std/csv`, `std/parse`.\n- Systems & I/O: `std/fs`, `std/files`, `std/buffer`, `std/env`, `std/path`, `std/process`, `std/time`.\n- Network, Concurrency & Security: `std/http`, `std/async`, `std/algorithms` (`parallel_map`), `std/crypto`." }
-    if topic == "syntax" { return "# Wysna Canonical Syntax Quick Reference\n- Bindings: `let x = 1` (immutable), `let mut y = 2` (mutable).\n- Functions: `fn add(a: int, b: int) -> int { return a + b }`\n- Cooperative Async: `async fn fetch_id() -> int { ... }`, `let v = await task`.\n- Optionals & Errors: `T?`, `T ! E`, unwrap `?`, recover `expr else err { fallback }`.\n- OOP & Contracts: `interface Drawable { fn draw() -> str }`, `class Rect implements Drawable { fn draw() -> str { ... } }`.\n- Lambdas: `|n: int| => n * n` (capture outer variables by immutable snapshot by design; return updated values for mutable state; classes cannot cross worker boundaries).\n- Canonical forms: `Class(...)`, `None`, `_ =>`, parenthesized tuple patterns.\n- Match patterns: alternatives `1 | 2`, Int64 ranges `0..=10`, nested `Point { x, .. }`; W6003 reports unreachable arms.\n- Static attributes on top-level functions: `@deprecated(\"message\")` (W6004), `@must_use` (W6005); custom typed metadata: `struct AgentTool { name: str }`, `@AgentTool(name: \"lookup\")`; literal str/bool/int fields, no macros or evaluation.\n- Ranges & Loops: `for i in 0..10 { ... }`, inclusive `0..=10`.\n- Non-exhaustive match W2003 includes data.uncovered_pattern_families for checked repairs." }
+    if topic == "stdlib" { return "# Standard Library (18 Modules)\n- Data & Text: `std/math`, `std/text`, `std/bytes`, `std/regex`, `std/collections`, `std/json`, `std/csv` (`parse`, `parse_records`, `stringify`), `std/parse`.\n- Systems & I/O: `std/fs`, `std/files`, `std/buffer`, `std/env`, `std/path`, `std/process`, `std/time`.\n- Network, Concurrency & Security: `std/http`, `std/async`, `std/algorithms` (`parallel_map`), `std/crypto`." }
+    if topic == "syntax" { return "# Wysna Canonical Syntax Quick Reference\n- Bindings: `let x = 1` (immutable), `let mut y = 2` (mutable).\n- Functions: `fn add(a: int, b: int) -> int { return a + b }` (`pub fn` at module level; `public`/`private` inside classes).\n- Control flow & logic: `if c { ... } elif d { ... } else { ... }` (`else if` also accepted); boolean operators are `and`, `or`, `not` (never `&&`, `||`, `!`).\n- Cooperative Async: `async fn fetch_id() -> int { ... }`, `let v = await task`.\n- Optionals & Errors: `T?`, `T ! E`, unwrap `?`, recover `expr else err { fallback }`.\n- OOP & Contracts: `interface Drawable { fn draw() -> str }`, `class Rect implements Drawable { public fn draw() -> str { ... } }`.\n- Lambdas: `|n: int| => n * n` (capture outer variables by immutable snapshot by design; return updated values for mutable state; classes cannot cross worker boundaries).\n- Canonical forms: `Class(...)`, `None`, `_ =>`, parenthesized tuple patterns.\n- Match patterns: alternatives `1 | 2`, Int64 ranges `0..=10`, nested `Point { x, .. }`; W6003 reports unreachable arms.\n- Static attributes on top-level functions: `@deprecated(\"message\")` (W6004), `@must_use` (W6005); custom typed metadata: `struct AgentTool { name: str }`, `@AgentTool(name: \"lookup\")`; literal str/bool/int fields, no macros or evaluation.\n- Ranges & Loops: `for i in 0..10 { ... }`, inclusive `0..=10`.\n- Non-exhaustive match W2003 includes data.uncovered_pattern_families for checked repairs." }
     if topic == "workers" { return "# Workers con propiedad aislada\n- `std/algorithms.parallel_map`, `parallel_filter`, `parallel_batch` y el mapper de `parallel_reduce`, además de `std/async.spawn` y `run_group`, exigen callbacks comprobables.\n- Usa funciones nombradas o lambdas y alias inmutables. Solo escalares, strings y compuestos de valores transferibles; W2014 rechaza clases, interfaces, Weak, handles y datos función.\n- W2015 rechaza globals no capturados, efectos transitivos, FFI, scheduler, callbacks sin resolver y workers anidados. Captura valores explícitamente o pásalos como parámetros.\n- Entradas, capturas y resultados se copian como grafos privados. CoW dentro de cada worker; profundidad máxima de snapshot 256.\n- `parallel_reduce` mapea en paralelo y combina mediante fold izquierdo secuencial. El orden de resultados no promete orden de efectos.\n- `run_group` acota trabajo de CPU y devuelve resultados por índice. Usa `group_cancelled()` en callbacks largos. I/O cooperativo permanece en el scheduler." }
     return ""
 }
@@ -2449,8 +2449,10 @@ fn module_expand(context: ModuleLoader, src: str, path: str, entry: bool) -> int
     let mut names: list[str] = []
     let mut exports: list[str] = []
     let tokens = tokenize(src, canonical)
+    let allow_json_builtins = canonical == module_canonical(module_stdlib_path("std/json"))
     for token in tokens {
         if token.kind == "IDENT" {
+            if allow_json_builtins and (token.val == "__wysna_json_parse" or token.val == "__wysna_json_parse_int") { continue }
             if (len(token.val) >= 8 and slice(token.val, 0, 8) == "__wysna_") or (len(token.val) >= 7 and slice(token.val, 0, 7) == "_WYSNA_") { report_error_at("W1002", token, "reserved compiler namespace") }
         }
     }
@@ -3367,7 +3369,7 @@ fn sem_skip_newlines_before_branch(context: SemanticContext) {
     while sem_is(context, "NEWLINE") { sem_take(context) }
     let mut branch = sem_is(context, "ELIF")
     if sem_is(context, "ELSE") {
-        if context.tokens[context.pos + 1].kind == "LBRACE" or context.tokens[context.pos + 1].kind == "IDENT" and context.tokens[context.pos + 2].kind == "LBRACE" { branch = true }
+        if (context.pos + 1 < len(context.tokens) and context.tokens[context.pos + 1].kind == "IF") or context.tokens[context.pos + 1].kind == "LBRACE" or context.tokens[context.pos + 1].kind == "IDENT" and context.tokens[context.pos + 2].kind == "LBRACE" { branch = true }
     }
     if not branch { context.pos = saved }
 }
@@ -4127,7 +4129,7 @@ fn sem_collect_record(context: SemanticContext, kind: str) {
     context.type_params = previous_type_params
 }
 fn sem_builtin(name: str) -> bool {
-    if name == "u8" { return true }
+    if name == "u8" or name == "__wysna_json_parse" or name == "__wysna_json_parse_int" { return true }
     return name == "join_strings" or name == "print" or name == "eprint" or name == "len" or name == "int" or name == "float" or name == "str" or name == "ord" or name == "chr" or name == "bytes" or name == "slice" or name == "args" or name == "env" or name == "unix_time" or name == "exit" or name == "enumerate" or name == "dict_items" or name == "read_file" or name == "write_file" or name == "Some" or name == "Ok" or name == "Err" or name == "weak" or name == "upgrade" or name == "contract_assert"
 }
 fn sem_call_builtin(context: SemanticContext, name: str, args: list[int], sources: list[Token], discard: bool) -> int {
@@ -4145,6 +4147,7 @@ fn sem_call_builtin(context: SemanticContext, name: str, args: list[int], source
     let mut arity = 1
     if name == "slice" { arity = 3 }
     if name == "write_file" or name == "join_strings" { arity = 2 }
+    if name == "__wysna_json_parse" { arity = 6 }
     if count != arity { sem_error(context, "W2005", "builtin arity: " + name) }
     if name == "join_strings" {
         if count != 2 { sem_error(context, "W2005", "join_strings arity") }
@@ -4224,6 +4227,19 @@ fn sem_call_builtin(context: SemanticContext, name: str, args: list[int], source
     if name == "dict_items" {
         if kind != "dict" { report_error_at("W2001", sem_source_at(context, sources, 0), "dict_items requires dict") }
         return sem_wrap(context, "list", sem_intern(context, "tuple", "", context.types[first].args))
+    }
+    if name == "__wysna_json_parse" {
+        sem_require_at(context, first, context.string_type, "W2001", sem_source_at(context, sources, 0))
+        sem_require_at(context, args[1], context.integer_type, "W2001", sem_source_at(context, sources, 1))
+        sem_require_at(context, args[2], context.integer_type, "W2001", sem_source_at(context, sources, 2))
+        sem_require_at(context, args[3], context.integer_type, "W2001", sem_source_at(context, sources, 3))
+        if sem_kind(context, args[4]) != "enum" { report_error_at("W2001", sem_source_at(context, sources, 4), "__wysna_json_parse requires enum prototype") }
+        if sem_kind(context, args[5]) != "struct" { report_error_at("W2001", sem_source_at(context, sources, 5), "__wysna_json_parse requires struct error prototype") }
+        return sem_intern(context, "result", "", [args[4], args[5]])
+    }
+    if name == "__wysna_json_parse_int" {
+        sem_require_at(context, first, context.string_type, "W2001", sem_source_at(context, sources, 0))
+        return sem_intern(context, "result", "", [context.integer_type, context.string_type])
     }
     sem_error(context, "W1001", "unknown builtin")
     return context.unit_type
@@ -5485,8 +5501,10 @@ fn sem_if(context: SemanticContext, statement: bool) -> SemValue {
         elif not first.terminates and first.type_id != context.unit_type { branch_expected = first.type_id }
     }
     sem_skip_newlines_before_branch(context)
-    while sem_is(context, "ELIF") {
-        sources.append(sem_take(context))
+    while sem_is(context, "ELIF") or (sem_is(context, "ELSE") and context.pos + 1 < len(context.tokens) and context.tokens[context.pos + 1].kind == "IF") {
+        let branch_tok = sem_take(context)
+        if branch_tok.kind == "ELSE" { let _else_if_tok = sem_take(context) }
+        sources.append(branch_tok)
         context.initialized = initial
         context.expected_type = -1
         let condition_source = sem_at(context)
@@ -7343,7 +7361,7 @@ fn worker_children(program: CheckedProgram, node: CheckedNode) -> list[int] {
     return children
 }
 fn worker_pure_builtin(name: str) -> bool {
-    return name == "len" or name == "int" or name == "u8" or name == "float" or name == "str" or name == "bytes" or name == "ord" or name == "chr" or name == "slice" or name == "join_strings" or name == "enumerate" or name == "dict_items" or name == "contract_assert" or name == "Some" or name == "Ok" or name == "Err"
+    return name == "len" or name == "int" or name == "u8" or name == "float" or name == "str" or name == "bytes" or name == "ord" or name == "chr" or name == "slice" or name == "join_strings" or name == "enumerate" or name == "dict_items" or name == "__wysna_json_parse" or name == "__wysna_json_parse_int" or name == "contract_assert" or name == "Some" or name == "Ok" or name == "Err"
 }
 fn worker_global(program: CheckedProgram, binding: int, function: CheckedFunction, source: Token, boundary: Token) {
     if binding >= 0 and program.bindings[binding].global and not worker_has(function.captures, binding) {
@@ -9428,6 +9446,8 @@ fn mir_call(context: MirBuilder, node: CheckedNode) -> int {
     }
     if node.text == "weak" { return mir_op(context, "runtime", returned, arguments, "wysna_builtin_weak_owned", mir_literal_unit(), node.source) }
     if node.text == "contract_assert" or node.text == "__wysna_contract_assert" { return mir_op(context, "runtime", returned, arguments, "wysna_builtin_contract_assert_at", mir_literal_unit(), node.source) }
+    if node.text == "__wysna_json_parse" { return mir_op(context, "runtime", returned, arguments, "wysna_builtin_json_parse", mir_literal_unit(), node.source) }
+    if node.text == "__wysna_json_parse_int" { return mir_op(context, "runtime", returned, arguments, "wysna_builtin_json_parse_int", mir_literal_unit(), node.source) }
     let builtins: list[str] = ["upgrade", "print", "eprint", "int", "u8", "float", "str", "len", "ord", "chr", "slice", "bytes", "args", "env", "unix_time", "join_strings", "enumerate", "dict_items", "read_file", "write_file"]
     for name in builtins { if node.text == name { return mir_op(context, "runtime", returned, arguments, "wysna_builtin_" + name, mir_literal_unit(), node.source) } }
     mir_unsupported(node.source, "builtin call " + node.text)
@@ -9964,6 +9984,17 @@ fn mir_verify_runtime(module: MirModule, operation: MirOperation, slots: list[Mi
     if name == "wysna_builtin_slice" {
         return len(operation.args) == 3 and slots[operation.args[0]].type_id == returned and (returned == 5 or module.types[returned].kind == "list") and slots[operation.args[1]].type_id == 3 and slots[operation.args[2]].type_id == 3
     }
+    if name == "wysna_builtin_json_parse" {
+        if len(operation.args) != 6 or not mir_is_result(module.types, returned) { return false }
+        let a0 = slots[operation.args[0]].type_id
+        let a1 = slots[operation.args[1]].type_id
+        let a2 = slots[operation.args[2]].type_id
+        let a3 = slots[operation.args[3]].type_id
+        let a4 = slots[operation.args[4]].type_id
+        let a5 = slots[operation.args[5]].type_id
+        let channel = module.types[returned].args
+        return a0 == 5 and a1 == 3 and a2 == 3 and a3 == 3 and module.types[a4].kind == "enum" and module.types[a5].kind == "struct" and channel[0] == a4 and channel[1] == a5
+    }
     if len(operation.args) == 1 {
         let argument = operation.args[0]
         let type_ = slots[argument].type_id
@@ -10006,6 +10037,7 @@ fn mir_verify_runtime(module: MirModule, operation: MirOperation, slots: list[Mi
         if name == "wysna_builtin_u8" { return type_ == 3 and mir_is_optional(module.types, returned) and module.types[returned].args[0] == 7 }
         if name == "wysna_builtin_int" { return ((type_ >= 2 and type_ <= 6) or type_ == 7) and returned == 3 }
         if name == "wysna_builtin_float" { return ((type_ >= 2 and type_ <= 6) or type_ == 7) and returned == 4 }
+        if name == "wysna_builtin_json_parse_int" { return type_ == 5 and mir_is_result(module.types, returned) and module.types[returned].args == [3, 5] }
         if name == "wysna_str_trim" or name == "wysna_str_to_lower" or name == "wysna_str_to_upper" { return type_ == 5 and returned == 5 }
         if name == "wysna_await" { return true }
         return false
@@ -13650,9 +13682,21 @@ fn tool_handle_capabilities(args: list[str], json_mode: bool) -> unit {
 # Native Language Server Protocol (LSP 3.17) server backed by the semantic graph and compiler frontend.
 # Shared host externs, buffer helpers, and LspJson live in 01_tool_common.wysna.
 
+fn lsp_create_workspace() -> str {
+    let nonce = diag_uuid4()
+    if nonce == "native" { return "" }
+    let directory = lsp_tmp_dir() + "/wysna_lsp_" + nonce
+    let path = lsp_buf_from_str(directory)
+    let unused = lsp_buf_from_str("")
+    let status = wysna_host_fs(path, unused, 2)
+    wysna_host_close(path)
+    wysna_host_close(unused)
+    return if status == 0 { directory } else { "" }
+}
+
 fn lsp_next_tmp_path(state: LspServerState, prefix: str, ext: str) -> str {
     state.tmp_seq = state.tmp_seq + 1
-    return lsp_tmp_dir() + "/" + prefix + "_" + str(unix_time()) + "_" + str(state.tmp_seq) + ext
+    return state.tmp_dir + "/" + prefix + "_" + str(state.tmp_seq) + ext
 }
 
 fn lsp_send_message(json_body: str) -> unit {
@@ -13874,18 +13918,20 @@ class LspServerState {
     stopping: bool
     eof_reached: bool
     tmp_seq: int
+    tmp_dir: str
     diag_tmp_path: str
     self_exe: str
     stdlib_root: str
     workspace_roots: list[str]
 
-    fn init() {
+    fn init(tmp_dir: str) {
         let d0: list[LspDocument] = []
         this.docs = d0
         this.stopping = false
         this.eof_reached = false
         this.tmp_seq = 1
-        this.diag_tmp_path = lsp_tmp_dir() + "/wysna_lsp_diag_" + str(unix_time()) + "_1.json"
+        this.tmp_dir = tmp_dir
+        this.diag_tmp_path = tmp_dir + "/diagnostics.json"
         this.self_exe = lsp_self_exe_path()
         this.stdlib_root = lsp_stdlib_root_arg()
         let roots: list[str] = []
@@ -14335,6 +14381,7 @@ fn lsp_recheck_dependents(state: LspServerState, exclude_uri: str) -> unit {
 fn lsp_cleanup(state: LspServerState) -> unit {
     lsp_remove_file(state.diag_tmp_path)
     for d in state.docs { lsp_remove_file(d.tmp_path) }
+    lsp_remove_file(state.tmp_dir)
 }
 
 fn lsp_range_offset(src: str, range_: LspJson, endpoint: str) -> int {
@@ -14840,7 +14887,12 @@ fn lsp_dispatch_message(state: LspServerState, msg: LspJson) -> bool {
 }
 
 fn lsp_serve() -> unit {
-    let state = LspServerState()
+    let tmp_dir = lsp_create_workspace()
+    if tmp_dir == "" {
+        lsp_send_message("{\"jsonrpc\":\"2.0\",\"method\":\"window/logMessage\",\"params\":{\"type\":1,\"message\":\"Could not create LSP workspace\"}}")
+        exit(2)
+    }
+    let state = LspServerState(tmp_dir)
     while not state.eof_reached {
         let payload = lsp_read_frame_clean(state)
         if state.eof_reached { break }
@@ -16804,7 +16856,260 @@ fn fix_plan_w3004(src: str, tokens: list[Token], start_byte: int, end_byte: int,
     return out
 }
 
+fn fix_is_ident_char(c: int) -> bool {
+    return (c >= 65 and c <= 90) or (c >= 97 and c <= 122) or (c >= 48 and c <= 57) or c == 95
+}
+
+fn fix_is_digit_char(c: int) -> bool {
+    return c >= 48 and c <= 57
+}
+
+fn fix_is_hws_char(c: int) -> bool {
+    return c == 32 or c == 9
+}
+
+fn fix_is_ws_char(c: int) -> bool {
+    return c == 32 or c == 9 or c == 13 or c == 10
+}
+
+fn fix_binary_left_disallowed(w: str) -> bool {
+    return w == "return" or w == "if" or w == "elif" or w == "else" or w == "while" or w == "for" or w == "match" or w == "and" or w == "or" or w == "not" or w == "in" or w == "let" or w == "mut"
+}
+
+fn fix_unary_bang_left_kw(w: str) -> bool {
+    return w == "if" or w == "elif" or w == "while" or w == "return" or w == "and" or w == "or" or w == "not" or w == "in" or w == "else"
+}
+
+fn fix_pad_binary_keyword(src: str, sc: int, ec: int, kw: str) -> str {
+    let n = len(src)
+    let mut prefix = " "
+    if sc == 0 {
+        prefix = ""
+    } else {
+        let pb = ord(src[sc - 1])
+        if pb == 32 or pb == 9 or pb == 13 or pb == 10 or pb == 40 or pb == 91 or pb == 44 {
+            prefix = ""
+        }
+    }
+    let mut suffix = " "
+    if ec >= n {
+        suffix = ""
+    } else {
+        let nb = ord(src[ec])
+        if nb == 32 or nb == 9 or nb == 13 or nb == 10 or nb == 41 or nb == 93 or nb == 44 or nb == 59 {
+            suffix = ""
+        }
+    }
+    return prefix + kw + suffix
+}
+
+fn fix_is_inside_class_body(src: str, target_char: int) -> bool {
+    let mut brace_stack: list[bool] = []
+    let mut in_string = false
+    let mut escaped = false
+    let mut in_comment = false
+    let mut header_kw = ""
+    let mut i = 0
+    while i < target_char {
+        let c = ord(src[i])
+        if in_comment {
+            if c == 10 { in_comment = false }
+            i = i + 1
+            continue
+        }
+        if in_string {
+            if escaped { escaped = false }
+            elif c == 92 { escaped = true }
+            elif c == 34 { in_string = false }
+            i = i + 1
+            continue
+        }
+        if c == 35 {
+            in_comment = true
+            i = i + 1
+            continue
+        }
+        if c == 34 {
+            in_string = true
+            i = i + 1
+            continue
+        }
+        if fix_is_ident_char(c) {
+            let mut j = i
+            while j < target_char and fix_is_ident_char(ord(src[j])) {
+                j = j + 1
+            }
+            let w = slice(src, i, j)
+            if header_kw == "" and w != "pub" and w != "public" and w != "private" and w != "async" {
+                header_kw = w
+            } elif w == "fn" or w == "struct" or w == "enum" or w == "interface" or w == "class" {
+                header_kw = w
+            }
+            i = j
+            continue
+        }
+        if c == 123 {
+            brace_stack.append(header_kw == "class")
+            header_kw = ""
+        } elif c == 125 {
+            if len(brace_stack) > 0 { let _popped = brace_stack.pop() }
+            header_kw = ""
+        } elif c == 59 or c == 61 {
+            header_kw = ""
+        } elif c == 10 and header_kw != "class" and header_kw != "struct" and header_kw != "enum" and header_kw != "interface" {
+            header_kw = ""
+        }
+        i = i + 1
+    }
+    return len(brace_stack) > 0 and brace_stack[len(brace_stack) - 1]
+}
+
+fn fix_plan_syntax(code: str, src: str, start_byte: int, end_byte: int, msg: str) -> list[FixEdit] {
+    let mut out: list[FixEdit] = []
+    let sc = lsp_char_offset_from_utf8_byte(src, start_byte)
+    let ec = lsp_char_offset_from_utf8_byte(src, end_byte)
+    let n = len(src)
+    if sc < 0 or sc > n { return out }
+
+    if code == "W0001" and sc + 2 <= n and slice(src, sc, sc + 2) == "&&" {
+        let b0 = diag_utf8_byte_at(src, sc)
+        let b1 = diag_utf8_byte_at(src, sc + 2)
+        out.append(FixEdit("W0001", "replace '&&' with 'and'", "machine", b0, b1, fix_pad_binary_keyword(src, sc, sc + 2, "and")))
+        return out
+    }
+
+    if code == "W0006" and (proj_str_contains_substr(msg, "expected LBRACE") or proj_str_contains_substr(msg, "expected RPAREN") or proj_str_contains_substr(msg, "Expected '{'") or proj_str_contains_substr(msg, "Expected ')'")) {
+        let mut pipe_start = -1
+        if sc + 2 <= n and slice(src, sc, sc + 2) == "||" {
+            pipe_start = sc
+        } elif sc >= 1 and sc + 1 <= n and slice(src, sc - 1, sc + 1) == "||" {
+            pipe_start = sc - 1
+        } else {
+            let mut j = sc
+            while j > 0 and fix_is_hws_char(ord(src[j - 1])) {
+                j = j - 1
+            }
+            if j >= 2 and slice(src, j - 2, j) == "||" {
+                pipe_start = j - 2
+            }
+        }
+        if pipe_start >= 0 {
+            let mut left_end = pipe_start
+            while left_end > 0 and fix_is_hws_char(ord(src[left_end - 1])) {
+                left_end = left_end - 1
+            }
+            let mut left_ok = false
+            if left_end > 0 {
+                let lc = ord(src[left_end - 1])
+                if lc == 41 or lc == 93 or lc == 34 or lc == 39 or fix_is_digit_char(lc) {
+                    left_ok = true
+                } elif fix_is_ident_char(lc) {
+                    let mut ws = left_end - 1
+                    while ws > 0 and fix_is_ident_char(ord(src[ws - 1])) {
+                        ws = ws - 1
+                    }
+                    let w = slice(src, ws, left_end)
+                    left_ok = not fix_binary_left_disallowed(w)
+                }
+            }
+            let mut right_start = pipe_start + 2
+            while right_start < n and fix_is_hws_char(ord(src[right_start])) {
+                right_start = right_start + 1
+            }
+            let mut right_ok = right_start < n
+            if right_ok {
+                let rc = ord(src[right_start])
+                if rc == 13 or rc == 10 or rc == 123 or rc == 44 or rc == 41 or rc == 93 {
+                    right_ok = false
+                } elif right_start + 2 <= n {
+                    let r2 = slice(src, right_start, right_start + 2)
+                    if r2 == "=>" or r2 == "->" {
+                        right_ok = false
+                    }
+                }
+            }
+            if left_ok and right_ok {
+                let b0 = diag_utf8_byte_at(src, pipe_start)
+                let b1 = diag_utf8_byte_at(src, pipe_start + 2)
+                out.append(FixEdit("W0006", "replace '||' with 'or'", "machine", b0, b1, fix_pad_binary_keyword(src, pipe_start, pipe_start + 2, "or")))
+                return out
+            }
+        }
+    }
+
+    let mut bang_pos = -1
+    if (code == "W0001" or code == "W0006") and sc + 1 <= n and src[sc] == "!" {
+        if sc + 1 >= n or src[sc + 1] != "=" {
+            bang_pos = sc
+        }
+    } elif code == "W2004" and ec <= n and sc < ec and slice(src, sc, ec) == "return" and proj_str_contains_substr(msg, "found 'unit'") {
+        let mut k = ec
+        while k < n and fix_is_hws_char(ord(src[k])) {
+            k = k + 1
+        }
+        if k < n and src[k] == "!" and (k + 1 >= n or src[k + 1] != "=") {
+            bang_pos = k
+        }
+    }
+    if bang_pos >= 0 {
+        let mut left_end = bang_pos
+        while left_end > 0 and fix_is_ws_char(ord(src[left_end - 1])) {
+            left_end = left_end - 1
+        }
+        let mut prefix_ok = false
+        if left_end == 0 {
+            prefix_ok = true
+        } else {
+            let lc = ord(src[left_end - 1])
+            if lc == 40 or lc == 91 or lc == 123 or lc == 44 or lc == 61 or lc == 58 or lc == 59 or lc == 60 or lc == 43 or lc == 45 or lc == 42 or lc == 47 or lc == 37 or lc == 33 {
+                prefix_ok = true
+            } elif left_end >= 2 and slice(src, left_end - 2, left_end) == "=>" {
+                prefix_ok = true
+            } elif fix_is_ident_char(lc) {
+                let mut ws = left_end - 1
+                while ws > 0 and fix_is_ident_char(ord(src[ws - 1])) {
+                    ws = ws - 1
+                }
+                prefix_ok = fix_unary_bang_left_kw(slice(src, ws, left_end))
+            }
+        }
+        if prefix_ok {
+            let mut prefix = " "
+            if bang_pos == 0 {
+                prefix = ""
+            } else {
+                let pb = ord(src[bang_pos - 1])
+                if fix_is_ws_char(pb) or pb == 40 or pb == 91 or pb == 123 or pb == 44 {
+                    prefix = ""
+                }
+            }
+            let next_ws = bang_pos + 1 < n and fix_is_hws_char(ord(src[bang_pos + 1]))
+            let repl = prefix + (if next_ws { "not" } else { "not " })
+            let b0 = diag_utf8_byte_at(src, bang_pos)
+            let b1 = diag_utf8_byte_at(src, bang_pos + 1)
+            out.append(FixEdit(code, "replace '!' with 'not'", "machine", b0, b1, repl))
+            return out
+        }
+    }
+
+    if code == "W0006" and sc + 3 <= n and slice(src, sc, sc + 3) == "pub" {
+        let left_ok = sc == 0 or not fix_is_ident_char(ord(src[sc - 1]))
+        let right_ok = sc + 3 >= n or not fix_is_ident_char(ord(src[sc + 3]))
+        if left_ok and right_ok and fix_is_inside_class_body(src, sc) {
+            let b0 = diag_utf8_byte_at(src, sc)
+            let b1 = diag_utf8_byte_at(src, sc + 3)
+            out.append(FixEdit("W0006", "replace 'pub' with 'public' inside class", "machine", b0, b1, "public"))
+            return out
+        }
+    }
+
+    return out
+}
+
 fn fix_plan_diagnostic(code: str, src: str, tokens: list[Token], start_byte: int, end_byte: int, msg: str) -> list[FixEdit] {
+    if code == "W0001" or code == "W0006" or code == "W2004" {
+        return fix_plan_syntax(code, src, start_byte, end_byte, msg)
+    }
     if code == "W2001" { return fix_plan_w2001(src, tokens, start_byte, msg) }
     if code == "W1001" { return fix_plan_w1001(src, tokens, start_byte, end_byte, msg) }
     if code == "W3001" { return fix_plan_w3001(src, tokens, start_byte, msg) }
@@ -16813,11 +17118,17 @@ fn fix_plan_diagnostic(code: str, src: str, tokens: list[Token], start_byte: int
 }
 
 fn fix_diagnostic_edits_json(code: str, msg: str, file: str, src: str, line: int, col: int) -> str {
-    if code != "W2001" and code != "W1001" and code != "W3001" and code != "W3004" { return "[]" }
+    let is_syntax = code == "W0001" or code == "W0006" or code == "W2004"
+    if not is_syntax and code != "W2001" and code != "W1001" and code != "W3001" and code != "W3004" { return "[]" }
     let start_char = diag_char_offset_at(src, line, col)
     let end_char = diag_char_span_width(src, start_char)
     if start_char < 0 or end_char <= start_char { return "[]" }
-    let fixes = fix_plan_diagnostic(code, src, tokenize(src, file), diag_utf8_byte_at(src, start_char), diag_utf8_byte_at(src, end_char), msg)
+    let mut fixes: list[FixEdit] = []
+    if is_syntax {
+        fixes = fix_plan_syntax(code, src, diag_utf8_byte_at(src, start_char), diag_utf8_byte_at(src, end_char), msg)
+    } else {
+        fixes = fix_plan_diagnostic(code, src, tokenize(src, file), diag_utf8_byte_at(src, start_char), diag_utf8_byte_at(src, end_char), msg)
+    }
     if len(fixes) == 0 { return "[]" }
     let source = "{\"source_id\":" + diag_json_quote(file) + ",\"source_sha256\":" + diag_json_quote(diag_sha256_hex(src))
     let mut parts: list[str] = []
@@ -16907,7 +17218,7 @@ fn tool_handle_fix(args: list[str], json_mode_in: bool) -> unit {
     let mut last_raw = fix_run_check_subprocess(canonical, current_src, 0)
     let mut pass_num = 0
 
-    while pass_num < 8 {
+    while pass_num < 64 {
         if last_raw == "" { break }
         let parsed = lsp_parse_json(last_raw)
         let d_arr = lsp_json_get(parsed, "diagnostics")
@@ -16918,7 +17229,22 @@ fn tool_handle_fix(args: list[str], json_mode_in: bool) -> unit {
             break
         }
         let cur_sha = diag_sha256_hex(current_src)
-        let tokens = tokenize(current_src, file)
+        let mut has_lexer_fatal = false
+        let mut need_tokens = false
+        for item in d_arr.items {
+            let d_code = lsp_json_str(item, "code", "")
+            let d_msg = lsp_json_str(item, "message", "")
+            if d_code == "W0001" and proj_str_contains_substr(d_msg, "unexpected character") {
+                has_lexer_fatal = true
+            }
+            if d_code == "W2001" or d_code == "W1001" or d_code == "W3001" or d_code == "W3004" {
+                need_tokens = true
+            }
+        }
+        let mut tokens: list[Token] = []
+        if need_tokens and not has_lexer_fatal {
+            tokens = tokenize(current_src, file)
+        }
         let mut cands: list[FixEdit] = []
         for item in d_arr.items {
             let code = lsp_json_str(item, "code", "")

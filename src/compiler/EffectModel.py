@@ -14,6 +14,8 @@ RUNTIME_EFFECTS = {name: frozenset({
     'wysna_builtin_float',
     'wysna_builtin_int',
     'wysna_builtin_join_strings',
+    'wysna_builtin_json_parse',
+    'wysna_builtin_json_parse_int',
     'wysna_builtin_len',
     'wysna_builtin_ord',
     'wysna_builtin_slice',

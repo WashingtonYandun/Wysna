@@ -39,7 +39,7 @@ stdlib = "stdlib"
 
 [tool.setuptools.package-data]
 common = ["agent_contract.json"]
-runtime = ["*.h", "wysna_llvm_runtime.c", "wysna_llvm_operations.def"]
+runtime = ["*.h", "wysna_llvm_runtime.c", "wysna_llvm_operations.def", "wysna_runtime_lib.c"]
 stdlib = ["*.wysna"]
 "common._vendor.tomli" = ["LICENSE", "py.typed"]
 

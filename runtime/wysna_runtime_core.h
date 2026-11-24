@@ -5,6 +5,14 @@
 #error "Include wysna_runtime.h before internal runtime headers"
 #endif
 
+#ifndef WYSNA_RT_FN
+#ifdef WYSNA_RUNTIME_IMPL
+#define WYSNA_RT_FN
+#else
+#define WYSNA_RT_FN static inline
+#endif
+#endif
+
 typedef enum {
     W_UNIT = 0,
     W_NONE,
@@ -198,6 +206,9 @@ typedef struct WysnaRuntimeContext {
     int64_t active_workers;
     volatile int worker_failure_lock;
     bool quotas_initialized;
+    bool telemetry_initialized;
+    bool mem_telemetry_disabled;
+    bool multi_threaded;
     WWeakControl* purple_head;
     int64_t collected_cycles;
     bool collecting_cycles;
@@ -210,13 +221,63 @@ typedef struct WysnaRuntimeContext {
 #endif
 } WysnaRuntimeContext;
 
-static inline int64_t wysna_collect_cycles(void);
+WYSNA_RT_FN int64_t wysna_collect_cycles(void);
 
 #ifdef WYSNA_SHARED_RUNTIME
 extern WysnaRuntimeContext wysna_runtime_context;
 #else
 static WysnaRuntimeContext wysna_runtime_context = {0};
 #endif
+
+#if defined(__GNUC__) || defined(__clang__)
+#define W_LIKELY(x)   __builtin_expect(!!(x), 1)
+#define W_UNLIKELY(x) __builtin_expect(!!(x), 0)
+#else
+#define W_LIKELY(x)   (x)
+#define W_UNLIKELY(x) (x)
+#endif
+
+/* Single-threaded programs skip hardware atomic barriers while active_workers == 0. */
+static inline int32_t wysna_rc_load(const int32_t* ptr) {
+    if (W_LIKELY(!wysna_runtime_context.multi_threaded)) return *ptr;
+    return wysna_atomic_load_i32(ptr);
+}
+static inline void wysna_rc_store(int32_t* ptr, int32_t val) {
+    if (W_LIKELY(!wysna_runtime_context.multi_threaded)) { *ptr = val; return; }
+    wysna_atomic_store_i32(ptr, val);
+}
+static inline int32_t wysna_rc_inc(int32_t* ptr) {
+    if (W_LIKELY(!wysna_runtime_context.multi_threaded)) return ++(*ptr);
+    return wysna_atomic_inc_i32(ptr);
+}
+static inline int32_t wysna_rc_dec(int32_t* ptr) {
+    if (W_LIKELY(!wysna_runtime_context.multi_threaded)) return --(*ptr);
+    return wysna_atomic_dec_i32(ptr);
+}
+static inline bool wysna_rc_dec_if_gt1(int32_t* ptr) {
+    if (W_LIKELY(!wysna_runtime_context.multi_threaded)) {
+        if (*ptr > 1) { --(*ptr); return true; }
+        return false;
+    }
+    return wysna_atomic_dec_if_gt1_i32(ptr);
+}
+static inline uint32_t wysna_rc_load_u32(const uint32_t* ptr) {
+    if (W_LIKELY(!wysna_runtime_context.multi_threaded)) return *ptr;
+    return wysna_atomic_load_u32(ptr);
+}
+static inline void wysna_rc_store_u32(uint32_t* ptr, uint32_t val) {
+    if (W_LIKELY(!wysna_runtime_context.multi_threaded)) { *ptr = val; return; }
+    wysna_atomic_store_u32(ptr, val);
+}
+static inline void wysna_enable_multi_threaded(void) {
+    if (!wysna_runtime_context.multi_threaded) {
+#if defined(__GNUC__) || defined(__clang__)
+        __atomic_store_n(&wysna_runtime_context.multi_threaded, true, __ATOMIC_RELEASE);
+#else
+        wysna_runtime_context.multi_threaded = true;
+#endif
+    }
+}
 /* Diagnostics belong to the executing thread; allocation quotas remain program-wide. */
 #if defined(__wasi__) && !defined(__wasm_threads__)
 #define WYSNA_THREAD_LOCAL
@@ -368,7 +429,7 @@ static inline WYSNA_NORETURN void wysna_panic_exit(int status) {
 #endif
 }
 
-static inline void wysna_runtime_vdiagnostic(bool located, const char* code, const char* format, va_list args) {
+WYSNA_RT_FN void wysna_runtime_vdiagnostic(bool located, const char* code, const char* format, va_list args) {
     bool worker_failure = wysna_worker_depth > 0 || wysna_atomic_add_i64(&wysna_runtime_context.active_workers, 0) > 0;
     if (worker_failure) wysna_spinlock_acquire(&wysna_runtime_context.worker_failure_lock);
     if (located && wysna_g_source_file && wysna_g_source_file[0] != '\0' && wysna_g_source_line > 0) {
@@ -397,7 +458,7 @@ static inline void wysna_runtime_vdiagnostic(bool located, const char* code, con
     }
 }
 
-static inline WYSNA_NORETURN void wysna_runtime_fail(const char* code, const char* format, ...) {
+WYSNA_RT_FN WYSNA_NORETURN void wysna_runtime_fail(const char* code, const char* format, ...) {
     va_list args;
     va_start(args, format);
     wysna_runtime_vdiagnostic(true, code, format, args);
@@ -405,7 +466,7 @@ static inline WYSNA_NORETURN void wysna_runtime_fail(const char* code, const cha
     wysna_panic_exit(1);
 }
 
-static inline WYSNA_NORETURN void wysna_runtime_fail_unlocated(const char* code, const char* format, ...) {
+WYSNA_RT_FN WYSNA_NORETURN void wysna_runtime_fail_unlocated(const char* code, const char* format, ...) {
     va_list args;
     va_start(args, format);
     wysna_runtime_vdiagnostic(false, code, format, args);
@@ -413,7 +474,7 @@ static inline WYSNA_NORETURN void wysna_runtime_fail_unlocated(const char* code,
     wysna_panic_exit(1);
 }
 
-static inline void wysna_sandbox_deny(const char* capability) {
+WYSNA_RT_FN void wysna_sandbox_deny(const char* capability) {
     wysna_runtime_fail("W5006", "Sandbox capability '%s' is denied", capability ? capability : "unknown");
 }
 
@@ -474,6 +535,34 @@ static inline void wysna_cow_reset_stats(void) {
     wysna_g_cow_allocated_bytes = 0;
 }
 
+WYSNA_RT_FN void wysna_runtime_init_telemetry(void) {
+    wysna_runtime_context.telemetry_initialized = true;
+    const char* check_env = getenv("WYSNA_MEM_CHECK");
+    const char* stats_env = getenv("WYSNA_MEM_STATS");
+    bool enabled = (check_env && strcmp(check_env, "1") == 0) ||
+                   (stats_env && strcmp(stats_env, "1") == 0);
+    wysna_runtime_context.mem_telemetry_disabled = !enabled;
+}
+
+static inline void wysna_rc_note_retain(void) {
+    if (W_UNLIKELY(!wysna_runtime_context.mem_telemetry_disabled)) {
+        if (W_LIKELY(!wysna_runtime_context.multi_threaded)) wysna_g_retain_count++;
+        else wysna_atomic_add_i64(&wysna_g_retain_count, 1);
+    }
+}
+
+static inline void wysna_rc_note_release(void) {
+    if (W_UNLIKELY(!wysna_runtime_context.mem_telemetry_disabled)) {
+        if (W_LIKELY(!wysna_runtime_context.multi_threaded)) wysna_g_release_count++;
+        else wysna_atomic_add_i64(&wysna_g_release_count, 1);
+    }
+}
+
+static inline void wysna_cow_add(int64_t* field, int64_t delta) {
+    if (W_LIKELY(!wysna_runtime_context.multi_threaded)) *field += delta;
+    else wysna_atomic_add_i64(field, delta);
+}
+
 /*
  * Logical container allocation tracking for Wysna runtime.
  * NOTE on WYSNA_MEM_CHECK vs ASan/LSan:
@@ -483,14 +572,25 @@ static inline void wysna_cow_reset_stats(void) {
  * Clang/GCC AddressSanitizer and LeakSanitizer (ASan/LSan) in CI and test suites.
  */
 static inline void wysna_mem_on_alloc(void) {
-    wysna_atomic_add_i64(&wysna_g_alloc_count, 1);
-    wysna_atomic_add_i64(&wysna_g_live_objects, 1);
+    if (W_LIKELY(!wysna_runtime_context.multi_threaded)) {
+        wysna_g_alloc_count++;
+        wysna_g_live_objects++;
+    } else {
+        wysna_atomic_add_i64(&wysna_g_alloc_count, 1);
+        wysna_atomic_add_i64(&wysna_g_live_objects, 1);
+    }
 }
 
 static inline void wysna_mem_on_free(void) {
-    wysna_atomic_add_i64(&wysna_g_free_count, 1);
-    int64_t live = wysna_atomic_sub_i64(&wysna_g_live_objects, 1);
-    if (live < 0) {
+    int64_t live;
+    if (W_LIKELY(!wysna_runtime_context.multi_threaded)) {
+        wysna_g_free_count++;
+        live = --wysna_g_live_objects;
+    } else {
+        wysna_atomic_add_i64(&wysna_g_free_count, 1);
+        live = wysna_atomic_sub_i64(&wysna_g_live_objects, 1);
+    }
+    if (W_UNLIKELY(live < 0)) {
         wysna_runtime_fail_unlocated("W4003", "Memory safety violation (live_object_count underflow: %" PRId64 ")", live);
     }
 }
@@ -508,7 +608,7 @@ static inline void wysna_check_retain_count(int32_t rc, const char* op) {
     wysna_check_refcount(rc, op);
 }
 
-static inline void wysna_init_quotas(void) {
+WYSNA_RT_FN void wysna_init_quotas(void) {
     if (wysna_runtime_context.quotas_initialized) return;
     wysna_runtime_context.quotas_initialized = true;
 #ifdef WYSNA_DEFAULT_MAX_STEPS
@@ -546,7 +646,7 @@ static inline void wysna_step_tick(void) {
     }
 }
 
-static inline void wysna_charge_heap_bytes(size_t size) {
+WYSNA_RT_FN void wysna_charge_heap_bytes(size_t size) {
     if (!wysna_runtime_context.quotas_initialized) wysna_init_quotas();
     if (wysna_runtime_context.max_heap_bytes > 0 && size > 0) {
         int64_t allocated = wysna_atomic_add_i64(&wysna_runtime_context.heap_bytes_allocated, (int64_t)size);
@@ -560,7 +660,7 @@ static inline void wysna_charge_heap_bytes(size_t size) {
     }
 }
 
-static inline void* wysna_alloc_safe(size_t size) {
+WYSNA_RT_FN void* wysna_alloc_safe(size_t size) {
     if (size == 0) return NULL;
     wysna_charge_heap_bytes(size);
     void* ptr = malloc(size);
@@ -570,7 +670,7 @@ static inline void* wysna_alloc_safe(size_t size) {
     return ptr;
 }
 
-static inline void* wysna_realloc_safe(void* old_ptr, size_t new_size) {
+WYSNA_RT_FN void* wysna_realloc_safe(void* old_ptr, size_t new_size) {
     if (new_size == 0) {
         free(old_ptr);
         return NULL;
@@ -589,7 +689,7 @@ static inline void* wysna_realloc_safe(void* old_ptr, size_t new_size) {
 #define wysna_g_argv_allocated (wysna_runtime_context.argv_allocated)
 #endif
 
-static inline void wysna_runtime_cleanup_impl(bool verify_live_objects) {
+WYSNA_RT_FN void wysna_runtime_cleanup_impl(bool verify_live_objects) {
 #ifdef _WIN32
     if (wysna_g_argv_allocated && wysna_g_argv) {
         for (int i = 0; i < wysna_g_argc; i++) {
@@ -643,11 +743,11 @@ static inline void wysna_runtime_cleanup_impl(bool verify_live_objects) {
 
 /* Explicit exit ends the process with active frames. Only normal completion can
  * verify that their values have been released. */
-static inline void wysna_runtime_cleanup(void) {
+WYSNA_RT_FN void wysna_runtime_cleanup(void) {
     wysna_runtime_cleanup_impl(true);
 }
 
-static inline void wysna_runtime_cleanup_for_exit(void) {
+WYSNA_RT_FN void wysna_runtime_cleanup_for_exit(void) {
     wysna_runtime_cleanup_impl(false);
 }
 

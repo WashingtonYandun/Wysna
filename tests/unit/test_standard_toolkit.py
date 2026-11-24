@@ -235,6 +235,77 @@ def test_json_differential_against_python_across_four_engines():
                 )
 
 
+def test_json_to_int_and_error_cleanup_across_four_engines():
+    source = '''import "std/json"
+
+fn main() -> unit {
+    let cases = [
+        "0", "-0", "42", "-9223372036854775808", "9223372036854775807",
+        "1.5", "1e3", "9223372036854775808", "-9223372036854775809",
+        "01", "true", "invalid", " 42 "
+    ]
+    for raw in cases {
+        let n = json.to_int(json.Value.Number(raw)) else err {
+            print("ERR", raw, err.offset, err.message)
+            continue
+        }
+        print("OK", raw, n)
+    }
+    let bad_docs = [
+        "[1, 2, [3, invalid]]",
+        "{\\"a\\": 1, \\"b\\": {\\"c\\": [true, \\"unterminated",
+        "{\\"esc\\": \\"\\\\uD83D\\\\uDE00\\", \\"bad\\": \\"\\\\uD800\\"}",
+        "[1, 2, 3]"
+    ]
+    for doc in bad_docs {
+        let _v = json.parse(doc) else err {
+            print("PARSE_ERR", err.offset, err.message)
+            continue
+        }
+        print("PARSE_OK", doc)
+    }
+    let obj = json.parse("{\\"s\\":\\"hi\\",\\"n\\":123,\\"f\\":1.5,\\"b\\":true}") else err {
+        print("OBJ_ERR", err.message)
+        return
+    }
+    print(
+        json.get_str(obj, "s") else _e { "?" },
+        json.get_int(obj, "n") else _e { -1 },
+        json.get_float(obj, "f") else _e { -1.0 },
+        json.get_bool(obj, "b") else _e { false },
+    )
+}
+main()
+'''
+    expected = (
+        "OK 0 0\n"
+        "OK -0 0\n"
+        "OK 42 42\n"
+        "OK -9223372036854775808 -9223372036854775808\n"
+        "OK 9223372036854775807 9223372036854775807\n"
+        "ERR 1.5 1 expected JSON integer, found JSON number with a fractional or exponent part\n"
+        "ERR 1e3 1 expected JSON integer, found JSON number with a fractional or exponent part\n"
+        "ERR 9223372036854775808 18 integer overflow\n"
+        "ERR -9223372036854775809 19 integer overflow\n"
+        "ERR 01 1 leading zero in number\n"
+        "ERR true 0 number value must contain one JSON number\n"
+        "ERR invalid 0 expected JSON value\n"
+        "OK  42  42\n"
+        "PARSE_ERR 11 expected JSON value\n"
+        "PARSE_ERR 40 unterminated string\n"
+        "PARSE_ERR 39 high surrogate must be followed by a low surrogate\n"
+        "PARSE_OK [1, 2, 3]\n"
+        "hi 123 1.5 true\n"
+    )
+    selfhost_bin = ensure_selfhost_compiler_binary(str(ROOT))
+    with tempfile.TemporaryDirectory() as directory:
+        results = [run_engine(engine, source, 'json-to-int-cleanup', selfhost_bin, directory,
+                              sanitize=(os.environ.get('WYSNA_SANITIZE') == '1' or engine == 'hir'))
+                   for engine in ('interpreter', 'ast', 'hir', 'selfhost')]
+        ok, detail = compare(results, expected)
+        assert ok, detail
+
+
 def test_streaming_files_and_filesystem_across_four_engines():
     selfhost_bin = ensure_selfhost_compiler_binary(str(ROOT))
     with tempfile.TemporaryDirectory(prefix='w toolkit é ') as temporary:

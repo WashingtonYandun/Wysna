@@ -1807,9 +1807,17 @@ class Parser:
         elif_branches: List[ElifBranch] = []
         while True:
             self._skip_newlines_before_branch()
-            if not self.match(TokenType.ELIF):
+            if self.match(TokenType.ELIF):
+                e_tok = self.tokens[self.pos - 1]
+            elif (
+                self.check(TokenType.ELSE)
+                and self.pos + 1 < len(self.tokens)
+                and self.tokens[self.pos + 1].type == TokenType.IF
+            ):
+                e_tok = self.advance()
+                self.advance()
+            else:
                 break
-            e_tok = self.tokens[self.pos - 1]
             elif_cond = self.parse_expr(allow_struct_init=False)
             elif_body = self.parse_block()
             elif_branches.append(ElifBranch(condition=elif_cond, body=elif_body, line=e_tok.line, col=e_tok.col))

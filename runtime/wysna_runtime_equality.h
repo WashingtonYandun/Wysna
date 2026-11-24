@@ -32,7 +32,7 @@ static inline void wysna_eq_push(WEqualityPair** items, int32_t* count, int32_t*
 static W_RUNTIME_NOINLINE bool wysna_eq_graph(WVal a, WVal b);
 
 /* Scalar equality must not create the structural comparison work list. */
-static inline bool wysna_eq(WVal a, WVal b) {
+WYSNA_RT_FN bool wysna_eq(WVal a, WVal b) {
     if (a.bits == b.bits && !wysna_is_double(a)) return true;
     WTag ta = wysna_tag(a);
     if (ta == wysna_tag(b)) {
@@ -47,8 +47,8 @@ static inline bool wysna_eq(WVal a, WVal b) {
                 WStringBuf* ob = wysna_str_owner(b);
                 if (oa && ob) {
                     if (oa == ob) return true;
-                    uint32_t ha = wysna_atomic_load_u32(&oa->hash_cache);
-                    uint32_t hb = wysna_atomic_load_u32(&ob->hash_cache);
+                    uint32_t ha = wysna_rc_load_u32(&oa->hash_cache);
+                    uint32_t hb = wysna_rc_load_u32(&ob->hash_cache);
                     if (ha != 0 && hb != 0 && ha != hb) return false;
                 }
                 char sba[7], sbb[7];
@@ -238,7 +238,7 @@ static bool wysna_eq_graph(WVal a, WVal b) {
     return equal;
 }
 
-static inline bool wysna_val64_eq(WVal64 a, WVal64 b) {
+WYSNA_RT_FN bool wysna_val64_eq(WVal64 a, WVal64 b) {
     return wysna_eq(a, b);
 }
 #endif /* WYSNA_RUNTIME_EQUALITY_H */

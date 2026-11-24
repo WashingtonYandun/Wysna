@@ -512,7 +512,260 @@ fn fix_plan_w3004(src: str, tokens: list[Token], start_byte: int, end_byte: int,
     return out
 }
 
+fn fix_is_ident_char(c: int) -> bool {
+    return (c >= 65 and c <= 90) or (c >= 97 and c <= 122) or (c >= 48 and c <= 57) or c == 95
+}
+
+fn fix_is_digit_char(c: int) -> bool {
+    return c >= 48 and c <= 57
+}
+
+fn fix_is_hws_char(c: int) -> bool {
+    return c == 32 or c == 9
+}
+
+fn fix_is_ws_char(c: int) -> bool {
+    return c == 32 or c == 9 or c == 13 or c == 10
+}
+
+fn fix_binary_left_disallowed(w: str) -> bool {
+    return w == "return" or w == "if" or w == "elif" or w == "else" or w == "while" or w == "for" or w == "match" or w == "and" or w == "or" or w == "not" or w == "in" or w == "let" or w == "mut"
+}
+
+fn fix_unary_bang_left_kw(w: str) -> bool {
+    return w == "if" or w == "elif" or w == "while" or w == "return" or w == "and" or w == "or" or w == "not" or w == "in" or w == "else"
+}
+
+fn fix_pad_binary_keyword(src: str, sc: int, ec: int, kw: str) -> str {
+    let n = len(src)
+    let mut prefix = " "
+    if sc == 0 {
+        prefix = ""
+    } else {
+        let pb = ord(src[sc - 1])
+        if pb == 32 or pb == 9 or pb == 13 or pb == 10 or pb == 40 or pb == 91 or pb == 44 {
+            prefix = ""
+        }
+    }
+    let mut suffix = " "
+    if ec >= n {
+        suffix = ""
+    } else {
+        let nb = ord(src[ec])
+        if nb == 32 or nb == 9 or nb == 13 or nb == 10 or nb == 41 or nb == 93 or nb == 44 or nb == 59 {
+            suffix = ""
+        }
+    }
+    return prefix + kw + suffix
+}
+
+fn fix_is_inside_class_body(src: str, target_char: int) -> bool {
+    let mut brace_stack: list[bool] = []
+    let mut in_string = false
+    let mut escaped = false
+    let mut in_comment = false
+    let mut header_kw = ""
+    let mut i = 0
+    while i < target_char {
+        let c = ord(src[i])
+        if in_comment {
+            if c == 10 { in_comment = false }
+            i = i + 1
+            continue
+        }
+        if in_string {
+            if escaped { escaped = false }
+            elif c == 92 { escaped = true }
+            elif c == 34 { in_string = false }
+            i = i + 1
+            continue
+        }
+        if c == 35 {
+            in_comment = true
+            i = i + 1
+            continue
+        }
+        if c == 34 {
+            in_string = true
+            i = i + 1
+            continue
+        }
+        if fix_is_ident_char(c) {
+            let mut j = i
+            while j < target_char and fix_is_ident_char(ord(src[j])) {
+                j = j + 1
+            }
+            let w = slice(src, i, j)
+            if header_kw == "" and w != "pub" and w != "public" and w != "private" and w != "async" {
+                header_kw = w
+            } elif w == "fn" or w == "struct" or w == "enum" or w == "interface" or w == "class" {
+                header_kw = w
+            }
+            i = j
+            continue
+        }
+        if c == 123 {
+            brace_stack.append(header_kw == "class")
+            header_kw = ""
+        } elif c == 125 {
+            if len(brace_stack) > 0 { let _popped = brace_stack.pop() }
+            header_kw = ""
+        } elif c == 59 or c == 61 {
+            header_kw = ""
+        } elif c == 10 and header_kw != "class" and header_kw != "struct" and header_kw != "enum" and header_kw != "interface" {
+            header_kw = ""
+        }
+        i = i + 1
+    }
+    return len(brace_stack) > 0 and brace_stack[len(brace_stack) - 1]
+}
+
+fn fix_plan_syntax(code: str, src: str, start_byte: int, end_byte: int, msg: str) -> list[FixEdit] {
+    let mut out: list[FixEdit] = []
+    let sc = lsp_char_offset_from_utf8_byte(src, start_byte)
+    let ec = lsp_char_offset_from_utf8_byte(src, end_byte)
+    let n = len(src)
+    if sc < 0 or sc > n { return out }
+
+    if code == "W0001" and sc + 2 <= n and slice(src, sc, sc + 2) == "&&" {
+        let b0 = diag_utf8_byte_at(src, sc)
+        let b1 = diag_utf8_byte_at(src, sc + 2)
+        out.append(FixEdit("W0001", "replace '&&' with 'and'", "machine", b0, b1, fix_pad_binary_keyword(src, sc, sc + 2, "and")))
+        return out
+    }
+
+    if code == "W0006" and (proj_str_contains_substr(msg, "expected LBRACE") or proj_str_contains_substr(msg, "expected RPAREN") or proj_str_contains_substr(msg, "Expected '{'") or proj_str_contains_substr(msg, "Expected ')'")) {
+        let mut pipe_start = -1
+        if sc + 2 <= n and slice(src, sc, sc + 2) == "||" {
+            pipe_start = sc
+        } elif sc >= 1 and sc + 1 <= n and slice(src, sc - 1, sc + 1) == "||" {
+            pipe_start = sc - 1
+        } else {
+            let mut j = sc
+            while j > 0 and fix_is_hws_char(ord(src[j - 1])) {
+                j = j - 1
+            }
+            if j >= 2 and slice(src, j - 2, j) == "||" {
+                pipe_start = j - 2
+            }
+        }
+        if pipe_start >= 0 {
+            let mut left_end = pipe_start
+            while left_end > 0 and fix_is_hws_char(ord(src[left_end - 1])) {
+                left_end = left_end - 1
+            }
+            let mut left_ok = false
+            if left_end > 0 {
+                let lc = ord(src[left_end - 1])
+                if lc == 41 or lc == 93 or lc == 34 or lc == 39 or fix_is_digit_char(lc) {
+                    left_ok = true
+                } elif fix_is_ident_char(lc) {
+                    let mut ws = left_end - 1
+                    while ws > 0 and fix_is_ident_char(ord(src[ws - 1])) {
+                        ws = ws - 1
+                    }
+                    let w = slice(src, ws, left_end)
+                    left_ok = not fix_binary_left_disallowed(w)
+                }
+            }
+            let mut right_start = pipe_start + 2
+            while right_start < n and fix_is_hws_char(ord(src[right_start])) {
+                right_start = right_start + 1
+            }
+            let mut right_ok = right_start < n
+            if right_ok {
+                let rc = ord(src[right_start])
+                if rc == 13 or rc == 10 or rc == 123 or rc == 44 or rc == 41 or rc == 93 {
+                    right_ok = false
+                } elif right_start + 2 <= n {
+                    let r2 = slice(src, right_start, right_start + 2)
+                    if r2 == "=>" or r2 == "->" {
+                        right_ok = false
+                    }
+                }
+            }
+            if left_ok and right_ok {
+                let b0 = diag_utf8_byte_at(src, pipe_start)
+                let b1 = diag_utf8_byte_at(src, pipe_start + 2)
+                out.append(FixEdit("W0006", "replace '||' with 'or'", "machine", b0, b1, fix_pad_binary_keyword(src, pipe_start, pipe_start + 2, "or")))
+                return out
+            }
+        }
+    }
+
+    let mut bang_pos = -1
+    if (code == "W0001" or code == "W0006") and sc + 1 <= n and src[sc] == "!" {
+        if sc + 1 >= n or src[sc + 1] != "=" {
+            bang_pos = sc
+        }
+    } elif code == "W2004" and ec <= n and sc < ec and slice(src, sc, ec) == "return" and proj_str_contains_substr(msg, "found 'unit'") {
+        let mut k = ec
+        while k < n and fix_is_hws_char(ord(src[k])) {
+            k = k + 1
+        }
+        if k < n and src[k] == "!" and (k + 1 >= n or src[k + 1] != "=") {
+            bang_pos = k
+        }
+    }
+    if bang_pos >= 0 {
+        let mut left_end = bang_pos
+        while left_end > 0 and fix_is_ws_char(ord(src[left_end - 1])) {
+            left_end = left_end - 1
+        }
+        let mut prefix_ok = false
+        if left_end == 0 {
+            prefix_ok = true
+        } else {
+            let lc = ord(src[left_end - 1])
+            if lc == 40 or lc == 91 or lc == 123 or lc == 44 or lc == 61 or lc == 58 or lc == 59 or lc == 60 or lc == 43 or lc == 45 or lc == 42 or lc == 47 or lc == 37 or lc == 33 {
+                prefix_ok = true
+            } elif left_end >= 2 and slice(src, left_end - 2, left_end) == "=>" {
+                prefix_ok = true
+            } elif fix_is_ident_char(lc) {
+                let mut ws = left_end - 1
+                while ws > 0 and fix_is_ident_char(ord(src[ws - 1])) {
+                    ws = ws - 1
+                }
+                prefix_ok = fix_unary_bang_left_kw(slice(src, ws, left_end))
+            }
+        }
+        if prefix_ok {
+            let mut prefix = " "
+            if bang_pos == 0 {
+                prefix = ""
+            } else {
+                let pb = ord(src[bang_pos - 1])
+                if fix_is_ws_char(pb) or pb == 40 or pb == 91 or pb == 123 or pb == 44 {
+                    prefix = ""
+                }
+            }
+            let next_ws = bang_pos + 1 < n and fix_is_hws_char(ord(src[bang_pos + 1]))
+            let repl = prefix + (if next_ws { "not" } else { "not " })
+            let b0 = diag_utf8_byte_at(src, bang_pos)
+            let b1 = diag_utf8_byte_at(src, bang_pos + 1)
+            out.append(FixEdit(code, "replace '!' with 'not'", "machine", b0, b1, repl))
+            return out
+        }
+    }
+
+    if code == "W0006" and sc + 3 <= n and slice(src, sc, sc + 3) == "pub" {
+        let left_ok = sc == 0 or not fix_is_ident_char(ord(src[sc - 1]))
+        let right_ok = sc + 3 >= n or not fix_is_ident_char(ord(src[sc + 3]))
+        if left_ok and right_ok and fix_is_inside_class_body(src, sc) {
+            let b0 = diag_utf8_byte_at(src, sc)
+            let b1 = diag_utf8_byte_at(src, sc + 3)
+            out.append(FixEdit("W0006", "replace 'pub' with 'public' inside class", "machine", b0, b1, "public"))
+            return out
+        }
+    }
+
+    return out
+}
+
 fn fix_plan_diagnostic(code: str, src: str, tokens: list[Token], start_byte: int, end_byte: int, msg: str) -> list[FixEdit] {
+    if code == "W0001" or code == "W0006" or code == "W2004" {
+        return fix_plan_syntax(code, src, start_byte, end_byte, msg)
+    }
     if code == "W2001" { return fix_plan_w2001(src, tokens, start_byte, msg) }
     if code == "W1001" { return fix_plan_w1001(src, tokens, start_byte, end_byte, msg) }
     if code == "W3001" { return fix_plan_w3001(src, tokens, start_byte, msg) }
@@ -521,11 +774,17 @@ fn fix_plan_diagnostic(code: str, src: str, tokens: list[Token], start_byte: int
 }
 
 fn fix_diagnostic_edits_json(code: str, msg: str, file: str, src: str, line: int, col: int) -> str {
-    if code != "W2001" and code != "W1001" and code != "W3001" and code != "W3004" { return "[]" }
+    let is_syntax = code == "W0001" or code == "W0006" or code == "W2004"
+    if not is_syntax and code != "W2001" and code != "W1001" and code != "W3001" and code != "W3004" { return "[]" }
     let start_char = diag_char_offset_at(src, line, col)
     let end_char = diag_char_span_width(src, start_char)
     if start_char < 0 or end_char <= start_char { return "[]" }
-    let fixes = fix_plan_diagnostic(code, src, tokenize(src, file), diag_utf8_byte_at(src, start_char), diag_utf8_byte_at(src, end_char), msg)
+    let mut fixes: list[FixEdit] = []
+    if is_syntax {
+        fixes = fix_plan_syntax(code, src, diag_utf8_byte_at(src, start_char), diag_utf8_byte_at(src, end_char), msg)
+    } else {
+        fixes = fix_plan_diagnostic(code, src, tokenize(src, file), diag_utf8_byte_at(src, start_char), diag_utf8_byte_at(src, end_char), msg)
+    }
     if len(fixes) == 0 { return "[]" }
     let source = "{\"source_id\":" + diag_json_quote(file) + ",\"source_sha256\":" + diag_json_quote(diag_sha256_hex(src))
     let mut parts: list[str] = []
@@ -615,7 +874,7 @@ fn tool_handle_fix(args: list[str], json_mode_in: bool) -> unit {
     let mut last_raw = fix_run_check_subprocess(canonical, current_src, 0)
     let mut pass_num = 0
 
-    while pass_num < 8 {
+    while pass_num < 64 {
         if last_raw == "" { break }
         let parsed = lsp_parse_json(last_raw)
         let d_arr = lsp_json_get(parsed, "diagnostics")
@@ -626,7 +885,22 @@ fn tool_handle_fix(args: list[str], json_mode_in: bool) -> unit {
             break
         }
         let cur_sha = diag_sha256_hex(current_src)
-        let tokens = tokenize(current_src, file)
+        let mut has_lexer_fatal = false
+        let mut need_tokens = false
+        for item in d_arr.items {
+            let d_code = lsp_json_str(item, "code", "")
+            let d_msg = lsp_json_str(item, "message", "")
+            if d_code == "W0001" and proj_str_contains_substr(d_msg, "unexpected character") {
+                has_lexer_fatal = true
+            }
+            if d_code == "W2001" or d_code == "W1001" or d_code == "W3001" or d_code == "W3004" {
+                need_tokens = true
+            }
+        }
+        let mut tokens: list[Token] = []
+        if need_tokens and not has_lexer_fatal {
+            tokens = tokenize(current_src, file)
+        }
         let mut cands: list[FixEdit] = []
         for item in d_arr.items {
             let code = lsp_json_str(item, "code", "")

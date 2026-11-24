@@ -10,7 +10,7 @@ from node import NodeType as A
 
 PURE_BUILTINS = frozenset(('len', 'int', 'float', 'str', 'bytes', 'ord', 'chr',
     'slice', 'join_strings', 'enumerate', 'dict_items', 'u8', 'assert', 'contract_assert',
-    '__wysna_contract_assert', 'Some', 'Ok', 'Err'))
+    '__wysna_contract_assert', '__wysna_json_parse', '__wysna_json_parse_int', 'Some', 'Ok', 'Err'))
 WORKER_ARGUMENTS = {'parallel_map': 1, 'parallel_filter': 1, 'parallel_batch': 2,
                     'parallel_reduce': 2, 'spawn': 0, '_spawn_handle': 0,
                     'run_group': 4, '_run_task_group': 4}

@@ -87,14 +87,18 @@ static inline WVal wysna_int_inline(int64_t x) {
     return wysna_make_hi(WVAL_HI_INT, (uint64_t)x);
 }
 
-static inline WVal wysna_int(int64_t x) {
-    if (wysna_int_fits_48(x)) return wysna_int_inline(x);
+WYSNA_RT_FN WVal wysna_int_box(int64_t x) {
     WIntBox* box = (WIntBox*)wysna_alloc_safe(sizeof(WIntBox));
     box->kind = W_INT;
     box->refcount = 1;
     box->value = x;
     wysna_mem_on_alloc();
     return wysna_make_hi_ptr(WVAL_HI_EXT, box);
+}
+
+static inline WVal wysna_int(int64_t x) {
+    if (W_LIKELY(wysna_int_fits_48(x))) return wysna_int_inline(x);
+    return wysna_int_box(x);
 }
 
 static inline WVal wysna_int_borrow_finish(WIntBox* stack_box, int64_t x) {
@@ -118,7 +122,7 @@ static inline WVal wysna_float(double x) {
     return v;
 }
 
-static inline WVal wysna_pointer(void* pointer) {
+WYSNA_RT_FN WVal wysna_pointer(void* pointer) {
     uint64_t addr = (uint64_t)(uintptr_t)pointer;
     if ((addr & ~WVAL_RAW_PTR_MASK) != 0) {
         wysna_runtime_fail("W4003", "Opaque pointer exceeds 47-bit tagged space");
@@ -129,16 +133,19 @@ static inline WVal wysna_pointer(void* pointer) {
 }
 
 /* Readers / Extractors */
+WYSNA_RT_FN int64_t wysna_as_int_boxed(WVal v) {
+    const WIntBox* box = (const WIntBox*)(uintptr_t)wysna_payload(v);
+    if (box && box->kind == W_INT) return box->value;
+    return 0;
+}
+
 static inline int64_t wysna_as_int(WVal v) {
     uint32_t hi = wysna_hi(v);
-    if (hi == WVAL_HI_INT) {
+    if (W_LIKELY(hi == WVAL_HI_INT)) {
         uint64_t raw = wysna_payload(v);
         return (int64_t)((raw ^ UINT64_C(0x0000800000000000)) - UINT64_C(0x0000800000000000));
     }
-    if (hi == WVAL_HI_EXT) {
-        const WIntBox* box = (const WIntBox*)(uintptr_t)wysna_payload(v);
-        if (box && box->kind == W_INT) return box->value;
-    }
+    if (hi == WVAL_HI_EXT) return wysna_as_int_boxed(v);
     return 0;
 }
 
@@ -150,7 +157,7 @@ static inline double wysna_as_float(WVal v) {
     return d;
 }
 
-static inline uint8_t wysna_as_u8(WVal value) {
+WYSNA_RT_FN uint8_t wysna_as_u8(WVal value) {
     if (wysna_tag(value) != W_INT) wysna_runtime_fail("W4003", "Expected a u8 value");
     int64_t number = wysna_as_int(value);
     if (number < 0 || number > UINT8_MAX) wysna_runtime_fail("W4003", "Value is outside u8 range");
@@ -233,7 +240,7 @@ static inline void* wysna_as_pointer(WVal v) {
     return owner ? owner->address : NULL;
 }
 
-static inline void wysna_set_vtable(WVal obj, const WClassVTable* table) {
+WYSNA_RT_FN void wysna_set_vtable(WVal obj, const WClassVTable* table) {
     if (wysna_hi(obj) == WVAL_HI_OBJECT) {
         WStructBuf* st = (WStructBuf*)(uintptr_t)wysna_payload(obj);
         if (st) st->vtable = table;
@@ -253,7 +260,7 @@ static inline bool wysna_is_ok(WVal v) {
     return wysna_hi(v) == WVAL_HI_OK;
 }
 
-static inline bool wysna_value_is_error_type(WVal value, const char* kind, const char* name) {
+WYSNA_RT_FN bool wysna_value_is_error_type(WVal value, const char* kind, const char* name) {
     WTag tag = wysna_tag(value);
     if (strcmp(kind, "int") == 0) return tag == W_INT;
     if (strcmp(kind, "float") == 0) return tag == W_FLOAT;
@@ -274,7 +281,7 @@ static inline bool wysna_value_is_error_type(WVal value, const char* kind, const
     return false;
 }
 
-static inline WVal wysna_virtual_call(WVal receiver, int32_t slot, int32_t argc, const WVal* argv) {
+WYSNA_RT_FN WVal wysna_virtual_call(WVal receiver, int32_t slot, int32_t argc, const WVal* argv) {
     WStructBuf* st = wysna_hi(receiver) == WVAL_HI_OBJECT ? wysna_as_struct(receiver) : NULL;
     const WClassVTable* table = st ? st->vtable : NULL;
     if (!table || slot < 0 || slot >= table->count || !table->methods[slot]) {
@@ -283,7 +290,7 @@ static inline WVal wysna_virtual_call(WVal receiver, int32_t slot, int32_t argc,
     return table->methods[slot](receiver, argc, argv);
 }
 
-static inline int32_t wysna_ffi_int32(WVal value) {
+WYSNA_RT_FN int32_t wysna_ffi_int32(WVal value) {
     if (wysna_tag(value) != W_INT) {
         wysna_runtime_fail_unlocated("W4003", "int32 FFI argument out of range");
     }
@@ -373,7 +380,7 @@ static inline const char* wysna_str_bytes(WVal v, char scratch[7], size_t* out_l
     return "";
 }
 
-static inline WVal wysna_str_n(const char* s, size_t length) {
+WYSNA_RT_FN WVal wysna_str_n(const char* s, size_t length) {
     if (!s) length = 0;
     if (length <= 6) return wysna_sso_from_n(s ? s : "", length);
     if (memchr(s, '\0', length) != NULL || s[length] != '\0') {
@@ -382,14 +389,14 @@ static inline WVal wysna_str_n(const char* s, size_t length) {
     return wysna_make_hi_ptr(WVAL_HI_CSTR, s);
 }
 
-static inline WVal wysna_copy_str_n(const char* data, size_t length);
+WYSNA_RT_FN WVal wysna_copy_str_n(const char* data, size_t length);
 
-static inline WVal wysna_literal_str_n(WStringLiteral* literal, const char* data, size_t length) {
+WYSNA_RT_FN WVal wysna_literal_str_n(WStringLiteral* literal, const char* data, size_t length) {
     if (length <= 6) return wysna_sso_from_n(data ? data : "", length);
     /* Literal index caches belong to the main thread, never to a worker graph. */
     if (wysna_worker_depth > 0) return wysna_copy_str_n(data, length);
-    if (wysna_atomic_load_i32(&literal->buffer.refcount) == 0) {
-        wysna_spinlock_acquire(&wysna_runtime_context.runtime_lock);
+    if (wysna_rc_load(&literal->buffer.refcount) == 0) {
+        if (wysna_runtime_context.multi_threaded) wysna_spinlock_acquire(&wysna_runtime_context.runtime_lock);
         if (literal->buffer.refcount == 0) {
             literal->buffer.hash_cache = 0;
             literal->buffer.byte_length = length;
@@ -397,26 +404,26 @@ static inline WVal wysna_literal_str_n(WStringLiteral* literal, const char* data
             literal->buffer.data = (char*)data;
             literal->next = wysna_g_string_literals;
             wysna_g_string_literals = literal;
-            wysna_atomic_store_i32(&literal->buffer.refcount, -1); /* Immortal data and descriptor. */
+            wysna_rc_store(&literal->buffer.refcount, -1); /* Immortal data and descriptor. */
         }
-        wysna_spinlock_release(&wysna_runtime_context.runtime_lock);
+        if (wysna_runtime_context.multi_threaded) wysna_spinlock_release(&wysna_runtime_context.runtime_lock);
     }
     return wysna_make_hi_ptr(WVAL_HI_STR_PTR, &literal->buffer);
 }
 
-static inline WVal wysna_str(const char* s) {
+WYSNA_RT_FN WVal wysna_str(const char* s) {
     return wysna_str_n(s, s ? strlen(s) : 0);
 }
 
 /* Single ASCII codepoints pack directly into 1-byte SSO with zero allocations. */
-static inline WVal wysna_ascii_string(uint8_t codepoint) {
+WYSNA_RT_FN WVal wysna_ascii_string(uint8_t codepoint) {
     if (codepoint >= 128) wysna_runtime_fail("W4003", "ASCII scalar out of bounds");
     char c = (char)codepoint;
     return wysna_sso_from_n(&c, 1);
 }
 
 /* Takes ownership of a terminated buffer; <=6B promotes to SSO and frees input buffer immediately. */
-static inline WVal wysna_owned_str_n(char* data, size_t length) {
+WYSNA_RT_FN WVal wysna_owned_str_n(char* data, size_t length) {
     if (length <= 6) {
         WVal sso = wysna_sso_from_n(data ? data : "", length);
         free(data);
@@ -433,11 +440,11 @@ static inline WVal wysna_owned_str_n(char* data, size_t length) {
     return wysna_make_hi_ptr(WVAL_HI_STR_PTR, buffer);
 }
 
-static inline WVal wysna_owned_str(char* data) {
+WYSNA_RT_FN WVal wysna_owned_str(char* data) {
     return wysna_owned_str_n(data, strlen(data));
 }
 
-static inline WVal wysna_copy_str(const char* data) {
+WYSNA_RT_FN WVal wysna_copy_str(const char* data) {
     if (!data || *data == '\0') return wysna_sso_from_n("", 0);
     size_t length = strlen(data);
     if (length <= 6) return wysna_sso_from_n(data, length);
@@ -446,10 +453,10 @@ static inline WVal wysna_copy_str(const char* data) {
     return wysna_owned_str_n(copy, length);
 }
 
-static inline WVal wysna_ok(WVal inner);
-static inline WVal wysna_err(WVal inner);
+WYSNA_RT_FN WVal wysna_ok(WVal inner);
+WYSNA_RT_FN WVal wysna_err(WVal inner);
 
-static inline bool wysna_builtin_name(const char* name, const char* base) {
+WYSNA_RT_FN bool wysna_builtin_name(const char* name, const char* base) {
     if (strcmp(name, base) == 0) return true;
     const char* p1 = strstr(name, "__");
     const char* p2 = strstr(base, "__");
@@ -463,23 +470,23 @@ static inline bool wysna_builtin_name(const char* name, const char* base) {
     return false;
 }
 
-static inline WVal wysna_enum_literal(WEnumBuf* literal, const char* enum_name, const char* variant) {
+WYSNA_RT_FN WVal wysna_enum_literal(WEnumBuf* literal, const char* enum_name, const char* variant) {
     if (wysna_builtin_name(enum_name, "Option") && strcmp(variant, "None") == 0) return wysna_none();
-    if (wysna_atomic_load_i32(&literal->refcount) == 0) {
-        wysna_spinlock_acquire(&wysna_runtime_context.runtime_lock);
+    if (wysna_rc_load(&literal->refcount) == 0) {
+        if (wysna_runtime_context.multi_threaded) wysna_spinlock_acquire(&wysna_runtime_context.runtime_lock);
         if (literal->refcount == 0) {
             literal->has_payload = false;
             literal->enum_name = wysna_builtin_name(enum_name, "Option") ? "Option" : enum_name;
             literal->variant = variant;
             literal->payload = wysna_unit();
-            wysna_atomic_store_i32(&literal->refcount, -1);
+            wysna_rc_store(&literal->refcount, -1);
         }
-        wysna_spinlock_release(&wysna_runtime_context.runtime_lock);
+        if (wysna_runtime_context.multi_threaded) wysna_spinlock_release(&wysna_runtime_context.runtime_lock);
     }
     return wysna_make_hi_ptr(WVAL_HI_ENUM, literal);
 }
 
-static inline WVal wysna_enum(const char* enum_name, const char* variant) {
+WYSNA_RT_FN WVal wysna_enum(const char* enum_name, const char* variant) {
     if (wysna_builtin_name(enum_name, "Option") && strcmp(variant, "None") == 0) return wysna_none();
     WEnumBuf* en = (WEnumBuf*)wysna_alloc_safe(sizeof(WEnumBuf));
     en->refcount = 1;
@@ -491,7 +498,7 @@ static inline WVal wysna_enum(const char* enum_name, const char* variant) {
     return wysna_make_hi_ptr(WVAL_HI_ENUM, en);
 }
 
-static inline WVal wysna_enum_payload(const char* enum_name, const char* variant, WVal payload) {
+WYSNA_RT_FN WVal wysna_enum_payload(const char* enum_name, const char* variant, WVal payload) {
     if (wysna_builtin_name(enum_name, "Result")) {
         if (strcmp(variant, "Ok") == 0) return wysna_ok(payload);
         if (strcmp(variant, "Err") == 0) return wysna_err(payload);
@@ -506,7 +513,7 @@ static inline WVal wysna_enum_payload(const char* enum_name, const char* variant
     return wysna_make_hi_ptr(WVAL_HI_ENUM, en);
 }
 
-static inline WVal wysna_make_box(uint64_t hi, WVal inner) {
+WYSNA_RT_FN WVal wysna_make_box(uint64_t hi, WVal inner) {
     WBoxBuf* b = (WBoxBuf*)wysna_alloc_safe(sizeof(WBoxBuf));
     b->refcount = 1;
     b->val = inner;
@@ -514,24 +521,24 @@ static inline WVal wysna_make_box(uint64_t hi, WVal inner) {
     return wysna_make_hi_ptr(hi, b);
 }
 
-static inline WVal wysna_ok(WVal inner) {
+WYSNA_RT_FN WVal wysna_ok(WVal inner) {
     return wysna_make_box(WVAL_HI_OK, inner);
 }
 
-static inline WVal wysna_err(WVal inner) {
+WYSNA_RT_FN WVal wysna_err(WVal inner) {
     return wysna_make_box(WVAL_HI_ERR, inner);
 }
 
-static inline WVal wysna_wrap_result(WVal v, const char* err_type) {
+WYSNA_RT_FN WVal wysna_wrap_result(WVal v, const char* err_type) {
     if (wysna_is_ok(v) || wysna_is_err(v)) return v;
     (void)err_type;
     return wysna_ok(v);
 }
 
-static WVal wysna_discard_result_value(WVal value);
+WYSNA_RT_FN WVal wysna_discard_result_value(WVal value);
 
 /* Internal resource owners carry only a trusted host closer, never user code. */
-static WVal wysna_managed_pointer(void* address, int64_t (*close)(void*)) {
+WYSNA_RT_FN WVal wysna_managed_pointer(void* address, int64_t (*close)(void*)) {
     if (!address) return wysna_pointer(NULL);
     WPointerOwner* owner = (WPointerOwner*)wysna_alloc_safe(sizeof(WPointerOwner));
     owner->kind = W_POINTER;
