@@ -73,20 +73,28 @@ TOOLS = [
          "symbol": {"type": "string", "description": "Optional symbol name or node ID filter."},
          "relation": {"type": "string", "description": "Optional relation filter: implements|hierarchy|usages|callers|callees|impact."}}}},
     {"name": "wysna_inspect",
-     "description": "Surgical, token-efficient symbol source slice, contract, effects, and dependency signatures.",
+     "description": "Surgical, token-efficient symbol source slice, contract, effects, call resolution, and dependency signatures.",
      "inputSchema": {"type": "object", "properties": {
          **_SOURCE_OR_PATH,
          "symbol": {"type": "string", "description": "Symbol name to extract (omit for compact index)."},
-         "with_deps": {"type": "boolean", "description": "Include signatures of referenced types and callees."}}}},
+         "with_deps": {"type": "boolean", "description": "Include signatures of referenced types and callees."},
+         "max_bytes": {"type": "integer", "minimum": 1, "description": "Maximum UTF-8 byte budget for returned source/context."},
+         "source_offset": {"type": "integer", "minimum": 0, "description": "UTF-8 byte offset within target symbol source."},
+         "offset": {"type": "integer", "minimum": 0, "description": "Starting index offset when listing symbols."}}}},
     {"name": "wysna_patch",
-     "description": "Checked declaration-level patch guarded by graph hash and in-memory typecheck.",
+     "description": "Checked declaration-level or multi-file workspace patch guarded by graph/plan hash and in-memory typecheck.",
      "inputSchema": {"type": "object", "properties": {
-         "path": {"type": "string", "description": "Path to a .wysna file inside the server root."},
-         "symbol": {"type": "string", "description": "Target declaration name or Class.method."},
-         "replacement": {"type": "string", "description": "Replacement declaration Wysna code."},
-         "expect_graph_hash": {"type": "string", "description": "Optional optimistic lock graph hash."},
-         "apply": {"type": "boolean", "description": "Write patch to disk after verification (default false)."}},
-         "required": ["path", "symbol", "replacement"]}},
+         "path": {"type": "string", "description": "Path to a .wysna file inside the server root (single-symbol mode)."},
+         "symbol": {"type": "string", "description": "Target declaration name or Class.method (single-symbol mode)."},
+         "replacement": {"type": "string", "description": "Replacement declaration Wysna code (single-symbol mode)."},
+         "expect_graph_hash": {"type": "string", "description": "Optional optimistic lock graph hash (single-symbol mode)."},
+         "manifest": {"type": "string", "description": "Path to wysna.toml inside server root (workspace mode)."},
+         "edits": {"type": "array", "description": "Array of {path, source} objects to check and apply together (workspace mode).",
+                   "items": {"type": "object", "properties": {"path": {"type": "string"}, "source": {"type": "string"}}, "required": ["path", "source"]}},
+         "expect_plan_hash": {"type": "string", "description": "Plan hash from preview (required with apply=true in workspace mode)."},
+         "discover": {"type": "boolean", "description": "Discover test files under tests/ (workspace mode)."},
+         "frozen": {"type": "boolean", "description": "Verify wysna.lock before planning/applying (workspace mode)."},
+         "apply": {"type": "boolean", "description": "Write verified patch to disk (default false)."}}}},
     {"name": "wysna_skills",
      "description": "Version-matched concise coding and workflow guides embedded in Wysna.",
      "inputSchema": {"type": "object", "properties": {
@@ -273,15 +281,64 @@ class McpServer:
                     path,
                     symbol=arguments.get("symbol"),
                     with_deps=bool(arguments.get("with_deps")),
+                    max_bytes=arguments.get("max_bytes"),
+                    source_offset=arguments.get("source_offset", 0),
+                    offset=arguments.get("offset", 0),
                     service=self.service,
                 )
             except WysnaError as error:
                 return self._diagnostics_envelope("inspect", error, path, source)
+            except ValueError as error:
+                raise ToolError(str(error)) from error
             envelope = tool_result("inspect", "ok", 0)
             envelope["result"] = payload
             return envelope
 
     def tool_wysna_patch(self, arguments):
+        if "edits" in arguments or "manifest" in arguments:
+            from pathlib import Path
+            from tooling.WorkspacePatch import plan_workspace_patch
+
+            manifest_raw = arguments.get("manifest")
+            edits = arguments.get("edits")
+            if not isinstance(manifest_raw, str) or not manifest_raw or edits is None:
+                raise ToolError("workspace 'wysna_patch' requires 'manifest' and 'edits'")
+            if any(arguments.get(k) is not None for k in ("path", "symbol", "replacement", "expect_graph_hash")):
+                raise ToolError("workspace 'wysna_patch' cannot combine single-symbol options with 'manifest'/'edits'")
+            manifest_path = Path(self._confine(manifest_raw))
+            try:
+                payload = plan_workspace_patch(
+                    manifest_path,
+                    edits,
+                    expected_hash=arguments.get("expect_plan_hash"),
+                    apply=bool(arguments.get("apply")),
+                    discover=bool(arguments.get("discover")),
+                    frozen=bool(arguments.get("frozen")),
+                )
+            except WysnaError as error:
+                items = getattr(error, "diagnostics", None) or [error]
+                sources = dict(self.service.source_texts())
+                root_dir = manifest_path.parent
+                if isinstance(edits, list):
+                    for edit in edits:
+                        if isinstance(edit, dict) and isinstance(edit.get("path"), str) and isinstance(edit.get("source"), str):
+                            sources[str((root_dir / edit["path"]).resolve())] = edit["source"]
+                for item in items:
+                    ifile = getattr(item, "file", None)
+                    if ifile and ifile not in sources and os.path.isfile(ifile):
+                        try:
+                            with open(ifile, "r", encoding="utf-8") as fh:
+                                sources[ifile] = fh.read()
+                        except OSError:
+                            pass
+                records = [diagnostic_from_error(item, sources) for item in items]
+                return tool_result("patch", "diagnostic_error", 1, diagnostics=records)
+            except ValueError as error:
+                raise ToolError(str(error)) from error
+            envelope = tool_result("patch", "ok", 0)
+            envelope["result"] = payload
+            return envelope
+
         from tooling.AgentGraphCLI import patch_source
         raw_path = arguments.get("path")
         symbol = arguments.get("symbol")
