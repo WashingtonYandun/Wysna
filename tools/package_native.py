@@ -25,7 +25,6 @@ from tools.package_components import download, extract, sha256
 
 COMPONENTS = json.loads((ROOT / "packaging/native/components.json").read_text(encoding="utf-8"))
 COMMANDS = native_sdk_commands()
-# Cold release compilation of the compiler itself needs the SDK build budget.
 SDK_COMPONENT_BUILD_TIMEOUT_SECONDS = 600
 
 
@@ -106,7 +105,7 @@ def assemble(output, cache, *, source_commit=None):
                 capture_output=True, text=True, timeout=SDK_COMPONENT_BUILD_TIMEOUT_SECONDS, env=environment)
             if archived_rt.returncode:
                 raise RuntimeError("Native SDK runtime archive creation failed (" + profile_name + "):\n" + archived_rt.stderr)
-        base = [str(zig), "cc", "-target", component["target"], "-std=c99", "-O2", "-fno-sanitize=undefined", "-mcpu=baseline", "-I" + str(ROOT)]
+        base = [str(zig), "cc", "-target", component["target"], "-std=c99", "-fno-sanitize=undefined", "-mcpu=baseline", "-I" + str(ROOT)]
         stack_flags = native_stack_link_args(base)
         base += stack_flags
         release_archive = stage / "lib" / "libwysna_runtime_release.a"
@@ -128,7 +127,11 @@ def assemble(output, cache, *, source_commit=None):
                     extra_link.append("-Wl,-dead_strip")
                 elif host.endswith("-linux"):
                     extra_link.append("-Wl,--gc-sections")
-            built = subprocess.run(base + defines + extra_compile + [str(source)] + extra_link + ["-lc", "-lm", "-o", str(target)],
+            # The generated compiler is a single large C file. Match the verified
+            # bootstrap's optimization level on macOS to bound Zig compilation time.
+            optimization = "-O1" if source.name != "driver.c" and host.endswith("-macos") else "-O2"
+            built = subprocess.run(base + [optimization] + defines + extra_compile + [str(source)] + extra_link
+                                   + ["-lc", "-lm", "-o", str(target)],
                                    capture_output=True, text=True, timeout=SDK_COMPONENT_BUILD_TIMEOUT_SECONDS, env=environment)
             if built.returncode:
                 raise RuntimeError("Native SDK compilation failed for " + source.name + ":\n" + built.stderr)
