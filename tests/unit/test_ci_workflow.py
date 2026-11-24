@@ -103,11 +103,13 @@ def test_ci_workflow_contracts():
     assert 'os: [ubuntu-latest, macos-latest, windows-latest]' in product
     for module in ('test_repl_session.py', 'test_project_scaffold.py',
                    'test_human_diagnostics.py', 'test_tool_result.py',
-                   'test_capability_policy.py', 'test_target_profiles.py'):
+                   'test_capability_policy.py', 'test_target_profiles.py',
+                   'test_ci_parallel.py'):
         assert module in product
     native_diagnostics = jobs['native-diagnostics']
     assert 'os: [ubuntu-latest, macos-latest, windows-latest]' in native_diagnostics
     assert 'test_selfhost_diagnostics.py' in native_diagnostics
+    assert 'tools/run_ci_parallel.py --mode pytest' in native_diagnostics
     contracts, conformance = jobs['compiler-contracts'], jobs['conformance']
     runtime = jobs['runtime-conformance']
     integration = jobs['integration-conformance']
@@ -124,7 +126,9 @@ def test_ci_workflow_contracts():
         assert 'cache: pip' in job and 'cache-dependency-path: pyproject.toml' in job
         assert 'pip install -e' not in job
         assert 'actions/upload-artifact@v4' in job
-    modules = re.findall(r'^\s+python3 -m tests\.unit\.(\w+)\s*$', contracts, re.MULTILINE)
+    assert 'tools/run_ci_parallel.py --mode module' in contracts
+    assert 'tools/run_ci_parallel.py --mode module --jobs 2' in jobs['sanitizers']
+    modules = re.findall(r'\btests\.unit\.(\w+)\b', contracts)
     assert sorted(modules) == sorted(CONTRACT_MODULES), modules
     assert not re.search(r'python3 -m tests\.unit\.test_ci_harness', conformance)
     for command in (

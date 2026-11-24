@@ -23,7 +23,7 @@ if str(SRC) not in sys.path:
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
-from common.Platform import compiler_command, executable_name, native_stack_link_args
+from common.Platform import cache_lock, compiler_command, executable_name, native_stack_link_args
 from common.Version import WYSNA_VERSION
 from compiler.Bootstrap import ensure_selfhost_compiler_binary
 from tools.bundle_selfhost import MODULE_ORDER
@@ -286,46 +286,48 @@ def _link_or_copy_dir(src: Path, dst: Path) -> None:
 
 def assemble_dev_sdk(units: list[str], rebuild_emitter: bool = False, opt: str = "-O0") -> dict:
     overall_start = time.perf_counter()
-    emitter, emitter_meta = _find_or_build_emitter(rebuild=rebuild_emitter)
-    results = [emitter_meta]
+    DEV_SDK_DIR.parent.mkdir(parents=True, exist_ok=True)
+    with cache_lock(str(DEV_SDK_DIR.parent / "dev-sdk.lock")):
+        emitter, emitter_meta = _find_or_build_emitter(rebuild=rebuild_emitter)
+        results = [emitter_meta]
 
-    bin_dir = DEV_SDK_DIR / "bin"
-    libexec_dir = DEV_SDK_DIR / "libexec"
-    toolchain_dir = DEV_SDK_DIR / "toolchain/zig"
-    bin_dir.mkdir(parents=True, exist_ok=True)
-    libexec_dir.mkdir(parents=True, exist_ok=True)
-    toolchain_dir.mkdir(parents=True, exist_ok=True)
+        bin_dir = DEV_SDK_DIR / "bin"
+        libexec_dir = DEV_SDK_DIR / "libexec"
+        toolchain_dir = DEV_SDK_DIR / "toolchain/zig"
+        bin_dir.mkdir(parents=True, exist_ok=True)
+        libexec_dir.mkdir(parents=True, exist_ok=True)
+        toolchain_dir.mkdir(parents=True, exist_ok=True)
 
-    _link_or_copy_dir(ROOT / "stdlib", DEV_SDK_DIR / "stdlib")
-    _link_or_copy_dir(ROOT / "runtime", DEV_SDK_DIR / "runtime")
+        _link_or_copy_dir(ROOT / "stdlib", DEV_SDK_DIR / "stdlib")
+        _link_or_copy_dir(ROOT / "runtime", DEV_SDK_DIR / "runtime")
 
-    compiler_dst = libexec_dir / executable_name("wysna-compiler")
-    if rebuild_emitter or not compiler_dst.is_file():
-        _copy_atomic(emitter, compiler_dst)
+        compiler_dst = libexec_dir / executable_name("wysna-compiler")
+        if rebuild_emitter or not compiler_dst.is_file():
+            _copy_atomic(emitter, compiler_dst)
 
-    if "driver" in units or not (bin_dir / executable_name("wysna")).is_file():
-        driver_bin, driver_meta = build_driver_unit()
-        _copy_atomic(driver_bin, bin_dir / executable_name("wysna"))
-        results.append(driver_meta)
+        if "driver" in units or not (bin_dir / executable_name("wysna")).is_file():
+            driver_bin, driver_meta = build_driver_unit()
+            _copy_atomic(driver_bin, bin_dir / executable_name("wysna"))
+            results.append(driver_meta)
 
-    if "zig-shim" in units or not (toolchain_dir / executable_name("zig")).is_file():
-        shim_bin, shim_meta = build_zig_shim()
-        if shim_bin is not None:
-            _copy_atomic(shim_bin, toolchain_dir / executable_name("zig"))
-        results.append(shim_meta)
+        if "zig-shim" in units or not (toolchain_dir / executable_name("zig")).is_file():
+            shim_bin, shim_meta = build_zig_shim()
+            if shim_bin is not None:
+                _copy_atomic(shim_bin, toolchain_dir / executable_name("zig"))
+            results.append(shim_meta)
 
-    for unit in ("project", "mcp", "compiler-core", "compiler"):
-        if unit in units:
-            unit_bin, meta = build_wysna_unit(unit, emitter, opt=opt)
-            _copy_atomic(unit_bin, libexec_dir / executable_name(f"wysna-{unit}"))
-            results.append(meta)
+        for unit in ("project", "mcp", "compiler-core", "compiler"):
+            if unit in units:
+                unit_bin, meta = build_wysna_unit(unit, emitter, opt=opt)
+                _copy_atomic(unit_bin, libexec_dir / executable_name(f"wysna-{unit}"))
+                results.append(meta)
 
-    return {
-        "sdk_root": str(DEV_SDK_DIR),
-        "driver": str(bin_dir / executable_name("wysna")),
-        "units": results,
-        "total_s": round(time.perf_counter() - overall_start, 3),
-    }
+        return {
+            "sdk_root": str(DEV_SDK_DIR),
+            "driver": str(bin_dir / executable_name("wysna")),
+            "units": results,
+            "total_s": round(time.perf_counter() - overall_start, 3),
+        }
 
 
 def main(argv: list[str] | None = None) -> int:
