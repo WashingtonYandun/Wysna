@@ -127,9 +127,10 @@ def assemble(output, cache, *, source_commit=None):
                     extra_link.append("-Wl,-dead_strip")
                 elif host.endswith("-linux"):
                     extra_link.append("-Wl,--gc-sections")
-            # The generated compiler is a single large C file. Match the verified
-            # bootstrap's optimization level on macOS to bound Zig compilation time.
-            optimization = "-O1" if source.name != "driver.c" and host.endswith("-macos") else "-O2"
+            # Optimizing the generated selfhost translation unit with Zig can
+            # exceed the macOS package build budget. Keep the runtime archive
+            # optimized independently of the compiler frontend and driver.
+            optimization = "-O0" if source.name != "driver.c" and host.endswith("-macos") else "-O2"
             built = subprocess.run(base + [optimization] + defines + extra_compile + [str(source)] + extra_link
                                    + ["-lc", "-lm", "-o", str(target)],
                                    capture_output=True, text=True, timeout=SDK_COMPONENT_BUILD_TIMEOUT_SECONDS, env=environment)
