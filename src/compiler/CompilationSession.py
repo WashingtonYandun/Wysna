@@ -27,10 +27,13 @@ class SourceManager:
     def __init__(self):
         self.snapshots = {}
         self.overlays = {}
+        self.deleted = set()
         self.batch = {}
         self.read_counts = {}
 
     def read(self, path):
+        if path in self.deleted:
+            raise FileNotFoundError(f"Deleted workspace overlay: {path}")
         if path not in self.batch:
             self.batch[path] = (self.overlays[path] if path in self.overlays
                                 else Path(path).read_bytes().decode('utf-8'))
@@ -565,19 +568,27 @@ class CompilationSession:
                 if isinstance(child, (A.Node, list)):
                     self.decorate(child, path, module_id)
 
+    def _module_file_exists(self, cand: str) -> bool:
+        if cand in self.sources.deleted:
+            return False
+        return os.path.isfile(cand) or cand in self.sources.overlays
+
     def find_module_file(self, raw_path: str, importer: str) -> Optional[str]:
         if self.project_resolver is not None:
-            cand = self.project_resolver.resolve_import(raw_path, importer)
-            return self.path(str(cand)) if cand is not None else None
+            cand = self.project_resolver.resolve_import(raw_path, importer, overlays=self.sources.overlays)
+            if cand is None:
+                return None
+            resolved = self.path(str(cand))
+            return None if resolved in self.sources.deleted else resolved
 
         directory = os.path.dirname(importer) if not importer.startswith('<') else os.getcwd()
         if raw_path.startswith('std/') or raw_path.startswith('std.'):
             subpath = raw_path[4:].replace('.', '/')
             base = Path(get_repo_root()) / 'stdlib' / subpath
             cand = self.path(str(base.with_suffix('.wysna')))
-            if os.path.isfile(cand) or cand in self.sources.overlays:
+            if self._module_file_exists(cand):
                 return cand
-            if os.path.isfile(str(base)) or str(base) in self.sources.overlays:
+            if self._module_file_exists(self.path(str(base))):
                 return self.path(str(base))
             return None
 
@@ -590,45 +601,45 @@ class CompilationSession:
             for _ in range(dot_count - 1):
                 target_dir = os.path.dirname(target_dir)
             cand = self.path(os.path.join(target_dir, remainder))
-            if os.path.isfile(cand) or cand in self.sources.overlays:
+            if self._module_file_exists(cand):
                 return cand
-            if os.path.isfile(cand + '.wysna') or (cand + '.wysna') in self.sources.overlays:
+            if self._module_file_exists(self.path(cand + '.wysna')):
                 return self.path(cand + '.wysna')
             return None
 
         # Relative to importer directory
         cand = self.path(os.path.join(directory, raw_path))
-        if os.path.isfile(cand) or cand in self.sources.overlays:
+        if self._module_file_exists(cand):
             return cand
-        if os.path.isfile(cand + '.wysna') or (cand + '.wysna') in self.sources.overlays:
+        if self._module_file_exists(self.path(cand + '.wysna')):
             return self.path(cand + '.wysna')
 
         if '.' in raw_path and not raw_path.endswith('.wysna'):
             slash_path = raw_path.replace('.', '/')
             cand = self.path(os.path.join(directory, slash_path))
-            if os.path.isfile(cand) or cand in self.sources.overlays:
+            if self._module_file_exists(cand):
                 return cand
-            if os.path.isfile(cand + '.wysna') or (cand + '.wysna') in self.sources.overlays:
+            if self._module_file_exists(self.path(cand + '.wysna')):
                 return self.path(cand + '.wysna')
 
         # Raw path directly (e.g. from cwd or absolute)
         cand = self.path(raw_path)
-        if os.path.isfile(cand) or cand in self.sources.overlays:
+        if self._module_file_exists(cand):
             return cand
-        if os.path.isfile(cand + '.wysna') or (cand + '.wysna') in self.sources.overlays:
+        if self._module_file_exists(self.path(cand + '.wysna')):
             return self.path(cand + '.wysna')
 
         if '.' in raw_path and not raw_path.endswith('.wysna'):
             slash_path = raw_path.replace('.', '/')
             cand = self.path(slash_path)
-            if os.path.isfile(cand) or cand in self.sources.overlays:
+            if self._module_file_exists(cand):
                 return cand
-            if os.path.isfile(cand + '.wysna') or (cand + '.wysna') in self.sources.overlays:
+            if self._module_file_exists(self.path(cand + '.wysna')):
                 return self.path(cand + '.wysna')
             cand_cwd = self.path(os.path.join(os.getcwd(), slash_path))
-            if os.path.isfile(cand_cwd) or cand_cwd in self.sources.overlays:
+            if self._module_file_exists(cand_cwd):
                 return cand_cwd
-            if os.path.isfile(cand_cwd + '.wysna') or (cand_cwd + '.wysna') in self.sources.overlays:
+            if self._module_file_exists(self.path(cand_cwd + '.wysna')):
                 return self.path(cand_cwd + '.wysna')
 
         return None

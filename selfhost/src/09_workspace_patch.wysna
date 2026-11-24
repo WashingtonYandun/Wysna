@@ -18,10 +18,11 @@ fn wpatch_valid_rel_wysna(name: str) -> bool {
     return true
 }
 
-fn wpatch_unified_diff(rel_path: str, old_text: str, new_text: str) -> str {
-    if old_text == new_text { return "" }
-    let old_lines = schema_split_lines(old_text)
-    let new_lines = schema_split_lines(new_text)
+fn wpatch_unified_diff_kind(rel_path: str, action: str, old_text: str, new_text: str) -> str {
+    if action == "modify" and old_text == new_text { return "" }
+    let empty_lines: list[str] = []
+    let old_lines = if action == "create" { empty_lines } else { schema_split_lines(old_text) }
+    let new_lines = if action == "delete" { empty_lines } else { schema_split_lines(new_text) }
     let mut prefix = 0
     while prefix < len(old_lines) and prefix < len(new_lines) and old_lines[prefix] == new_lines[prefix] {
         prefix = prefix + 1
@@ -36,13 +37,134 @@ fn wpatch_unified_diff(rel_path: str, old_text: str, new_text: str) -> str {
     let new_count = new_end - prefix
     let old_start = if old_count == 0 { prefix } else { prefix + 1 }
     let new_start = if new_count == 0 { prefix } else { prefix + 1 }
+    let from_h = if action == "create" { "--- /dev/null\n" } else { "--- a/" + rel_path + "\n" }
+    let to_h = if action == "delete" { "+++ /dev/null\n" } else { "+++ b/" + rel_path + "\n" }
     let mut parts: list[str] = [
-        "--- a/" + rel_path + "\n",
-        "+++ b/" + rel_path + "\n",
+        from_h,
+        to_h,
         "@@ -" + str(old_start) + "," + str(old_count) + " +" + str(new_start) + "," + str(new_count) + " @@\n",
     ]
     for i in prefix..old_end { parts.append("-" + old_lines[i] + "\n") }
     for i in prefix..new_end { parts.append("+" + new_lines[i] + "\n") }
+    return join_strings(parts, "")
+}
+
+fn wpatch_no_symlink_ancestors(root: str, rel: str) -> bool {
+    let mut cur = root
+    let mut seg = ""
+    for i in 0..len(rel) + 1 {
+        if i == len(rel) or rel[i] == "/" {
+            if seg != "" {
+                cur = cur + "/" + seg
+                if proj_path_exists(cur) and module_canonical_resolved(cur) != cur {
+                    return false
+                }
+                seg = ""
+            }
+        } else {
+            seg = seg + rel[i]
+        }
+    }
+    return true
+}
+
+fn wpatch_ensure_parents(root: str, rel: str) -> bool {
+    let mut cur = root
+    let mut seg = ""
+    for i in 0..len(rel) {
+        if rel[i] == "/" {
+            if seg != "" {
+                cur = cur + "/" + seg
+                if not proj_is_dir(cur) {
+                    if proj_path_exists(cur) { return false }
+                    if proj_scaffold_fs(cur, 2) != 0 { return false }
+                }
+                seg = ""
+            }
+        } else {
+            seg = seg + rel[i]
+        }
+    }
+    return true
+}
+
+fn wpatch_find_nth_match(hay: str, needle: str) -> list[int] {
+    if needle == "" or len(needle) > len(hay) { return [0, -1] }
+    let mut count = 0
+    let mut first_idx = -1
+    let limit = len(hay) - len(needle) + 1
+    let mut i = 0
+    while i < limit {
+        if slice(hay, i, i + len(needle)) == needle {
+            count = count + 1
+            if first_idx < 0 { first_idx = i }
+            i = i + len(needle)
+        } else {
+            i = i + 1
+        }
+    }
+    return [count, first_idx]
+}
+
+fn wpatch_apply_hunks(rel: str, before_src: str, hunks_val: LspJson, json_mode: bool) -> str {
+    if hunks_val.kind != "array" or len(hunks_val.items) == 0 {
+        proj_emit_error_and_exit("patch", json_mode, "W5002", "Workspace edit 'hunks' must be a non-empty array: " + rel)
+    }
+    let mut cur = before_src
+    for h_idx in 0..len(hunks_val.items) {
+        let h = hunks_val.items[h_idx]
+        if h.kind != "object" or len(h.keys) != 2 or not lsp_json_has(h, "old_text") or not lsp_json_has(h, "new_text") {
+            proj_emit_error_and_exit("patch", json_mode, "W5002", "Hunk requires old_text and new_text: " + rel)
+        }
+        let ov = lsp_json_get(h, "old_text")
+        let nv = lsp_json_get(h, "new_text")
+        if ov.kind != "str" or nv.kind != "str" or ov.str_val == "" {
+            proj_emit_error_and_exit("patch", json_mode, "W5002", "Hunk requires non-empty old_text and string new_text: " + rel)
+        }
+        let hit = wpatch_find_nth_match(cur, ov.str_val)
+        if hit[0] != 1 {
+            proj_emit_error_and_exit("patch", json_mode, "W5002", "Hunk matched " + str(hit[0]) + " times in '" + rel + "' (expected 1)")
+        }
+        let pos = hit[1]
+        cur = slice(cur, 0, pos) + nv.str_val + slice(cur, pos + len(ov.str_val), len(cur))
+    }
+    return cur
+}
+
+fn wpatch_apply_symbol_edit(abs_p: str, before_src: str, sym_name: str, replacement: str, json_mode: bool) -> str {
+    if sym_name == "" {
+        proj_emit_error_and_exit("patch", json_mode, "W5002", "Workspace symbol edit requires non-empty symbol")
+    }
+    let graph = tool_build_graph(before_src, abs_p)
+    let n_idx = tool_require_symbol(graph, sym_name, "patch", json_mode)
+    let n = graph.nodes[n_idx]
+    if module_canonical(n.file) != module_canonical(abs_p) {
+        proj_emit_error_and_exit("patch", json_mode, "W5002", "Target symbol belongs to another file: " + sym_name)
+    }
+    let orig_bytes = bytes(before_src)
+    if n.start_byte < 0 or n.end_byte < n.start_byte or n.end_byte > len(orig_bytes) {
+        proj_emit_error_and_exit("patch", json_mode, "W5004", "Invalid symbol byte range for patch: " + sym_name)
+    }
+    let mut prefix_b: list[int] = []
+    for i in 0..n.start_byte { prefix_b.append(orig_bytes[i]) }
+    let mut suffix_b: list[int] = []
+    for i in n.end_byte..len(orig_bytes) { suffix_b.append(orig_bytes[i]) }
+    return wpatch_utf8_bytes_to_str(prefix_b) + replacement + wpatch_utf8_bytes_to_str(suffix_b)
+}
+
+fn wpatch_utf8_bytes_to_str(bs: list[int]) -> str {
+    let mut parts: list[str] = []
+    let mut i = 0
+    while i < len(bs) {
+        let first = bs[i]
+        let width = if first < 128 { 1 } elif first < 224 { 2 } elif first < 240 { 3 } else { 4 }
+        let mut cp = if width == 1 { first } elif width == 2 { first % 32 } elif width == 3 { first % 16 } else { first % 8 }
+        for off in 1..width {
+            if i + off < len(bs) { cp = cp * 64 + (bs[i + off] % 64) }
+        }
+        parts.append(chr(cp))
+        i = i + width
+    }
     return join_strings(parts, "")
 }
 
@@ -137,7 +259,16 @@ fn proj_handle_workspace_patch(manifest_arg: str, edits_file: str, expected_hash
         proj_emit_error_and_exit("patch", json_mode, "W5002", "Workspace edits must be a nonempty array")
     }
 
+    let mut protected_rels: list[str] = []
+    for t in m.targets {
+        if not tool_str_contains(protected_rels, t.entry) { protected_rels.append(t.entry) }
+    }
+    for tc in test_plan.cases {
+        if not tool_str_contains(protected_rels, tc.entry) { protected_rels.append(tc.entry) }
+    }
+
     let mut seen_rel: list[str] = []
+    let mut edit_actions: list[str] = []
     let mut edit_rels: list[str] = []
     let mut edit_abs: list[str] = []
     let mut edit_canon: list[str] = []
@@ -147,30 +278,84 @@ fn proj_handle_workspace_patch(manifest_arg: str, edits_file: str, expected_hash
     let mut edit_after_sha: list[str] = []
 
     for item in parsed_edits.items {
-        if item.kind != "object" or len(item.keys) != 2 or not lsp_json_has(item, "path") or not lsp_json_has(item, "source") {
-            proj_emit_error_and_exit("patch", json_mode, "W5002", "Each workspace edit requires path and source")
+        if item.kind != "object" or not lsp_json_has(item, "path") {
+            proj_emit_error_and_exit("patch", json_mode, "W5002", "Each workspace edit requires path")
         }
         let pv = lsp_json_get(item, "path")
-        let sv = lsp_json_get(item, "source")
-        if pv.kind != "str" or sv.kind != "str" {
-            proj_emit_error_and_exit("patch", json_mode, "W5002", "Workspace edit path and source must be strings")
+        if pv.kind != "str" {
+            proj_emit_error_and_exit("patch", json_mode, "W5002", "Workspace edit path must be a string")
         }
         let rel = pv.str_val
-        let after_src = sv.str_val
         if not wpatch_valid_rel_wysna(rel) or tool_str_contains(seen_rel, rel) {
-            proj_emit_error_and_exit("patch", json_mode, "W5002", "Workspace edit must identify one existing project source: " + rel)
+            proj_emit_error_and_exit("patch", json_mode, "W5002", "Workspace edit must use a unique relative .wysna path: " + rel)
         }
+        seen_rel.append(rel)
+        let abs_p = m.root + "/" + rel
+
+        let has_create = lsp_json_has(item, "create")
+        let has_delete = lsp_json_has(item, "delete")
+        let has_src = lsp_json_has(item, "source")
+        let has_sym = lsp_json_has(item, "symbol")
+        let has_rep = lsp_json_has(item, "replacement")
+        let has_hunks = lsp_json_has(item, "hunks")
+
         let mut snap_idx = -1
         for k in 0..len(snap_paths) {
             if snap_paths[k] == rel { snap_idx = k break }
         }
-        if snap_idx < 0 {
-            proj_emit_error_and_exit("patch", json_mode, "W5002", "Workspace edit must identify one existing project source: " + rel)
+
+        if len(item.keys) == 3 and has_create and has_src {
+            let cv = lsp_json_get(item, "create")
+            let sv = lsp_json_get(item, "source")
+            if cv.kind != "bool" or not cv.bool_val or sv.kind != "str" {
+                proj_emit_error_and_exit("patch", json_mode, "W5002", "Create workspace edit requires create=true and string source")
+            }
+            if snap_idx >= 0 or proj_path_exists(abs_p) or not wpatch_no_symlink_ancestors(m.root, rel) {
+                proj_emit_error_and_exit("patch", json_mode, "W5002", "Cannot create existing or symlinked workspace path: " + rel)
+            }
+            edit_actions.append("create")
+            edit_rels.append(rel)
+            edit_abs.append(abs_p)
+            edit_canon.append(module_normalize(abs_p))
+            edit_before.append("")
+            edit_after.append(sv.str_val)
+            edit_before_sha.append("")
+            edit_after_sha.append(diag_sha256_hex(sv.str_val))
+            continue
         }
-        seen_rel.append(rel)
-        let abs_p = m.root + "/" + rel
-        if module_canonical_resolved(abs_p) != abs_p {
-            proj_emit_error_and_exit("patch", json_mode, "W5002", "Workspace edit must use a direct project source path: " + rel)
+
+        if len(item.keys) == 2 and has_delete {
+            let dv = lsp_json_get(item, "delete")
+            if dv.kind != "bool" or not dv.bool_val {
+                proj_emit_error_and_exit("patch", json_mode, "W5002", "Delete workspace edit requires delete=true")
+            }
+            if snap_idx < 0 or module_canonical_resolved(abs_p) != abs_p {
+                proj_emit_error_and_exit("patch", json_mode, "W5002", "Delete workspace edit must reference one existing project source: " + rel)
+            }
+            if tool_str_contains(protected_rels, rel) {
+                proj_emit_error_and_exit("patch", json_mode, "W5002", "Cannot delete protected manifest entry: " + rel)
+            }
+            let before_src = read_file(abs_p) else err {
+                proj_emit_error_and_exit("patch", json_mode, "W5003", "cannot read workspace source: " + abs_p)
+                ""
+            }
+            let b_sha = diag_sha256_hex(before_src)
+            if b_sha != snap_hashes[snap_idx] {
+                proj_emit_error_and_exit("patch", json_mode, "W5005", "Source changed during workspace planning: " + rel)
+            }
+            edit_actions.append("delete")
+            edit_rels.append(rel)
+            edit_abs.append(abs_p)
+            edit_canon.append(module_canonical(abs_p))
+            edit_before.append(before_src)
+            edit_after.append("__WYSNA_OVERLAY_DELETED__")
+            edit_before_sha.append(b_sha)
+            edit_after_sha.append("")
+            continue
+        }
+
+        if snap_idx < 0 or module_canonical_resolved(abs_p) != abs_p {
+            proj_emit_error_and_exit("patch", json_mode, "W5002", "Workspace edit must identify one existing project source: " + rel)
         }
         let before_src = read_file(abs_p) else err {
             proj_emit_error_and_exit("patch", json_mode, "W5003", "cannot read workspace source: " + abs_p)
@@ -180,7 +365,29 @@ fn proj_handle_workspace_patch(manifest_arg: str, edits_file: str, expected_hash
         if b_sha != snap_hashes[snap_idx] {
             proj_emit_error_and_exit("patch", json_mode, "W5005", "Source changed during workspace planning: " + rel)
         }
+
+        let mut after_src = ""
+        if len(item.keys) == 2 and has_src {
+            let sv = lsp_json_get(item, "source")
+            if sv.kind != "str" {
+                proj_emit_error_and_exit("patch", json_mode, "W5002", "Workspace edit path and source must be strings")
+            }
+            after_src = sv.str_val
+        } elif len(item.keys) == 3 and has_sym and has_rep {
+            let sym_v = lsp_json_get(item, "symbol")
+            let rep_v = lsp_json_get(item, "replacement")
+            if sym_v.kind != "str" or rep_v.kind != "str" {
+                proj_emit_error_and_exit("patch", json_mode, "W5002", "Workspace symbol edit requires string symbol and replacement")
+            }
+            after_src = wpatch_apply_symbol_edit(abs_p, before_src, sym_v.str_val, rep_v.str_val, json_mode)
+        } elif len(item.keys) == 2 and has_hunks {
+            after_src = wpatch_apply_hunks(rel, before_src, lsp_json_get(item, "hunks"), json_mode)
+        } else {
+            proj_emit_error_and_exit("patch", json_mode, "W5002", "Unsupported workspace edit fields for: " + rel)
+        }
+
         if before_src != after_src {
+            edit_actions.append("modify")
             edit_rels.append(rel)
             edit_abs.append(abs_p)
             edit_canon.append(module_canonical(abs_p))
@@ -198,8 +405,10 @@ fn proj_handle_workspace_patch(manifest_arg: str, edits_file: str, expected_hash
     for t in m.targets {
         if not tool_str_contains(entries, t.entry) { entries.append(t.entry) }
     }
-    for rel in edit_rels {
-        if not tool_str_contains(entries, rel) { entries.append(rel) }
+    for ek in 0..len(edit_rels) {
+        if edit_actions[ek] != "delete" and not tool_str_contains(entries, edit_rels[ek]) {
+            entries.append(edit_rels[ek])
+        }
     }
     for tc in test_plan.cases {
         if not tool_str_contains(entries, tc.entry) { entries.append(tc.entry) }
@@ -216,7 +425,8 @@ fn proj_handle_workspace_patch(manifest_arg: str, edits_file: str, expected_hash
     let mut entry_inputs: list[list[str]] = []
     for entry in sorted_entries {
         let entry_abs = m.root + "/" + entry
-        let entry_canon = module_canonical(entry_abs)
+        let mut entry_canon = module_canonical(entry_abs)
+        if entry_canon == "" { entry_canon = module_normalize(entry_abs) }
         let mut entry_src = ""
         let mut edited_hit = -1
         for k in 0..len(edit_canon) {
@@ -255,19 +465,47 @@ fn proj_handle_workspace_patch(manifest_arg: str, edits_file: str, expected_hash
         for k in 0..len(edit_rels) {
             if edit_rels[k] == srel { eidx = k break }
         }
-        let diff = wpatch_unified_diff(srel, edit_before[eidx], edit_after[eidx])
-        changes_rows.append("{\"path\":" + diag_json_quote(srel) + ",\"before_sha256\":" + diag_json_quote(edit_before_sha[eidx]) +
-            ",\"after_sha256\":" + diag_json_quote(edit_after_sha[eidx]) + ",\"diff\":" + diag_json_quote(diff) + "}")
+        let act = edit_actions[eidx]
+        let diff = wpatch_unified_diff_kind(srel, act, edit_before[eidx], edit_after[eidx])
+        let b_json = if act == "create" { "null" } else { diag_json_quote(edit_before_sha[eidx]) }
+        let a_json = if act == "delete" { "null" } else { diag_json_quote(edit_after_sha[eidx]) }
+        changes_rows.append("{\"path\":" + diag_json_quote(srel) + ",\"action\":" + diag_json_quote(act) +
+            ",\"before_sha256\":" + b_json + ",\"after_sha256\":" + a_json + ",\"diff\":" + diag_json_quote(diff) + "}")
     }
 
-    let mut after_ws_rows: list[str] = []
+    let mut next_paths: list[str] = []
+    let mut next_hashes: list[str] = []
     for k in 0..len(snap_paths) {
         let p = snap_paths[k]
         let mut f_sha = snap_hashes[k]
+        let mut deleted = false
         for ek in 0..len(edit_rels) {
-            if edit_rels[ek] == p { f_sha = edit_after_sha[ek] break }
+            if edit_rels[ek] == p {
+                if edit_actions[ek] == "delete" { deleted = true }
+                else { f_sha = edit_after_sha[ek] }
+                break
+            }
         }
-        after_ws_rows.append("[" + diag_json_quote(p) + "," + diag_json_quote(f_sha) + "]")
+        if not deleted {
+            next_paths.append(p)
+            next_hashes.append(f_sha)
+        }
+    }
+    for ek in 0..len(edit_rels) {
+        if edit_actions[ek] == "create" {
+            next_paths.append(edit_rels[ek])
+            next_hashes.append(edit_after_sha[ek])
+        }
+    }
+    let sorted_after_paths = tool_sort_strings(next_paths)
+    let mut after_ws_rows: list[str] = []
+    for p in sorted_after_paths {
+        for nk in 0..len(next_paths) {
+            if next_paths[nk] == p {
+                after_ws_rows.append("[" + diag_json_quote(p) + "," + diag_json_quote(next_hashes[nk]) + "]")
+                break
+            }
+        }
     }
     let after_ws_sha = diag_sha256_hex("[" + join_strings(after_ws_rows, ",") + "]")
     let after_rev_parts = proj_workspace_revision_parts(m.manifest_sha256, test_plan.lock_sha, sdk_sha, after_ws_sha)
@@ -323,14 +561,31 @@ fn proj_handle_workspace_patch(manifest_arg: str, edits_file: str, expected_hash
 
     if apply {
         let stamp = str(unix_time())
+        let mut created_dirs: list[str] = []
         let mut tmp_paths: list[str] = []
         for k in 0..len(edit_abs) {
-            let staged = wpatch_stage_temp_file(edit_abs[k], stamp, k, edit_after[k])
-            if staged == "" {
-                wpatch_unlink_all(tmp_paths)
-                proj_emit_error_and_exit("patch", json_mode, "W5004", "failed staging workspace replacement: " + edit_rels[k])
+            let act = edit_actions[k]
+            if act == "create" {
+                if not wpatch_ensure_parents(m.root, edit_rels[k]) {
+                    wpatch_unlink_all(tmp_paths)
+                    proj_emit_error_and_exit("patch", json_mode, "W5004", "failed creating parent directory: " + edit_rels[k])
+                }
+                let staged = wpatch_stage_temp_file(edit_abs[k], stamp, k, edit_after[k])
+                if staged == "" {
+                    wpatch_unlink_all(tmp_paths)
+                    proj_emit_error_and_exit("patch", json_mode, "W5004", "failed staging workspace creation: " + edit_rels[k])
+                }
+                tmp_paths.append(staged)
+            } elif act == "modify" {
+                let staged = wpatch_stage_temp_file(edit_abs[k], stamp, k, edit_after[k])
+                if staged == "" {
+                    wpatch_unlink_all(tmp_paths)
+                    proj_emit_error_and_exit("patch", json_mode, "W5004", "failed staging workspace replacement: " + edit_rels[k])
+                }
+                tmp_paths.append(staged)
+            } else {
+                tmp_paths.append("")
             }
-            tmp_paths.append(staged)
         }
         let live_commit = wpatch_live_revision(state, m, sdk_sha)
         if live_commit != test_plan.revision {
@@ -340,11 +595,27 @@ fn proj_handle_workspace_patch(manifest_arg: str, edits_file: str, expected_hash
         let mut committed: list[int] = []
         let mut failed_idx = -1
         for k in 0..len(edit_abs) {
-            if not wpatch_rename_file(tmp_paths[k], edit_abs[k]) {
-                failed_idx = k
-                break
+            let act = edit_actions[k]
+            if act == "delete" {
+                if not proj_path_exists(edit_abs[k]) {
+                    failed_idx = k
+                    break
+                }
+                wpatch_unlink_all([edit_abs[k]])
+                committed.append(k)
+            } elif act == "create" {
+                if proj_path_exists(edit_abs[k]) or not wpatch_rename_file(tmp_paths[k], edit_abs[k]) {
+                    failed_idx = k
+                    break
+                }
+                committed.append(k)
+            } else {
+                if not wpatch_rename_file(tmp_paths[k], edit_abs[k]) {
+                    failed_idx = k
+                    break
+                }
+                committed.append(k)
             }
-            committed.append(k)
         }
         if failed_idx >= 0 {
             let mut leftover: list[str] = []
@@ -353,14 +624,19 @@ fn proj_handle_workspace_patch(manifest_arg: str, edits_file: str, expected_hash
             let mut r_idx = len(committed) - 1
             while r_idx >= 0 {
                 let c_idx = committed[r_idx]
-                let rb_tmp = wpatch_stage_temp_file(edit_abs[c_idx], stamp + "_rb", r_idx, edit_before[c_idx])
-                if rb_tmp != "" {
-                    let _ok = wpatch_rename_file(rb_tmp, edit_abs[c_idx])
-                    wpatch_unlink_all([rb_tmp])
+                let rb_act = edit_actions[c_idx]
+                if rb_act == "create" {
+                    wpatch_unlink_all([edit_abs[c_idx]])
+                } else {
+                    let rb_tmp = wpatch_stage_temp_file(edit_abs[c_idx], stamp + "_rb", r_idx, edit_before[c_idx])
+                    if rb_tmp != "" {
+                        let _ok = wpatch_rename_file(rb_tmp, edit_abs[c_idx])
+                        wpatch_unlink_all([rb_tmp])
+                    }
                 }
                 r_idx = r_idx - 1
             }
-            proj_emit_error_and_exit("patch", json_mode, "W5004", "failed committing workspace replacement: " + edit_rels[failed_idx])
+            proj_emit_error_and_exit("patch", json_mode, "W5004", "failed committing workspace operation: " + edit_rels[failed_idx])
         }
     }
 

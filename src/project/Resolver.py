@@ -147,8 +147,8 @@ class ProjectResolver:
                     raise ManifestError(f"source modules collide on portable filesystems: '{previous}' and '{component}'")
                 seen_components[key] = component
 
-    def resolve_import(self, import_path, importer):
-        """Return one physical module path, or None. CWD is never consulted."""
+    def resolve_import(self, import_path, importer, *, overlays=None):
+        """Return one physical (or overlay-created) module path, or None. CWD is never consulted."""
         if import_path.startswith("std/") or import_path.startswith("std."):
             relative = import_path[4:].replace(".", "/")
             parts = relative.split("/")
@@ -196,11 +196,18 @@ class ProjectResolver:
         try:
             resolved = candidate.resolve(strict=True)
             resolved.relative_to(module_root.resolve())
+            if resolved.is_file():
+                return resolved
         except (OSError, ValueError):
-            return None
-        if not resolved.is_file():
-            return None
-        return resolved
+            if overlays is not None:
+                try:
+                    cand_resolved = candidate.resolve(strict=False)
+                    cand_resolved.relative_to(module_root.resolve())
+                    if str(cand_resolved) in overlays:
+                        return cand_resolved
+                except (OSError, ValueError):
+                    pass
+        return None
 
     def _owning_package(self, importer):
         path = Path(importer).resolve()

@@ -1,9 +1,56 @@
 # Path canonicalization helpers live in 01_paths.wysna.
 
+fn module_canonical_virtual(path: str) -> str {
+    let resolved = module_canonical_resolved(path)
+    if resolved != "" { return resolved }
+    let norm = module_normalize(path)
+    if norm == "" { return "" }
+    let mut cur = norm
+    let mut suffix_rev: list[str] = []
+    while cur != "" and cur != "/" {
+        let mut slash = -1
+        for i in 0..len(cur) {
+            if cur[i] == "/" { slash = i }
+        }
+        if slash < 0 {
+            if cur != "" {
+                suffix_rev.append(cur)
+                let anc = module_canonical_resolved(".")
+                if anc != "" {
+                    let mut out = anc
+                    let mut k = len(suffix_rev) - 1
+                    while k >= 0 {
+                        out = if out == "/" { "/" + suffix_rev[k] } else { out + "/" + suffix_rev[k] }
+                        k = k - 1
+                    }
+                    return module_normalize(out)
+                }
+            }
+            break
+        }
+        let tail = slice(cur, slash + 1, len(cur))
+        if tail != "" { suffix_rev.append(tail) }
+        cur = if slash == 0 { "/" } else { slice(cur, 0, slash) }
+        let anc = module_canonical_resolved(cur)
+        if anc != "" {
+            let mut out = anc
+            let mut k = len(suffix_rev) - 1
+            while k >= 0 {
+                out = if out == "/" { "/" + suffix_rev[k] } else { out + "/" + suffix_rev[k] }
+                k = k - 1
+            }
+            return module_normalize(out)
+        }
+    }
+    return norm
+}
+
 fn module_read_with_overlays(path: str, ov_paths: list[str], ov_texts: list[str]) -> list[str] {
-    let canon = module_canonical(path)
+    let canon = module_canonical_virtual(path)
     for i in 0..len(ov_paths) {
-        if ov_paths[i] == canon or ov_paths[i] == path {
+        let ovp = ov_paths[i]
+        if ovp == canon or ovp == path or module_canonical_virtual(ovp) == canon {
+            if ov_texts[i] == "__WYSNA_OVERLAY_DELETED__" { return ["0", ""] }
             return ["1", ov_texts[i]]
         }
     }
@@ -198,6 +245,29 @@ fn module_is_confined_under(candidate: str, root: str) -> bool {
     return len(can_file) > len(prefix) and slice(can_file, 0, len(prefix)) == prefix
 }
 
+fn module_loader_has_active_overlay(context: ModuleLoader, path: str) -> bool {
+    if len(context.ov_paths) == 0 { return false }
+    let canon = module_canonical(path)
+    let virt = module_canonical_virtual(path)
+    for i in 0..len(context.ov_paths) {
+        let ovp = context.ov_paths[i]
+        if ovp == path or ovp == canon or ovp == virt or module_canonical_virtual(ovp) == virt {
+            return context.ov_texts[i] != "__WYSNA_OVERLAY_DELETED__"
+        }
+    }
+    return false
+}
+
+fn module_is_confined_under_loader(context: ModuleLoader, candidate: str, root: str) -> bool {
+    if module_is_confined_under(candidate, root) { return true }
+    if not module_loader_has_active_overlay(context, candidate) { return false }
+    let can_root = module_canonical_resolved(root)
+    let virt = module_canonical_virtual(candidate)
+    if can_root == "" or virt == "" { return false }
+    let prefix = if can_root == "/" { "/" } else { can_root + "/" }
+    return len(virt) > len(prefix) and slice(virt, 0, len(prefix)) == prefix
+}
+
 struct UseHeader {
     found: bool,
     use_pos: int,
@@ -291,10 +361,10 @@ fn module_try_resolve_source(context: ModuleLoader, canonical: str, requested: s
                     break
                 }
             }
-            let base = if is_rel_dot or module_is_confined_under(canonical, owner) { module_directory(canonical) } else { owner + "/" }
+            let base = if is_rel_dot or module_is_confined_under_loader(context, canonical, owner) { module_directory(canonical) } else { owner + "/" }
             let relative = if need_ext { requested + ".wysna" } else { requested }
             resolved = module_normalize(base + relative)
-            if not module_is_confined_under(resolved, owner) {
+            if not module_is_confined_under_loader(context, resolved, owner) {
                 report_error_at("W1003", token, "module not found inside project source root: " + requested)
             }
             return if module_loader_file_readable(context, resolved) { resolved } else { "" }
