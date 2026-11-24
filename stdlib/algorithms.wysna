@@ -15,25 +15,32 @@ pub fn fold[T, R](values: list[T], initial: R, combine: fn(R, T) -> R) -> R {
 }
 
 pub fn sort[T](values: list[T], before: fn(T, T) -> bool) -> list[T] {
-    if len(values) < 2 {
+    let count = len(values)
+    if count < 2 {
         return values
     }
-    let middle = len(values) / 2
-    let mut left: list[T] = []
-    let mut right: list[T] = []
-    for index in 0..len(values) {
-        if index < middle {
-            left.append(values[index])
-        } else {
-            right.append(values[index])
-        }
+    return sort_range[T](values, before, 0, count)
+}
+
+fn sort_range[T](values: list[T], before: fn(T, T) -> bool, first: int, end: int) -> list[T] {
+    let count = end - first
+    if count == 1 {
+        return [values[first]]
     }
-    left = sort[T](left, before)
-    right = sort[T](right, before)
+    if count == 2 {
+        let left = values[first]
+        let right = values[first + 1]
+        return if before(right, left) { [right, left] } else { [left, right] }
+    }
+    let middle = first + count / 2
+    let left = sort_range[T](values, before, first, middle)
+    let right = sort_range[T](values, before, middle, end)
+    let left_count = len(left)
+    let right_count = len(right)
     let mut result: list[T] = []
     let mut i = 0
     let mut j = 0
-    while i < len(left) and j < len(right) {
+    while i < left_count and j < right_count {
         if before(right[j], left[i]) {
             result.append(right[j])
             j = j + 1
@@ -42,11 +49,11 @@ pub fn sort[T](values: list[T], before: fn(T, T) -> bool) -> list[T] {
             i = i + 1
         }
     }
-    while i < len(left) {
+    while i < left_count {
         result.append(left[i])
         i = i + 1
     }
-    while j < len(right) {
+    while j < right_count {
         result.append(right[j])
         j = j + 1
     }
