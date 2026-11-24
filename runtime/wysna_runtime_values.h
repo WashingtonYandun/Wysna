@@ -388,8 +388,8 @@ static inline WVal wysna_literal_str_n(WStringLiteral* literal, const char* data
     if (length <= 6) return wysna_sso_from_n(data ? data : "", length);
     /* Literal index caches belong to the main thread, never to a worker graph. */
     if (wysna_worker_depth > 0) return wysna_copy_str_n(data, length);
-    if (wysna_atomic_load_i32(&literal->buffer.refcount) == 0) {
-        wysna_spinlock_acquire(&wysna_runtime_context.runtime_lock);
+    if (wysna_rc_load(&literal->buffer.refcount) == 0) {
+        if (wysna_runtime_context.multi_threaded) wysna_spinlock_acquire(&wysna_runtime_context.runtime_lock);
         if (literal->buffer.refcount == 0) {
             literal->buffer.hash_cache = 0;
             literal->buffer.byte_length = length;
@@ -397,9 +397,9 @@ static inline WVal wysna_literal_str_n(WStringLiteral* literal, const char* data
             literal->buffer.data = (char*)data;
             literal->next = wysna_g_string_literals;
             wysna_g_string_literals = literal;
-            wysna_atomic_store_i32(&literal->buffer.refcount, -1); /* Immortal data and descriptor. */
+            wysna_rc_store(&literal->buffer.refcount, -1); /* Immortal data and descriptor. */
         }
-        wysna_spinlock_release(&wysna_runtime_context.runtime_lock);
+        if (wysna_runtime_context.multi_threaded) wysna_spinlock_release(&wysna_runtime_context.runtime_lock);
     }
     return wysna_make_hi_ptr(WVAL_HI_STR_PTR, &literal->buffer);
 }
@@ -465,16 +465,16 @@ static inline bool wysna_builtin_name(const char* name, const char* base) {
 
 static inline WVal wysna_enum_literal(WEnumBuf* literal, const char* enum_name, const char* variant) {
     if (wysna_builtin_name(enum_name, "Option") && strcmp(variant, "None") == 0) return wysna_none();
-    if (wysna_atomic_load_i32(&literal->refcount) == 0) {
-        wysna_spinlock_acquire(&wysna_runtime_context.runtime_lock);
+    if (wysna_rc_load(&literal->refcount) == 0) {
+        if (wysna_runtime_context.multi_threaded) wysna_spinlock_acquire(&wysna_runtime_context.runtime_lock);
         if (literal->refcount == 0) {
             literal->has_payload = false;
             literal->enum_name = wysna_builtin_name(enum_name, "Option") ? "Option" : enum_name;
             literal->variant = variant;
             literal->payload = wysna_unit();
-            wysna_atomic_store_i32(&literal->refcount, -1);
+            wysna_rc_store(&literal->refcount, -1);
         }
-        wysna_spinlock_release(&wysna_runtime_context.runtime_lock);
+        if (wysna_runtime_context.multi_threaded) wysna_spinlock_release(&wysna_runtime_context.runtime_lock);
     }
     return wysna_make_hi_ptr(WVAL_HI_ENUM, literal);
 }

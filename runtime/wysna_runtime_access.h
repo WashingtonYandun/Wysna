@@ -80,22 +80,32 @@ static inline WVal* wysna_index_ref(WVal* obj, WVal idx) {
     if (hi == WVAL_HI_DICT) {
         wysna_dict_detach(obj);
         WDictBuf* d = wysna_as_dict(*obj);
-        int32_t found = wysna_dict_find(d, idx);
+        uint64_t full_hash = 0;
+        uint32_t slot = 0;
+        int32_t found = wysna_dict_probe(d, idx, &full_hash, &slot);
         if (found >= 0) return &d->vals[found];
         if (d->cap > INT32_MAX / 2 || d->bucket_count > INT32_MAX / 2) {
             wysna_runtime_fail_unlocated("W4003", "Dictionary too large");
         }
-        if ((int64_t)(d->len + 1) * 2 >= d->bucket_count) wysna_dict_reindex(d, d->bucket_count * 2);
+        bool reindexed = false;
+        if ((int64_t)(d->len + 1) * 2 >= d->bucket_count) {
+            wysna_dict_reindex(d, d->bucket_count * 2);
+            reindexed = true;
+        }
         if (d->len >= d->cap) {
             d->cap = d->cap > 0 ? d->cap * 2 : 4;
             d->keys = (WVal*)wysna_realloc_safe(d->keys, sizeof(WVal) * d->cap);
             d->vals = (WVal*)wysna_realloc_safe(d->vals, sizeof(WVal) * d->cap);
         }
-        d->keys[d->len] = wysna_clone(idx);
-        d->vals[d->len] = wysna_none();
-        d->len++;
-        wysna_dict_index_entry(d, d->len - 1);
-        return &d->vals[d->len - 1];
+        int32_t new_index = d->len++;
+        d->keys[new_index] = wysna_clone(idx);
+        d->vals[new_index] = wysna_none();
+        if (reindexed) {
+            wysna_dict_index_entry_hashed(d, new_index, full_hash);
+        } else {
+            d->buckets[slot] = new_index;
+        }
+        return &d->vals[new_index];
     }
     wysna_runtime_fail_unlocated("W4003", "Cannot index-assign non-collection");
 }

@@ -641,6 +641,7 @@ static inline int64_t wysna_async_spawn_handle(WVal fn) {
     int64_t task_id = task->id;
     wysna_spinlock_release(&wysna_spawn_lock);
 
+    wysna_enable_multi_threaded();
     wysna_atomic_add_i64(&wysna_runtime_context.active_workers, 1);
     if (wysna_spawn_threads_available()) {
 #if !defined(_WIN32) && !defined(__wasi__)
@@ -2205,6 +2206,7 @@ static inline WVal wysna_parallel_map_configured(WVal values, WVal transform,
         cursor += span;
     }
 
+    wysna_enable_multi_threaded();
     wysna_atomic_add_i64(&wysna_runtime_context.active_workers, workers);
 #if !defined(_WIN32) && !defined(__wasi__)
     pthread_t tids[4];

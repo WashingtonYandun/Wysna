@@ -198,6 +198,9 @@ typedef struct WysnaRuntimeContext {
     int64_t active_workers;
     volatile int worker_failure_lock;
     bool quotas_initialized;
+    bool telemetry_initialized;
+    bool mem_telemetry_disabled;
+    bool multi_threaded;
     WWeakControl* purple_head;
     int64_t collected_cycles;
     bool collecting_cycles;
@@ -217,6 +220,56 @@ extern WysnaRuntimeContext wysna_runtime_context;
 #else
 static WysnaRuntimeContext wysna_runtime_context = {0};
 #endif
+
+#if defined(__GNUC__) || defined(__clang__)
+#define W_LIKELY(x)   __builtin_expect(!!(x), 1)
+#define W_UNLIKELY(x) __builtin_expect(!!(x), 0)
+#else
+#define W_LIKELY(x)   (x)
+#define W_UNLIKELY(x) (x)
+#endif
+
+/* Single-threaded programs skip hardware atomic barriers while active_workers == 0. */
+static inline int32_t wysna_rc_load(const int32_t* ptr) {
+    if (W_LIKELY(!wysna_runtime_context.multi_threaded)) return *ptr;
+    return wysna_atomic_load_i32(ptr);
+}
+static inline void wysna_rc_store(int32_t* ptr, int32_t val) {
+    if (W_LIKELY(!wysna_runtime_context.multi_threaded)) { *ptr = val; return; }
+    wysna_atomic_store_i32(ptr, val);
+}
+static inline int32_t wysna_rc_inc(int32_t* ptr) {
+    if (W_LIKELY(!wysna_runtime_context.multi_threaded)) return ++(*ptr);
+    return wysna_atomic_inc_i32(ptr);
+}
+static inline int32_t wysna_rc_dec(int32_t* ptr) {
+    if (W_LIKELY(!wysna_runtime_context.multi_threaded)) return --(*ptr);
+    return wysna_atomic_dec_i32(ptr);
+}
+static inline bool wysna_rc_dec_if_gt1(int32_t* ptr) {
+    if (W_LIKELY(!wysna_runtime_context.multi_threaded)) {
+        if (*ptr > 1) { --(*ptr); return true; }
+        return false;
+    }
+    return wysna_atomic_dec_if_gt1_i32(ptr);
+}
+static inline uint32_t wysna_rc_load_u32(const uint32_t* ptr) {
+    if (W_LIKELY(!wysna_runtime_context.multi_threaded)) return *ptr;
+    return wysna_atomic_load_u32(ptr);
+}
+static inline void wysna_rc_store_u32(uint32_t* ptr, uint32_t val) {
+    if (W_LIKELY(!wysna_runtime_context.multi_threaded)) { *ptr = val; return; }
+    wysna_atomic_store_u32(ptr, val);
+}
+static inline void wysna_enable_multi_threaded(void) {
+    if (!wysna_runtime_context.multi_threaded) {
+#if defined(__GNUC__) || defined(__clang__)
+        __atomic_store_n(&wysna_runtime_context.multi_threaded, true, __ATOMIC_RELEASE);
+#else
+        wysna_runtime_context.multi_threaded = true;
+#endif
+    }
+}
 /* Diagnostics belong to the executing thread; allocation quotas remain program-wide. */
 #if defined(__wasi__) && !defined(__wasm_threads__)
 #define WYSNA_THREAD_LOCAL
@@ -474,6 +527,34 @@ static inline void wysna_cow_reset_stats(void) {
     wysna_g_cow_allocated_bytes = 0;
 }
 
+static inline void wysna_runtime_init_telemetry(void) {
+    wysna_runtime_context.telemetry_initialized = true;
+    const char* check_env = getenv("WYSNA_MEM_CHECK");
+    const char* stats_env = getenv("WYSNA_MEM_STATS");
+    bool enabled = (check_env && strcmp(check_env, "1") == 0) ||
+                   (stats_env && strcmp(stats_env, "1") == 0);
+    wysna_runtime_context.mem_telemetry_disabled = !enabled;
+}
+
+static inline void wysna_rc_note_retain(void) {
+    if (W_UNLIKELY(!wysna_runtime_context.mem_telemetry_disabled)) {
+        if (W_LIKELY(!wysna_runtime_context.multi_threaded)) wysna_g_retain_count++;
+        else wysna_atomic_add_i64(&wysna_g_retain_count, 1);
+    }
+}
+
+static inline void wysna_rc_note_release(void) {
+    if (W_UNLIKELY(!wysna_runtime_context.mem_telemetry_disabled)) {
+        if (W_LIKELY(!wysna_runtime_context.multi_threaded)) wysna_g_release_count++;
+        else wysna_atomic_add_i64(&wysna_g_release_count, 1);
+    }
+}
+
+static inline void wysna_cow_add(int64_t* field, int64_t delta) {
+    if (W_LIKELY(!wysna_runtime_context.multi_threaded)) *field += delta;
+    else wysna_atomic_add_i64(field, delta);
+}
+
 /*
  * Logical container allocation tracking for Wysna runtime.
  * NOTE on WYSNA_MEM_CHECK vs ASan/LSan:
@@ -483,14 +564,25 @@ static inline void wysna_cow_reset_stats(void) {
  * Clang/GCC AddressSanitizer and LeakSanitizer (ASan/LSan) in CI and test suites.
  */
 static inline void wysna_mem_on_alloc(void) {
-    wysna_atomic_add_i64(&wysna_g_alloc_count, 1);
-    wysna_atomic_add_i64(&wysna_g_live_objects, 1);
+    if (W_LIKELY(!wysna_runtime_context.multi_threaded)) {
+        wysna_g_alloc_count++;
+        wysna_g_live_objects++;
+    } else {
+        wysna_atomic_add_i64(&wysna_g_alloc_count, 1);
+        wysna_atomic_add_i64(&wysna_g_live_objects, 1);
+    }
 }
 
 static inline void wysna_mem_on_free(void) {
-    wysna_atomic_add_i64(&wysna_g_free_count, 1);
-    int64_t live = wysna_atomic_sub_i64(&wysna_g_live_objects, 1);
-    if (live < 0) {
+    int64_t live;
+    if (W_LIKELY(!wysna_runtime_context.multi_threaded)) {
+        wysna_g_free_count++;
+        live = --wysna_g_live_objects;
+    } else {
+        wysna_atomic_add_i64(&wysna_g_free_count, 1);
+        live = wysna_atomic_sub_i64(&wysna_g_live_objects, 1);
+    }
+    if (W_UNLIKELY(live < 0)) {
         wysna_runtime_fail_unlocated("W4003", "Memory safety violation (live_object_count underflow: %" PRId64 ")", live);
     }
 }

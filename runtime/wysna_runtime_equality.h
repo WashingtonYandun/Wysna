@@ -47,8 +47,8 @@ static inline bool wysna_eq(WVal a, WVal b) {
                 WStringBuf* ob = wysna_str_owner(b);
                 if (oa && ob) {
                     if (oa == ob) return true;
-                    uint32_t ha = wysna_atomic_load_u32(&oa->hash_cache);
-                    uint32_t hb = wysna_atomic_load_u32(&ob->hash_cache);
+                    uint32_t ha = wysna_rc_load_u32(&oa->hash_cache);
+                    uint32_t hb = wysna_rc_load_u32(&ob->hash_cache);
                     if (ha != 0 && hb != 0 && ha != hb) return false;
                 }
                 char sba[7], sbb[7];

@@ -128,17 +128,25 @@ static inline WVal wysna_make_dict(int32_t count, const WVal* keys, const WVal* 
     wysna_mem_on_alloc();
     WVal v = wysna_make_hi_ptr(WVAL_HI_DICT, d);
     for (int32_t i = 0; i < count; i++) {
-        int32_t index = wysna_dict_find(d, keys[i]);
+        uint64_t full_hash = 0;
+        uint32_t slot = 0;
+        int32_t index = wysna_dict_probe(d, keys[i], &full_hash, &slot);
         if (index >= 0) { wysna_release(d->vals[index]); d->vals[index] = wysna_clone(vals[i]); }
         else {
+            bool reindexed = false;
             if ((int64_t)(d->len + 1) * 2 >= d->bucket_count) {
                 if (d->bucket_count > INT32_MAX / 2) { wysna_runtime_fail_unlocated("W4003", "Dictionary too large"); }
                 wysna_dict_reindex(d, d->bucket_count * 2);
+                reindexed = true;
             }
             index = d->len++;
             d->keys[index] = wysna_clone(keys[i]);
             d->vals[index] = wysna_clone(vals[i]);
-            wysna_dict_index_entry(d, index);
+            if (reindexed) {
+                wysna_dict_index_entry_hashed(d, index, full_hash);
+            } else {
+                d->buckets[slot] = index;
+            }
         }
     }
     return v;
@@ -264,9 +272,9 @@ static inline WVal wysna_builtin_weak(WVal object) {
         wysna_runtime_fail_unlocated("W4003", "weak expects a class object");
     }
     WWeakControl* control = st->control;
-    wysna_check_retain_count(control->weak, "retain/weak");
-    wysna_atomic_inc_i32(&control->weak);
-    wysna_atomic_add_i64(&wysna_g_retain_count, 1);
+    wysna_check_retain_count(wysna_rc_load(&control->weak), "retain/weak");
+    wysna_rc_inc(&control->weak);
+    wysna_rc_note_retain();
     return wysna_make_hi_ptr(WVAL_HI_EXT, control);
 }
 

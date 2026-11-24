@@ -569,6 +569,7 @@ static inline int wysna_entry_status(WVal value) {
 
 #ifdef _WIN32
 static inline void wysna_init_args(int argc, char** argv) {
+    wysna_runtime_init_telemetry();
     (void)argc; (void)argv;
     typedef LPWSTR* (WINAPI *pfnCommandLineToArgvW)(LPCWSTR, int*);
     HMODULE hShell = LoadLibraryA("shell32.dll");
@@ -621,6 +622,7 @@ static inline void wysna_init_args(int argc, char** argv) {
 }
 #else
 static inline void wysna_init_args(int argc, char** argv) {
+    wysna_runtime_init_telemetry();
     wysna_g_argc = argc;
     wysna_g_argv = argv;
 }
