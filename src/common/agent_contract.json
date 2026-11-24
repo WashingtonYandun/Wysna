@@ -224,8 +224,8 @@
         "shared_mutable_objects": false,
         "unknown_callbacks": "rejected",
         "parallel_reduce": "parallel-map-sequential-left-fold",
-        "task_groups": false,
-        "public_cancellation": false
+        "task_groups": true,
+        "public_cancellation": true
       }
     },
     "compiler": {
@@ -447,8 +447,8 @@
         "shared_mutable_objects": false,
         "unknown_callbacks": "rejected",
         "parallel_reduce": "parallel-map-sequential-left-fold",
-        "task_groups": false,
-        "public_cancellation": false
+        "task_groups": true,
+        "public_cancellation": true
       }
     }
   },

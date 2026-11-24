@@ -3,8 +3,8 @@
 Use the installed Seed CLI as the project workflow. It provides deterministic
 project checks, builds, tests, API discovery and versioned machine output. The standalone `native-core-v1` SDK provides `check`, `fmt`, `test`, `build`, `run`, `graph`,
 `inspect`, `patch`, `explain`, `fix`, `schema`, `mcp`, `api`, `capabilities`, `skills`,
-`project new|lock|check|build|run|test`, and Stage-3 native `lsp` without Python, while Seed continues
-to own library-mode exports and WebAssembly targets (`wasi-command`, `browser-library`).
+`project new|lock|check|build|run|test`, and Stage-3 native `lsp` without Python. The native SDK also builds standalone
+WASI commands. Seed provides WASI project workflows, execution, and library-mode browser exports.
 
 ## Discover the installed toolchain
 
@@ -119,7 +119,7 @@ from std.text use {
 ```
 
 - **Token Economy:** Direct symbol importing avoids repetitive `module.` qualifiers, saving ~13%–22% BPE tokens in dense multi-step logic.
-- **Canonical Formatting:** Multiple symbols must be enclosed in braces `{ ... }` with trailing commas; single symbols can be unbraced (`from std.math use sqrt`).
+- **Canonical Formatting:** Multiple symbols must be enclosed in braces `{ ... }` with trailing commas; single symbols can be unbraced (`from std.text use to_lower`).
 - **Disambiguation:** If symbol names clash across imported modules, assign local aliases using `as` (`User as DomainUser`).
 - **Bootstrap Namespace Parity:** Selective `from ... use { ... }` imports (including aliases) and whole-module namespace imports (`import "std/json"`) are both supported across Seed and the self-hosted `native-core-v1` compiler.
 - **Self-Healing Autofix (`wysna fix`):** Automatically repairs immutable assignment targets (`W3001`: `let` -> `let mut`), misnamed class constructors (`W3004`: `fn ClassName` -> `fn init`), scalar string concatenations (`W2001`: `+ scalar` -> `+ str(scalar)`), high-confidence identifier typos (`W1001`), and common foreign syntax (`&&` -> `and`, binary `||` -> `or`, prefix `!` -> `not`, class-body `pub` -> `public`; `else if` is also accepted alongside canonical `elif`). Pass `--include-maybe` to also apply tentative repairs such as appending `?` on `W2001` optional/result mismatches (`T?` / `T ! E`) when the enclosing function allows propagation (whereas supplying a fallback via `?? <default>` remains an explicit domain decision).
@@ -140,8 +140,9 @@ To safeguard agent loops against runaway execution and unrepeatable I/O side-eff
 - The native SDK currently implements `native-core-v1` source checking, MIR/C99
   emission, native build/run/test/fmt, Agent-First tools (`graph`, `inspect`, `patch`,
   `explain`, `schema`, `fix`, `api`, `capabilities`, `skills`, `mcp`, `project new|lock|check|build|run|test`),
-  and Stage-3 native `lsp` without Python. Do not assume library-mode exports, WASI,
-  browser targets, or `--backend=llvm-experimental` are available through that SDK.
+  and Stage-3 native `lsp` without Python. It builds standalone WASI commands with
+  `build --target=wasi`. Seed provides WASI project workflows, execution, and
+  library-mode browser exports.
 - Effect reports and capability declarations help review programs; `wysna run --allow/--deny` enforces static pre-execution gates (`W5006`) and Seed `wysna build --sandbox` (with `--allow/--deny`) compiles `WYSNA_DENY_CAP_*` runtime checks (`W5006`), though neither replaces an OS kernel sandbox for arbitrary native C extensions.
 - AI authoring and self-healing repair benchmarks live in `bench/ai_eval/`
   (`harness.py` and `token_audit.py`); outside this evaluation suite, Wysna
