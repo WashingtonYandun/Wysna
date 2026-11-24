@@ -73,28 +73,47 @@ TOOLS = [
          "symbol": {"type": "string", "description": "Optional symbol name or node ID filter."},
          "relation": {"type": "string", "description": "Optional relation filter: implements|hierarchy|usages|callers|callees|impact."}}}},
     {"name": "wysna_inspect",
-     "description": "Surgical, token-efficient symbol source slice, contract, effects, call resolution, and dependency signatures.",
+     "description": "Surgical, token-efficient symbol source slice (single or batch), contract, effects, call resolution, and dependency signatures.",
      "inputSchema": {"type": "object", "properties": {
          **_SOURCE_OR_PATH,
          "symbol": {"type": "string", "description": "Symbol name to extract (omit for compact index)."},
+         "symbols": {"type": "array", "items": {"type": "string"}, "description": "Batch list of symbols to extract under one shared max_bytes budget."},
          "with_deps": {"type": "boolean", "description": "Include signatures of referenced types and callees."},
          "max_bytes": {"type": "integer", "minimum": 1, "description": "Maximum UTF-8 byte budget for returned source/context."},
          "source_offset": {"type": "integer", "minimum": 0, "description": "UTF-8 byte offset within target symbol source."},
          "offset": {"type": "integer", "minimum": 0, "description": "Starting index offset when listing symbols."}}}},
     {"name": "wysna_patch",
-     "description": "Checked declaration-level or multi-file workspace patch guarded by graph/plan hash and in-memory typecheck.",
+     "description": "Checked declaration-level or multi-file workspace patch (source, symbol, hunks, create, delete) guarded by graph/plan hash and in-memory typecheck.",
      "inputSchema": {"type": "object", "properties": {
          "path": {"type": "string", "description": "Path to a .wysna file inside the server root (single-symbol mode)."},
          "symbol": {"type": "string", "description": "Target declaration name or Class.method (single-symbol mode)."},
          "replacement": {"type": "string", "description": "Replacement declaration Wysna code (single-symbol mode)."},
          "expect_graph_hash": {"type": "string", "description": "Optional optimistic lock graph hash (single-symbol mode)."},
          "manifest": {"type": "string", "description": "Path to wysna.toml inside server root (workspace mode)."},
-         "edits": {"type": "array", "description": "Array of {path, source} objects to check and apply together (workspace mode).",
-                   "items": {"type": "object", "properties": {"path": {"type": "string"}, "source": {"type": "string"}}, "required": ["path", "source"]}},
+         "edits": {"type": "array", "description": "Array of workspace edit objects ({path, source|symbol+replacement|hunks|create+source|delete}) checked and applied together.",
+                   "items": {"type": "object"}},
          "expect_plan_hash": {"type": "string", "description": "Plan hash from preview (required with apply=true in workspace mode)."},
          "discover": {"type": "boolean", "description": "Discover test files under tests/ (workspace mode)."},
          "frozen": {"type": "boolean", "description": "Verify wysna.lock before planning/applying (workspace mode)."},
          "apply": {"type": "boolean", "description": "Write verified patch to disk (default false)."}}}},
+    {"name": "wysna_project_check",
+     "description": "Static project-wide typecheck across wysna.toml targets and lockfile verification.",
+     "inputSchema": {"type": "object", "properties": {
+         "manifest": {"type": "string", "description": "Path to wysna.toml inside server root."},
+         "target": {"type": "string", "description": "Optional target name from wysna.toml."},
+         "frozen": {"type": "boolean", "description": "Verify wysna.lock before checking."}},
+         "required": ["manifest"]}},
+    {"name": "wysna_project_test",
+     "description": "List test plans deterministically (list=true) or execute project tests when MCP server was started with --allow-exec.",
+     "inputSchema": {"type": "object", "properties": {
+         "manifest": {"type": "string", "description": "Path to wysna.toml inside server root."},
+         "list": {"type": "boolean", "description": "Return static test plan and plan_hash without executing code."},
+         "discover": {"type": "boolean", "description": "Discover test files under tests/."},
+         "frozen": {"type": "boolean", "description": "Verify wysna.lock before listing or running tests."},
+         "filter": {"type": "string", "description": "Substring filter on test ID/name."},
+         "case": {"type": "string", "description": "Run only the specified test case ID."},
+         "expect_plan_hash": {"type": "string", "description": "Verify test selection against a previously listed plan_hash."}},
+         "required": ["manifest"]}},
     {"name": "wysna_skills",
      "description": "Version-matched concise coding and workflow guides embedded in Wysna.",
      "inputSchema": {"type": "object", "properties": {
@@ -120,8 +139,9 @@ def _run_cli(argv):
 
 
 class McpServer:
-    def __init__(self, root=None):
+    def __init__(self, root=None, allow_exec=False):
         self.root = os.path.realpath(root or os.getcwd())
+        self.allow_exec = bool(allow_exec)
         self.service = CompilerService(project_root=self.root)
         self._inline_path = os.path.join(self.root, "__mcp_inline__.wysna")
 
@@ -280,6 +300,7 @@ class McpServer:
                 payload = inspect_source(
                     path,
                     symbol=arguments.get("symbol"),
+                    symbols=arguments.get("symbols"),
                     with_deps=bool(arguments.get("with_deps")),
                     max_bytes=arguments.get("max_bytes"),
                     source_offset=arguments.get("source_offset", 0),
@@ -293,6 +314,59 @@ class McpServer:
             envelope = tool_result("inspect", "ok", 0)
             envelope["result"] = payload
             return envelope
+
+    def _run_project_subcommand(self, argv):
+        code, stdout, stderr = _run_cli(argv)
+        if not stdout.strip():
+            raise ToolError((stderr or f"project command produced no JSON (exit {code})").strip())
+        try:
+            return json.loads(stdout)
+        except ValueError as error:
+            raise ToolError(f"invalid JSON from project command: {error}") from error
+
+    def tool_wysna_project_check(self, arguments):
+        manifest_raw = arguments.get("manifest")
+        if not isinstance(manifest_raw, str) or not manifest_raw.strip():
+            raise ToolError("'wysna_project_check' requires 'manifest'")
+        confined = self._confine(manifest_raw)
+        argv = ["project", "check", "--engine=seed", "--manifest", confined, "--output-format=json-v1"]
+        target = arguments.get("target")
+        if isinstance(target, str) and target.strip():
+            argv.extend(["--target", target])
+        if bool(arguments.get("frozen")):
+            argv.append("--frozen")
+        return self._run_project_subcommand(argv)
+
+    def tool_wysna_project_test(self, arguments):
+        manifest_raw = arguments.get("manifest")
+        if not isinstance(manifest_raw, str) or not manifest_raw.strip():
+            raise ToolError("'wysna_project_test' requires 'manifest'")
+        confined = self._confine(manifest_raw)
+        list_only = bool(arguments.get("list"))
+        if not list_only and not self.allow_exec:
+            from tooling.ToolResult import diagnostic_record
+            return tool_result(
+                "project.test",
+                "usage_error",
+                2,
+                diagnostics=[diagnostic_record(
+                    "W5002",
+                    "usage",
+                    "wysna_project_test execution requires starting MCP server with --allow-exec (pass list=true for static test discovery)",
+                )],
+            )
+        argv = ["project", "test", "--engine=seed", "--manifest", confined, "--output-format=json-v1"]
+        if list_only:
+            argv.append("--list")
+        if bool(arguments.get("discover")):
+            argv.append("--discover")
+        if bool(arguments.get("frozen")):
+            argv.append("--frozen")
+        for flag, key in (("--filter", "filter"), ("--case", "case"), ("--expect-plan-hash", "expect_plan_hash")):
+            val = arguments.get(key)
+            if isinstance(val, str) and val.strip():
+                argv.extend([flag, val])
+        return self._run_project_subcommand(argv)
 
     def tool_wysna_patch(self, arguments):
         if "edits" in arguments or "manifest" in arguments:
@@ -455,12 +529,20 @@ class McpServer:
 def serve_mcp(argv=()):
     arguments = list(argv)
     root = None
-    if arguments[:1] == ["--root"] and len(arguments) == 2:
-        root = arguments[1]
-    elif arguments:
-        print("usage: wysna mcp [--root <dir>]", file=sys.stderr)
-        return 2
-    server = McpServer(root)
+    allow_exec = False
+    i = 0
+    while i < len(arguments):
+        arg = arguments[i]
+        if arg == "--root" and i + 1 < len(arguments) and root is None:
+            root = arguments[i + 1]
+            i += 2
+        elif arg == "--allow-exec":
+            allow_exec = True
+            i += 1
+        else:
+            print("usage: wysna mcp [--root <dir>] [--allow-exec]", file=sys.stderr)
+            return 2
+    server = McpServer(root, allow_exec=allow_exec)
     protocol_out = sys.stdout
     for line in sys.stdin:
         line = line.strip()

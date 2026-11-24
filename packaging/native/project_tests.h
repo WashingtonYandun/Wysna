@@ -298,25 +298,28 @@ static void sdk_test_artifact(FILE* output, const char* path, const char* media,
     fputs("\"}", output);
 }
 
-static void sdk_test_envelope(const SdkProjectTestPlan* plan, int count, int64_t duration, int code, int json_ok, int junit_ok) {
+static void sdk_test_envelope(const SdkProjectTestPlan* plan, int count, int64_t duration, int code, int json_ok, int junit_ok, const char* diag_out) {
+    FILE* out = (diag_out && diag_out[0]) ? sdk_test_open(diag_out, "wb") : NULL;
+    FILE* dst = out ? out : stdout;
     const char* status = code == 0 ? "ok" : code == 2 ? "usage_error" : code == 3 ? "toolchain_error" : code == 130 ? "cancelled" : "runtime_error";
-    fprintf(stdout, "{\"schema_version\":\"wysna.tool-result/1\",\"command\":\"project.test\",\"status\":\"%s\",\"invocation_id\":\"native\",\"tool_exit_code\":%d,\"process_exit_code\":%d,\"execution\":null,\"toolchain\":{\"compiler\":\"" WYSNA_NATIVE_VERSION "\"},\"target\":{\"profile\":\"native-cli\",\"triple\":null},\"diagnostics\":[", status, code, code);
-    if (code == 3) fputs("{\"code\":\"W5004\",\"stage\":\"filesystem\",\"severity\":\"error\",\"message\":\"Cannot publish test report\",\"primary_span\":null,\"related\":[],\"data\":{},\"fixes\":[]}", stdout);
-    fputs("],\"artifacts\":[", stdout);
+    fprintf(dst, "{\"schema_version\":\"wysna.tool-result/1\",\"command\":\"project.test\",\"status\":\"%s\",\"invocation_id\":\"native\",\"tool_exit_code\":%d,\"process_exit_code\":%d,\"execution\":null,\"toolchain\":{\"compiler\":\"" WYSNA_NATIVE_VERSION "\"},\"target\":{\"profile\":\"native-cli\",\"triple\":null},\"diagnostics\":[", status, code, code);
+    if (code == 3) fputs("{\"code\":\"W5004\",\"stage\":\"filesystem\",\"severity\":\"error\",\"message\":\"Cannot publish test report\",\"primary_span\":null,\"related\":[],\"data\":{},\"fixes\":[]}", dst);
+    fputs("],\"artifacts\":[", dst);
     int emitted = 0;
-    if (json_ok && plan->report_json[0]) sdk_test_artifact(stdout, plan->report_json, "application/json", &emitted);
-    if (junit_ok && plan->report_junit[0]) sdk_test_artifact(stdout, plan->report_junit, "application/xml", &emitted);
-    fputs("],\"telemetry\":null,\"result\":", stdout);
-    if (plan->list_only) fputs(plan->json, stdout);
-    else sdk_project_test_report(stdout, plan, count, duration, 0);
-    puts("}");
+    if (json_ok && plan->report_json[0]) sdk_test_artifact(dst, plan->report_json, "application/json", &emitted);
+    if (junit_ok && plan->report_junit[0]) sdk_test_artifact(dst, plan->report_junit, "application/xml", &emitted);
+    fputs("],\"telemetry\":null,\"result\":", dst);
+    if (plan->list_only) fputs(plan->json, dst);
+    else sdk_project_test_report(dst, plan, count, duration, 0);
+    fputs("}\n", dst);
+    if (out) fclose(out);
 }
 
 static int sdk_run_project_tests(SdkInvocation* invocation, const SdkOptions* options, SdkProjectTestPlan* plan) {
     if (plan->list_only) {
         int ok = sdk_publish_test_report(plan->report_json, plan, 0, 0, 2);
         int code = !ok ? 3 : plan->count ? 0 : 2;
-        if (options->project_json_v1) sdk_test_envelope(plan, 0, 0, code, ok, 0);
+        if (options->project_json_v1) sdk_test_envelope(plan, 0, 0, code, ok, 0, options->diag_out);
         else for (int index = 0; index < plan->count; index++) printf("test:%s %s\n", plan->cases[index].name, plan->cases[index].entry + strlen(plan->root) + 1);
         return code;
     }
@@ -340,7 +343,7 @@ static int sdk_run_project_tests(SdkInvocation* invocation, const SdkOptions* op
     int json_ok = sdk_publish_test_report(plan->report_json, plan, completed, duration, 0);
     int junit_ok = sdk_publish_test_report(plan->report_junit, plan, completed, duration, 1);
     if (!json_ok || !junit_ok) code = 3;
-    if (options->project_json_v1) sdk_test_envelope(plan, completed, duration, code, json_ok, junit_ok);
+    if (options->project_json_v1) sdk_test_envelope(plan, completed, duration, code, json_ok, junit_ok, options->diag_out);
     else printf("Ran %d test(s): %d passed, %d failed.\n", completed, completed - failed, failed);
     for (int index = 0; index < completed; index++) {
         free(plan->cases[index].out); free(plan->cases[index].err); free(plan->cases[index].diagnostics);

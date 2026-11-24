@@ -39,7 +39,7 @@
 typedef struct {
     const char *command, *source, *output, *profile;
     const char *project_subcmd, *project_src_root, *unsupported_target;
-    const char *allow_caps, *deny_caps;
+    const char *allow_caps, *deny_caps, *diag_out;
     int arguments, include_count, link_count, library_count, library_dir_count, dep_count;
     int profile_set, timeout_set, project_json_v1, test_diagnostics, sandbox, json_v1, target_set, wasi;
     const char *includes[SDK_LINK_LIMIT], *links[SDK_LINK_LIMIT], *libraries[SDK_LINK_LIMIT], *library_dirs[SDK_LINK_LIMIT];
@@ -198,6 +198,9 @@ static int sdk_parse(SdkOptions* options, int argc, char** argv) {
             } else if (strcmp(value, "--timeout-ms") == 0) {
                 if (++index >= argc || options->timeout_set++) return 0;
                 if (!sdk_parse_timeout_ms(argv[index], &options->timeout)) return 0;
+            } else if (strcmp(value, "--diag-out") == 0 && strcmp(options->project_subcmd, "test") == 0) {
+                if (++index >= argc || options->diag_out) return 0;
+                options->diag_out = argv[index];
             } else if (strcmp(value, "--include-dir") == 0) {
                 if (++index >= argc || options->include_count >= SDK_LINK_LIMIT) return 0;
                 options->includes[options->include_count++] = argv[index];
@@ -881,6 +884,13 @@ static int sdk_execute(SdkInvocation* invocation, const SdkOptions* options, int
         const char* target_exe = strcmp(options->command, "mcp") == 0 ? invocation->mcp_engine : invocation->engine;
         if (strcmp(target_exe, invocation->engine) != 0) {
             (void)sdk_environment("WYSNA_SELFHOST_COMPILER", invocation->engine);
+        }
+        if (strcmp(options->command, "mcp") == 0) {
+            char driver_raw[SDK_PATH_CAP];
+            char driver_abs[SDK_PATH_CAP];
+            if (sdk_executable(driver_raw) && sdk_absolute(driver_abs, driver_raw, 1)) {
+                (void)sdk_environment("WYSNA_SDK_DRIVER", driver_abs);
+            }
         }
         const char* engine_arguments[SDK_ARGUMENT_LIMIT + 4];
         engine_arguments[0] = target_exe;
