@@ -10,6 +10,7 @@ import json
 from pathlib import Path
 import re
 
+from error.Error import WysnaError
 from lexer.Lexer import Lexer
 from node import NodeType as A
 from tokens.TokenType import TokenType
@@ -220,6 +221,13 @@ def _walk_expressions(node):
     elif isinstance(node, list):
         for item in node:
             yield from _walk_expressions(item)
+
+
+def _identifier_target(expr, fallback):
+    symbol = getattr(expr, 'resolved_symbol', None)
+    if symbol is None:
+        return fallback
+    return symbol.declaration_name or symbol.name
 
 
 def build_semantic_graph(checked, *, effects_report=None) -> dict:
@@ -674,8 +682,7 @@ def build_semantic_graph(checked, *, effects_report=None) -> dict:
                         nodes[node_id]['indirect_call'] = True
                     callee = expr.callee
                     if isinstance(callee, A.IdentExpr):
-                        sym = getattr(callee, 'resolved_symbol', None)
-                        callee_raw = sym.name if sym is not None else callee.name
+                        callee_raw = _identifier_target(callee, callee.name)
                         ctor_target = resolve_node_id(callee_raw, ('class', 'struct'))
                         if ctor_target is not None:
                             record_instantiation(node_id, callee_raw, stmt_file, expr_line)
@@ -715,7 +722,7 @@ def build_semantic_graph(checked, *, effects_report=None) -> dict:
 
                 reference = getattr(expr, 'function_reference', None)
                 if reference:
-                    target = resolve_node_id(reference, ('fn', 'extern'))
+                    target = resolve_node_id(_identifier_target(expr, reference), ('fn', 'extern'))
                     add_edge(node_id, target, 'references_function', file=stmt_file, line=expr_line)
                 inferred = getattr(expr, 'inferred_type', None)
                 if inferred is not None and getattr(inferred, 'kind', '') in ('ClassType', 'InterfaceType', 'StructType', 'EnumType'):
@@ -737,7 +744,7 @@ def build_semantic_graph(checked, *, effects_report=None) -> dict:
             expr_line = getattr(expr, 'line', getattr(stmt, 'line', 1))
             reference = getattr(expr, 'function_reference', None)
             if reference:
-                top_references.append((reference, expr_line))
+                top_references.append((_identifier_target(expr, reference), expr_line))
             if isinstance(expr, A.LetDecl) and expr.type_ann is not None:
                 for type_ref in _extract_type_names_from_annotation(expr.type_ann):
                     top_type_usages.append((type_ref, expr.line, 'local'))
@@ -750,8 +757,7 @@ def build_semantic_graph(checked, *, effects_report=None) -> dict:
                 top_indirect_call |= is_indirect_call(expr)
                 callee = expr.callee
                 if isinstance(callee, A.IdentExpr):
-                    sym = getattr(callee, 'resolved_symbol', None)
-                    callee_raw = sym.name if sym is not None else callee.name
+                    callee_raw = _identifier_target(callee, callee.name)
                     ctor_target = resolve_node_id(callee_raw, ('class', 'struct'))
                     if ctor_target is not None:
                         top_instantiations.append((callee_raw, expr_line))
@@ -909,6 +915,30 @@ def find_graph_node(graph: dict, symbol: str) -> dict | None:
     return suffix_matches[0] if len(suffix_matches) == 1 else None
 
 
+def resolve_graph_symbol(graph: dict, symbol: str, stage: str) -> dict | None:
+    """Resolve user-supplied selectors without choosing among homonyms."""
+    nodes = graph['nodes']
+    for field in ('id', 'qualified_name', 'name'):
+        matches = [node for node in nodes if node[field] == symbol
+                   and not (field == 'qualified_name' and node['name'] == symbol)]
+        if matches:
+            break
+    else:
+        matches = [node for node in nodes
+                   if node['qualified_name'].endswith(('::' + symbol, '.' + symbol))]
+    if len(matches) < 2:
+        return matches[0] if matches else None
+    fields = ('id', 'qualified_name', 'kind', 'file', 'line', 'col', 'signature')
+    candidates = [{field: node.get(field, '') for field in fields}
+                  for node in sorted(matches, key=lambda item: (item['id'], item['file'], item['line']))]
+    choices = ', '.join(candidate['id'] for candidate in candidates)
+    error = WysnaError(f"Ambiguous symbol '{symbol}'; pass a candidate ID to --symbol: {choices}",
+                       file=graph['entry_file'], code='W1005', stage=stage)
+    error.data = {'kind': 'ambiguous_symbol', 'symbol': symbol,
+                  'graph_hash': graph['graph_hash'], 'candidates': candidates}
+    raise error
+
+
 def compute_blast_radius(graph: dict, target_id: str) -> dict:
     """Compute direct and transitive reverse dependents for a target graph node."""
     edges = graph.get('edges', [])
@@ -945,7 +975,7 @@ def query_semantic_graph(graph: dict, *, symbol: str | None = None, relation: st
     if symbol is None and relation is None:
         return graph
 
-    node = find_graph_node(graph, symbol) if symbol else None
+    node = resolve_graph_symbol(graph, symbol, 'graph') if symbol else None
     if symbol and node is None:
         return {
             'schema_version': graph['schema_version'],

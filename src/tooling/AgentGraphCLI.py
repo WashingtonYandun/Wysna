@@ -12,7 +12,7 @@ from compiler.CompilerService import CompilerService
 from compiler.SemanticGraph import (
     build_semantic_graph,
     compute_blast_radius,
-    find_graph_node,
+    resolve_graph_symbol,
     query_semantic_graph,
 )
 from error.Error import WysnaError
@@ -205,7 +205,7 @@ def inspect_source(
             result['project'] = resolver.lock_data()
         return result
 
-    node = find_graph_node(full_graph, symbol)
+    node = resolve_graph_symbol(full_graph, symbol, 'inspect')
     if node is None:
         raise WysnaError(
             f"Unknown symbol '{symbol}'",
@@ -327,7 +327,7 @@ def patch_source(
             stage='patch',
         )
 
-    node = find_graph_node(before_graph, symbol)
+    node = resolve_graph_symbol(before_graph, symbol, 'patch')
     if node is None:
         raise WysnaError(
             f"Target symbol '{symbol}' not found for patch",
@@ -342,6 +342,9 @@ def patch_source(
             code='W5002',
             stage='patch',
         )
+    if node['start_byte'] >= node['end_byte']:
+        raise WysnaError('Patch target has no editable declaration range',
+                         file=str(target_path), code='W5002', stage='patch')
     if not replacement.strip():
         raise ValueError('Replacement code must not be empty')
 

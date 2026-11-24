@@ -241,7 +241,6 @@ fn mcp_tool_graph(state: McpServerState, arguments: LspJson) -> list[str] {
     let rs = mcp_resolve_source(state, arguments)
     if rs[0] != "1" { return mcp_tool_err(rs[1]) }
     let target = rs[1]
-    let src_text = rs[2]
     let mut argv: list[str] = ["graph", target, "--output-format=json-v1"]
     let sym_v = lsp_json_get(arguments, "symbol")
     let sym = if sym_v.kind == "str" { sym_v.str_val } else { "" }
@@ -258,14 +257,6 @@ fn mcp_tool_graph(state: McpServerState, arguments: LspJson) -> list[str] {
     let sub = mcp_run_subcommand(state, argv)
     mcp_cleanup_source(rs)
     if sub[1] == "" { return mcp_tool_err("tool produced no JSON (exit " + sub[0] + ")") }
-    if sym != "" {
-        let parsed = lsp_parse_json(sub[1])
-        let res_obj = lsp_json_get(parsed, "result")
-        if res_obj.kind == "object" and lsp_json_has(res_obj, "found") and not lsp_json_bool(res_obj, "found", true) {
-            let diag = diag_record_json("W1001", "graph", "error", "Symbol '" + sym + "' not found in semantic graph", target, 1, 1, src_text)
-            return ["0", diag_tool_envelope_json("graph", "diagnostic_error", 1, "[" + diag + "]", "", "", "[]")]
-        }
-    }
     return ["0", sub[1]]
 }
 

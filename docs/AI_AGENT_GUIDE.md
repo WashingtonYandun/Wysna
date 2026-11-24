@@ -106,6 +106,19 @@ and file permissions. External editors that write directly without using Wysna t
 not hold the cooperative lock; optimistic revision verification still rejects stale snapshots
 detected before replacement.
 
+### Seleccionar el símbolo que se quiere consultar o editar
+
+Si un nombre corto coincide con varias declaraciones, `graph`, `inspect` y
+`patch` devuelven `W1005`. En `json-v1`, `diagnostics[].data.candidates`
+incluye `id`, `qualified_name`, `signature`, archivo y ubicación. Usa el
+`id` elegido como valor de `--symbol`. Para un parche con comprobación de
+revisión, usa también el `data.graph_hash` de esa consulta.
+
+Consulta declaraciones importadas desde el archivo que las usa. Para editarlas
+con un parche de símbolo, abre el archivo que contiene la declaración y vuelve
+a obtener su hash. El parche verifica el archivo de destino antes de usar el
+rango de la declaración.
+
 ### Invocar una herramienta con un contrato tipado
 
 Declara la herramienta y su identidad versionada en un módulo:

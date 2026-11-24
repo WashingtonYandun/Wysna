@@ -125,6 +125,7 @@ class ToolGraph {
     nodes: list[ToolGraphNode]
     edges: list[ToolGraphEdge]
     mod_names: list[str]
+    callable_indexes: dict[str, int]
 
     fn init(entry_file: str, entry_source: str) {
         this.entry_file = entry_file
@@ -136,6 +137,8 @@ class ToolGraph {
         this.edges = e0
         let m0: list[str] = []
         this.mod_names = m0
+        let callables: dict[str, int] = {}
+        this.callable_indexes = callables
     }
 }
 
@@ -311,39 +314,75 @@ fn tool_find_node_idx(graph: ToolGraph, node_id: str) -> int {
     return -1
 }
 
-fn tool_resolve_node_idx(graph: ToolGraph, query: str) -> int {
-    if query == "" { return -1 }
-    for i in 0..len(graph.nodes) {
-        if graph.nodes[i].id == query { return i }
+fn tool_module_label(graph: ToolGraph, file: str) -> str {
+    if file == graph.entry_file { return "entry" }
+    let label = tool_basename(file)
+    for other in graph.mod_names {
+        if other != file and other != graph.entry_file and tool_basename(other) == label { return file }
     }
+    return label
+}
+
+fn tool_symbol_candidates(graph: ToolGraph, query: str) -> list[int] {
+    let mut ids: list[int] = []
+    let mut qualified: list[int] = []
+    let mut names: list[int] = []
+    let mut suffixes: list[int] = []
     for i in 0..len(graph.nodes) {
-        if graph.nodes[i].qualified_name == query { return i }
+        let node = graph.nodes[i]
+        if node.id == query { ids.append(i) }
+        elif node.name != query and node.qualified_name == query { qualified.append(i) }
+        elif node.name == query { names.append(i) }
+        elif len(node.qualified_name) > len(query) {
+            let end = len(node.qualified_name)
+            let suffix = slice(node.qualified_name, end - len(query) - 1, end)
+            if suffix == ":" + query or suffix == "." + query { suffixes.append(i) }
+        }
     }
-    let mut matches: list[int] = []
-    for i in 0..len(graph.nodes) {
-        if graph.nodes[i].name == query { matches.append(i) }
-    }
+    if len(ids) > 0 { return ids }
+    if len(qualified) > 0 { return qualified }
+    if len(names) > 0 { return names }
+    return suffixes
+}
+
+fn tool_require_symbol(graph: ToolGraph, query: str, command: str, json_mode: bool) -> int {
+    let matches = tool_symbol_candidates(graph, query)
     if len(matches) == 1 { return matches[0] }
+    let mut code = "W1001"
+    let mut message = "Symbol '" + query + "' not found in semantic graph"
+    let mut data = "{}"
     if len(matches) > 1 {
-        let mut top: list[int] = []
-        for idx in matches {
-            let k = graph.nodes[idx].kind
-            if k != "method" and k != "interface_method" { top.append(idx) }
+        let mut by_id: dict[str, str] = {}
+        let mut ids: list[str] = []
+        for index in matches {
+            let node = graph.nodes[index]
+            ids.append(node.id)
+            by_id[node.id] = "{\"id\":" + diag_json_quote(node.id) +
+                ",\"qualified_name\":" + diag_json_quote(node.qualified_name) +
+                ",\"kind\":" + diag_json_quote(node.kind) + ",\"file\":" + diag_json_quote(node.file) +
+                ",\"line\":" + str(node.line) + ",\"col\":" + str(node.col) +
+                ",\"signature\":" + diag_json_quote(node.signature) + "}"
         }
-        if len(top) == 1 { return top[0] }
-        return matches[0]
+        let mut rows: list[str] = []
+        let ordered = tool_sort_strings(ids)
+        for id in ordered { rows.append(by_id[id]) }
+        code = "W1005"
+        message = "Ambiguous symbol '" + query + "'; pass a candidate ID to --symbol: " + join_strings(ordered, ", ")
+        data = "{\"kind\":\"ambiguous_symbol\",\"symbol\":" + diag_json_quote(query) +
+            ",\"graph_hash\":" + diag_json_quote(graph.graph_hash) + ",\"candidates\":[" + join_strings(rows, ",") + "]}"
     }
-    let mut suffix_matches: list[int] = []
-    for i in 0..len(graph.nodes) {
-        let qn = graph.nodes[i].qualified_name
-        if len(qn) > len(query) + 2 and slice(qn, len(qn) - len(query) - 2, len(qn)) == "::" + query {
-            suffix_matches.append(i)
-        } elif len(qn) > len(query) + 1 and slice(qn, len(qn) - len(query) - 1, len(qn)) == "." + query {
-            suffix_matches.append(i)
-        }
+    if json_mode {
+        let diag = diag_record_json_data(code, command, "error", message, graph.entry_file, 0, 0, "", data)
+        diag_write_output(diag_tool_envelope_json(command, "diagnostic_error", 1, "[" + diag + "]", "", "", "[]"))
+    } else {
+        eprint("[" + code + "] " + message)
     }
-    if len(suffix_matches) == 1 { return suffix_matches[0] }
+    exit(1)
     return -1
+}
+
+fn tool_callable_index(graph: ToolGraph, file: str, name: str) -> int {
+    return graph.callable_indexes.get(file + "\n" + tool_short_name(name)) ?? -1
 }
 
 fn tool_add_edge(graph: ToolGraph, from_id: str, to_id: str, kind: str, context: str, file: str, line: int) -> unit {
@@ -423,7 +462,7 @@ fn tool_effect_to_cap(eff: str) -> str {
 
 fn tool_scan_decl_nodes(graph: ToolGraph, program: CheckedProgram, src: str, file: str) -> unit {
     let is_entry = file == graph.entry_file
-    let mod_label = if is_entry { "entry" } else { tool_basename(file) }
+    let mod_label = tool_module_label(graph, file)
     let tokens = tokenize(src, file)
     let mut depth = 0
     let mut current_owner_idx = -1
@@ -508,7 +547,7 @@ fn tool_scan_decl_nodes(graph: ToolGraph, program: CheckedProgram, src: str, fil
                 let nid = decl_kind + ":" + qname
                 let mut sig_str = (if is_async { "async fn " } else { "fn " }) + name + "()"
                 for sig in program.signatures {
-                    if tool_short_name(sig.name) == name and len(sig.params) >= 0 {
+                    if sig.source.file == file and tool_short_name(sig.name) == name {
                         sig_str = tool_format_signature(program, name, sig.params, sig.type_id, is_async)
                         break
                     }
@@ -521,6 +560,7 @@ fn tool_scan_decl_nodes(graph: ToolGraph, program: CheckedProgram, src: str, fil
                     node.effects.append("ffi.native")
                     node.capabilities.append("native-ffi")
                 }
+                graph.callable_indexes[file + "\n" + name] = len(graph.nodes)
                 graph.nodes.append(node)
             }
             is_public = false
@@ -539,12 +579,13 @@ fn tool_scan_decl_nodes(graph: ToolGraph, program: CheckedProgram, src: str, fil
             let vis = if is_public { "public" } else { "private" }
             let mut sig_str = "fn " + mname + "()"
             for sig in program.signatures {
-                if tool_short_name(sig.name) == short_q {
+                if sig.source.file == file and tool_short_name(sig.name) == short_q {
                     sig_str = tool_format_signature(program, mname, sig.params, sig.type_id, is_async)
                     break
                 }
             }
             let mnode = ToolGraphNode(nid, mname, qname, mkind, mod_label, file, span.start_line, tok.col, span.end_line, span.start_byte, span.end_byte, span.start_char, span.end_char, vis, is_async, sig_str, graph.nodes[current_owner_idx].id)
+            graph.callable_indexes[file + "\n" + short_q] = len(graph.nodes)
             graph.nodes.append(mnode)
             is_public = false
             is_async = false
@@ -569,22 +610,10 @@ fn tool_walk_subtree(program: CheckedProgram, graph: ToolGraph, caller_idx: int,
         graph.nodes[caller_idx].indirect_call = true
     }
     if node.kind == "callee" and node.target >= 0 {
-        let name = program.signatures[node.target].name
-        let short_name = tool_short_name(name)
-        let mut target_idx = -1
-        for function in program.functions {
-            if function.name != name { continue }
-            for i in 0..len(graph.nodes) {
-                if graph.nodes[i].kind == "fn" and graph.nodes[i].name == short_name and
-                     graph.nodes[i].file == function.source.file {
-                    target_idx = i
-                    break
-                }
-            }
-            break
-        }
+        let signature = program.signatures[node.target]
+        let target_idx = tool_callable_index(graph, signature.source.file, signature.declaration_name)
         if target_idx >= 0 {
-            tool_add_edge(graph, caller_id, graph.nodes[target_idx].id, "references_function", name, file, line)
+            tool_add_edge(graph, caller_id, graph.nodes[target_idx].id, "references_function", signature.name, file, line)
         }
     }
     if node.kind == "new" or node.kind == "struct" or node.kind == "struct_call" {
@@ -604,7 +633,11 @@ fn tool_walk_subtree(program: CheckedProgram, graph: ToolGraph, caller_idx: int,
             let owner_short = tool_short_name(node.labels[0])
             callee_short = owner_short + "." + node.labels[1]
         }
-        let target_idx = tool_resolve_node_idx(graph, callee_short)
+        let mut target_idx = -1
+        if node.target >= 0 and node.target < len(program.signatures) {
+            let signature = program.signatures[node.target]
+            target_idx = tool_callable_index(graph, signature.source.file, signature.declaration_name)
+        }
         if target_idx >= 0 {
             let target_id = graph.nodes[target_idx].id
             graph.nodes[caller_idx].add_tag("calls", target_id)
@@ -636,16 +669,18 @@ fn tool_build_checked_graph(src: str, canonical: str, expanded: list[Token], pro
     let graph = ToolGraph(canonical, src)
     graph.mod_names.append(canonical)
     let mut mod_hashes: list[str] = [canonical + "=" + diag_sha256_hex(src)]
-    tool_scan_decl_nodes(graph, program, src, canonical)
     for etok in expanded {
         if etok.file != "" and etok.file != "<unknown>" and not tool_str_contains(graph.mod_names, etok.file) {
             graph.mod_names.append(etok.file)
-            let ext_res = module_read_with_overlays(etok.file, ov_paths, ov_texts)
-            let ext_src = if ext_res[0] == "1" { ext_res[1] } else { "" }
-            if ext_src != "" {
-                mod_hashes.append(etok.file + "=" + diag_sha256_hex(ext_src))
-                tool_scan_decl_nodes(graph, program, ext_src, etok.file)
-            }
+        }
+    }
+    tool_scan_decl_nodes(graph, program, src, canonical)
+    for file in graph.mod_names {
+        if file == canonical { continue }
+        let ext_res = module_read_with_overlays(file, ov_paths, ov_texts)
+        if ext_res[0] == "1" and ext_res[1] != "" {
+            mod_hashes.append(file + "=" + diag_sha256_hex(ext_res[1]))
+            tool_scan_decl_nodes(graph, program, ext_res[1], file)
         }
     }
 
@@ -698,8 +733,7 @@ fn tool_build_checked_graph(src: str, canonical: str, expanded: list[Token], pro
     # Walk checked function bodies for calls, instantiations, signature type dependencies, and effects
     for fn_info in program.functions {
         if fn_info.closure or tool_is_synthetic_instantiation(fn_info.name) { continue }
-        let short = tool_short_name(fn_info.name)
-        let f_idx = tool_resolve_node_idx(graph, short)
+        let f_idx = tool_callable_index(graph, fn_info.source.file, fn_info.declaration_name)
         if f_idx < 0 { continue }
         let f_id = graph.nodes[f_idx].id
         let fn_type = program.types[fn_info.type_id]
@@ -838,7 +872,7 @@ fn tool_graph_summary_json(graph: ToolGraph) -> str {
     return "{\"modules\":" + str(len(graph.mod_names)) + ",\"nodes\":" + str(len(graph.nodes)) + ",\"edges\":" + str(len(graph.edges)) + ",\"interfaces\":" + str(ifaces) + ",\"classes\":" + str(classes) + ",\"structs\":" + str(structs) + ",\"enums\":" + str(enums) + ",\"functions\":" + str(fns) + ",\"methods\":" + str(methods) + "}"
 }
 
-fn tool_graph_payload_json(graph: ToolGraph, symbol: str, rel: str) -> str {
+fn tool_graph_payload_json(graph: ToolGraph, symbol: str, rel: str, idx: int) -> str {
     if symbol == "" and rel == "" {
         let mut nodes_p: list[str] = ["["]
         for i in 0..len(graph.nodes) {
@@ -857,7 +891,7 @@ fn tool_graph_payload_json(graph: ToolGraph, symbol: str, rel: str) -> str {
             if i > 0 { mods_p.append(",") }
             let mp = graph.mod_names[i]
             let is_e = mp == graph.entry_file
-            let mid = if is_e { "entry" } else { tool_basename(mp) }
+            let mid = tool_module_label(graph, mp)
             mods_p.append("{\"id\":" + diag_json_quote(mid) + ",\"file\":" + diag_json_quote(mp) + ",\"is_entry\":" + (if is_e { "true" } else { "false" }) + ",\"dependencies\":[]}")
         }
         mods_p.append("]")
@@ -865,10 +899,6 @@ fn tool_graph_payload_json(graph: ToolGraph, symbol: str, rel: str) -> str {
         return "{\"schema_version\":\"wysna.graph/1\",\"graph_hash\":" + diag_json_quote(graph.graph_hash) + ",\"entry_file\":" + diag_json_quote(graph.entry_file) + ",\"summary\":" + tool_graph_summary_json(graph) + ",\"modules\":" + mod_json + ",\"nodes\":" + join_strings(nodes_p, "") + ",\"edges\":" + join_strings(edges_p, "") + "}"
     }
     if symbol != "" {
-        let idx = tool_resolve_node_idx(graph, symbol)
-        if idx < 0 {
-            return "{\"schema_version\":\"wysna.graph/1\",\"graph_hash\":" + diag_json_quote(graph.graph_hash) + ",\"query\":{\"symbol\":" + diag_json_quote(symbol) + ",\"relation\":" + (if rel == "" { "null" } else { diag_json_quote(rel) }) + "},\"found\":false,\"node\":null,\"edges\":[]}"
-        }
         let nid = graph.nodes[idx].id
         let affected = if rel == "impact" { tool_impact_ids(graph, nid) } else { [nid] }
         let mut rel_edges: list[str] = ["["]
@@ -918,6 +948,7 @@ fn tool_explain_code_info(code: str) -> list[str] {
     if code == "W1002" { return ["W1002", "semantic", "Duplicate declaration", "Two declarations share the same name or use reserved __wysna_ prefix", "let x = 1\nlet x = 2", "let x = 1\nlet y = 2"] }
     if code == "W1003" { return ["W1003", "module", "Module resolution or circular import error", "Import target path cannot be resolved or introduces a dependency cycle", "import \"missing.wysna\"", "import \"std/json\""] }
     if code == "W1004" { return ["W1004", "semantic", "Invalid control-flow or lexical context", "Using break/continue outside loop, or this/super outside a class method", "fn f() { break }", "for i in 0..3 { break }"] }
+    if code == "W1005" { return ["W1005", "graph", "Ambiguous symbol selector", "Multiple declarations match the selector", "wysna graph main.wysna --symbol score", "Pass a candidate ID from diagnostics to --symbol"] }
     if code == "W2001" { return ["W2001", "typecheck", "Type mismatch", "Expression, argument, or initializer type does not match annotation/expectation", "let n: int = \"42\"", "let n: int = 42"] }
     if code == "W2002" { return ["W2002", "typecheck", "Invalid assignment target", "Assigning to a non-place expression (literal or call result)", "foo() = 10", "let mut v = foo()\nv = 10"] }
     if code == "W2003" { return ["W2003", "typecheck", "Non-exhaustive match expression", "match arms do not cover every enum variant, bool value, or error alternative", "match opt { Some(v) => v }", "match opt { Some(v) => v, None => 0 }"] }
@@ -1024,13 +1055,15 @@ fn tool_handle_graph(args: list[str], json_mode: bool) -> unit {
     }
     let src = loaded[1]
     let graph = tool_build_graph(src, file)
-    let payload = tool_graph_payload_json(graph, symbol, rel)
+    let query_idx = if symbol == "" { -1 } else { tool_require_symbol(graph, symbol, "graph", json_mode) }
+    let payload = tool_graph_payload_json(graph, symbol, rel, query_idx)
     if json_mode {
         diag_write_output(diag_tool_envelope_json("graph", "ok", 0, "[]", "result", payload, "[]"))
     } else {
         print("Semantic Graph (" + graph.graph_hash + ") — " + str(len(graph.nodes)) + " nodes, " + str(len(graph.edges)) + " edges")
-        for n in graph.nodes {
-            if symbol == "" or n.name == symbol or n.qualified_name == symbol or n.id == symbol {
+        for index in 0..len(graph.nodes) {
+            if query_idx < 0 or index == query_idx {
+                let n = graph.nodes[index]
                 print("  " + n.id + " (" + n.file + ":" + str(n.line) + ")")
             }
         }
@@ -1092,8 +1125,7 @@ fn tool_handle_inspect(args: list[str], json_mode: bool) -> unit {
         }
         exit(0)
     }
-    let n_idx = tool_resolve_node_idx(graph, symbol)
-    if n_idx < 0 { report_error(file, "W1001", 1, 1, "symbol not found: " + symbol) }
+    let n_idx = tool_require_symbol(graph, symbol, "inspect", json_mode)
     let n = graph.nodes[n_idx]
     let decl_src = tool_node_source_text(graph, n)
     let mut deps_json = "[]"
@@ -1186,9 +1218,14 @@ fn tool_handle_patch(args: list[str], json_mode: bool) -> unit {
     if expect_hash != "" and expect_hash != before.graph_hash {
         report_error(file, "W5005", 1, 1, "stale semantic graph hash: expected '" + expect_hash + "', current '" + before.graph_hash + "'")
     }
-    let n_idx = tool_resolve_node_idx(before, symbol)
-    if n_idx < 0 { report_error(file, "W1001", 1, 1, "symbol not found: " + symbol) }
+    let n_idx = tool_require_symbol(before, symbol, "patch", json_mode)
     let target = before.nodes[n_idx]
+    if target.file != before.entry_file {
+        report_error(file, "W5002", 1, 1, "symbol is declared in a different file: " + target.file)
+    }
+    if target.start_char >= target.end_char {
+        report_error(file, "W5002", 1, 1, "patch target has no editable declaration range")
+    }
     let candidate = slice(src, 0, target.start_char) + replacement + slice(src, target.end_char, len(src))
     let canonical = module_canonical(file)
     let checked_after = check_source(candidate, canonical)

@@ -107,11 +107,13 @@ class SymbolInfo:
     line: int
     col: int
     file: str
+    declaration_name: str = ''
 
     @classmethod
     def from_symbol(cls, symbol):
         return cls(symbol.name, str(symbol.type), symbol.is_mut, symbol.kind,
-                   symbol.line, symbol.col, getattr(symbol, 'file', ''))
+                   symbol.line, symbol.col, getattr(symbol, 'file', ''),
+                   getattr(symbol, 'declaration_name', ''))
 
 
 @dataclass(frozen=True)

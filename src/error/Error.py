@@ -23,6 +23,7 @@ DIAGNOSTIC_CODES: Dict[str, str] = {
     "W1002": "Duplicate declaration",
     "W1003": "Module resolution or circular import error",
     "W1004": "Invalid control-flow or lexical context (break/continue/return/this/super)",
+    "W1005": "Ambiguous semantic tool symbol selector",
     # W2xxx — Type System & Exhaustiveness
     "W2001": "Type mismatch",
     "W2002": "Invalid assignment target",

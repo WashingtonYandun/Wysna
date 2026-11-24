@@ -723,6 +723,7 @@ pub import "std/path"
        - `W1002`: Duplicate declaration
        - `W1003`: Module resolution or circular import error
        - `W1004`: Invalid control-flow or lexical context (`break`/`continue`/`return`/`this`/`super`)
+       - `W1005`: Ambiguous symbol selector in semantic tooling
      - **`W2xxx` — Type System, Exhaustiveness & Error Channel Diagnostics:**
        - `W2001`: Type mismatch
        - `W2002`: Invalid assignment target

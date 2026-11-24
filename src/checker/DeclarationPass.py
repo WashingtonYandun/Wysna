@@ -173,11 +173,9 @@ def _bind_symbol_from_unit(checker: "TypeChecker", unit, name: str, bound_name: 
     if name in unit.exports.symbols:
         sym = unit.exports.symbols[name]
         checker.imported_symbol_names[bound_name] = sym.name
-        checker.global_scope.define_symbol(
-            Symbol(bound_name, sym.type, is_mut=False, kind=sym.kind, line=line, col=col),
-            file=checker.file,
-            allow_builtin_override=True,
-        )
+        binding = Symbol(bound_name, sym.type, is_mut=False, kind=sym.kind, line=line, col=col)
+        binding.declaration_name = sym.name
+        checker.global_scope.define_symbol(binding, file=checker.file, allow_builtin_override=True)
         found = True
 
     if name in unit.exports.types:
