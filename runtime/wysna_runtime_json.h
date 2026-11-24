@@ -419,7 +419,7 @@ static inline WVal wysna_json_read_object(WysnaJsonCtx* ctx) {
     WDictBuf* d = (WDictBuf*)wysna_alloc_safe(sizeof(WDictBuf));
     d->refcount = 1;
     d->len = 0;
-    d->cap = 8;
+    d->cap = 4;
     d->keys = (WVal*)wysna_alloc_safe(sizeof(WVal) * (size_t)d->cap);
     d->vals = (WVal*)wysna_alloc_safe(sizeof(WVal) * (size_t)d->cap);
     d->bucket_count = 16;
