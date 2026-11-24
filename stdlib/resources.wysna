@@ -9,25 +9,25 @@ pub fn error(message: str) -> ResourceError {
 }
 
 pub class Resource {
-    private handle: opaque
-    private dispose: fn(opaque) -> int
-    private closed: bool
-    private claim: opaque
+    priv handle: opaque
+    priv dispose: fn(opaque) -> int
+    priv closed: bool
+    priv claim: opaque
 
-    public fn init(handle: opaque, dispose: fn(opaque) -> int) {
+    pub fn init(handle: opaque, dispose: fn(opaque) -> int) {
         this.handle = handle
         this.dispose = dispose
         this.closed = false
         this.claim = wysna_host_claim(handle)
     }
 
-    public fn borrow() -> opaque ! ResourceError {
+    pub fn borrow() -> opaque ! ResourceError {
         if this.closed { return Err(ResourceError { message: "resource is closed" }) }
         if wysna_host_claim_valid(this.claim) == 0 { return Err(ResourceError { message: "resource already owned or released" }) }
         return this.handle
     }
 
-    public fn close() -> int {
+    pub fn close() -> int {
         if this.closed { return 0 }
         if wysna_host_claim_valid(this.claim) == 0 { return -1 }
         let status = this.dispose(this.handle)

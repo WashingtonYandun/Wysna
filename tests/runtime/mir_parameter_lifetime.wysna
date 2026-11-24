@@ -36,10 +36,10 @@ fn escaping_field() -> list[str] {
 }
 
 class Store {
-    private items: list[str]
+    priv items: list[str]
     fn init(items: list[str]) { this.items = items }
-    public fn view() -> list[str] { this.items }
-    public fn replace() { this.items = ["changed"] }
+    pub fn view() -> list[str] { this.items }
+    pub fn replace() { this.items = ["changed"] }
 }
 
 let mut source = Snapshot { items: ["record-" + str(8)] }

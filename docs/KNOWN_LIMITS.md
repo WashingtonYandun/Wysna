@@ -158,7 +158,7 @@ one user expression. The interpreter continues to report its existing source spa
 hold a class reference and the class can hold that same container:
 
 ```w
-class Node { public name: str, public children: list[Node] ... }
+class Node { pub name: str, pub children: list[Node] ... }
 let n = Node("root")
 n.children.append(n)           # value storage now reaches back to the object
 ```

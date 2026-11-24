@@ -1,5 +1,5 @@
 class C {
- public text: str
+ pub text: str
  fn init() {
   print(this.text)
   this.text = "set"

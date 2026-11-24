@@ -393,64 +393,6 @@ def _pad_binary_keyword(src_bytes, start, end, keyword):
     return prefix + keyword + suffix
 
 
-def _is_inside_class_body(src_bytes, target_byte):
-    """Return True iff target_byte lies inside an unclosed `class { ... }` body."""
-    brace_stack = []
-    in_string = False
-    escaped = False
-    in_comment = False
-    header_kw = ""
-    i = 0
-    while i < target_byte:
-        b = src_bytes[i]
-        if in_comment:
-            if b == 10:
-                in_comment = False
-            i += 1
-            continue
-        if in_string:
-            if escaped:
-                escaped = False
-            elif b == 92:
-                escaped = True
-            elif b == 34:
-                in_string = False
-            i += 1
-            continue
-        if b == 35:
-            in_comment = True
-            i += 1
-            continue
-        if b == 34:
-            in_string = True
-            i += 1
-            continue
-        if _is_ascii_ident_byte(b):
-            j = i
-            while j < target_byte and _is_ascii_ident_byte(src_bytes[j]):
-                j += 1
-            word = src_bytes[i:j].decode("ascii", "ignore")
-            if header_kw == "" and word not in ("pub", "public", "private", "async"):
-                header_kw = word
-            elif word in ("fn", "struct", "enum", "interface", "class"):
-                header_kw = word
-            i = j
-            continue
-        if b == 123:  # '{'
-            brace_stack.append(header_kw == "class")
-            header_kw = ""
-        elif b == 125:  # '}'
-            if brace_stack:
-                brace_stack.pop()
-            header_kw = ""
-        elif b in (59, 61):  # ';', '='
-            header_kw = ""
-        elif b == 10 and header_kw not in ("class", "struct", "enum", "interface"):
-            header_kw = ""
-        i += 1
-    return bool(brace_stack and brace_stack[-1])
-
-
 def _synthesize_syntax_fixes(code, message, filename, source, primary_span):
     """Build deterministic machine fixes for common foreign-syntax slips."""
     if not filename or source is None or primary_span is None:
@@ -570,11 +512,10 @@ def _synthesize_syntax_fixes(code, message, filename, source, primary_span):
                 prefix + ("not" if next_ws else "not "),
             )
 
-    if code == "W0006" and 0 <= sb and sb + 3 <= n and src_bytes[sb:sb + 3] == b"pub":
-        left_ok = sb == 0 or not _is_ascii_ident_byte(src_bytes[sb - 1])
-        right_ok = sb + 3 >= n or not _is_ascii_ident_byte(src_bytes[sb + 3])
-        if left_ok and right_ok and _is_inside_class_body(src_bytes, sb):
-            return make_fix("replace 'pub' with 'public' inside class", sb, sb + 3, "public")
+    if code == "W0006" and message.startswith("Use '"):
+        for old, new in ((b"public", "pub"), (b"private", "priv")):
+            if message == f"Use '{new}' in place of '{old.decode()}'" and src_bytes[sb:sb + len(old)] == old:
+                return make_fix(message, sb, sb + len(old), new)
 
     return []
 

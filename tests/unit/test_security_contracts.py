@@ -207,7 +207,7 @@ print(f(1))
 def test_method_postcondition_traps_on_invalid_result(engine, tmp_path, native_worker_compiler):
     source = """class Box {
     fn init() {}
-    public fn value(input: int) -> int ensures result > input { input }
+    pub fn value(input: int) -> int ensures result > input { input }
 }
 print(Box().value(1))
 """

@@ -1,5 +1,5 @@
 class Animal {
-    public name: str
+    pub name: str
 
     fn init(name: str) {
         this.name = name
@@ -7,7 +7,7 @@ class Animal {
 }
 
 class Dog extends Animal {
-    public breed: str
+    pub breed: str
 
     fn init(name: str, breed: str) {
         this.breed = breed

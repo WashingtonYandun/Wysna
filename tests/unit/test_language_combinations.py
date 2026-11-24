@@ -65,9 +65,9 @@ fn wrong() -> int {
 ''', 'W2001'),
     ('generic-method', '''struct Failure[T] { detail: T }
 class Factory[T] {
-    public value: T
+    pub value: T
     fn init(value: T) { this.value = value }
-    public fn reject[E](payload: E) -> T ! Failure[E] | str { Err(Failure[E] { detail: payload }) }
+    pub fn reject[E](payload: E) -> T ! Failure[E] | str { Err(Failure[E] { detail: payload }) }
 }
 fn wrong() -> int ! Failure[str] | str {
     let factory = Factory[int](0)

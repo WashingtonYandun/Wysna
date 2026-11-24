@@ -6,7 +6,7 @@ struct Vec2 {
 }
 
 class BoxedId {
-    public id: int
+    pub id: int
 
     fn init(id: int) {
         this.id = id

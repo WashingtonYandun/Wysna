@@ -1286,7 +1286,7 @@ fn tool_skills_topic_content(topic: str) -> str {
     if topic == "patch" { return "# Checked Semantic Patching (`wysna patch`)\n- Dry-run check in memory (default): validates syntax, types, and interface contracts before disk writes.\n- Optimistic locking: pass `--expect-graph-hash graph:...`; stale hashes fail with `[W5005]`.\n- Target classes, interfaces, structs, enums, functions, or `ClassName.method`." }
     if topic == "project-tests" { return "# Pruebas de proyecto para agentes\n1. Lista sin ejecutar: `wysna project test --discover --list --frozen --output-format=json-v1`.\n2. Usa los IDs exactos de result.cases: `--case test:example`; --filter conserva selección por subcadena.\n3. Ejecuta con `--expect-plan-hash <result.plan_hash> --output-format=json-v1 --report-json tests.json --report-junit tests.xml`.\n4. Lee result.cases[].failure_kind, diagnostics y los hashes de stdout/stderr; no interpretes texto de terminal.\n5. W5005 indica plan obsoleto: vuelve a listar. Una suite vacía devuelve 2; una cancelación devuelve 130.\n6. std/test ofrece igualdad genérica, tolerancia flotante, opcionales y fixture_directory(); los fixtures se eliminan después del caso.\nEl hash cubre manifiesto, lock, versión y entradas seleccionadas, no todos los imports. El SDK native-core-v1 ejecuta estos comandos sin Python.\n7. Dependencias: `wysna packages pack --manifest dependency/wysna.toml -o dependency.tar`; adquiere con `packages fetch --manifest wysna.toml --archive dependency.tar --sha256 <pin> --cache <cache>`, agrega con `packages add alias --path vendor/<pin>` y ejecuta `project lock`.\n8. Restaura con `packages restore --cache <cache>` y verifica con `project test --frozen`; todas las operaciones admiten `--output-format=json-v1`, sin hooks ni registro remoto.\n" }
     if topic == "stdlib" { return "# Standard Library (18 Modules)\n- Data & Text: `std/math`, `std/text`, `std/bytes`, `std/regex`, `std/collections`, `std/json`, `std/csv` (`parse`, `parse_records`, `stringify`), `std/parse`.\n- Systems & I/O: `std/fs`, `std/files`, `std/buffer`, `std/env`, `std/path`, `std/process`, `std/time`.\n- Network, Concurrency & Security: `std/http`, `std/async`, `std/algorithms` (`parallel_map`), `std/crypto`." }
-    if topic == "syntax" { return "# Wysna Canonical Syntax Quick Reference\n- Bindings: `let x = 1` (immutable), `let mut y = 2` (mutable).\n- Functions: `fn add(a: int, b: int) -> int { return a + b }` (`pub fn` at module level; `public`/`private` inside classes).\n- Control flow & logic: `if c { ... } elif d { ... } else { ... }` (`else if` also accepted); boolean operators are `and`, `or`, `not` (never `&&`, `||`, `!`).\n- Cooperative Async: `async fn fetch_id() -> int { ... }`, `let v = await task`.\n- Optionals & Errors: `T?`, `T ! E`, unwrap `?`, recover `expr else err { fallback }`.\n- OOP & Contracts: `interface Drawable { fn draw() -> str }`, `class Rect implements Drawable { public fn draw() -> str { ... } }`.\n- Lambdas: `|n: int| => n * n` (capture outer variables by immutable snapshot by design; return updated values for mutable state; classes cannot cross worker boundaries).\n- Canonical forms: `Class(...)`, `None`, `_ =>`, parenthesized tuple patterns.\n- Match patterns: alternatives `1 | 2`, Int64 ranges `0..=10`, nested `Point { x, .. }`; W6003 reports unreachable arms.\n- Static attributes on top-level functions: `@deprecated(\"message\")` (W6004), `@must_use` (W6005); custom typed metadata: `struct AgentTool { name: str }`, `@AgentTool(name: \"lookup\")`; literal str/bool/int fields, no macros or evaluation.\n- Ranges & Loops: `for i in 0..10 { ... }`, inclusive `0..=10`.\n- Non-exhaustive match W2003 includes data.uncovered_pattern_families for checked repairs." }
+    if topic == "syntax" { return "# Wysna Canonical Syntax Quick Reference\n- Bindings: `let x = 1` (immutable), `let mut y = 2` (mutable).\n- Functions: `fn add(a: int, b: int) -> int { return a + b }` (`pub` and `priv` at module scope and inside classes).\n- Control flow & logic: `if c { ... } elif d { ... } else { ... }` (`else if` also accepted); boolean operators are `and`, `or`, `not` (never `&&`, `||`, `!`).\n- Cooperative Async: `async fn fetch_id() -> int { ... }`, `let v = await task`.\n- Optionals & Errors: `T?`, `T ! E`, unwrap `?`, recover `expr else err { fallback }`.\n- OOP & Contracts: `interface Drawable { fn draw() -> str }`, `class Rect implements Drawable { pub fn draw() -> str { ... } }`.\n- Lambdas: `|n: int| => n * n` (capture outer variables by immutable snapshot by design; return updated values for mutable state; classes cannot cross worker boundaries).\n- Canonical forms: `Class(...)`, `None`, `_ =>`, parenthesized tuple patterns.\n- Match patterns: alternatives `1 | 2`, Int64 ranges `0..=10`, nested `Point { x, .. }`; W6003 reports unreachable arms.\n- Static attributes on top-level functions: `@deprecated(\"message\")` (W6004), `@must_use` (W6005); custom typed metadata: `struct AgentTool { name: str }`, `@AgentTool(name: \"lookup\")`; literal str/bool/int fields, no macros or evaluation.\n- Ranges & Loops: `for i in 0..10 { ... }`, inclusive `0..=10`.\n- Non-exhaustive match W2003 includes data.uncovered_pattern_families for checked repairs." }
     if topic == "workers" { return "# Workers con propiedad aislada\n- `std/algorithms.parallel_map`, `parallel_filter`, `parallel_batch` y el mapper de `parallel_reduce`, además de `std/async.spawn` y `run_group`, exigen callbacks comprobables.\n- Usa funciones nombradas o lambdas y alias inmutables. Solo escalares, strings y compuestos de valores transferibles; W2014 rechaza clases, interfaces, Weak, handles y datos función.\n- W2015 rechaza globals no capturados, efectos transitivos, FFI, scheduler, callbacks sin resolver y workers anidados. Captura valores explícitamente o pásalos como parámetros.\n- Entradas, capturas y resultados se copian como grafos privados. CoW dentro de cada worker; profundidad máxima de snapshot 256.\n- `parallel_reduce` mapea en paralelo y combina mediante fold izquierdo secuencial. El orden de resultados no promete orden de efectos.\n- `run_group` acota trabajo de CPU y devuelve resultados por índice. Usa `group_cancelled()` en callbacks largos. I/O cooperativo permanece en el scheduler." }
     return ""
 }
@@ -1303,6 +1303,7 @@ fn line_terminates_statement(kind: str) -> bool {
 fn keyword_kind(word: str) -> str {
     if word == "as" { return "AS" }
     if word == "pub" { return "PUB" }
+    if word == "priv" { return "PRIV" }
     if word == "extern" { return "EXTERN" }
     if word == "fn" {
         return "FN"
@@ -2507,7 +2508,7 @@ fn module_expand(context: ModuleLoader, src: str, path: str, entry: bool) -> int
 
         if top_depth == 0 and token.kind == "IMPORT" {
             let public_import = position > 0 and tokens[position - 1].kind == "PUB"
-            if public_import and len(body) > 0 and body[len(body) - 1].kind == "PUB" { body.pop() }
+            if len(body) > 0 and (body[len(body) - 1].kind == "PUB" or body[len(body) - 1].kind == "PRIV") { body.pop() }
             let requested = tokens[position + 1].val
             let dependency = module_load_source(context, canonical, requested, token)
             let mut alias = extract_module_ns(requested)
@@ -2523,7 +2524,7 @@ fn module_expand(context: ModuleLoader, src: str, path: str, entry: bool) -> int
             if public_import { context.public_names[index].append(alias) }
         } elif from_hdr.found {
             let public_use = position > 0 and tokens[position - 1].kind == "PUB"
-            if public_use and len(body) > 0 and body[len(body) - 1].kind == "PUB" { body.pop() }
+            if len(body) > 0 and (body[len(body) - 1].kind == "PUB" or body[len(body) - 1].kind == "PRIV") { body.pop() }
             let requested = from_hdr.requested
             let base_req = module_strip_wysna_ext(requested)
             let mut base_resolved = false
@@ -4080,7 +4081,10 @@ fn sem_collect_record(context: SemanticContext, kind: str) {
         if sem_is(context, "RBRACE") { break }
         let mut visible = true
         if sem_is(context, "AT") { sem_error(context, "W0006", "static attributes require a top-level function declaration") }
-        if sem_match(context, "PRIVATE") { visible = false } else { sem_match(context, "PUBLIC") }
+        if sem_match(context, "PRIV") {
+            if kind == "interface" { sem_error(context, "W0006", "interface methods are public") }
+            visible = false
+        } else { sem_match(context, "PUB") }
         let mut method_is_async = false
         if sem_is(context, "IDENT") and sem_at(context).val == "async" and context.tokens[context.pos + 1].kind == "FN" { sem_take(context) method_is_async = true }
         if sem_is(context, "FN") {
@@ -6453,7 +6457,10 @@ fn sem_validate(context: SemanticContext, tokens: list[Token]) {
         sem_skip_separators(context)
         if sem_is(context, "EOF") { break }
         let attributes = sem_static_attributes(context)
-        sem_match(context, "PUB")
+        let visibility = sem_match(context, "PUB") or sem_match(context, "PRIV")
+        if visibility and (sem_is(context, "PUB") or sem_is(context, "PRIV")) {
+            sem_error(context, "W0006", "a declaration takes one visibility modifier")
+        }
         if sem_is(context, "AT") { sem_error(context, "W0006", "static attributes must precede pub") }
         let mut decl_is_async = false
         if sem_is(context, "IDENT") and sem_at(context).val == "async" and context.tokens[context.pos + 1].kind == "FN" { sem_take(context) decl_is_async = true }
@@ -6490,7 +6497,10 @@ fn sem_validate(context: SemanticContext, tokens: list[Token]) {
         sem_skip_separators(context)
         if sem_is(context, "RBRACE") or sem_is(context, "EOF") { break }
         sem_static_attributes(context)
-        sem_match(context, "PUB")
+        let visibility = sem_match(context, "PUB") or sem_match(context, "PRIV")
+        if visibility and (sem_is(context, "PUB") or sem_is(context, "PRIV")) {
+            sem_error(context, "W0006", "a declaration takes one visibility modifier")
+        }
         if sem_is(context, "AT") { sem_error(context, "W0006", "static attributes must precede pub") }
         if sem_is(context, "IDENT") and sem_at(context).val == "async" and context.tokens[context.pos + 1].kind == "FN" { sem_take(context) }
         let mut declaration = false
@@ -7625,6 +7635,8 @@ fn check_delimiters(tokens: list[Token]) -> unit {
     let mut delim_tokens: list[Token] = []
     for tok in tokens {
         let k = tok.kind
+        if k == "PUBLIC" { report_error_at("W0006", tok, "Use 'pub' in place of 'public'") }
+        if k == "PRIVATE" { report_error_at("W0006", tok, "Use 'priv' in place of 'private'") }
         if k == "LPAREN" or k == "LBRACE" or k == "LBRACKET" {
             delim_kinds.append(k)
             delim_tokens.append(tok)
@@ -12704,8 +12716,8 @@ fn tool_format_signature(program: CheckedProgram, short_name: str, params: list[
 }
 
 fn tool_is_decl_modifier(tok: Token) -> bool {
-    if tok.kind == "PUB" or tok.kind == "PUBLIC" or tok.kind == "PRIVATE" { return true }
-    if tok.kind == "IDENT" and (tok.val == "async" or tok.val == "pub" or tok.val == "public" or tok.val == "private") { return true }
+    if tok.kind == "PUB" or tok.kind == "PRIV" { return true }
+    if tok.kind == "IDENT" and (tok.val == "async" or tok.val == "pub" or tok.val == "priv") { return true }
     return false
 }
 
@@ -12924,7 +12936,7 @@ fn tool_scan_decl_nodes(graph: ToolGraph, program: CheckedProgram, src: str, fil
             i = metadata.pos
             continue
         }
-        if tok.kind == "PUB" or (tok.kind == "IDENT" and tok.val == "pub") or tok.kind == "PUBLIC" {
+        if tok.kind == "PUB" or (tok.kind == "IDENT" and tok.val == "pub") {
             is_public = true
             i = i + 1
             continue
@@ -15143,7 +15155,7 @@ fn lsp_handle_completion(doc: LspDocument, pos_obj: LspJson) -> str {
         }
     }
     if qual == "" {
-        let kws: list[str] = ["fn", "async", "struct", "class", "interface", "enum", "let", "mut", "if", "elif", "else", "for", "while", "match", "return", "await", "import", "pub", "true", "false", "None", "Some", "Ok", "Err"]
+        let kws: list[str] = ["fn", "async", "struct", "class", "interface", "enum", "let", "mut", "if", "elif", "else", "for", "while", "match", "return", "await", "import", "pub", "priv", "true", "false", "None", "Some", "Ok", "Err"]
         for kw in kws {
             if prefix != "" and (len(kw) < len(prefix) or slice(kw, 0, len(prefix)) != prefix) { continue }
             if not tool_str_contains(seen_labels, kw) {
@@ -15170,7 +15182,7 @@ fn lsp_semantic_tok_type(tok: Token) -> int {
     let k = tok.kind
     if k == "STR" or k == "FSTR" { return 11 }
     if k == "INT" or k == "FLOAT" { return 12 }
-    if k == "FN" or k == "LET" or k == "MUT" or k == "STRUCT" or k == "CLASS" or k == "INTERFACE" or k == "ENUM" or k == "IF" or k == "ELIF" or k == "ELSE" or k == "FOR" or k == "IN" or k == "WHILE" or k == "RETURN" or k == "MATCH" or k == "IMPORT" or k == "FROM" or k == "AS" or k == "PUB" or k == "TRUE" or k == "FALSE" or k == "THIS" or k == "SUPER" or k == "EXTERN" or k == "AND" or k == "OR" or k == "NOT" or k == "REQUIRES" or k == "ENSURES" {
+    if k == "FN" or k == "LET" or k == "MUT" or k == "STRUCT" or k == "CLASS" or k == "INTERFACE" or k == "ENUM" or k == "IF" or k == "ELIF" or k == "ELSE" or k == "FOR" or k == "IN" or k == "WHILE" or k == "RETURN" or k == "MATCH" or k == "IMPORT" or k == "FROM" or k == "AS" or k == "PUB" or k == "PRIV" or k == "TRUE" or k == "FALSE" or k == "THIS" or k == "SUPER" or k == "EXTERN" or k == "AND" or k == "OR" or k == "NOT" or k == "REQUIRES" or k == "ENSURES" {
         return 0
     }
     if k == "IDENT" {
@@ -16467,8 +16479,8 @@ fn schema_collect_decls(tokens: list[Token], out: SchemaDeclSet) -> unit {
             c.pos = c.pos + 1
             continue
         }
-        if k == "PUB" or k == "PUBLIC" or (k == "IDENT" and v == "pub") {
-            is_pub = true
+        if k == "PUB" or k == "PRIV" {
+            is_pub = k == "PUB"
             c.pos = c.pos + 1
             continue
         }
@@ -17858,67 +17870,6 @@ fn fix_pad_binary_keyword(src: str, sc: int, ec: int, kw: str) -> str {
     return prefix + kw + suffix
 }
 
-fn fix_is_inside_class_body(src: str, target_char: int) -> bool {
-    let mut brace_stack: list[bool] = []
-    let mut in_string = false
-    let mut escaped = false
-    let mut in_comment = false
-    let mut header_kw = ""
-    let mut i = 0
-    while i < target_char {
-        let c = ord(src[i])
-        if in_comment {
-            if c == 10 { in_comment = false }
-            i = i + 1
-            continue
-        }
-        if in_string {
-            if escaped { escaped = false }
-            elif c == 92 { escaped = true }
-            elif c == 34 { in_string = false }
-            i = i + 1
-            continue
-        }
-        if c == 35 {
-            in_comment = true
-            i = i + 1
-            continue
-        }
-        if c == 34 {
-            in_string = true
-            i = i + 1
-            continue
-        }
-        if fix_is_ident_char(c) {
-            let mut j = i
-            while j < target_char and fix_is_ident_char(ord(src[j])) {
-                j = j + 1
-            }
-            let w = slice(src, i, j)
-            if header_kw == "" and w != "pub" and w != "public" and w != "private" and w != "async" {
-                header_kw = w
-            } elif w == "fn" or w == "struct" or w == "enum" or w == "interface" or w == "class" {
-                header_kw = w
-            }
-            i = j
-            continue
-        }
-        if c == 123 {
-            brace_stack.append(header_kw == "class")
-            header_kw = ""
-        } elif c == 125 {
-            if len(brace_stack) > 0 { let _popped = brace_stack.pop() }
-            header_kw = ""
-        } elif c == 59 or c == 61 {
-            header_kw = ""
-        } elif c == 10 and header_kw != "class" and header_kw != "struct" and header_kw != "enum" and header_kw != "interface" {
-            header_kw = ""
-        }
-        i = i + 1
-    }
-    return len(brace_stack) > 0 and brace_stack[len(brace_stack) - 1]
-}
-
 fn fix_plan_syntax(code: str, src: str, start_byte: int, end_byte: int, msg: str) -> list[FixEdit] {
     let mut out: list[FixEdit] = []
     let sc = lsp_char_offset_from_utf8_byte(src, start_byte)
@@ -18047,14 +17998,12 @@ fn fix_plan_syntax(code: str, src: str, start_byte: int, end_byte: int, msg: str
         }
     }
 
-    if code == "W0006" and sc + 3 <= n and slice(src, sc, sc + 3) == "pub" {
-        let left_ok = sc == 0 or not fix_is_ident_char(ord(src[sc - 1]))
-        let right_ok = sc + 3 >= n or not fix_is_ident_char(ord(src[sc + 3]))
-        if left_ok and right_ok and fix_is_inside_class_body(src, sc) {
-            let b0 = diag_utf8_byte_at(src, sc)
-            let b1 = diag_utf8_byte_at(src, sc + 3)
-            out.append(FixEdit("W0006", "replace 'pub' with 'public' inside class", "machine", b0, b1, "public"))
-            return out
+    if code == "W0006" {
+        let old = if msg == "Use 'pub' in place of 'public'" { "public" }
+            elif msg == "Use 'priv' in place of 'private'" { "private" } else { "" }
+        if old != "" and sc + len(old) <= n and slice(src, sc, sc + len(old)) == old {
+            let replacement = if old == "public" { "pub" } else { "priv" }
+            out.append(FixEdit(code, msg, "machine", start_byte, diag_utf8_byte_at(src, sc + len(old)), replacement))
         }
     }
 
@@ -21525,8 +21474,8 @@ fn api_extract_module(src: str, file_path: str, module_id: str, package_id: str)
             is_extern = false
             continue
         }
-        if k == "PUB" {
-            is_pub = true
+        if k == "PUB" or k == "PRIV" {
+            is_pub = k == "PUB"
             c.pos = c.pos + 1
             continue
         }
@@ -21660,8 +21609,8 @@ fn api_extract_module(src: str, file_path: str, module_id: str, package_id: str)
                     let mk = schema_cur_kind(c)
                     let mv = schema_cur_val(c)
                     if mk == "NEWLINE" { c.pos = c.pos + 1 continue }
-                    if mk == "PUBLIC" or mk == "PUB" { member_public = true c.pos = c.pos + 1 continue }
-                    if mk == "PRIVATE" { member_public = false c.pos = c.pos + 1 continue }
+                    if mk == "PUB" { member_public = true c.pos = c.pos + 1 continue }
+                    if mk == "PRIV" { member_public = false c.pos = c.pos + 1 continue }
                     if mk == "IDENT" and mv == "async" { c.pos = c.pos + 1 continue }
                     if mk == "FN" and c.pos + 1 < len(c.tokens) and c.tokens[c.pos + 1].kind == "IDENT" {
                         let m = api_parse_fn_symbol(c, lines, owner, "method", module_id, package_id, true)

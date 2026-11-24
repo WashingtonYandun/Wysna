@@ -1,9 +1,9 @@
 class Cell {
-    public value: int
+    pub value: int
     fn init(value: int) { this.value = value }
 }
 class Holder {
-    public cell: Cell
+    pub cell: Cell
     fn init() { this.cell = Cell(1) }
     fn replace() -> int { this.cell = Cell(2) return 9 }
 }

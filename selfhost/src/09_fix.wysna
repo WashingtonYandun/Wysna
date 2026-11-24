@@ -559,67 +559,6 @@ fn fix_pad_binary_keyword(src: str, sc: int, ec: int, kw: str) -> str {
     return prefix + kw + suffix
 }
 
-fn fix_is_inside_class_body(src: str, target_char: int) -> bool {
-    let mut brace_stack: list[bool] = []
-    let mut in_string = false
-    let mut escaped = false
-    let mut in_comment = false
-    let mut header_kw = ""
-    let mut i = 0
-    while i < target_char {
-        let c = ord(src[i])
-        if in_comment {
-            if c == 10 { in_comment = false }
-            i = i + 1
-            continue
-        }
-        if in_string {
-            if escaped { escaped = false }
-            elif c == 92 { escaped = true }
-            elif c == 34 { in_string = false }
-            i = i + 1
-            continue
-        }
-        if c == 35 {
-            in_comment = true
-            i = i + 1
-            continue
-        }
-        if c == 34 {
-            in_string = true
-            i = i + 1
-            continue
-        }
-        if fix_is_ident_char(c) {
-            let mut j = i
-            while j < target_char and fix_is_ident_char(ord(src[j])) {
-                j = j + 1
-            }
-            let w = slice(src, i, j)
-            if header_kw == "" and w != "pub" and w != "public" and w != "private" and w != "async" {
-                header_kw = w
-            } elif w == "fn" or w == "struct" or w == "enum" or w == "interface" or w == "class" {
-                header_kw = w
-            }
-            i = j
-            continue
-        }
-        if c == 123 {
-            brace_stack.append(header_kw == "class")
-            header_kw = ""
-        } elif c == 125 {
-            if len(brace_stack) > 0 { let _popped = brace_stack.pop() }
-            header_kw = ""
-        } elif c == 59 or c == 61 {
-            header_kw = ""
-        } elif c == 10 and header_kw != "class" and header_kw != "struct" and header_kw != "enum" and header_kw != "interface" {
-            header_kw = ""
-        }
-        i = i + 1
-    }
-    return len(brace_stack) > 0 and brace_stack[len(brace_stack) - 1]
-}
-
 fn fix_plan_syntax(code: str, src: str, start_byte: int, end_byte: int, msg: str) -> list[FixEdit] {
     let mut out: list[FixEdit] = []
     let sc = lsp_char_offset_from_utf8_byte(src, start_byte)
@@ -748,14 +687,12 @@ fn fix_plan_syntax(code: str, src: str, start_byte: int, end_byte: int, msg: str
         }
     }
 
-    if code == "W0006" and sc + 3 <= n and slice(src, sc, sc + 3) == "pub" {
-        let left_ok = sc == 0 or not fix_is_ident_char(ord(src[sc - 1]))
-        let right_ok = sc + 3 >= n or not fix_is_ident_char(ord(src[sc + 3]))
-        if left_ok and right_ok and fix_is_inside_class_body(src, sc) {
-            let b0 = diag_utf8_byte_at(src, sc)
-            let b1 = diag_utf8_byte_at(src, sc + 3)
-            out.append(FixEdit("W0006", "replace 'pub' with 'public' inside class", "machine", b0, b1, "public"))
-            return out
+    if code == "W0006" {
+        let old = if msg == "Use 'pub' in place of 'public'" { "public" }
+            elif msg == "Use 'priv' in place of 'private'" { "private" } else { "" }
+        if old != "" and sc + len(old) <= n and slice(src, sc, sc + len(old)) == old {
+            let replacement = if old == "public" { "pub" } else { "priv" }
+            out.append(FixEdit(code, msg, "machine", start_byte, diag_utf8_byte_at(src, sc + len(old)), replacement))
         }
     }
 

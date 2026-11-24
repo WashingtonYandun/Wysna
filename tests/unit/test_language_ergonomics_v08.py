@@ -226,11 +226,11 @@ struct Bag {
 }
 
 class Repo {
-    public ids: dict[str, int]
+    pub ids: dict[str, int]
     fn init() {
         this.ids = {}
     }
-    public fn set_empty() -> unit {
+    pub fn set_empty() -> unit {
         this.ids = {}
     }
 }
@@ -310,11 +310,11 @@ struct Stat {
 }
 
 class Meter {
-    public value: int
+    pub value: int
     fn init(start: int) {
         this.value = start
     }
-    public fn bump(delta: int) -> unit {
+    pub fn bump(delta: int) -> unit {
         this.value += delta
         this.value -= 1
     }
@@ -749,7 +749,7 @@ main()
     def test_w2_phase5_constructor_w3004_diagnostic_and_autofix(self):
         bad_cls = '''
 class BankAccount {
-    public owner: str
+    pub owner: str
 
     fn BankAccount(owner: str) {
         this.owner = owner

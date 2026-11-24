@@ -3,6 +3,7 @@ from enum import Enum, auto
 class TokenType(Enum):
     # Reserved Keywords
     PUB = auto()
+    PRIV = auto()
     EXTERN = auto()
     ASYNC = auto()
     AWAIT = auto()

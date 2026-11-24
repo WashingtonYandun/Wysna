@@ -57,28 +57,28 @@ def generate_typed_program(seed: int) -> str:
         "}",
         "",
         "class Animal {",
-        "    public energy: int",
-        "    private secret_id: int",
+        "    pub energy: int",
+        "    priv secret_id: int",
         "    fn init(e: int) {",
         "        this.energy = e",
         "        this.secret_id = 999",
         "    }",
-        "    public fn act(cost: int) -> int {",
+        "    pub fn act(cost: int) -> int {",
         "        this.energy = this.energy - cost",
         "        return this.energy",
         "    }",
-        "    public fn get_secret() -> int {",
+        "    pub fn get_secret() -> int {",
         "        return this.secret_id",
         "    }",
         "}",
         "",
         "class Bird extends Animal {",
-        "    public altitude: int",
+        "    pub altitude: int",
         "    fn init(e: int, alt: int) {",
         "        super.init(e)",
         "        this.altitude = alt",
         "    }",
-        "    public fn act(cost: int) -> int {",
+        "    pub fn act(cost: int) -> int {",
         "        this.energy = this.energy - cost * 2",
         "        this.altitude = this.altitude + 10",
         "        return this.altitude",
@@ -195,8 +195,8 @@ def generate_mutated_negative(seed: int) -> Tuple[str, str]:
     if choice == "uninitialized_field":
         code = (
             "class Device {\n"
-            "    public serial: int\n"
-            "    public name: str\n"
+            "    pub serial: int\n"
+            "    pub name: str\n"
             "    fn init(s: int) {\n"
             "        this.serial = s\n"
             "        # missing this.name = ...\n"
@@ -211,11 +211,11 @@ def generate_mutated_negative(seed: int) -> Tuple[str, str]:
     elif choice == "missing_super_init":
         code = (
             "class Base {\n"
-            "    public v: int\n"
+            "    pub v: int\n"
             "    fn init(x: int) { this.v = x }\n"
             "}\n"
             "class Derived extends Base {\n"
-            "    public extra: int\n"
+            "    pub extra: int\n"
             "    fn init(x: int, y: int) {\n"
             "        this.extra = y\n"
             "    }\n"
@@ -227,11 +227,11 @@ def generate_mutated_negative(seed: int) -> Tuple[str, str]:
     elif choice == "super_init_not_first":
         code = (
             "class Base {\n"
-            "    public v: int\n"
+            "    pub v: int\n"
             "    fn init(x: int) { this.v = x }\n"
             "}\n"
             "class Derived extends Base {\n"
-            "    public extra: int\n"
+            "    pub extra: int\n"
             "    fn init(x: int, y: int) {\n"
             "        this.extra = y\n"
             "        super.init(x)\n"
@@ -244,7 +244,7 @@ def generate_mutated_negative(seed: int) -> Tuple[str, str]:
     elif choice == "private_access":
         code = (
             "class Account {\n"
-            "    private pin: int\n"
+            "    priv pin: int\n"
             "    fn init(p: int) { this.pin = p }\n"
             "}\n"
             "fn main() {\n"
@@ -257,12 +257,12 @@ def generate_mutated_negative(seed: int) -> Tuple[str, str]:
     elif choice == "override_private":
         code = (
             "class Parent {\n"
-            "    private fn secret() -> int { return 42 }\n"
+            "    priv fn secret() -> int { return 42 }\n"
             "    fn init() {}\n"
             "}\n"
             "class Child extends Parent {\n"
             "    fn init() { super.init() }\n"
-            "    public fn secret() -> int { return 99 }\n"
+            "    pub fn secret() -> int { return 99 }\n"
             "}\n"
             "fn main() { let c = Child() }\n"
         )

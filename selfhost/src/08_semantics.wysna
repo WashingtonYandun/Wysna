@@ -731,7 +731,10 @@ fn sem_collect_record(context: SemanticContext, kind: str) {
         if sem_is(context, "RBRACE") { break }
         let mut visible = true
         if sem_is(context, "AT") { sem_error(context, "W0006", "static attributes require a top-level function declaration") }
-        if sem_match(context, "PRIVATE") { visible = false } else { sem_match(context, "PUBLIC") }
+        if sem_match(context, "PRIV") {
+            if kind == "interface" { sem_error(context, "W0006", "interface methods are public") }
+            visible = false
+        } else { sem_match(context, "PUB") }
         let mut method_is_async = false
         if sem_is(context, "IDENT") and sem_at(context).val == "async" and context.tokens[context.pos + 1].kind == "FN" { sem_take(context) method_is_async = true }
         if sem_is(context, "FN") {
@@ -3104,7 +3107,10 @@ fn sem_validate(context: SemanticContext, tokens: list[Token]) {
         sem_skip_separators(context)
         if sem_is(context, "EOF") { break }
         let attributes = sem_static_attributes(context)
-        sem_match(context, "PUB")
+        let visibility = sem_match(context, "PUB") or sem_match(context, "PRIV")
+        if visibility and (sem_is(context, "PUB") or sem_is(context, "PRIV")) {
+            sem_error(context, "W0006", "a declaration takes one visibility modifier")
+        }
         if sem_is(context, "AT") { sem_error(context, "W0006", "static attributes must precede pub") }
         let mut decl_is_async = false
         if sem_is(context, "IDENT") and sem_at(context).val == "async" and context.tokens[context.pos + 1].kind == "FN" { sem_take(context) decl_is_async = true }
@@ -3141,7 +3147,10 @@ fn sem_validate(context: SemanticContext, tokens: list[Token]) {
         sem_skip_separators(context)
         if sem_is(context, "RBRACE") or sem_is(context, "EOF") { break }
         sem_static_attributes(context)
-        sem_match(context, "PUB")
+        let visibility = sem_match(context, "PUB") or sem_match(context, "PRIV")
+        if visibility and (sem_is(context, "PUB") or sem_is(context, "PRIV")) {
+            sem_error(context, "W0006", "a declaration takes one visibility modifier")
+        }
         if sem_is(context, "AT") { sem_error(context, "W0006", "static attributes must precede pub") }
         if sem_is(context, "IDENT") and sem_at(context).val == "async" and context.tokens[context.pos + 1].kind == "FN" { sem_take(context) }
         let mut declaration = false

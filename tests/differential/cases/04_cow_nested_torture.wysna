@@ -6,8 +6,8 @@ struct Person {
 }
 
 class TeamHolder {
-    public lead: Person
-    public scores: list[int]
+    pub lead: Person
+    pub scores: list[int]
 
     fn init(lead: Person, scores: list[int]) {
         this.lead = lead

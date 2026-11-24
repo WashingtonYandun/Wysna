@@ -116,18 +116,18 @@ fn add(x: int) -> int {
 pub class Tag implements Printable {
     name: str
     fn init(name: str) { this.name = name }
-    public fn label() -> str { return this.name }
+    pub fn label() -> str { return this.name }
 }
 
 pub class Box[T] {
     value: T
     fn init(value: T) { this.value = value }
 
-    public fn transform[R](f: fn(T) -> R) -> Box[R] {
+    pub fn transform[R](f: fn(T) -> R) -> Box[R] {
         return Box[R](f(this.value))
     }
 
-    public fn pair_with[U](other: U) -> tuple[T, U] {
+    pub fn pair_with[U](other: U) -> tuple[T, U] {
         return (this.value, other)
     }
 }
@@ -141,7 +141,7 @@ pub class ChildBox[T] extends Box[T] {
             main_source = f'''from "{mod_path}" use {{ Printable, Tag, Box, ChildBox }}
 
 class Util {{
-    public fn render[X: Printable](item: X) -> str {{
+    pub fn render[X: Printable](item: X) -> str {{
         return "[" + item.label() + "]"
     }}
 }}
@@ -183,14 +183,14 @@ main()
             self.service.check(bad_init, file="bad_init.wysna")
         self.assertEqual(ctx.exception.code, "W2001")
 
-        bad_type_arity = '''class A { public fn f[T, U](x: T) -> T { x } }
+        bad_type_arity = '''class A { pub fn f[T, U](x: T) -> T { x } }
 fn main() -> unit { let a = A(); print(a.f[int](1)) }
 '''
         with self.assertRaises(WysnaError) as ctx2:
             self.service.check(bad_type_arity, file="bad_type_arity.wysna")
         self.assertIn(ctx2.exception.code, ("W2001", "W2004"))
 
-        bad_val_arity = '''class A { public fn f[T](x: T) -> T { x } }
+        bad_val_arity = '''class A { pub fn f[T](x: T) -> T { x } }
 fn main() -> unit { let a = A(); print(a.f[int](1, 2)) }
 '''
         with self.assertRaises(WysnaError) as ctx2b:
@@ -198,14 +198,14 @@ fn main() -> unit { let a = A(); print(a.f[int](1, 2)) }
         self.assertEqual(ctx2b.exception.code, "W2005")
 
         bad_bound = '''interface Named { fn name() -> str }
-class A { public fn show[T: Named](x: T) -> str { x.name() } }
+class A { pub fn show[T: Named](x: T) -> str { x.name() } }
 fn main() -> unit { let a = A(); print(a.show[int](1)) }
 '''
         with self.assertRaises(WysnaError) as ctx3:
             self.service.check(bad_bound, file="bad_bound.wysna")
         self.assertEqual(ctx3.exception.code, "W2001")
 
-        uncalled = '''class A { public fn id[T](x: T) -> T { x } }
+        uncalled = '''class A { pub fn id[T](x: T) -> T { x } }
 fn main() -> unit { let a = A(); let _ = a.id }
 '''
         with self.assertRaises(WysnaError) as ctx4:

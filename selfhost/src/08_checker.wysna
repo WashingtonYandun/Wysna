@@ -3,6 +3,8 @@ fn check_delimiters(tokens: list[Token]) -> unit {
     let mut delim_tokens: list[Token] = []
     for tok in tokens {
         let k = tok.kind
+        if k == "PUBLIC" { report_error_at("W0006", tok, "Use 'pub' in place of 'public'") }
+        if k == "PRIVATE" { report_error_at("W0006", tok, "Use 'priv' in place of 'private'") }
         if k == "LPAREN" or k == "LBRACE" or k == "LBRACKET" {
             delim_kinds.append(k)
             delim_tokens.append(tok)

@@ -1,5 +1,5 @@
 class Holder {
-    public xs: list[int]
+    pub xs: list[int]
     fn init() { this.xs = [1] }
 }
 let mut current = Holder()

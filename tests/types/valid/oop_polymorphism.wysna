@@ -3,26 +3,26 @@ interface Speakable {
 }
 
 class Animal implements Speakable {
-    public name: str
+    pub name: str
 
     fn init(name: str) {
         this.name = name
     }
 
-    public fn speak() -> str {
+    pub fn speak() -> str {
         return "..."
     }
 }
 
 class Dog extends Animal {
-    private breed: str
+    priv breed: str
 
     fn init(name: str, breed: str) {
         super.init(name)
         this.breed = breed
     }
 
-    public fn speak() -> str {
+    pub fn speak() -> str {
         return this.name + " (" + this.breed + ") says Woof"
     }
 }
@@ -32,7 +32,7 @@ class Cat extends Animal {
         super.init(name)
     }
 
-    public fn speak() -> str {
+    pub fn speak() -> str {
         return this.name + " says Meow"
     }
 }

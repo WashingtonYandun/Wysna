@@ -1,2 +1,2 @@
-class Values { public fn keys() -> list[int] { return [1, 2] } }
+class Values { pub fn keys() -> list[int] { return [1, 2] } }
 print(Values().keys())

@@ -1,5 +1,5 @@
 class Node {
-    public next: Node?
+    pub next: Node?
     fn init() { this.next = None }
 }
 fn exercise() -> unit {

@@ -1,5 +1,5 @@
 class Base {
-    private fn pin() -> int {
+    priv fn pin() -> int {
         return 42
     }
 
@@ -11,7 +11,7 @@ class Derived extends Base {
         super.init()
     }
 
-    public fn pin() -> int {
+    pub fn pin() -> int {
         return 99
     }
 }

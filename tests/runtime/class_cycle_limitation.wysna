@@ -1,17 +1,17 @@
 class Node {
-    public id: int
-    public next: Node?
+    pub id: int
+    pub next: Node?
 
     fn init(id: int) {
         this.id = id
         this.next = None
     }
 
-    public fn set_next(target: Node?) -> unit {
+    pub fn set_next(target: Node?) -> unit {
         this.next = target
     }
 
-    public fn has_next() -> bool {
+    pub fn has_next() -> bool {
         return this.next != None
     }
 }

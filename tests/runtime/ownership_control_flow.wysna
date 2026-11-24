@@ -1,6 +1,6 @@
 class Box {
-    public text: str
-    public calls: int
+    pub text: str
+    pub calls: int
     fn init(text: str) { this.text = text
 this.calls = 0 }
     fn replace() -> str {

@@ -112,7 +112,7 @@ Tal como establecen las reglas de este plan, **los conteos de tokens por sí sol
 - **Problema:** En `src/tooling/McpServer.py:170-177`, `tool_wysna_check` junta en una misma lista `warnings` los objetos `WysnaError` de `lint_discarded_expressions` (`W6001`) y los `dict` devueltos por `self.service.analyze_reference_cycles(checked)` (`W6002`), y luego llama a `diagnostic_from_error(w, sources, severity="warning", span_cache=cache)`. Esto falla siempre por **dos causas**:
   1. `diagnostic_from_error` en `src/tooling/ToolResult.py` no acepta el argumento `severity="warning"` (`TypeError: diagnostic_from_error() got an unexpected keyword argument 'severity'`).
   2. Los elementos de `analyze_reference_cycles` son diccionarios (`{"message": ..., "advisory": ..., "classes": ...}`), no instancias de `WysnaError`.
-  Como consecuencia, cualquier archivo válido que tenga una expresión descartada (`W6001`) o una clase recursiva como `class Node { public next: Node? }` (`W6002`, incluyendo el propio `selfhost/compiler.wysna`!) hace crashear la herramienta `wysna_check` del servidor MCP.
+  Como consecuencia, cualquier archivo válido que tenga una expresión descartada (`W6001`) o una clase recursiva como `class Node { pub next: Node? }` (`W6002`, incluyendo el propio `selfhost/compiler.wysna`!) hace crashear la herramienta `wysna_check` del servidor MCP.
 - **Propuesta:** Reutilizar la función `_warning_records(cycle_warnings, lint_warnings, path, sources)` que ya existe y funciona correctamente en `src/tooling/SourceCommand.py:68-80` dentro de `McpServer.tool_wysna_check`.
 - **Alternativas:**
   1. *No hacer nada:* dejar que `wysna_check` en MCP falle con excepción no controlada en cualquier programa con clases recursivas o warnings de linter. Inaceptable (`P0`).
@@ -123,7 +123,7 @@ Tal como establecen las reglas de este plan, **los conteos de tokens por sí sol
 - **Compatibilidad y migración:** Sin cambios de interfaz; repara una ruta rota del protocolo `wysna.tool-result/1`.
 - **Componentes afectados:** `src/tooling/McpServer.py`, `src/tooling/SourceCommand.py`, `src/tooling/ToolResult.py`, `tests/unit/test_mcp_server.py`.
 - **Depende de:** Ninguno.
-- **Criterio de aceptación:** Llamar a `McpServer(".").tool_wysna_check({"source": "class Node { public next: Node?\n fn init() { this.next = none } }\n1 + 2\n"})` retorna `status: "ok"` con dos diagnósticos de severidad `"warning"` (`W6001` y `W6002`) sin lanzar `TypeError`.
+- **Criterio de aceptación:** Llamar a `McpServer(".").tool_wysna_check({"source": "class Node { pub next: Node?\n fn init() { this.next = none } }\n1 + 2\n"})` retorna `status: "ok"` con dos diagnósticos de severidad `"warning"` (`W6001` y `W6002`) sin lanzar `TypeError`.
 - **Requiere aprobación:** no.
 - **Estado:** implementado.
 

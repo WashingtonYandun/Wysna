@@ -611,7 +611,7 @@ fn lsp_handle_completion(doc: LspDocument, pos_obj: LspJson) -> str {
         }
     }
     if qual == "" {
-        let kws: list[str] = ["fn", "async", "struct", "class", "interface", "enum", "let", "mut", "if", "elif", "else", "for", "while", "match", "return", "await", "import", "pub", "true", "false", "None", "Some", "Ok", "Err"]
+        let kws: list[str] = ["fn", "async", "struct", "class", "interface", "enum", "let", "mut", "if", "elif", "else", "for", "while", "match", "return", "await", "import", "pub", "priv", "true", "false", "None", "Some", "Ok", "Err"]
         for kw in kws {
             if prefix != "" and (len(kw) < len(prefix) or slice(kw, 0, len(prefix)) != prefix) { continue }
             if not tool_str_contains(seen_labels, kw) {
@@ -638,7 +638,7 @@ fn lsp_semantic_tok_type(tok: Token) -> int {
     let k = tok.kind
     if k == "STR" or k == "FSTR" { return 11 }
     if k == "INT" or k == "FLOAT" { return 12 }
-    if k == "FN" or k == "LET" or k == "MUT" or k == "STRUCT" or k == "CLASS" or k == "INTERFACE" or k == "ENUM" or k == "IF" or k == "ELIF" or k == "ELSE" or k == "FOR" or k == "IN" or k == "WHILE" or k == "RETURN" or k == "MATCH" or k == "IMPORT" or k == "FROM" or k == "AS" or k == "PUB" or k == "TRUE" or k == "FALSE" or k == "THIS" or k == "SUPER" or k == "EXTERN" or k == "AND" or k == "OR" or k == "NOT" or k == "REQUIRES" or k == "ENSURES" {
+    if k == "FN" or k == "LET" or k == "MUT" or k == "STRUCT" or k == "CLASS" or k == "INTERFACE" or k == "ENUM" or k == "IF" or k == "ELIF" or k == "ELSE" or k == "FOR" or k == "IN" or k == "WHILE" or k == "RETURN" or k == "MATCH" or k == "IMPORT" or k == "FROM" or k == "AS" or k == "PUB" or k == "PRIV" or k == "TRUE" or k == "FALSE" or k == "THIS" or k == "SUPER" or k == "EXTERN" or k == "AND" or k == "OR" or k == "NOT" or k == "REQUIRES" or k == "ENSURES" {
         return 0
     }
     if k == "IDENT" {

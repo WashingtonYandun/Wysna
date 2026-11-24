@@ -2,8 +2,8 @@ struct Entry { id: int, units: int }
 pub struct Summary { count: int, total: int, rolled_back: bool }
 
 class Ledger {
-    private balances: dict[int, int]
-    private total: int
+    priv balances: dict[int, int]
+    priv total: int
 
     fn init() {
         let initial: dict[int, int] = {0: 7}
@@ -11,7 +11,7 @@ class Ledger {
         this.total = 7
     }
 
-    public fn apply(entries: list[Entry]) -> bool {
+    pub fn apply(entries: list[Entry]) -> bool {
         let mut pending: dict[int, int] = {}
         let mut subtotal = 0
         for entry in entries {
@@ -28,7 +28,7 @@ class Ledger {
         return true
     }
 
-    public fn summary(rolled_back: bool) -> Summary {
+    pub fn summary(rolled_back: bool) -> Summary {
         return Summary { count: len(this.balances), total: this.total, rolled_back: rolled_back }
     }
 }

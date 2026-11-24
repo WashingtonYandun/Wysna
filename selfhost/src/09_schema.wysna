@@ -712,8 +712,8 @@ fn schema_collect_decls(tokens: list[Token], out: SchemaDeclSet) -> unit {
             c.pos = c.pos + 1
             continue
         }
-        if k == "PUB" or k == "PUBLIC" or (k == "IDENT" and v == "pub") {
-            is_pub = true
+        if k == "PUB" or k == "PRIV" {
+            is_pub = k == "PUB"
             c.pos = c.pos + 1
             continue
         }

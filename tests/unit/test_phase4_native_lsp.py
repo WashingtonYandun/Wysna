@@ -146,8 +146,8 @@ class Phase4NativeLspTests(unittest.TestCase):
                 '}\n'
                 'pub class ConsoleGreeter implements Greeter {\n'
                 '    tag: str\n'
-                '    public fn init(tag: str) { this.tag = tag }\n'
-                '    public fn greet(who: str) -> str { return this.tag + ":" + who }\n'
+                '    pub fn init(tag: str) { this.tag = tag }\n'
+                '    pub fn greet(who: str) -> str { return this.tag + ":" + who }\n'
                 '}\n'
             )
             main_src = (

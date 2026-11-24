@@ -223,8 +223,8 @@ fn tool_format_signature(program: CheckedProgram, short_name: str, params: list[
 }
 
 fn tool_is_decl_modifier(tok: Token) -> bool {
-    if tok.kind == "PUB" or tok.kind == "PUBLIC" or tok.kind == "PRIVATE" { return true }
-    if tok.kind == "IDENT" and (tok.val == "async" or tok.val == "pub" or tok.val == "public" or tok.val == "private") { return true }
+    if tok.kind == "PUB" or tok.kind == "PRIV" { return true }
+    if tok.kind == "IDENT" and (tok.val == "async" or tok.val == "pub" or tok.val == "priv") { return true }
     return false
 }
 
@@ -443,7 +443,7 @@ fn tool_scan_decl_nodes(graph: ToolGraph, program: CheckedProgram, src: str, fil
             i = metadata.pos
             continue
         }
-        if tok.kind == "PUB" or (tok.kind == "IDENT" and tok.val == "pub") or tok.kind == "PUBLIC" {
+        if tok.kind == "PUB" or (tok.kind == "IDENT" and tok.val == "pub") {
             is_public = true
             i = i + 1
             continue

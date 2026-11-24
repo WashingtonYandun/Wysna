@@ -18,8 +18,7 @@ from tokens.TokenType import TokenType
 _MODIFIER_TOKENS = frozenset({
     TokenType.PUB,
     TokenType.ASYNC,
-    TokenType.PUBLIC,
-    TokenType.PRIVATE,
+    TokenType.PRIV,
 })
 
 _OPEN_DELIMITERS = frozenset({TokenType.LPAREN, TokenType.LBRACKET, TokenType.LBRACE})

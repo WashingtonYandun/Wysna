@@ -53,10 +53,10 @@ fn read_db_error(db_raw: opaque) -> SqliteError {
 }
 
 pub class Statement {
-    private handle: resources.Resource
-    private owner: opaque
+    priv handle: resources.Resource
+    priv owner: opaque
 
-    public fn init(stmt_raw: opaque, owner_raw: opaque) {
+    pub fn init(stmt_raw: opaque, owner_raw: opaque) {
         this.owner = owner_raw
         this.handle = resources.acquire(stmt_raw, |ptr: opaque| -> int {
             ws_sqlite_finalize(ptr)
@@ -65,7 +65,7 @@ pub class Statement {
         }
     }
 
-    public fn bind_int(index: int, value: int) -> unit ! SqliteError {
+    pub fn bind_int(index: int, value: int) -> unit ! SqliteError {
         let raw = this.handle.borrow() else error {
             return Err(SqliteError { code: 21, message: error.message })
         }
@@ -75,7 +75,7 @@ pub class Statement {
         }
     }
 
-    public fn bind_text(index: int, value: str) -> unit ! SqliteError {
+    pub fn bind_text(index: int, value: str) -> unit ! SqliteError {
         let raw = this.handle.borrow() else error {
             return Err(SqliteError { code: 21, message: error.message })
         }
@@ -88,7 +88,7 @@ pub class Statement {
         }
     }
 
-    public fn step() -> bool ! SqliteError {
+    pub fn step() -> bool ! SqliteError {
         let raw = this.handle.borrow() else error {
             return Err(SqliteError { code: 21, message: error.message })
         }
@@ -99,7 +99,7 @@ pub class Statement {
         return rc == 1
     }
 
-    public fn reset() -> unit ! SqliteError {
+    pub fn reset() -> unit ! SqliteError {
         let raw = this.handle.borrow() else error {
             return Err(SqliteError { code: 21, message: error.message })
         }
@@ -109,14 +109,14 @@ pub class Statement {
         }
     }
 
-    public fn column_int(col: int) -> int ! SqliteError {
+    pub fn column_int(col: int) -> int ! SqliteError {
         let raw = this.handle.borrow() else error {
             return Err(SqliteError { code: 21, message: error.message })
         }
         return ws_sqlite_column_int(raw, col)
     }
 
-    public fn column_text(col: int) -> str ! SqliteError {
+    pub fn column_text(col: int) -> str ! SqliteError {
         let raw = this.handle.borrow() else error {
             return Err(SqliteError { code: 21, message: error.message })
         }
@@ -131,15 +131,15 @@ pub class Statement {
         return text
     }
 
-    public fn close() -> int {
+    pub fn close() -> int {
         return this.handle.close()
     }
 }
 
 pub class Database {
-    private handle: resources.Resource
+    priv handle: resources.Resource
 
-    public fn init(raw: opaque) {
+    pub fn init(raw: opaque) {
         this.handle = resources.acquire(raw, |ptr: opaque| -> int {
             ws_sqlite_close(ptr)
         }) else error {
@@ -147,7 +147,7 @@ pub class Database {
         }
     }
 
-    public fn exec(sql: str) -> unit ! SqliteError {
+    pub fn exec(sql: str) -> unit ! SqliteError {
         let raw = this.handle.borrow() else error {
             return Err(SqliteError { code: 21, message: error.message })
         }
@@ -160,19 +160,19 @@ pub class Database {
         }
     }
 
-    public fn begin() -> unit ! SqliteError {
+    pub fn begin() -> unit ! SqliteError {
         return this.exec("BEGIN")
     }
 
-    public fn commit() -> unit ! SqliteError {
+    pub fn commit() -> unit ! SqliteError {
         return this.exec("COMMIT")
     }
 
-    public fn rollback() -> unit ! SqliteError {
+    pub fn rollback() -> unit ! SqliteError {
         return this.exec("ROLLBACK")
     }
 
-    public fn prepare(sql: str) -> Statement ! SqliteError {
+    pub fn prepare(sql: str) -> Statement ! SqliteError {
         let raw = this.handle.borrow() else error {
             return Err(SqliteError { code: 21, message: error.message })
         }
@@ -189,7 +189,7 @@ pub class Database {
         return Statement(stmt_raw, raw)
     }
 
-    public fn close() -> int {
+    pub fn close() -> int {
         return this.handle.close()
     }
 }

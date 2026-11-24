@@ -128,7 +128,7 @@ print(classify(-9223372036854775808), classify(-1), classify(0), classify(922337
 
     def test_or_guard_and_subject_are_evaluated_once(self):
         self.check_engines('''class Counter {
-    public count: int
+    pub count: int
     fn init() { this.count = 0 }
     fn subject() -> int { this.count += 1; return 1 }
     fn guard() -> bool { this.count += 1; return false }

@@ -131,8 +131,8 @@ def test_native_check_does_not_lint_calls_assignments_or_tail_returns(native_dri
 def test_native_check_reports_w6002_arc_cycle_and_clears_with_weak(native_driver, tmp_path):
     cyclic = tmp_path / "cycle.wysna"
     cyclic.write_text(
-        "class A { public b: B? }\n"
-        "class B { public a: A? }\n"
+        "class A { pub b: B? }\n"
+        "class B { pub a: A? }\n"
         "fn main() { print(1) }\n",
         encoding="utf-8",
     )
@@ -145,8 +145,8 @@ def test_native_check_reports_w6002_arc_cycle_and_clears_with_weak(native_driver
 
     acyclic = tmp_path / "weak_ok.wysna"
     acyclic.write_text(
-        "class A { public b: B? }\n"
-        "class B { public a: Weak[A] }\n"
+        "class A { pub b: B? }\n"
+        "class B { pub a: Weak[A] }\n"
         "fn main() { print(1) }\n",
         encoding="utf-8",
     )
@@ -158,8 +158,8 @@ def test_native_check_reports_w6002_arc_cycle_and_clears_with_weak(native_driver
 def test_native_lsp_publishes_w6001_and_w6002_warnings(native_driver, tmp_path):
     doc = tmp_path / "lints.wysna"
     text = (
-        "class A { public b: B? }\n"
-        "class B { public a: A? }\n"
+        "class A { pub b: B? }\n"
+        "class B { pub a: A? }\n"
         "fn f(x: int) -> int {\n"
         "    x + 1\n"
         "    return x\n"

@@ -100,8 +100,8 @@ def test_selfhost_formatter_matches_seed_on_inline_spacing_new_and_multiline_str
     parity_target = tmp_path / "fmt_parity.wysna"
     parity_source = (
         "class Counter {\n"
-        "    public value: int\n"
-        "    public fn init(v: int) -> unit {\n"
+        "    pub value: int\n"
+        "    pub fn init(v: int) -> unit {\n"
         "        this.value = v\n"
         "    }\n"
         "}\n"

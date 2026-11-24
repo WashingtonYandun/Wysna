@@ -1,5 +1,5 @@
 class C {
- public text: str
+ pub text: str
  fn init(b: bool) {
   if b { this.text = "yes" } else { this.text = "no" }
  }

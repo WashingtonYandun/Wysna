@@ -536,11 +536,11 @@ class NativeMirPipelineTests(unittest.TestCase):
             ('interface Show { fn show() -> str }\nclass Box[T: Show] { value: T\n    fn init(v: T) { this.value = v } }\nlet b = Box[int](1)', 'W2001'),
             ('interface Show { fn show() -> str }\nclass Box[T] { value: T\n    fn init(v: T) { this.value = v }\n    fn render[U: Show](x: U) -> str { x.show() } }\nlet b = Box[int](1)\nprint(b.render(42))', 'W2001'),
             ('class Base { value: int }\nclass Box[T] extends Base { value: T }', 'W3003'),
-            ('interface Reader[T] { fn get() -> T }\nclass Bad implements Reader { public fn get() -> int { 1 } }', 'W2001'),
-            ('interface Reader[T] { fn get() -> T }\nclass Bad implements Reader[int, str] { public fn get() -> int { 1 } }', 'W2001'),
-            ('interface Reader[T] { fn get() -> T }\nclass Bad implements Reader[int] { public fn get() -> str { "x" } }', 'W3003'),
+            ('interface Reader[T] { fn get() -> T }\nclass Bad implements Reader { pub fn get() -> int { 1 } }', 'W2001'),
+            ('interface Reader[T] { fn get() -> T }\nclass Bad implements Reader[int, str] { pub fn get() -> int { 1 } }', 'W2001'),
+            ('interface Reader[T] { fn get() -> T }\nclass Bad implements Reader[int] { pub fn get() -> str { "x" } }', 'W3003'),
             ('interface Reader[T] { fn get() -> T }\nclass Box[T] implements Reader[T] { value: T\nfn init(v: T) { this.value = v }\npublic fn get() -> T { this.value } }\nlet r: Reader[int] = Box[str]("x")', 'W2001'),
-            ('interface Show { fn show() -> str }\ninterface ShowReader[T: Show] { fn get() -> T }\nclass Bad implements ShowReader[int] { public fn get() -> int { 1 } }', 'W2001'),
+            ('interface Show { fn show() -> str }\ninterface ShowReader[T: Show] { fn get() -> T }\nclass Bad implements ShowReader[int] { pub fn get() -> int { 1 } }', 'W2001'),
             ('enum Maybe[T] { None, Value(T) }\nprint(Maybe.None)', 'W2013'),
             ('enum Maybe[T] { None, Value(T) }\nprint(Maybe.None == Maybe.None)', 'W2013'),
             ('class Box[T] { value: T }\nlet value: Box[int] = Box[str]()', 'W2001'),
@@ -585,20 +585,20 @@ class NativeMirPipelineTests(unittest.TestCase):
                 '    fn show() -> str\n'
                 '}\n'
                 'pub class Box[T: Show] implements Show {\n'
-                '    public value: T\n'
-                '    public fn init(v: T) { this.value = v }\n'
-                '    public fn show() -> str { this.value.show() }\n'
-                '    public fn transform[R: Show](f: fn(T) -> R) -> Box[R] {\n'
+                '    pub value: T\n'
+                '    pub fn init(v: T) { this.value = v }\n'
+                '    pub fn show() -> str { this.value.show() }\n'
+                '    pub fn transform[R: Show](f: fn(T) -> R) -> Box[R] {\n'
                 '        return Box[R](f(this.value))\n'
                 '    }\n'
                 '}\n'
                 'pub class ChildBox[T: Show] extends Box[T] {\n'
                 '    tag: str\n'
-                '    public fn init(v: T, t: str) {\n'
+                '    pub fn init(v: T, t: str) {\n'
                 '        super.init(v)\n'
                 '        this.tag = t\n'
                 '    }\n'
-                '    public fn show() -> str { this.tag + ":" + super.show() }\n'
+                '    pub fn show() -> str { this.tag + ":" + super.show() }\n'
                 '}\n',
                 encoding="utf-8",
             )
@@ -636,31 +636,31 @@ class NativeMirPipelineTests(unittest.TestCase):
                 'class Tag implements Show {\n'
                 '    text: str\n'
                 '    fn init(t: str) { this.text = t }\n'
-                '    public fn show() -> str { return "[" + this.text + "]" }\n'
+                '    pub fn show() -> str { return "[" + this.text + "]" }\n'
                 '}\n'
                 'class IntHolder implements Collection[int] {\n'
                 '    n: int\n'
                 '    fn init(n: int) { this.n = n }\n'
-                '    public fn get() -> int { return this.n }\n'
+                '    pub fn get() -> int { return this.n }\n'
                 '}\n'
                 'class Box[T] {\n'
                 '    value: T\n'
                 '    fn init(v: T) { this.value = v }\n'
-                '    public fn get() -> T { return this.value }\n'
+                '    pub fn get() -> T { return this.value }\n'
                 '}\n'
                 'class Child extends Box[int] implements Collection[int] {\n'
                 '    fn init(n: int) { super.init(n) }\n'
                 '}\n'
                 'class Repository[T] implements Collection[T] {\n'
-                '    private value: T\n'
+                '    priv value: T\n'
                 '    fn init(value: T) { this.value = value }\n'
-                '    public fn get() -> T { return this.value }\n'
+                '    pub fn get() -> T { return this.value }\n'
                 '}\n'
                 'class StyledBox[T: Show] implements ShowBox[T], Collection[T] {\n'
                 '    item: T\n'
                 '    fn init(item: T) { this.item = item }\n'
-                '    public fn label() -> str { return this.item.show() }\n'
-                '    public fn get() -> T { return this.item }\n'
+                '    pub fn label() -> str { return this.item.show() }\n'
+                '    pub fn get() -> T { return this.item }\n'
                 '}\n'
                 'fn read_val[T](c: Collection[T]) -> T { return c.get() }\n'
                 'let a: Collection[int] = IntHolder(7)\n'

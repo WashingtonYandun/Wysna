@@ -192,36 +192,36 @@ interface Describable {
 }
 
 class Animal {
-    public name: str
-    private energy: int
+    pub name: str
+    priv energy: int
 
     fn init(name: str, energy: int) {
         this.name = name
         this.energy = energy
     }
 
-    public fn speak() -> str {
+    pub fn speak() -> str {
         return this.name + " makes a sound"
     }
 
-    public fn get_energy() -> int {
+    pub fn get_energy() -> int {
         return this.energy
     }
 }
 
 class Dog extends Animal implements Describable {
-    public breed: str
+    pub breed: str
 
     fn init(name: str, breed: str) {
         super.init(name, 100)
         this.breed = breed
     }
 
-    public fn speak() -> str {
+    pub fn speak() -> str {
         return this.name + " (" + this.breed + ") barks: Woof!"
     }
 
-    public fn describe() -> str {
+    pub fn describe() -> str {
         return this.speak()
     }
 }

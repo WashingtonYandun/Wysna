@@ -23,7 +23,7 @@ class ConsoleLogger implements Logger {
         this.prefix = prefix
     }
 
-    public fn log(msg: str) -> str {
+    pub fn log(msg: str) -> str {
         return this.prefix + ": " + msg
     }
 }
@@ -139,7 +139,7 @@ def test_cross_module_semantic_graph_and_lsp_implementation(tmp_path):
     app_source = (
         'from "contracts.wysna" use { Store }\n'
         "class DiskStore implements Store {\n"
-        "    public fn save(key: str) -> int {\n"
+        "    pub fn save(key: str) -> int {\n"
         "        return len(key)\n"
         "    }\n"
         "}\n"
@@ -221,7 +221,7 @@ def test_inspect_and_hash_guarded_checked_patch_workflow(tmp_path):
         "patch", str(target),
         "--symbol", "ConsoleLogger.log",
         "--expect-graph-hash", current_hash,
-        "--with", "public fn log(msg: str) -> int { return 42 }",
+        "--with", "pub fn log(msg: str) -> int { return 42 }",
         "--apply",
         "--output-format=json-v1",
     )
@@ -230,7 +230,7 @@ def test_inspect_and_hash_guarded_checked_patch_workflow(tmp_path):
     assert target.read_text(encoding="utf-8") == SAMPLE_OOP
 
     # 5. Valid dry-run checks cleanly without modifying disk
-    new_log = 'public fn log(msg: str) -> str {\n        return "[" + this.prefix + "] " + msg\n    }'
+    new_log = 'pub fn log(msg: str) -> str {\n        return "[" + this.prefix + "] " + msg\n    }'
     code, dry_payload, _ = _run_cli(
         "patch", str(target),
         "--symbol", "ConsoleLogger.log",

@@ -1,11 +1,11 @@
 class Base {
-    private secret: int
+    priv secret: int
 
     fn init(s: int) {
         this.secret = s
     }
 
-    private fn pin() -> int {
+    priv fn pin() -> int {
         return this.secret
     }
 }
@@ -15,7 +15,7 @@ class Derived extends Base {
         super.init(s)
     }
 
-    public fn leak_field() -> int {
+    pub fn leak_field() -> int {
         return this.secret
     }
 }
