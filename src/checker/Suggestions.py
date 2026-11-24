@@ -63,6 +63,7 @@ def suggest_mutable(error, sym, file: str):
     sym_kind = getattr(sym, "kind", "var")
     error.with_data(
         kind="immutable_mutation",
+        binding=sym_name,
         symbol=sym_name,
         binding_kind=sym_kind,
         declared_line=decl_line,

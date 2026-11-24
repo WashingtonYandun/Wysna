@@ -347,6 +347,16 @@ fn diag_render_source_excerpt(src: str, target_line: int, target_col: int) -> st
     return line_label + " | " + text + "\n" + join_strings(pad_parts, "") + " | " + join_strings(caret_parts, "")
 }
 
+struct CollectedDiag {
+    file: str,
+    code: str,
+    line: int,
+    col: int,
+    msg: str,
+    data: str,
+    related_json: str,
+}
+
 fn diag_emit_and_exit(file: str, code: str, line: int, col: int, msg: str) -> unit {
     diag_emit_and_exit_full(file, code, line, col, msg, "", "[]")
 }
@@ -356,29 +366,57 @@ fn diag_emit_and_exit_data(file: str, code: str, line: int, col: int, msg: str, 
 }
 
 fn diag_emit_and_exit_full(file: str, code: str, line: int, col: int, msg: str, data: str, related_json: str) -> unit {
+    diag_emit_all_and_exit([CollectedDiag {
+        file: file,
+        code: code,
+        line: line,
+        col: col,
+        msg: msg,
+        data: data,
+        related_json: related_json,
+    }])
+}
+
+fn diag_emit_all_and_exit(diags: list[CollectedDiag]) -> unit {
+    if len(diags) == 0 { exit(1) }
     let mode = diag_cli_json_mode()
-    let mut src = ""
-    if file != "" and file != "<stdin>" and file != "<unknown>" and file != "<cli>" {
-        src = diag_read_snippet_source(file)
-    }
     if mode == "" {
-        eprint("[" + code + "] " + file + ":" + str(line) + ":" + str(col) + " - " + msg)
-        let excerpt = diag_render_source_excerpt(src, line, col)
-        if excerpt != "" { eprint(excerpt) }
+        for d in diags {
+            let mut src = ""
+            if d.file != "" and d.file != "<stdin>" and d.file != "<unknown>" and d.file != "<cli>" {
+                src = diag_read_snippet_source(d.file)
+            }
+            eprint("[" + d.code + "] " + d.file + ":" + str(d.line) + ":" + str(d.col) + " - " + d.msg)
+            let excerpt = diag_render_source_excerpt(src, d.line, d.col)
+            if excerpt != "" { eprint(excerpt) }
+        }
         exit(1)
     }
-    let stage = diag_stage_for_code(code)
-    let eff_data = if data == "" {
-        if stage == "type" { fix_mismatch_data_json(msg) } else { "{}" }
-    } else { data }
-    let diag_json = diag_record_json_full(code, stage, "error", msg, file, line, col, src, eff_data, related_json)
-    if mode == "array" { diag_write_output("[" + diag_json + "]"); exit(1) }
+    let mut records: list[str] = []
+    for d in diags {
+        let mut src = ""
+        if d.file != "" and d.file != "<stdin>" and d.file != "<unknown>" and d.file != "<cli>" {
+            src = diag_read_snippet_source(d.file)
+        }
+        let stage = diag_stage_for_code(d.code)
+        let eff_data = if d.data == "" {
+            if stage == "type" { fix_mismatch_data_json(d.msg) } else { "{}" }
+        } else { d.data }
+        let rel = if d.related_json == "" { "[]" } else { d.related_json }
+        records.append(diag_record_json_full(d.code, stage, "error", d.msg, d.file, d.line, d.col, src, eff_data, rel))
+    }
+    let joined = "[" + join_strings(records, ",") + "]"
+    if mode == "array" {
+        diag_write_output(joined)
+        exit(1)
+    }
     if mode == "check-json" {
-        diag_write_output(("{\"schema_version\":\"wysna.cli.result/1\",\"compiler_version\":\"" + tool_compiler_version() + "\",\"command\":\"check\",\"ok\":false,\"exit_code\":1,\"diagnostics\":[") + diag_json + "],\"data\":null}")
+        diag_write_output(("{\"schema_version\":\"wysna.cli.result/1\",\"compiler_version\":\"" + tool_compiler_version() + "\",\"command\":\"check\",\"ok\":false,\"exit_code\":1,\"diagnostics\":") + joined + ",\"data\":null}")
         exit(1)
     }
     let cmd = diag_cli_command()
-    let status = if code == "W5002" { "usage_error" } elif code == "W5003" or code == "W5004" { "toolchain_error" } else { "diagnostic_error" }
-    diag_write_output(diag_tool_envelope_json(cmd, status, 1, "[" + diag_json + "]", "", "", "[]"))
+    let first_code = diags[0].code
+    let status = if first_code == "W5002" { "usage_error" } elif first_code == "W5003" or first_code == "W5004" { "toolchain_error" } else { "diagnostic_error" }
+    diag_write_output(diag_tool_envelope_json(cmd, status, 1, joined, "", "", "[]"))
     exit(1)
 }

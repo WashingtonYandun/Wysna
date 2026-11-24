@@ -62,9 +62,11 @@ fn check_delimiters(tokens: list[Token]) -> unit {
 fn check_program(tokens: list[Token], file: str, capture: bool) -> CheckedProgram {
     check_delimiters(tokens)
     let context = SemanticContext(capture or worker_needs_nodes(tokens))
+    context.collect_errors = true
     sem_validate(context, tokens)
     sem_complete_specializations(context)
     sem_validate_field_contracts(context)
+    if len(context.errors) > 0 { diag_emit_all_and_exit(context.errors) }
     let checked = checked_finish(context, tokens, file)
     worker_check(checked)
     return checked

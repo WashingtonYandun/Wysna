@@ -1481,12 +1481,23 @@ class Parser:
             if op_tok.type in (TokenType.ASSIGN, TokenType.PLUS_ASSIGN, TokenType.MINUS_ASSIGN, TokenType.STAR_ASSIGN):
                 # Target validation
                 if not isinstance(left, (IdentExpr, IndexExpr, MemberExpr)):
+                    target_name = left.__class__.__name__
+                    if target_name == "CallExpr":
+                        short_kind = "call"
+                    elif "Lit" in target_name or target_name == "NoneLiteral":
+                        short_kind = "literal"
+                    else:
+                        short_kind = "expr"
                     raise ParserError(
-                        message=f"Invalid assignment target '{left.__class__.__name__}'",
+                        message=f"Invalid assignment target '{target_name}'",
                         line=op_tok.line,
                         col=op_tok.col,
                         file=self.file,
                         code="W2002"
+                    ).with_data(
+                        kind="invalid_assignment_target",
+                        target_kind=short_kind,
+                        help="Assign to a mutable variable ('let mut name'), struct/class field, or list/dict index.",
                     )
                 if op_tok.type == TokenType.ASSIGN:
                     left = AssignmentExpr(target=left, value=right, line=op_tok.line, col=op_tok.col)
