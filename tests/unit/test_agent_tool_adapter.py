@@ -43,6 +43,8 @@ def test_agent_tool_adapter_validates_input_and_serializes_typed_outcomes(toolch
     adapter = tmp_path / 'adapter.wysna'
     export = cli + ['schema', str(tool), '--function', 'summarize', '--emit-tool',
                     '-o', str(adapter), '--output-format=json-v1']
+    if not native:
+        export.append('--engine=seed')
     result = invoke(export)
     assert result.returncode == 0, result.stderr + result.stdout
     artifact = json.loads(result.stdout)['result']['agent_adapter']
@@ -87,7 +89,7 @@ def test_agent_tool_adapter_validates_input_and_serializes_typed_outcomes(toolch
 
 @pytest.mark.parametrize('initializer', [False, True], ids=['function', 'module'])
 def test_agent_tool_adapter_refuses_effects(toolchain, tmp_path, initializer):
-    cli, _ = toolchain
+    cli, native = toolchain
     tool = tmp_path / 'tool.wysna'
     body = 'return value' if initializer else 'print(value)\n    return value'
     trailing = 'print("module initializer")\n' if initializer else ''
@@ -96,7 +98,10 @@ def test_agent_tool_adapter_refuses_effects(toolchain, tmp_path, initializer):
         '@AgentTool(id: "test.unsafe", version: 1)\n'
         f'pub fn unsafe(value: int) -> int {{\n    {body}\n}}\n' + trailing,
         encoding='utf-8')
-    result = invoke(cli + ['schema', str(tool), '--function', 'unsafe', '--emit-tool',
-                           '--output-format=json-v1'])
+    export = cli + ['schema', str(tool), '--function', 'unsafe', '--emit-tool',
+                    '--output-format=json-v1']
+    if not native:
+        export.append('--engine=seed')
+    result = invoke(export)
     assert result.returncode != 0
     assert json.loads(result.stdout)['diagnostics'][0]['code'] == ('W5006' if initializer else 'W2013')
