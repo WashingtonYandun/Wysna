@@ -32,8 +32,7 @@ static inline void wysna_eq_push(WEqualityPair** items, int32_t* count, int32_t*
 static W_RUNTIME_NOINLINE bool wysna_eq_graph(WVal a, WVal b);
 
 /* Scalar equality must not create the structural comparison work list. */
-WYSNA_RT_FN bool wysna_eq(WVal a, WVal b) {
-    if (a.bits == b.bits && !wysna_is_double(a)) return true;
+WYSNA_RT_FN bool wysna_eq_slow(WVal a, WVal b) {
     WTag ta = wysna_tag(a);
     if (ta == wysna_tag(b)) {
         switch (ta) {

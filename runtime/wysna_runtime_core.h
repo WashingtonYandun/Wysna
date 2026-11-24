@@ -223,6 +223,8 @@ typedef struct WysnaRuntimeContext {
     int32_t box_pool_len;
     WEnumBuf* enum_pool[16];
     int32_t enum_pool_len;
+    WStructBuf* struct_pool[32];
+    int32_t struct_pool_len;
 } WysnaRuntimeContext;
 
 WYSNA_RT_FN int64_t wysna_collect_cycles(void);
@@ -739,6 +741,11 @@ WYSNA_RT_FN void wysna_runtime_cleanup_impl(bool verify_live_objects) {
         wysna_runtime_context.enum_pool[i] = NULL;
     }
     wysna_runtime_context.enum_pool_len = 0;
+    for (int32_t i = 0; i < wysna_runtime_context.struct_pool_len; i++) {
+        free(wysna_runtime_context.struct_pool[i]);
+        wysna_runtime_context.struct_pool[i] = NULL;
+    }
+    wysna_runtime_context.struct_pool_len = 0;
     const char* stats_env = getenv("WYSNA_MEM_STATS");
     if (stats_env && strcmp(stats_env, "1") == 0) {
         fprintf(stderr, "[WYSNA_MEM_STATS] alloc=%" PRId64 " free=%" PRId64 " retain=%" PRId64 " release=%" PRId64 " live=%" PRId64 "\n",

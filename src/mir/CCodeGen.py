@@ -10,11 +10,36 @@ from mir.Verifier import Verifier
 from compiler.StdlibIdentity import stdlib_declaration
 
 
+_READONLY_RUNTIME_FOR_BORROW = frozenset({
+    'wysna_builtin_len', 'wysna_contains', 'wysna_index_get_owned_at', 'wysna_index_get_at',
+    'wysna_index_get_owned', 'wysna_index_get', 'wysna_dict_get', 'wysna_dict_keys',
+    'wysna_dict_values', 'wysna_builtin_dict_items', 'wysna_builtin_json_parse',
+    'wysna_builtin_json_parse_int', 'wysna_builtin_json_get_int', 'wysna_builtin_json_get_bool',
+    'wysna_builtin_json_get_str', 'wysna_builtin_json_get_float', 'wysna_builtin_json_quote_str',
+    'wysna_builtin_enumerate', 'wysna_builtin_slice', 'wysna_builtin_str',
+    'wysna_str_trim', 'wysna_str_to_lower', 'wysna_str_to_upper', 'wysna_str_split',
+    'wysna_str_starts_with', 'wysna_str_ends_with', 'wysna_str_replace',
+    'wysna_builtin_ord', 'wysna_builtin_chr', 'wysna_builtin_int', 'wysna_builtin_float',
+    'wysna_builtin_u8', 'wysna_builtin_bytes', 'wysna_builtin_join_strings',
+    'wysna_builtin_read_file', 'wysna_builtin_write_file',
+    'wysna_equal', 'wysna_not_equal', 'wysna_lt', 'wysna_le', 'wysna_gt', 'wysna_ge',
+    'wysna_add', 'wysna_neg', 'wysna_not', 'wysna_builtin_print', 'wysna_builtin_eprint',
+    'wysna_unwrap_ok', 'wysna_unwrap_err', 'wysna_unwrap_optional', 'wysna_unwrap_success',
+    'wysna_enum_payload_owned', 'wysna_builtin_contract_assert_at', 'wysna_builtin_contract_assert',
+})
+
+_NONTRAPPING_LEAF_SCALAR_OPS = frozenset({
+    'wysna_add', 'wysna_sub', 'wysna_mul', 'wysna_neg', 'wysna_not',
+    'wysna_lt', 'wysna_le', 'wysna_gt', 'wysna_ge', 'wysna_equal', 'wysna_not_equal',
+})
+
+
 class CCodeGen:
     def __init__(self, interner, *, emit_line_directives=False):
         self.interner = interner
         self.emit_line_directives = bool(emit_line_directives)
         self.abi_exports = []
+        self._sync_info = None
 
     def generate(self, module):
         Verifier(self.interner).verify(module)
@@ -316,18 +341,278 @@ class CCodeGen:
                 raw = raw[end + 2:]
         return raw
 
+    def _is_skipped_unit_op(self, function, operation):
+        kind = operation.opcode
+        if kind in ('const', 'default'):
+            return operation.result is not None and self.slots[operation.result].type_id == TYPE_UNIT
+        if kind == 'release':
+            return len(operation.args) == 1 and self.slots[operation.args[0]].type_id == TYPE_UNIT
+        if kind in ('clone', 'store'):
+            return (operation.result is not None and len(operation.args) == 1
+                    and self.slots[operation.result].type_id == TYPE_UNIT
+                    and self.slots[operation.args[0]].type_id == TYPE_UNIT)
+        if kind == 'store_place':
+            place = operation.data.get('place')
+            return (place is not None and place.root >= 0 and not place.projections
+                    and len(operation.args) == 1
+                    and self.slots[place.root].type_id == TYPE_UNIT
+                    and self.slots[operation.args[0]].type_id == TYPE_UNIT)
+        return False
+
+    def _analyze_sync_function(self, function):
+        blocks = function.blocks
+        preds = {b.id: [] for b in blocks}
+        by_id = {b.id: b for b in blocks}
+        definitions = {}
+        iter_test_counts = {}
+        counter_ops = {}
+        inc_blocks = {}
+
+        for b in blocks:
+            if b.terminator:
+                for target in b.terminator.targets:
+                    if target in preds:
+                        preds[target].append(b.id)
+            for op in b.operations:
+                if op.result is not None:
+                    definitions[op.result] = definitions.get(op.result, 0) + 1
+                if op.opcode == 'iterate_test' and not op.data.get('range') and len(op.args) == 2:
+                    c = op.args[0]
+                    iter_test_counts[c] = iter_test_counts.get(c, 0) + 1
+                if op.opcode == 'counter' and op.result is not None:
+                    counter_ops.setdefault(op.result, []).append(b.id)
+                if op.opcode == 'increment':
+                    targets = set(op.args)
+                    if op.result is not None:
+                        targets.add(op.result)
+                    for c in targets:
+                        inc_blocks.setdefault(c, []).append((b.id, op))
+
+        hoisted_counters = {}  # counter -> (iterable, loop_blocks_set, source)
+        entry_inits = {}       # preheader_bid -> list[(counter, iterable, source)]
+        for b in blocks:
+            for op in b.operations:
+                if op.opcode != 'iterate_test' or op.data.get('range') or len(op.args) != 2:
+                    continue
+                counter, iterable = op.args
+                if counter in hoisted_counters:
+                    continue
+                if iter_test_counts.get(counter, 0) != 1:
+                    continue
+                if len(counter_ops.get(counter, ())) != 1:
+                    continue
+                incs = inc_blocks.get(counter, ())
+                if not incs:
+                    continue
+                latches = []
+                valid_incs = True
+                for lb_id, inc_op in incs:
+                    lb = by_id[lb_id]
+                    if (inc_op.result != counter or inc_op.args != (counter,)
+                            or not lb.terminator or lb.terminator.kind != 'goto'
+                            or lb.terminator.targets != (b.id,)):
+                        valid_incs = False
+                        break
+                    latches.append(lb_id)
+                if not valid_incs or not latches:
+                    continue
+                if definitions.get(counter, 0) != 1 + len(latches):
+                    continue
+                if iterable < 0 or iterable not in self.slots:
+                    continue
+                iter_entry = self.interner.get_entry(self.slots[iterable].type_id)
+                if iter_entry is None or iter_entry.tag != 'list':
+                    continue
+
+                in_loop = {b.id}
+                work = []
+                for l_id in latches:
+                    if l_id not in in_loop:
+                        in_loop.add(l_id)
+                        work.append(l_id)
+                while work:
+                    cur = work.pop()
+                    for p in preds.get(cur, ()):
+                        if p not in in_loop:
+                            in_loop.add(p)
+                            work.append(p)
+
+                reducible = True
+                for lb_id in in_loop:
+                    if lb_id != b.id:
+                        for p in preds.get(lb_id, ()):
+                            if p not in in_loop:
+                                reducible = False
+                                break
+                    if not reducible:
+                        break
+                if not reducible:
+                    continue
+
+                entry_preds = [p for p in preds.get(b.id, ()) if p not in in_loop]
+                if not entry_preds:
+                    continue
+                if any(not by_id[p].terminator or by_id[p].terminator.kind != 'goto'
+                       or by_id[p].terminator.targets != (b.id,) for p in entry_preds):
+                    continue
+
+                immutable = True
+                for lb_id in in_loop:
+                    for kop in by_id[lb_id].operations:
+                        if kop.result == iterable:
+                            immutable = False
+                            break
+                        place = kop.data.get('place')
+                        if place is not None and place.root == iterable and kop.opcode in ('mutate', 'store_place'):
+                            immutable = False
+                            break
+                        if kop.opcode == 'release' and kop.args == (iterable,):
+                            immutable = False
+                            break
+                        if any(kop.args[m] == iterable for m in kop.moves):
+                            immutable = False
+                            break
+                    if not immutable:
+                        break
+                if not immutable:
+                    continue
+
+                hoisted_counters[counter] = (iterable, in_loop, op.source)
+                for p in entry_preds:
+                    entry_inits.setdefault(p, []).append((counter, iterable, op.source))
+
+        # Check borrowed non-scalar items produced inside hoisted loops.
+        borrowed_items = {}  # item_slot -> counter_slot
+        sync_fns = {fn.name for fn in self.module.functions if not getattr(fn, 'is_async', False)}
+        terminator_vals = {b.terminator.value for b in blocks if b.terminator and b.terminator.value is not None}
+        for b in blocks:
+            for op in b.operations:
+                if op.opcode != 'iterate_value' or op.data.get('range') or len(op.args) != 2:
+                    continue
+                iterable, counter = op.args
+                if counter not in hoisted_counters:
+                    continue
+                h_iter, in_loop, _ = hoisted_counters[counter]
+                if iterable != h_iter or b.id not in in_loop:
+                    continue
+                item = op.result
+                if item is None or item not in self.slots:
+                    continue
+                slot = self.slots[item]
+                if slot.parameter or slot.storage != 'value' or slot.type_id == TYPE_UNIT:
+                    continue
+                entry = self.interner.get_entry(slot.type_id)
+                if entry is not None and entry.tag == 'class':
+                    continue
+                if definitions.get(item, 0) != 1 or item in terminator_vals:
+                    continue
+                safe = True
+                for kb in blocks:
+                    for kop in kb.operations:
+                        place = kop.data.get('place')
+                        if place is not None and place.root == item:
+                            safe = False
+                            break
+                        used_in_proj = (
+                            place is not None
+                            and any(proj.kind == 'index' and proj.index == item for proj in place.projections)
+                        )
+                        used_in_args = item in kop.args
+                        if not used_in_args and not used_in_proj:
+                            continue
+                        if kop.opcode == 'release' and kop.args == (item,) and not used_in_proj:
+                            continue
+                        if kb.id not in in_loop:
+                            safe = False
+                            break
+                        if used_in_args:
+                            if any(kop.args[m] == item for m in kop.moves):
+                                safe = False
+                                break
+                            kcode = kop.opcode
+                            if kcode in ('indirect', 'virtual', 'function', 'global_store'):
+                                safe = False
+                                break
+                            if kcode == 'call' and kop.data.get('name') not in sync_fns:
+                                safe = False
+                                break
+                            if kcode == 'runtime' and kop.data.get('name') not in _READONLY_RUNTIME_FOR_BORROW:
+                                safe = False
+                                break
+                    if not safe:
+                        break
+                if safe:
+                    borrowed_items[item] = counter
+
+        unit_read = set()
+        can_trap = False
+        for bi, b in enumerate(blocks):
+            if b.terminator:
+                if b.terminator.kind == 'unreachable':
+                    can_trap = True
+                for target in b.terminator.targets:
+                    if target <= b.id:
+                        can_trap = True
+                if b.terminator.value is not None and b.terminator.value >= 0:
+                    if self.slots[b.terminator.value].type_id == TYPE_UNIT:
+                        unit_read.add(b.terminator.value)
+            for op in b.operations:
+                if not self._is_skipped_unit_op(function, op):
+                    for a in op.args:
+                        if a >= 0 and self.slots[a].type_id == TYPE_UNIT:
+                            unit_read.add(a)
+                    place = op.data.get('place')
+                    if place is not None:
+                        if place.root >= 0 and self.slots[place.root].type_id == TYPE_UNIT:
+                            unit_read.add(place.root)
+                        for proj in place.projections:
+                            if proj.kind == 'index' and proj.index >= 0 and self.slots[proj.index].type_id == TYPE_UNIT:
+                                unit_read.add(proj.index)
+                if not can_trap:
+                    kcode = op.opcode
+                    if kcode in ('const', 'default', 'clone', 'narrow', 'store', 'release', 'load_field'):
+                        continue
+                    if kcode == 'store_place' and not op.data.get('place').projections:
+                        continue
+                    if kcode == 'test' and op.data.get('kind') != 'error_type':
+                        continue
+                    if kcode == 'runtime':
+                        rname = op.data.get('name', '')
+                        if rname in ('wysna_unwrap_ok', 'wysna_unwrap_err', 'wysna_unwrap_optional'):
+                            continue
+                        if rname in _NONTRAPPING_LEAF_SCALAR_OPS and all(
+                            self.slots[a].storage in ('boolean', 'integer', 'float')
+                            and self.slots[a].type_id in (TYPE_BOOL, TYPE_INT, TYPE_FLOAT)
+                            for a in op.args
+                        ):
+                            continue
+                    can_trap = True
+
+        return {
+            'hoisted_counters': hoisted_counters,
+            'entry_inits': entry_inits,
+            'borrowed_items': borrowed_items,
+            'unit_read': unit_read,
+            'can_trap': can_trap,
+        }
+
     def function(self, function):
         if getattr(function, 'is_async', False):
+            self._sync_info = None
             return self._async_function(function)
         self.slots = {slot.id: slot for slot in self.module.globals}
         self.slots.update({slot.id: slot for slot in function.slots})
+        info = self._analyze_sync_function(function)
+        self._sync_info = info
         params = ', '.join(self.ctype(function.slots[index].type_id) + ' ' + self.name(index) for index in function.params) or 'void'
         lines = [f'static {self.ctype(function.return_type)} {function.name}({params}) {{']
         for name in ('group_cancelled', 'cancel_group'):
             if stdlib_declaration(function, 'async', name, 0):
+                self._sync_info = None
                 return lines + [f'    return wysna_{name}();', '}', '']
         if stdlib_declaration(function, 'async', '_run_task_group', 5):
             arguments = ', '.join(self.name(index) for index in function.params)
+            self._sync_info = None
             return lines + [f'    return wysna_run_task_group({arguments});', '}', '']
         async_helper = self._async_runtime_helper(function)
         if async_helper is not None:
@@ -338,6 +623,7 @@ class CCodeGen:
                 else:
                     lines.append(f'    return wysna_async_spawn_handle({p_names[0]});')
                 lines.extend(['}', ''])
+                self._sync_info = None
                 return lines
             if async_helper == 'wysna_spawn_take_option' and len(p_names) == 2 and self.ctype(function.return_type) == 'WVal':
                 p0_slot = self.slots[function.params[0]]
@@ -347,6 +633,7 @@ class CCodeGen:
                 )
                 lines.append(f'    return wysna_spawn_take_option({p0_boxed}, {p_names[1]});')
                 lines.extend(['}', ''])
+                self._sync_info = None
                 return lines
         parallel_helper = self._parallel_runtime_helper(function)
         if parallel_helper is not None and self.ctype(function.return_type) == 'WVal':
@@ -360,16 +647,23 @@ class CCodeGen:
                 call = f'wysna_pack_u8_owned({call})'
             lines.append(f'    return {call};')
             lines.extend(['}', ''])
+            self._sync_info = None
             return lines
-        track_frame = function.name.startswith('wysna_fn_')
+        track_frame = function.name.startswith('wysna_fn_') and info['can_trap']
+        unit_read = info['unit_read']
         for slot in function.slots:
             if slot.parameter:
+                continue
+            if slot.type_id == TYPE_UNIT and slot.id not in unit_read:
                 continue
             type_ = {'value': 'WVal', 'predicate': 'bool', 'counter': 'int32_t', 'integer': 'int64_t', 'float': 'double', 'boolean': 'bool'}[slot.storage]
             if slot.type_id == TYPE_U8 and slot.storage == 'integer':
                 type_ = 'uint8_t'
             initial = 'wysna_unit()' if slot.storage == 'value' else '0'
             lines.append(f'    {type_} {self.name(slot.id)} = {initial};')
+        for counter in sorted(info['hoisted_counters']):
+            lines.append(f'    WListBuf* _ibuf_{counter} = NULL;')
+            lines.append(f'    int32_t _ilen_{counter} = 0;')
         if track_frame:
             fn_src = getattr(function, 'source', None)
             fn_file = getattr(fn_src, 'file', '') or '<unknown>'
@@ -391,6 +685,9 @@ class CCodeGen:
             if block.id == 0 or block.id in back_edge_targets:
                 lines.append('    wysna_step_tick();')
             for operation in block.operations:
+                emitted_lines = [line for line in self.operation(operation) if line]
+                if not emitted_lines:
+                    continue
                 if self.emit_line_directives:
                     src = getattr(operation, 'source', None)
                     src_file = getattr(src, 'file', '') if src is not None else ''
@@ -400,9 +697,15 @@ class CCodeGen:
                         if key != last_source:
                             lines.append(f'#line {src_line} {quote(src_file)}')
                             last_source = key
-                lines.extend('    ' + line for line in self.operation(operation))
+                lines.extend('    ' + line for line in emitted_lines)
             term = block.terminator
             if term.kind == 'goto':
+                for counter, iter_slot, test_src in info['entry_inits'].get(block.id, ()):
+                    lines.append(
+                        f'    _ibuf_{counter} = wysna_list_iter_begin_at('
+                        f'{self.value(iter_slot)}, {quote(test_src.file)}, {test_src.line}, {test_src.col});'
+                    )
+                    lines.append(f'    _ilen_{counter} = _ibuf_{counter}->len;')
                 lines.append(f'    goto bb{term.targets[0]};')
             elif term.kind == 'branch':
                 slot = self.slots[term.value]
@@ -422,6 +725,7 @@ class CCodeGen:
                 default_ret = 'wysna_unit()' if self.ctype(function.return_type) == 'WVal' else '0'
                 lines.append(f'    return {default_ret};')
         lines.extend(['}', ''])
+        self._sync_info = None
         return lines
 
     def _emit_coro_assign_from_wval(self, lines, dest_slot_id, wval_var, indent='    '):
@@ -570,12 +874,21 @@ class CCodeGen:
         return lines
 
     def write(self, destination, value, boxed=True, consume=False):
+        slot = self.slots[destination]
+        if slot.type_id == TYPE_UNIT and self._sync_info is not None:
+            if value == 'wysna_unit()':
+                return ''
+            return f'(void)({value});'
         name = self.name(destination)
-        if self.slots[destination].storage == 'value':
+        if slot.storage == 'value':
             return f'wysna_assign(&{name}, {value});'
         if boxed:
-            value = self.unbox_expression(value, self.slots[destination].type_id, consume=consume)
+            value = self.unbox_expression(value, slot.type_id, consume=consume)
         return f'{name} = {value};'
+
+    def _emit_op_write(self, destination, value, boxed=True, consume=False):
+        line = self.write(destination, value, boxed=boxed, consume=consume)
+        return [line] if line else []
 
     def place(self, place, source):
         reference = '&' + self.name(place.root)
@@ -598,6 +911,8 @@ class CCodeGen:
             if slot.storage == 'predicate':
                 expression = str(bool(value)).lower()
             elif value is None:
+                if slot.type_id == TYPE_UNIT and self._sync_info is not None:
+                    return []
                 if slot.type_id == TYPE_U8:
                     return [self.write(result, '0', boxed=False)]
                 expression = 'wysna_unit()' if slot.type_id == TYPE_UNIT or data.get('placeholder') else 'wysna_none()'
@@ -625,11 +940,15 @@ class CCodeGen:
                 expression = f'wysna_str_n({quote(value)}, {utf8_len})'
             return [self.write(result, expression, boxed=self.slots[result].storage != 'predicate')]
         if kind in ('clone', 'narrow'):
+            if kind == 'clone' and self._sync_info is not None and self.slots[result].type_id == TYPE_UNIT and self.slots[operation.args[0]].type_id == TYPE_UNIT:
+                return []
             if self.slots[result].storage != 'value' and self.slots[operation.args[0]].storage != 'value':
                 return [self.write(result, self.name(operation.args[0]), boxed=False)]
             value = args[0] if self.slots[result].storage != 'value' else f'wysna_clone({args[0]})'
             return [self.write(result, value)]
         if kind == 'store':
+            if self._sync_info is not None and self.slots[result].type_id == TYPE_UNIT and self.slots[operation.args[0]].type_id == TYPE_UNIT:
+                return []
             if self.slots[result].storage != 'value' and self.slots[operation.args[0]].storage != 'value':
                 return [self.write(result, self.name(operation.args[0]), boxed=False)]
             if data.get('scalar'):
@@ -637,7 +956,11 @@ class CCodeGen:
             moved_box = 0 in operation.moves and self.slots[operation.args[0]].storage == 'value'
             return [self.write(result, args[0], consume=moved_box)]
         if kind == 'release':
-            name = self.name(operation.args[0])
+            arg_id = operation.args[0]
+            if self._sync_info is not None:
+                if self.slots[arg_id].type_id == TYPE_UNIT or arg_id in self._sync_info['borrowed_items']:
+                    return []
+            name = self.name(arg_id)
             return [f'wysna_release({name}); {name} = wysna_unit();']
         if kind in ('runtime', 'call'):
             name = data['name']
@@ -709,6 +1032,20 @@ class CCodeGen:
                         'boolean': 'wysna_list_get_bool_at',
                     }[self.slots[result].storage]
                     return [self.write(result, f'{helper}({args[0]}, {idx_expr}, {quote(source.file)}, {source.line}, {source.col})', boxed=False)]
+                elif name == 'wysna_builtin_len' and len(operation.args) == 1 and self.slots[result].storage != 'value':
+                    arg_tag = self.interner.get_entry(self.slots[operation.args[0]].type_id).tag
+                    len_helper = {'list': 'wysna_list_len_i64', 'dict': 'wysna_dict_len_i64', 'tuple': 'wysna_tuple_len_i64'}.get(arg_tag)
+                    if len_helper is not None:
+                        return [self.write(result, f'{len_helper}({args[0]})', boxed=False)]
+                elif name in ('wysna_unwrap_ok', 'wysna_unwrap_err', 'wysna_unwrap_optional') and len(operation.args) == 1:
+                    res_slot = self.slots[result]
+                    if res_slot.storage in ('integer', 'float', 'boolean') and res_slot.type_id in (TYPE_INT, TYPE_FLOAT, TYPE_BOOL):
+                        peek_fn = {'wysna_unwrap_ok': 'wysna_peek_ok', 'wysna_unwrap_err': 'wysna_peek_err', 'wysna_unwrap_optional': 'wysna_peek_optional'}[name]
+                        return [self.write(result, self.unbox_expression(f'{peek_fn}({args[0]})', res_slot.type_id), boxed=False)]
+                elif name == 'wysna_contains' and len(operation.args) == 2 and self.slots[result].storage != 'value':
+                    c_entry = self.interner.get_entry(self.slots[operation.args[0]].type_id)
+                    if c_entry is not None and c_entry.tag == 'dict' and self.slots[operation.args[1]].type_id == TYPE_INT:
+                        return [self.write(result, f'wysna_dict_contains_i64({args[0]}, {self.scalar(operation.args[1])})', boxed=False)]
             if name in ('wysna_builtin_print', 'wysna_builtin_eprint'):
                 args = [str(len(args)), self.array(args)]
             elif name in ('wysna_enum', 'wysna_enum_payload'):
@@ -754,11 +1091,14 @@ class CCodeGen:
             return [self.write(result, value, consume=True)]
         if kind == 'store_place':
             place = data['place']
-            if not place.projections and self.slots[place.root].storage != 'value':
-                if self.slots[operation.args[0]].storage != 'value':
-                    return [self.write(place.root, self.name(operation.args[0]), boxed=False)]
-                moved_box = 0 in operation.moves
-                return [self.write(place.root, args[0], consume=moved_box)]
+            if not place.projections:
+                if self._sync_info is not None and place.root >= 0 and self.slots[place.root].type_id == TYPE_UNIT and self.slots[operation.args[0]].type_id == TYPE_UNIT:
+                    return []
+                if self.slots[place.root].storage != 'value':
+                    if self.slots[operation.args[0]].storage != 'value':
+                        return [self.write(place.root, self.name(operation.args[0]), boxed=False)]
+                    moved_box = 0 in operation.moves
+                    return [self.write(place.root, args[0], consume=moved_box)]
             if place.projections:
                 final = place.projections[-1]
                 if final.kind == 'index' and final.type_id == TYPE_U8:
@@ -766,6 +1106,17 @@ class CCodeGen:
                     location = final.source
                     return [f'wysna_index_store_at({reference}, {self.value(final.index)}, {args[0]}, '
                             f'{quote(location.file)}, {location.line}, {location.col});']
+                if final.kind == 'index' and self.slots[final.index].type_id == TYPE_INT:
+                    parent_tid = place.projections[-2].type_id if len(place.projections) >= 2 else self.slots[place.root].type_id
+                    parent_entry = self.interner.get_entry(parent_tid)
+                    reference = self.place(Place(place.root, place.projections[:-1]), source)
+                    location = final.source
+                    if parent_entry is not None and parent_entry.tag == 'list':
+                        return [f'wysna_list_set_at({reference}, {self.scalar(final.index)}, {args[0]}, '
+                                f'{quote(location.file)}, {location.line}, {location.col});']
+                    if parent_entry is not None and parent_entry.tag == 'dict' and parent_entry.data[0] == TYPE_INT:
+                        return [f'wysna_dict_set_i64_at({reference}, {self.scalar(final.index)}, {args[0]}, '
+                                f'{quote(location.file)}, {location.line}, {location.col});']
             return [f'wysna_assign({self.place(place, source)}, {args[0]});']
         if kind == 'mutate':
             place = data['place']
@@ -788,6 +1139,8 @@ class CCodeGen:
         if kind == 'range_count':
             return [self.write(result, f'wysna_range_count_i64({self.scalar(operation.args[0])}, {self.scalar(operation.args[1])}, {str(data["inclusive"]).lower()})', boxed=False)]
         if kind == 'iterate_test':
+            if not data['range'] and self._sync_info is not None and operation.args[0] in self._sync_info['hoisted_counters']:
+                return [self.write(result, self.name(operation.args[0]) + f' < _ilen_{operation.args[0]}', boxed=False)]
             bound = self.name(operation.args[1]) if data['range'] else (
                 f'wysna_list_iteration_length_at({args[1]}, {quote(source.file)}, {source.line}, {source.col})')
             return [self.write(result, self.name(operation.args[0]) + ' < ' + bound, boxed=False)]
@@ -800,7 +1153,15 @@ class CCodeGen:
                 if self.slots[result].storage != 'value':
                     return [self.write(result, f'{start_val} + (int64_t){index}', boxed=False)]
                 return [self.write(result, f'wysna_int({start_val} + (int64_t){index})', boxed=False)]
-            res_storage = self.slots[result].storage
+            res_slot = self.slots[result]
+            res_storage = res_slot.storage
+            if self._sync_info is not None and operation.args[1] in self._sync_info['hoisted_counters']:
+                loaded = f'wysna_list_load(_ibuf_{operation.args[1]}, {index})'
+                if res_storage in ('integer', 'float', 'boolean'):
+                    return [self.write(result, self.unbox_expression(loaded, res_slot.type_id), boxed=False)]
+                if result in self._sync_info['borrowed_items']:
+                    return [f'{self.name(result)} = {loaded};']
+                return [self.write(result, f'wysna_clone({loaded})', consume=True)]
             if res_storage in ('integer', 'float', 'boolean'):
                 iter_helper = {
                     'integer': 'wysna_list_iteration_get_int_at',

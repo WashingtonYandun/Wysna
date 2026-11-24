@@ -275,16 +275,30 @@ fn sum_ints(xs: list[int]) -> int {
     return total + xs[0]
 }
 
+fn sum_mutated_ints() -> int {
+    let mut ys = [1, 2, 3]
+    let mut total = 0
+    for y in ys {
+        if y == 1 {
+            ys.append(4)
+        }
+        total = total + y
+    }
+    return total
+}
+
 fn main() {
     let values = [10, 20, 30]
-    print(sum_ints(values))
+    print(sum_ints(values) + sum_mutated_ints())
 }
 """
     service = CompilerService()
     checked = service.check(source, "scalar_list.wysna")
     emission = service.emit_c(checked)
-    assert "wysna_list_iteration_get_int_at" in emission.source
+    assert "wysna_list_iter_begin_at" in emission.source
+    assert "wysna_as_int(wysna_list_load(_ibuf_" in emission.source
     assert "wysna_list_get_int_at" in emission.source
+    assert "wysna_list_iteration_get_owned_at" not in emission.source
 
 
 # ============================================================================

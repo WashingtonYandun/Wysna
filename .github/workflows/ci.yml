@@ -175,7 +175,18 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: "3.11"
-      - uses: actions/download-artifact@v4
+      - id: download-wheel
+        uses: actions/download-artifact@v4
+        continue-on-error: true
+        with:
+          name: wysna-wheel
+          path: .wysna_cache/installation-wheel
+      - name: Wait for artifact propagation before retry
+        if: steps.download-wheel.outcome == 'failure'
+        run: python -c "import time; time.sleep(8)"
+      - name: Retry wysna-wheel artifact download
+        if: steps.download-wheel.outcome == 'failure'
+        uses: actions/download-artifact@v4
         with:
           name: wysna-wheel
           path: .wysna_cache/installation-wheel
@@ -866,7 +877,18 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: "3.11"
-      - uses: actions/download-artifact@v4
+      - id: download-native-sdk
+        uses: actions/download-artifact@v4
+        continue-on-error: true
+        with:
+          name: native-sdk-${{ matrix.os }}
+          path: native-artifact
+      - name: Wait for artifact propagation before retry
+        if: steps.download-native-sdk.outcome == 'failure'
+        run: python -c "import time; time.sleep(8)"
+      - name: Retry native-sdk artifact download
+        if: steps.download-native-sdk.outcome == 'failure'
+        uses: actions/download-artifact@v4
         with:
           name: native-sdk-${{ matrix.os }}
           path: native-artifact
