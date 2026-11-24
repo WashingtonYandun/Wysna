@@ -98,7 +98,10 @@ def test_workspace_patch_checks_and_applies_all_edits_together(toolchain, tmp_pa
     assert provider.read_text(encoding='utf-8') == request[0]['source']
     assert app.read_text(encoding='utf-8') == request[1]['source']
 
-    listed = _run_cli(toolchain, 'project', 'test', '--manifest', str(manifest), '--list', '--output-format=json-v1')
+    list_args = ['project', 'test', '--manifest', str(manifest), '--list', '--output-format=json-v1']
+    if toolchain == SEED:
+        list_args.append('--engine=seed')
+    listed = _run_cli(toolchain, *list_args)
     assert listed.returncode == 0, listed.stderr + listed.stdout
     test_plan = json.loads(listed.stdout)
     assert test_plan['result']['workspace_revision'] == preview['workspace_revision_after']
@@ -107,13 +110,13 @@ def test_workspace_patch_checks_and_applies_all_edits_together(toolchain, tmp_pa
         exec_cli = SEED
         exec_plan_hash = test_plan['result']['plan_hash']
     else:
-        seed_listed = _run_cli(SEED, 'project', 'test', '--manifest', str(manifest), '--list', '--output-format=json-v1')
+        seed_listed = _run_cli(SEED, 'project', 'test', '--engine=seed', '--manifest', str(manifest), '--list', '--output-format=json-v1')
         assert seed_listed.returncode == 0, seed_listed.stderr + seed_listed.stdout
         seed_plan = json.loads(seed_listed.stdout)
         exec_cli = SEED
         exec_plan_hash = seed_plan['result']['plan_hash']
 
-    executed = _run_cli(exec_cli, 'project', 'test', '--manifest', str(manifest),
+    executed = _run_cli(exec_cli, 'project', 'test', '--engine=seed', '--manifest', str(manifest),
                         '--expect-plan-hash', exec_plan_hash, '--output-format=json-v1')
     assert executed.returncode == 0, executed.stderr + executed.stdout
     report = json.loads(executed.stdout)
