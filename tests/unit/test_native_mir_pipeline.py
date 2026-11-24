@@ -539,7 +539,7 @@ class NativeMirPipelineTests(unittest.TestCase):
             ('interface Reader[T] { fn get() -> T }\nclass Bad implements Reader { pub fn get() -> int { 1 } }', 'W2001'),
             ('interface Reader[T] { fn get() -> T }\nclass Bad implements Reader[int, str] { pub fn get() -> int { 1 } }', 'W2001'),
             ('interface Reader[T] { fn get() -> T }\nclass Bad implements Reader[int] { pub fn get() -> str { "x" } }', 'W3003'),
-            ('interface Reader[T] { fn get() -> T }\nclass Box[T] implements Reader[T] { value: T\nfn init(v: T) { this.value = v }\npublic fn get() -> T { this.value } }\nlet r: Reader[int] = Box[str]("x")', 'W2001'),
+            ('interface Reader[T] { fn get() -> T }\nclass Box[T] implements Reader[T] { value: T\nfn init(v: T) { this.value = v }\npub fn get() -> T { this.value } }\nlet r: Reader[int] = Box[str]("x")', 'W2001'),
             ('interface Show { fn show() -> str }\ninterface ShowReader[T: Show] { fn get() -> T }\nclass Bad implements ShowReader[int] { pub fn get() -> int { 1 } }', 'W2001'),
             ('enum Maybe[T] { None, Value(T) }\nprint(Maybe.None)', 'W2013'),
             ('enum Maybe[T] { None, Value(T) }\nprint(Maybe.None == Maybe.None)', 'W2013'),
