@@ -61,6 +61,7 @@ class TypeChecker:
         self.global_scope = create_global_scope()
         self.current_scope = self.global_scope
         self.current_fn_ret_type: Optional[WysnaType] = None
+        self.current_fn_decl = None
         self._lambda_return_inference: Optional[List[WysnaType]] = None
         self.expected_type: Optional[WysnaType] = None
         self.current_class: Optional[ClassType] = None
@@ -205,6 +206,22 @@ class TypeChecker:
                 pass
         self._poisoned_names.add(stmt.name)
 
+    def _annotate_return_error(self, error: WysnaError, expected_type, found_type=None, *, missing: bool = False) -> WysnaError:
+        fn_label = "<unknown>"
+        decl_line = None
+        decl_col = None
+        if self.current_fn_decl is not None:
+            fn_label, decl_line, decl_col = self.current_fn_decl
+        if missing:
+            error.with_data(kind="missing_return", expected=str(expected_type), function=fn_label)
+        elif isinstance(expected_type, ResultType) and isinstance(found_type, ResultType) and not self.type_relations.is_assignable(found_type, expected_type):
+            error.with_data(kind="incompatible_error_channel", expected=str(expected_type), found=str(found_type), function=fn_label)
+        else:
+            error.with_data(kind="return_type_mismatch", expected=str(expected_type), found=str(found_type), function=fn_label)
+        if isinstance(decl_line, int) and isinstance(decl_col, int):
+            error.with_related(f"function '{fn_label}' return type declared here", line=decl_line, col=decl_col, file=self.file)
+        return error
+
     def _raise_collected_errors(self) -> None:
         errors = self._collected_errors
         if not errors:
@@ -220,7 +237,8 @@ class TypeChecker:
             if isinstance(declaration, (StructDecl, EnumDecl, ClassDecl, InterfaceDecl)):
                 if declaration.name in ("Option", "Result", "Weak") or declaration.name.startswith(("Option__", "Result__")):
                     raise TypeError("Builtin Option/Result/Weak identities are reserved", line=declaration.line,
-                                    col=declaration.col, file=self.file, code="W1002")
+                                    col=declaration.col, file=self.file, code="W1002").with_data(
+                                        kind="reserved_namespace", name=declaration.name)
 
         # Validate finite layouts via formal LayoutGraph (SCC on inline subgraph)
         pre_graph = build_layout_graph_from_declarations(
@@ -530,12 +548,16 @@ class TypeChecker:
                     code="W1004"
                 )
             if not self.type_relations.is_assignable(val_t, self.current_fn_ret_type):
-                raise TypeError(
-                    message=f"Return type mismatch: expected '{self.current_fn_ret_type}', found '{val_t}'",
-                    line=stmt.line,
-                    col=stmt.col,
-                    file=self.file,
-                    code="W2004"
+                raise self._annotate_return_error(
+                    TypeError(
+                        message=f"Return type mismatch: expected '{self.current_fn_ret_type}', found '{val_t}'",
+                        line=stmt.line,
+                        col=stmt.col,
+                        file=self.file,
+                        code="W2004"
+                    ),
+                    self.current_fn_ret_type,
+                    val_t,
                 )
 
             self._mark_result_lift(stmt.value, self.current_fn_ret_type)
@@ -604,11 +626,13 @@ class TypeChecker:
         old_scope = self.current_scope
         old_class = self.current_class
         old_ret_type = self.current_fn_ret_type
+        old_fn_decl = self.current_fn_decl
         old_loop_depth = self.loop_depth
         old_expected = self.expected_type
         self.current_scope = fn_scope
         self.current_class = cls_type
         self.current_fn_ret_type = fn_type.ret
+        self.current_fn_decl = (f"{stmt.name}.{m.name}", m.line, m.col)
         self.expected_type = fn_type.ret
         self.loop_depth = 0
         try:
@@ -637,12 +661,16 @@ class TypeChecker:
                 if body_ret is not None and self.type_relations.is_assignable(body_ret, fn_type.ret):
                     pass
                 else:
-                    raise TypeError(
-                        message=f"Method '{stmt.name}.{m.name}' missing return statement for type '{fn_type.ret}'",
-                        line=m.line,
-                        col=m.col,
-                        file=self.file,
-                        code="W2004"
+                    raise self._annotate_return_error(
+                        TypeError(
+                            message=f"Method '{stmt.name}.{m.name}' missing return statement for type '{fn_type.ret}'",
+                            line=m.line,
+                            col=m.col,
+                            file=self.file,
+                            code="W2004"
+                        ),
+                        fn_type.ret,
+                        missing=True,
                     )
         except WysnaError as error:
             if recovering:
@@ -653,6 +681,7 @@ class TypeChecker:
             self.current_scope = old_scope
             self.current_class = old_class
             self.current_fn_ret_type = old_ret_type
+            self.current_fn_decl = old_fn_decl
             self.loop_depth = old_loop_depth
             self.expected_type = old_expected
 
@@ -701,11 +730,13 @@ class TypeChecker:
         fn_scope = Scope(parent=self.current_scope, is_function_scope=True)
         old_scope = self.current_scope
         old_ret_type = self.current_fn_ret_type
+        old_fn_decl = self.current_fn_decl
         old_loop_depth = self.loop_depth
         old_expected = self.expected_type
 
         self.current_scope = fn_scope
         self.current_fn_ret_type = fn_type.ret
+        self.current_fn_decl = (stmt.name, stmt.line, stmt.col)
         self.expected_type = fn_type.ret
         self.loop_depth = 0
 
@@ -733,16 +764,21 @@ class TypeChecker:
                 if body_ret is not None and self.type_relations.is_assignable(body_ret, fn_type.ret):
                     pass  # Tail expression satisfies return
                 else:
-                    raise TypeError(
-                        message=f"Function '{stmt.name}' missing return statement for type '{fn_type.ret}'",
-                        line=stmt.line,
-                        col=stmt.col,
-                        file=self.file,
-                        code="W2004"
+                    raise self._annotate_return_error(
+                        TypeError(
+                            message=f"Function '{stmt.name}' missing return statement for type '{fn_type.ret}'",
+                            line=stmt.line,
+                            col=stmt.col,
+                            file=self.file,
+                            code="W2004"
+                        ),
+                        fn_type.ret,
+                        missing=True,
                     )
         finally:
             self.current_scope = old_scope
             self.current_fn_ret_type = old_ret_type
+            self.current_fn_decl = old_fn_decl
             self.loop_depth = old_loop_depth
             self.expected_type = old_expected
 

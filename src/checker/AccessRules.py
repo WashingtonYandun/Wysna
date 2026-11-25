@@ -301,12 +301,27 @@ def check_assignment_expr(checker: "TypeChecker", expr: AssignmentExpr, is_state
         expr.target.session_arena_id = checker.interner.arena_id
         return field_t
 
+    target_kind = type(expr.target).__name__
+    if target_kind == "CallExpr":
+        short_kind = "call"
+    elif "Lit" in target_kind or target_kind == "NoneLiteral":
+        short_kind = "literal"
+    elif target_kind == "IndexExpr":
+        short_kind = "index"
+    elif target_kind == "MemberExpr":
+        short_kind = "member"
+    else:
+        short_kind = "expr"
     raise TypeError(
         message="Invalid assignment target",
         line=expr.line,
         col=expr.col,
         file=checker.file,
         code="W2002"
+    ).with_data(
+        kind="invalid_assignment_target",
+        target_kind=short_kind,
+        help="Assign to a mutable variable ('let mut name'), struct/class field, or list/dict index.",
     )
 
 

@@ -44,7 +44,9 @@ class Scope:
                 code="W1002"
             ).with_data(
                 kind="duplicate_declaration",
+                name=symbol.name,
                 symbol=symbol.name,
+                symbol_kind=getattr(symbol, "kind", "var"),
                 previous_line=prev.line,
                 previous_col=prev.col,
             ).with_related(
@@ -71,6 +73,11 @@ class Scope:
                 col=col,
                 file=file,
                 code="W1002"
+            ).with_data(
+                kind="duplicate_declaration",
+                name=name,
+                symbol=name,
+                symbol_kind="type",
             )
         self.types[name] = wysna_type
 

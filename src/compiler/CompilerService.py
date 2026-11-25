@@ -101,10 +101,19 @@ class CompilerService:
         return self.check(source, path)
 
     def set_overlay(self, path, source):
-        self._session.sources.overlays[self._session.path(path)] = source
+        p = self._session.path(path)
+        self._session.sources.deleted.discard(p)
+        self._session.sources.overlays[p] = source
+
+    def mark_deleted(self, path):
+        p = self._session.path(path)
+        self._session.sources.overlays.pop(p, None)
+        self._session.sources.deleted.add(p)
 
     def remove_overlay(self, path):
-        self._session.sources.overlays.pop(self._session.path(path), None)
+        p = self._session.path(path)
+        self._session.sources.overlays.pop(p, None)
+        self._session.sources.deleted.discard(p)
 
     def source_snapshot(self, path):
         path = self._session.path(path)

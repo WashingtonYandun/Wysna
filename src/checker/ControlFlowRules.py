@@ -189,7 +189,11 @@ def check_match_expr(checker: "TypeChecker", expr: MatchExpr, is_statement_conte
             families.sort()
             raise TypeError("Non-exhaustive match; add cases for: " + ', '.join(families),
                             line=expr.line, col=expr.col, file=checker.file, code="W2003").with_data(
-                                uncovered_pattern_families=families)
+                                kind="non_exhaustive_match",
+                                subject_type=str(subject_t),
+                                open_domain=False,
+                                uncovered_pattern_families=families,
+                                missing_variants=families)
     else:
         # The subject domain is open (int, str, struct, ...), so the pattern
         # matrix can never be closed. The match is still only well defined when
@@ -209,6 +213,12 @@ def check_match_expr(checker: "TypeChecker", expr: MatchExpr, is_statement_conte
                 col=expr.col,
                 file=checker.file,
                 code="W2003",
+            ).with_data(
+                kind="non_exhaustive_match",
+                subject_type=str(subject_t),
+                open_domain=True,
+                uncovered_pattern_families=["_"],
+                missing_variants=[],
             )
 
     if arm_types:

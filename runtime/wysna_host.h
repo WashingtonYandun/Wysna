@@ -211,14 +211,14 @@ WYSNA_RT_FN void* wysna_host_file_open(void* path_handle, int64_t mode) {
     }
 #endif
     char* path = wysna_host_path(path_handle);
-    if (!path || mode < 0 || mode > 3) { free(path); wysna_host_errno(EINVAL); return NULL; }
+    if (!path || mode < 0 || mode > 4) { free(path); wysna_host_errno(EINVAL); return NULL; }
     FILE* file = NULL;
     int open_error = 0;
 #ifdef _WIN32
     wchar_t* wide = wysna_host_wide(path);
     if (!wide) {
         open_error = errno ? errno : EINVAL;
-    } else if (mode == 3) {
+    } else if (mode >= 3) {
         int fd = _wopen(wide, _O_WRONLY | _O_CREAT | _O_EXCL | _O_BINARY, _S_IREAD | _S_IWRITE);
         if (fd < 0) {
             open_error = errno;
@@ -236,8 +236,8 @@ WYSNA_RT_FN void* wysna_host_file_open(void* path_handle, int64_t mode) {
     }
     free(wide);
 #else
-    if (mode == 3) {
-        int fd = open(path, O_WRONLY | O_CREAT | O_EXCL, 0666);
+    if (mode >= 3) {
+        int fd = open(path, O_WRONLY | O_CREAT | O_EXCL, mode == 4 ? 0600 : 0666);
         if (fd < 0) {
             open_error = errno;
         } else {
@@ -295,22 +295,23 @@ WYSNA_RT_FN int64_t wysna_host_is_open(void* handle) { return wysna_host_find(ha
 /* Operations: exists, size, mkdir, remove, rename, is_dir, is_file. Failures return -1. */
 WYSNA_RT_FN int64_t wysna_host_fs(void* first, void* second, int64_t operation) {
 #ifdef WYSNA_DENY_CAP_FILESYSTEM_READ
-    if (operation == 0 || operation == 1 || operation == 5 || operation == 6) {
+    if (operation == 0 || operation == 1 || operation == 5 || operation == 6 || operation == 7) {
         (void)first; (void)second;
         wysna_sandbox_deny("filesystem.read");
         return -1;
     }
 #endif
 #ifdef WYSNA_DENY_CAP_FILESYSTEM_WRITE
-    if (operation >= 2 && operation <= 4) {
+    if ((operation >= 2 && operation <= 4) || operation == 7) {
         (void)first; (void)second;
         wysna_sandbox_deny("filesystem.write");
         return -1;
     }
 #endif
     char* path = wysna_host_path(first);
-    char* other = operation == 4 ? wysna_host_path(second) : NULL;
-    if (!path || (operation == 4 && !other)) { free(path); free(other); return wysna_host_errno(EINVAL); }
+    int uses_second_path = operation == 4 || operation == 7;
+    char* other = uses_second_path ? wysna_host_path(second) : NULL;
+    if (!path || (uses_second_path && !other)) { free(path); free(other); return wysna_host_errno(EINVAL); }
     int64_t result = -1;
 #ifdef _WIN32
     wchar_t* wide = wysna_host_wide(path);
@@ -347,6 +348,9 @@ WYSNA_RT_FN int64_t wysna_host_fs(void* first, void* second, int64_t operation) 
             result = (DeleteFileW(wide) || RemoveDirectoryW(wide)) ? 0 : -1;
         } else if (operation == 4 && wide_other) {
             result = MoveFileExW(wide, wide_other, MOVEFILE_REPLACE_EXISTING) ? 0 : -1;
+        } else if (operation == 7 && wide_other) {
+            /* POSIX access bits have no direct ACL equivalent on Windows. */
+            result = 0;
         }
     }
     if (result < 0 && operation != 0 && operation != 5 && operation != 6) {
@@ -370,6 +374,13 @@ WYSNA_RT_FN int64_t wysna_host_fs(void* first, void* second, int64_t operation) 
     else if (operation == 2) result = mkdir(path, 0777) == 0 ? 0 : -1;
     else if (operation == 3) result = remove(path) == 0 ? 0 : -1;
     else if (operation == 4) result = rename(path, other) == 0 ? 0 : -1;
+    else if (operation == 7) {
+        /* The caller creates its staging file privately before copying access bits. */
+        if (stat(path, &status) == 0) {
+            if (S_ISREG(status.st_mode)) result = chmod(other, status.st_mode & 0777) == 0 ? 0 : -1;
+            else errno = EINVAL;
+        }
+    }
 #endif
 #ifndef _WIN32
     if (result < 0) wysna_host_errno(errno);

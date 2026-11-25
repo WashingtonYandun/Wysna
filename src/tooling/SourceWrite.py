@@ -90,48 +90,105 @@ def _stage_source(target: Path, data: bytes, mode: int) -> Path:
         raise
 
 
-def write_verified_sources(edits, verify_revision):
-    """Stage a batch under the same per-file locks used by patch and fix."""
-    ordered = sorted(edits, key=lambda edit: str(edit[0]))
+def write_workspace_operations(operations, verify_revision):
+    """Apply mixed modify/create/delete source batches atomically with rollback."""
+    ordered = sorted(operations, key=lambda op: (str(op[1]), op[0]))
     with ExitStack() as locks, ExitStack() as cleanup:
-        for path, _, _ in ordered:
+        for _, path, _, _ in ordered:
             locks.enter_context(cache_lock(_lock_path_for(path), timeout=30))
         verify_revision()
         staged = []
         retained = set()
+        created_dirs = []
 
         def remove_backup(path):
             if path not in retained:
                 path.unlink(missing_ok=True)
 
-        for path, before, after in ordered:
-            mode = path.stat().st_mode
-            backup = _stage_source(path, before, mode)
-            cleanup.callback(remove_backup, backup)
-            candidate = _stage_source(path, after, mode)
-            cleanup.callback(candidate.unlink, missing_ok=True)
-            staged.append((path, before, after, backup, candidate))
+        for action, path, before, after in ordered:
+            if action == "modify":
+                mode = path.stat().st_mode
+                backup = _stage_source(path, before, mode)
+                cleanup.callback(remove_backup, backup)
+                candidate = _stage_source(path, after, mode)
+                cleanup.callback(candidate.unlink, missing_ok=True)
+                staged.append((action, path, before, after, backup, candidate))
+            elif action == "create":
+                if path.exists():
+                    raise WysnaError(f"Cannot create existing workspace file: '{path}'",
+                                     file=str(path), code="W5002", stage="patch")
+                missing_parents = []
+                cur = path.parent
+                while not cur.exists() and cur != cur.parent:
+                    missing_parents.append(cur)
+                    cur = cur.parent
+                for parent in reversed(missing_parents):
+                    parent.mkdir(exist_ok=True)
+                    created_dirs.append(parent)
+                candidate = _stage_source(path, after, 0o644)
+                cleanup.callback(candidate.unlink, missing_ok=True)
+                staged.append((action, path, None, after, None, candidate))
+            elif action == "delete":
+                mode = path.stat().st_mode
+                backup = _stage_source(path, before, mode)
+                cleanup.callback(remove_backup, backup)
+                staged.append((action, path, before, None, backup, None))
+            else:
+                raise ValueError(f"Unsupported workspace operation: {action!r}")
+
         verify_revision()
         applied = []
         try:
-            for path, before, after, backup, candidate in staged:
-                if path.read_bytes() != before:
-                    raise WysnaError(f"Source changed before workspace apply: '{path}'",
-                                     file=str(path), code="W5005", stage="patch")
-                os.replace(candidate, path)
-                applied.append((path, after, backup))
+            for action, path, before, after, backup, candidate in staged:
+                if action == "modify":
+                    if path.read_bytes() != before:
+                        raise WysnaError(f"Source changed before workspace apply: '{path}'",
+                                         file=str(path), code="W5005", stage="patch")
+                    os.replace(candidate, path)
+                elif action == "create":
+                    if path.exists():
+                        raise WysnaError(f"Source appeared before workspace create: '{path}'",
+                                         file=str(path), code="W5005", stage="patch")
+                    os.replace(candidate, path)
+                elif action == "delete":
+                    if path.read_bytes() != before:
+                        raise WysnaError(f"Source changed before workspace delete: '{path}'",
+                                         file=str(path), code="W5005", stage="patch")
+                    path.unlink()
+                applied.append((action, path, before, after, backup))
         except BaseException as error:
             rollback_failures = []
-            for path, after, backup in reversed(applied):
+            for action, path, _before, after, backup in reversed(applied):
                 try:
-                    if path.read_bytes() == after:
+                    if action == "modify":
+                        if path.read_bytes() == after:
+                            os.replace(backup, path)
+                        else:
+                            retained.add(backup)
+                            rollback_failures.append(f"{path} (backup {backup})")
+                    elif action == "create":
+                        path.unlink(missing_ok=True)
+                    elif action == "delete":
                         os.replace(backup, path)
-                    else:
+                except OSError:
+                    if backup is not None:
                         retained.add(backup)
                         rollback_failures.append(f"{path} (backup {backup})")
+                    else:
+                        rollback_failures.append(str(path))
+            for folder in reversed(created_dirs):
+                try:
+                    folder.rmdir()
                 except OSError:
-                    retained.add(backup)
-                    rollback_failures.append(f"{path} (backup {backup})")
+                    pass
             if rollback_failures:
                 raise OSError("Workspace apply failed and could not restore: " + ", ".join(rollback_failures)) from error
             raise
+
+
+def write_verified_sources(edits, verify_revision):
+    """Stage a batch under the same per-file locks used by patch and fix."""
+    write_workspace_operations(
+        [("modify", path, before, after) for path, before, after in edits],
+        verify_revision,
+    )

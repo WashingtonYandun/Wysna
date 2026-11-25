@@ -82,11 +82,14 @@ server over stdio to avoid Python startup and temporary-file overhead on every c
 
 ```sh
 wysna mcp --root .
+wysna mcp --root . --allow-exec
 ```
 
-The MCP server exposes 11 tools confined to `--root`: `wysna_check`, `wysna_fix`,
+The MCP server exposes 13 tools confined to `--root`: `wysna_check`, `wysna_fix`,
 `wysna_fmt`, `wysna_explain`, `wysna_schema`, `wysna_api`, `wysna_capabilities`,
-`wysna_graph`, `wysna_inspect`, `wysna_patch`, and `wysna_skills`.
+`wysna_graph`, `wysna_inspect` (single symbol, index, or batch `symbols`), `wysna_patch`
+(`source`, `symbol`, `hunks`, `create`, `delete`), `wysna_project_check`, `wysna_project_test`
+(`list: true` always allowed; test execution requires `--allow-exec`), and `wysna_skills`.
 
 For zero-Python native semantic inspection, checked edits, and editor integration in
 the standalone SDK / Selfhost Stage-2+ toolchain:
@@ -100,7 +103,7 @@ wysna patch --manifest wysna.toml --edits changes.json --apply --expect-plan-has
 wysna lsp
 ```
 
-`wysna inspect` enforces UTF-8 byte budgets via `--max-bytes` (`--source-offset` / `--offset`), returns resumable fetch handles in `omitted[].ref`, and surfaces `call_resolution` plus `analysis_boundaries` (`virtual-dispatch`, `indirect-call`, `c-ffi`) across `graph` and `inspect`. Both Seed and the Native SDK (`patch --manifest ... --edits ...` and `wysna_patch` MCP) support checked multi-file workspace patches with unified diffs, impact selection, plan-hash validation (`W5005`), and staged atomic commit/rollback.
+`wysna inspect` enforces UTF-8 byte budgets via `--max-bytes` (`--source-offset` / `--offset`), returns resumable fetch handles in `omitted[].ref`, and surfaces `call_resolution` plus `analysis_boundaries` (`virtual-dispatch`, `indirect-call`, `c-ffi`) across `graph` and `inspect`. Both Seed and the Native SDK (`patch --manifest ... --edits ...` and `wysna_patch` MCP) support checked multi-file workspace patches with unified diffs, impact selection, plan-hash validation (`W5005`), and staged publication with rollback if a later operation fails.
 
 `wysna patch` rejects stale `graph:...` hashes with `W5005` and verifies types in
 memory before mutating disk. When applying edits via Seed CLI or MCP (`wysna patch --apply`

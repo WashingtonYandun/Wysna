@@ -71,6 +71,9 @@ class SemanticContext {
     symbols: list[CheckedBinding]
     checked_functions: list[CheckedFunction]
     top_nodes: list[int]
+    collect_errors: bool
+    errors: list[CollectedDiag]
+    error_type: int
     fn init(capture: bool) {
         let initial_tokens: list[Token] = []
         this.tokens = initial_tokens
@@ -157,6 +160,10 @@ class SemanticContext {
         this.checked_functions = initial_checked_functions
         let initial_top_nodes: list[int] = []
         this.top_nodes = initial_top_nodes
+        this.collect_errors = false
+        let initial_errors: list[CollectedDiag] = []
+        this.errors = initial_errors
+        this.error_type = -1
     }
 }
 

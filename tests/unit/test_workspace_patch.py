@@ -1,6 +1,8 @@
 """Keep patch previews and test plans bound to the same checked source revision."""
 import json
+import os
 from pathlib import Path
+import stat
 import subprocess
 import sys
 
@@ -68,6 +70,8 @@ def test_workspace_patch_checks_and_applies_all_edits_together(toolchain, tmp_pa
     root = project(tmp_path)
     manifest = root / 'wysna.toml'
     provider, app, request = _paired_edits(root)
+    if os.name != 'nt':
+        provider.chmod(0o600)
     baseline = [file.read_bytes() for file in (provider, app)]
 
     bad_edit_file = root / 'bad_changes.json'
@@ -188,3 +192,158 @@ def test_workspace_write_rolls_back_a_failed_later_replacement(tmp_path, monkeyp
                                               (second, b'old second', b'new second')], lambda: None)
     assert first.read_bytes() == b'old first'
     assert second.read_bytes() == b'old second'
+
+
+def test_workspace_patch_supports_symbol_hunks_create_and_delete(toolchain, tmp_path):
+    root = project(tmp_path)
+    manifest = root / 'wysna.toml'
+    provider, app, _ = _paired_edits(root)
+    unused = root / 'src/unused.wysna'
+    unused.write_text('pub fn legacy() -> int { 0 }\n', encoding='utf-8')
+    keep = root / 'src/keep.wysna'
+    keep.write_text('pub fn bump(x: int) -> int { return x + 1 }\n', encoding='utf-8')
+
+    # Deleting a file imported by main must fail verification before applying.
+    app.write_text('import "unused.wysna" as u\nprint(u.legacy())\n', encoding='utf-8')
+    bad_del = root / 'bad_del.json'
+    bad_del.write_text(json.dumps([{'path': 'src/unused.wysna', 'delete': True}]), encoding='utf-8')
+    rejected = _run_cli(toolchain, 'patch', '--manifest', str(manifest), '--edits', str(bad_del), '--output-format=json-v1')
+    assert rejected.returncode != 0
+    assert unused.exists()
+
+    # Now restore app using symbol replacement, modify keep via hunks, create src/extra/new_mod.wysna, and delete unused.
+    edits = [
+        {'path': 'src/extra/new_mod.wysna', 'create': True, 'source': 'pub fn factor() -> int { return 10 }\n'},
+        {'path': 'src/keep.wysna', 'hunks': [{'old_text': 'return x + 1', 'new_text': 'return x + 2'}]},
+        {'path': 'src/unused.wysna', 'delete': True},
+        {
+            'path': 'src/main.wysna',
+            'source': 'import "extra/new_mod.wysna" as extra\nimport "keep.wysna" as keep\nprint(keep.bump(extra.factor()))\n',
+        },
+    ]
+    # Also test symbol edit in isolation before combined edit.
+    sym_file = root / 'sym_edit.json'
+    sym_file.write_text(json.dumps([
+        {'path': 'src/provider.wysna', 'symbol': 'value', 'replacement': 'pub fn value() -> int { return 42 }'},
+    ]), encoding='utf-8')
+    sym_preview = _run_cli(toolchain, 'patch', '--manifest', str(manifest), '--edits', str(sym_file), '--output-format=json-v1')
+    assert sym_preview.returncode == 0, sym_preview.stderr + sym_preview.stdout
+    assert '+pub fn value() -> int { return 42 }' in json.loads(sym_preview.stdout)['result']['changes'][0]['diff']
+
+    edit_file = root / 'wave2_edits.json'
+    edit_file.write_text(json.dumps(edits), encoding='utf-8')
+    previewed = _run_cli(toolchain, 'patch', '--manifest', str(manifest), '--edits', str(edit_file), '--output-format=json-v1')
+    assert previewed.returncode == 0, previewed.stderr + previewed.stdout
+    preview = json.loads(previewed.stdout)['result']
+    actions = {c['path']: c['action'] for c in preview['changes']}
+    assert actions == {
+        'src/extra/new_mod.wysna': 'create',
+        'src/keep.wysna': 'modify',
+        'src/main.wysna': 'modify',
+        'src/unused.wysna': 'delete',
+    }
+    assert not (root / 'src/extra/new_mod.wysna').exists()
+    assert unused.exists()
+
+    applied = _run_cli(
+        toolchain, 'patch', '--manifest', str(manifest), '--edits', str(edit_file),
+        '--expect-plan-hash', preview['plan_hash'], '--apply', '--output-format=json-v1',
+    )
+    assert applied.returncode == 0, applied.stderr + applied.stdout
+    assert (root / 'src/extra/new_mod.wysna').exists()
+    assert 'return x + 2' in keep.read_text(encoding='utf-8')
+    assert not unused.exists()
+
+    # Protected manifest entry cannot be deleted.
+    prot_del = root / 'prot_del.json'
+    prot_del.write_text(json.dumps([{'path': 'src/main.wysna', 'delete': True}]), encoding='utf-8')
+    prot_res = _run_cli(toolchain, 'patch', '--manifest', str(manifest), '--edits', str(prot_del), '--output-format=json-v1')
+    assert prot_res.returncode != 0
+
+    # Hunk with multiple or zero matches is rejected.
+    ambig_hunk = root / 'ambig_hunk.json'
+    ambig_hunk.write_text(json.dumps([{'path': 'src/keep.wysna', 'hunks': [{'old_text': 'not_present', 'new_text': 'x'}]}]), encoding='utf-8')
+    ambig_res = _run_cli(toolchain, 'patch', '--manifest', str(manifest), '--edits', str(ambig_hunk), '--output-format=json-v1')
+    assert ambig_res.returncode != 0
+
+    # MCP supports the new edit forms cleanly too.
+    failed, mcp_prev = _call_mcp(toolchain, root, 'wysna_patch', {
+        'manifest': 'wysna.toml',
+        'edits': [{'path': 'src/keep.wysna', 'symbol': 'bump', 'replacement': 'pub fn bump(x: int) -> int { return x + 3 }'}],
+    })
+    assert not failed and mcp_prev['status'] == 'ok', mcp_prev
+
+
+def test_workspace_operations_rolls_back_mixed_create_modify_delete(tmp_path, monkeypatch):
+    keep = tmp_path / 'keep.wysna'
+    remove_me = tmp_path / 'remove.wysna'
+    create_me = tmp_path / 'sub/new.wysna'
+    keep.write_bytes(b'old keep')
+    remove_me.write_bytes(b'old remove')
+    real_replace = SourceWrite.os.replace
+
+    def fail_on_keep(source, destination):
+        if destination == keep:
+            raise OSError('simulated mixed failure')
+        real_replace(source, destination)
+
+    monkeypatch.setattr(SourceWrite.os, 'replace', fail_on_keep)
+    with pytest.raises(OSError, match='simulated mixed failure'):
+        SourceWrite.write_workspace_operations(
+            [
+                ('create', create_me, None, b'created'),
+                ('delete', remove_me, b'old remove', None),
+                ('modify', keep, b'old keep', b'new keep'),
+            ],
+            lambda: None,
+        )
+    assert keep.read_bytes() == b'old keep'
+    assert remove_me.read_bytes() == b'old remove'
+    assert not create_me.exists()
+
+
+def test_native_workspace_patch_does_not_publish_a_failed_delete(tmp_path):
+    root = project(tmp_path)
+    parent = root / 'src/protected'
+    parent.mkdir()
+    victim = parent / 'old.wysna'
+    victim.write_text('fn unused() -> int { return 1 }\n', encoding='utf-8')
+    source = root / 'src/main.wysna'
+    before = {path: path.read_bytes() for path in (victim, source)}
+    edits = root / 'changes.json'
+    edits.write_text(json.dumps([
+        {'path': 'src/main.wysna', 'source': 'print("replacement")\n'},
+        {'path': 'src/protected/old.wysna', 'delete': True},
+    ]), encoding='utf-8')
+    cli = [ensure_selfhost_compiler_binary(str(ROOT))]
+    args = ['patch', '--manifest', str(root / 'wysna.toml'), '--edits', str(edits),
+            '--output-format=json-v1']
+    preview = _run_cli(cli, *args)
+    assert preview.returncode == 0, preview.stderr + preview.stdout
+    plan_hash = json.loads(preview.stdout)['result']['plan_hash']
+
+    immutable = hasattr(os, 'chflags') and hasattr(stat, 'UF_IMMUTABLE')
+    if immutable:
+        try:
+            os.chflags(victim, stat.UF_IMMUTABLE)
+        except OSError:
+            immutable = False
+    if os.name == 'nt':
+        victim.chmod(stat.S_IREAD)
+    elif not immutable:
+        if os.geteuid() == 0:
+            pytest.skip('Root can delete files from a read-only directory')
+        parent.chmod(0o555)
+    try:
+        applied = _run_cli(cli, *args, '--apply', '--expect-plan-hash', plan_hash)
+        assert applied.returncode != 0, applied.stdout
+        assert json.loads(applied.stdout)['diagnostics'][0]['code'] == 'W5004'
+        assert {path: path.read_bytes() for path in before} == before
+        assert not list(root.rglob('*.wysna_tmp_*'))
+    finally:
+        if immutable:
+            os.chflags(victim, 0)
+        elif os.name == 'nt':
+            victim.chmod(stat.S_IREAD | stat.S_IWRITE)
+        else:
+            parent.chmod(0o755)

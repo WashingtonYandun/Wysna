@@ -170,3 +170,55 @@ def test_graph_and_inspect_distinguish_resolved_calls_from_uncertainty_boundarie
     inspect_iface = _call_mcp(toolchain, tmp_path, 'wysna_inspect', {'path': 'calls.wysna', 'symbol': 'via_interface'})
     assert inspect_iface['result']['call_resolution']['complete'] is False
     assert 'virtual-dispatch' in inspect_iface['result']['analysis_boundaries']
+
+
+def test_inspect_exact_parity_and_batch_symbols(toolchain, tmp_path):
+    target = tmp_path / 'batch.wysna'
+    target.write_text(
+        'pub fn one(x: int) -> int { return x + 1 }\n'
+        'pub fn two(x: int) -> int { return one(x) * 2 }\n'
+        'pub fn three(x: int) -> int { return two(x) - 1 }\n',
+        encoding='utf-8',
+    )
+
+    code_idx, idx_payload = _run_cli(toolchain, 'inspect', str(target))
+    assert code_idx == 0, idx_payload
+    assert {'schema_version', 'file', 'graph_hash', 'summary', 'symbols', 'budget', 'omitted', 'analysis_boundaries'} <= set(idx_payload['result'])
+    assert all('qualified_name' in s for s in idx_payload['result']['symbols'])
+
+    code_one, one_payload = _run_cli(toolchain, 'inspect', str(target), '--symbol', 'two', '--with-deps')
+    assert code_one == 0, one_payload
+    res_one = one_payload['result']
+    assert 'node' in res_one and 'symbol' not in res_one
+    assert {'schema_version', 'file', 'graph_hash', 'node', 'source', 'dependencies', 'impact', 'call_resolution', 'budget', 'omitted', 'analysis_boundaries'} <= set(res_one)
+    assert res_one['node']['name'] == 'two'
+    assert res_one['impact']['impact_count'] >= 1
+
+    code_batch, batch_payload = _run_cli(toolchain, 'inspect', str(target), '--symbols', 'one,three')
+    assert code_batch == 0, batch_payload
+    bres = batch_payload['result']
+    assert bres['mode'] == 'batch'
+    assert [it['node']['name'] for it in bres['items']] == ['one', 'three']
+    assert bres['budget']['requested_count'] == 2
+    assert bres['budget']['returned_count'] == 2
+
+    mcp_batch = _call_mcp(toolchain, tmp_path, 'wysna_inspect', {
+        'path': 'batch.wysna',
+        'symbols': ['one', 'two', 'three'],
+        'max_bytes': 45,
+    })
+    assert mcp_batch['status'] == 'ok', mcp_batch
+    mb = mcp_batch['result']
+    assert mb['mode'] == 'batch'
+    assert mb['budget']['truncated'] is True
+    assert len(mb['omitted']) >= 1
+
+    # Validate strict InspectResult JSON Schema if jsonschema is installed.
+    import importlib
+    schema_doc = json.loads((ROOT / 'schemas/wysna-tool-result.v1.schema.json').read_text(encoding='utf-8'))
+    try:
+        js = importlib.import_module('jsonschema')
+        for payload in (idx_payload, one_payload, batch_payload, mcp_batch):
+            js.Draft202012Validator(schema_doc).validate(payload)
+    except ImportError:
+        pass

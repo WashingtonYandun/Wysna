@@ -530,11 +530,12 @@ def diagnostic_from_error(error, source_by_file=None, *, span_cache=None):
     if getattr(error, "stage", None) == "type" and not getattr(error, "data", None):
         enrich_from_message(error)
     data = dict(getattr(error, "data", None) or {})
-    for key in ("expected", "found"):
+    for key in ("expected", "found", "subject_type"):
         if isinstance(data.get(key), str):
             data[key] = _demangle_type_text(data[key])
-    if isinstance(data.get("callee"), str):
-        data["callee"] = _clean_symbol_name(data["callee"])
+    for key in ("callee", "function", "name", "symbol", "binding"):
+        if isinstance(data.get(key), str):
+            data[key] = _clean_symbol_name(data[key])
     if getattr(error, "help", None):
         data["help"] = error.help
 
