@@ -530,6 +530,15 @@ def diagnostic_from_error(error, source_by_file=None, *, span_cache=None):
     if getattr(error, "stage", None) == "type" and not getattr(error, "data", None):
         enrich_from_message(error)
     data = dict(getattr(error, "data", None) or {})
+    if data.get("kind") == "ambiguous_symbol":
+        cache = span_cache if span_cache is not None else {}
+        candidates = []
+        for candidate in data["candidates"]:
+            path = candidate["file"]
+            span = _primary_span(path, candidate["line"], candidate["col"],
+                                 source_for_file(source_by_file, path), span_cache=cache)
+            candidates.append(dict(candidate, span=span))
+        data["candidates"] = candidates
     for key in ("expected", "found", "subject_type"):
         if isinstance(data.get(key), str):
             data[key] = _demangle_type_text(data[key])

@@ -3,6 +3,7 @@ import argparse
 import hashlib
 import json
 import os
+import re
 from pathlib import Path
 import sys
 
@@ -200,28 +201,15 @@ def run_graph_command(argv) -> int:
 
 
 def _utf8_slice_budget(text: str, start_byte: int, max_bytes: int | None) -> tuple[str, int, int, int]:
-    total_bytes = len(text.encode('utf-8'))
-    byte_pos = 0
-    char_start = len(text)
-    clamped_start = total_bytes
-    for idx, ch in enumerate(text):
-        if byte_pos >= start_byte:
-            char_start = idx
-            clamped_start = byte_pos
-            break
-        byte_pos += len(ch.encode('utf-8'))
-    if max_bytes is None:
-        sliced = text[char_start:]
-        return sliced, clamped_start, total_bytes - clamped_start, total_bytes
-    used = 0
-    char_end = char_start
-    for idx in range(char_start, len(text)):
-        width = len(text[idx].encode('utf-8'))
-        if used + width > max_bytes:
-            break
-        used += width
-        char_end = idx + 1
-    return text[char_start:char_end], clamped_start, used, total_bytes
+    raw = text.encode('utf-8')
+    total_bytes = len(raw)
+    start = min(start_byte, total_bytes)
+    while start < total_bytes and raw[start] & 0xC0 == 0x80:
+        start += 1
+    end = total_bytes if max_bytes is None else min(total_bytes, start + max_bytes)
+    while end < total_bytes and raw[end] & 0xC0 == 0x80:
+        end -= 1
+    return raw[start:end].decode('utf-8'), start, end - start, total_bytes
 
 
 def _validate_non_negative_int(value: int, flag: str) -> int:
@@ -434,7 +422,7 @@ def inspect_source(
     if symbols is not None:
         resolved_nodes = []
         for req_sym in symbols:
-            target_node = resolve_graph_symbol(full_graph, req_sym, 'inspect')
+            target_node = resolve_graph_symbol(full_graph, req_sym, 'inspect', checked=checked)
             if target_node is None:
                 raise WysnaError(
                     f"Unknown symbol '{req_sym}'",
@@ -502,7 +490,7 @@ def inspect_source(
             result['project'] = resolver.lock_data()
         return result
 
-    node = resolve_graph_symbol(full_graph, symbol, 'inspect')
+    node = resolve_graph_symbol(full_graph, symbol, 'inspect', checked=checked)
     if node is None:
         raise WysnaError(
             f"Unknown symbol '{symbol}'",
@@ -532,10 +520,42 @@ def inspect_source(
     return result
 
 
+def inspect_span(path, source, span, max_bytes=None):
+    """Read bounded context at a diagnostic's exact UTF-8 source revision."""
+    source_id = span.get('source_id') if isinstance(span, dict) else None
+    digest = span.get('source_sha256') if isinstance(span, dict) else None
+    if (not isinstance(source_id, str) or not source_id or '\0' in source_id
+            or not isinstance(digest, str) or not re.fullmatch(r'[0-9a-f]{64}', digest)):
+        raise ValueError('Expected a diagnostic span with source_id and source_sha256')
+    if Path(source_id).resolve() != Path(path).resolve():
+        raise ValueError('Diagnostic span belongs to a different file')
+    raw = source.encode('utf-8')
+    if hashlib.sha256(raw).hexdigest() != digest:
+        raise WysnaError('Diagnostic span is stale', code='W5005', stage='inspect')
+    start, end = span.get('start_byte'), span.get('end_byte')
+    if (type(start) is not int or type(end) is not int or not 0 <= start <= end <= len(raw)
+            or any(index < len(raw) and raw[index] & 0xC0 == 0x80 for index in (start, end))):
+        raise ValueError('Diagnostic span must delimit a valid UTF-8 byte range')
+
+    budget = _validate_positive_int(max_bytes, '--max-bytes') if max_bytes is not None else 1024
+    prefix = min(budget // 4, max(0, budget - (end - start)))
+    anchor = max(0, start - prefix)
+    snippet, context_start, used, _ = _utf8_slice_budget(source, anchor, budget)
+    return {
+        'schema_version': 'wysna.inspect-span/1',
+        'span': {'source_id': source_id, 'source_sha256': digest, 'start_byte': start, 'end_byte': end},
+        'source': snippet,
+        'context_start_byte': context_start,
+        'context_end_byte': context_start + used,
+        'budget': {'max_bytes': budget, 'used_bytes': used},
+    }
+
+
 def run_inspect_command(argv) -> int:
     """Extract a surgical, token-efficient symbol slice with its graph dependencies."""
     parser = _Parser(prog='wysna inspect', description=__doc__)
     parser.add_argument('source')
+    parser.add_argument('--span', help='Diagnostic source span as a JSON object')
     parser.add_argument('--symbol', action='append', help='Target function, class, interface, struct, enum, or Class.method (repeatable)')
     parser.add_argument('--symbols', help='Comma-separated symbol list for batch inspect')
     parser.add_argument('--with-deps', action='store_true', help='Include signatures of referenced symbols')
@@ -549,6 +569,19 @@ def run_inspect_command(argv) -> int:
     try:
         options = parser.parse_args(list(argv))
         json_output = options.output_format == 'json-v1'
+        if options.span is not None:
+            if any((options.symbol, options.symbols is not None, options.with_deps, options.source_offset,
+                    options.offset, options.manifest, options.frozen)):
+                raise ValueError('--span cannot be combined with symbol or project inspection options')
+            path, source, _ = read_source_snapshot(Path(options.source))
+            result = inspect_span(path, source, json.loads(options.span), options.max_bytes)
+            if json_output:
+                envelope = tool_result('inspect', 'ok', 0)
+                envelope['result'] = result
+                write_tool_result(envelope, sys.stdout)
+            else:
+                print(result['source'], end='')
+            return 0
         sym_list = list(options.symbol or [])
         if options.symbols is not None:
             if sym_list:
@@ -634,7 +667,7 @@ def patch_source(
             stage='patch',
         )
 
-    node = resolve_graph_symbol(before_graph, symbol, 'patch')
+    node = resolve_graph_symbol(before_graph, symbol, 'patch', checked=checked)
     if node is None:
         raise WysnaError(
             f"Target symbol '{symbol}' not found for patch",

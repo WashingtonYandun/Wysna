@@ -55,12 +55,22 @@ fn arch_issue(m: ProjectManifest, graph: ToolGraph, loader: ModuleLoader, rule: 
     let status = if violation { "violation" } else { "incomplete" }
     let code = if violation { "W6101" } else { "W6102" }
     let mut to_symbol = ""
-    let mut related = "[]"
+    let mut related: list[str] = []
     if target_index >= 0 {
         let target = graph.nodes[target_index]
         to_symbol = arch_symbol(m, graph, target)
         let span = diag_primary_span_json(target.file, target.line, target.col, arch_source(loader, target.file))
-        related = "[{\"message\":\"Target declaration\",\"line\":" + str(target.line) + ",\"col\":" + str(target.col) + ",\"span\":" + span + "}]"
+        let owner_index = tool_find_node_idx(graph, arch_owner_id(target))
+        if boundary == "unclassified_target" and owner_index >= 0 {
+            let owner = graph.nodes[owner_index]
+            let owner_span = diag_primary_span_json(owner.file, owner.line, owner.col, arch_source(loader, owner.file))
+            related.append("{\"message\":\"Class requiring an architecture role\",\"line\":" + str(owner.line) +
+                ",\"col\":" + str(owner.col) + ",\"span\":" + owner_span + "}")
+        }
+        if boundary != "unclassified_target" or owner_index != target_index {
+            related.append("{\"message\":\"Target declaration\",\"line\":" + str(target.line) +
+                ",\"col\":" + str(target.col) + ",\"span\":" + span + "}")
+        }
     }
     let message = "Architecture rule '" + rule.id + "'" + (if violation {
         " forbids " + relation + " from " + from_symbol + " to " + to_symbol
@@ -92,7 +102,7 @@ fn arch_issue(m: ProjectManifest, graph: ToolGraph, loader: ModuleLoader, rule: 
     }
     return ArchitectureIssue {
         code: code, message: message, file: site.file, line: site.line, col: col,
-        data: "{" + join_strings(fields, ",") + "}", related: related,
+        data: "{" + join_strings(fields, ",") + "}", related: "[" + join_strings(related, ",") + "]",
     }
 }
 

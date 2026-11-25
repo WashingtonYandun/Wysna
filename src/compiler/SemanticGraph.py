@@ -1054,7 +1054,7 @@ def find_graph_node(graph: dict, symbol: str) -> dict | None:
     return suffix_matches[0] if len(suffix_matches) == 1 else None
 
 
-def resolve_graph_symbol(graph: dict, symbol: str, stage: str) -> dict | None:
+def resolve_graph_symbol(graph: dict, symbol: str, stage: str, *, checked=None) -> dict | None:
     """Resolve user-supplied selectors without choosing among homonyms."""
     nodes = graph['nodes']
     for field in ('id', 'qualified_name', 'name'):
@@ -1075,6 +1075,8 @@ def resolve_graph_symbol(graph: dict, symbol: str, stage: str) -> dict | None:
                        file=graph['entry_file'], code='W1005', stage=stage)
     error.data = {'kind': 'ambiguous_symbol', 'symbol': symbol,
                   'graph_hash': graph['graph_hash'], 'candidates': candidates}
+    if checked is not None:
+        error.source_texts = {path: snapshot.text for path, snapshot in checked.sources.items()}
     raise error
 
 

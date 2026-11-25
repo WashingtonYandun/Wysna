@@ -13279,11 +13279,13 @@ fn tool_require_symbol(graph: ToolGraph, query: str, command: str, json_mode: bo
         for index in matches {
             let node = graph.nodes[index]
             ids.append(node.id)
+            let src = if node.file == graph.entry_file { graph.entry_source } else { diag_read_snippet_source(node.file) }
+            let span = diag_primary_span_json(node.file, node.line, node.col, src)
             by_id[node.id] = "{\"id\":" + diag_json_quote(node.id) +
                 ",\"qualified_name\":" + diag_json_quote(node.qualified_name) +
                 ",\"kind\":" + diag_json_quote(node.kind) + ",\"file\":" + diag_json_quote(node.file) +
                 ",\"line\":" + str(node.line) + ",\"col\":" + str(node.col) +
-                ",\"signature\":" + diag_json_quote(node.signature) + "}"
+                ",\"signature\":" + diag_json_quote(node.signature) + ",\"span\":" + span + "}"
         }
         let mut rows: list[str] = []
         let ordered = tool_sort_strings(ids)
@@ -13858,34 +13860,22 @@ fn tool_boundaries_for_nodes_json(nodes: list[ToolGraphNode]) -> str {
 }
 
 fn tool_utf8_slice_budget(text: str, start_byte: int, has_budget: bool, max_bytes: int) -> list[str] {
-    let total_bytes = len(bytes(text))
-    let mut byte_pos = 0
-    let mut char_start = len(text)
-    let mut clamped_start = total_bytes
-    for i in 0..len(text) {
-        if byte_pos >= start_byte {
-            char_start = i
-            clamped_start = byte_pos
-            break
-        }
-        byte_pos = byte_pos + len(bytes(text[i]))
+    let raw = bytes(text)
+    let total = len(raw)
+    let mut first = if start_byte < total { start_byte } else { total }
+    while first < total and raw[first] >= 128 and raw[first] < 192 { first = first + 1 }
+    let mut last = if has_budget and max_bytes < total - first { first + max_bytes } else { total }
+    while last < total and raw[last] >= 128 and raw[last] < 192 { last = last - 1 }
+    if first == 0 and last == total { return [text, "0", str(total), str(total)] }
+    let mut char_start = 0
+    for i in 0..first {
+        if raw[i] < 128 or raw[i] >= 192 { char_start = char_start + 1 }
     }
-    if not has_budget {
-        let sliced = slice(text, char_start, len(text))
-        return [sliced, str(clamped_start), str(total_bytes - clamped_start), str(total_bytes)]
-    }
-    let mut used = 0
     let mut char_end = char_start
-    let mut j = char_start
-    while j < len(text) {
-        let w = len(bytes(text[j]))
-        if used + w > max_bytes { break }
-        used = used + w
-        j = j + 1
-        char_end = j
+    for i in first..last {
+        if raw[i] < 128 or raw[i] >= 192 { char_end = char_end + 1 }
     }
-    let sliced = slice(text, char_start, char_end)
-    return [sliced, str(clamped_start), str(used), str(total_bytes)]
+    return [slice(text, char_start, char_end), str(first), str(last - first), str(total)]
 }
 
 fn tool_node_json(n: ToolGraphNode) -> str {
@@ -14290,8 +14280,75 @@ fn tool_inspect_split_csv(raw_csv: str) -> list[str] {
     return dst
 }
 
+fn tool_inspect_span_error(code: str, message: str, json_mode: bool) -> unit {
+    let exit_code = if code == "W5005" { 1 } elif code == "W5004" { 3 } else { 2 }
+    let status = if exit_code == 1 { "diagnostic_error" } elif exit_code == 3 { "toolchain_error" } else { "usage_error" }
+    if json_mode {
+        let record = diag_record_json(code, "inspect", "error", message, "", 0, 0, "")
+        diag_write_output(diag_tool_envelope_json("inspect", status, exit_code, "[" + record + "]", "", "", "[]"))
+    } else {
+        eprint("[" + code + "] " + message)
+    }
+    exit(exit_code)
+}
+
+fn tool_inspect_span(file: str, span_text: str, budget: int, json_mode: bool) -> unit {
+    let span = mcp_parse_json_strict(span_text)
+    let source_id = lsp_json_str(span, "source_id", "")
+    let digest = lsp_json_str(span, "source_sha256", "")
+    if source_id == "" or len(digest) != 64 {
+        tool_inspect_span_error("W5002", "Expected a diagnostic span with source_id and source_sha256", json_mode)
+    }
+    for idx in 0..len(digest) {
+        if not proj_str_contains_substr("0123456789abcdef", digest[idx]) {
+            tool_inspect_span_error("W5002", "Invalid diagnostic source hash", json_mode)
+        }
+    }
+    let resolved = module_canonical_resolved(file)
+    if resolved == "" {
+        tool_inspect_span_error("W5004", "Cannot read " + file, json_mode)
+    }
+    if module_canonical_resolved(source_id) != resolved {
+        tool_inspect_span_error("W5002", "Diagnostic span belongs to a different file", json_mode)
+    }
+    let src = read_file(resolved) else err {
+        tool_inspect_span_error("W5004", "Cannot read UTF-8 source: " + file, json_mode)
+        ""
+    }
+    if diag_sha256_hex(src) != digest {
+        tool_inspect_span_error("W5005", "Diagnostic span is stale", json_mode)
+    }
+    let raw = bytes(src)
+    let start = lsp_json_int(span, "start_byte", -1)
+    let end = lsp_json_int(span, "end_byte", -1)
+    let valid = start >= 0 and end >= start and end <= len(raw) and
+        (start == len(raw) or raw[start] < 128 or raw[start] >= 192) and
+        (end == len(raw) or raw[end] < 128 or raw[end] >= 192)
+    if not valid {
+        tool_inspect_span_error("W5002", "Diagnostic span must delimit a valid UTF-8 byte range", json_mode)
+    }
+    let spare = budget - (end - start)
+    let prefix = if spare < 0 { 0 } elif spare < budget / 4 { spare } else { budget / 4 }
+    let anchor = if prefix > start { 0 } else { start - prefix }
+    let sliced = tool_utf8_slice_budget(src, anchor, true, budget)
+    if json_mode {
+        let context_start = lsp_parse_int(sliced[1], 0)
+        let used = lsp_parse_int(sliced[2], 0)
+        let target = "{\"source_id\":" + diag_json_quote(source_id) + ",\"source_sha256\":" + diag_json_quote(digest) +
+            ",\"start_byte\":" + str(start) + ",\"end_byte\":" + str(end) + "}"
+        let result = "{\"schema_version\":\"wysna.inspect-span/1\",\"span\":" + target +
+            ",\"source\":" + diag_json_quote(sliced[0]) + ",\"context_start_byte\":" + str(context_start) +
+            ",\"context_end_byte\":" + str(context_start + used) +
+            ",\"budget\":{\"max_bytes\":" + str(budget) + ",\"used_bytes\":" + str(used) + "}}"
+        diag_write_output(diag_tool_envelope_json("inspect", "ok", 0, "[]", "result", result, "[]"))
+    } else {
+        print(sliced[0])
+    }
+}
+
 fn tool_handle_inspect(args: list[str], json_mode: bool) -> unit {
     let mut file = ""
+    let mut span: str? = None
     let mut sym_args: list[str] = []
     let mut csv_syms: list[str] = []
     let mut has_symbols_flag = false
@@ -14309,6 +14366,9 @@ fn tool_handle_inspect(args: list[str], json_mode: bool) -> unit {
             i = i + 2
         } elif (a == "--symbol" or a == "-s") and i + 1 < len(args) {
             sym_args.append(args[i + 1])
+            i = i + 2
+        } elif a == "--span" and i + 1 < len(args) {
+            span = args[i + 1]
             i = i + 2
         } elif a == "--symbols" and i + 1 < len(args) {
             has_symbols_flag = true
@@ -14359,6 +14419,13 @@ fn tool_handle_inspect(args: list[str], json_mode: bool) -> unit {
         } else {
             report_error("<cli>", "W5002", 1, 1, "unknown option for inspect: " + a)
         }
+    }
+    if span != None {
+        if file == "" or has_symbols_flag or len(sym_args) > 0 or with_deps or source_offset != 0 or index_offset != 0 {
+            tool_inspect_span_error("W5002", "--span requires a file and cannot be combined with symbol inspection options", json_mode)
+        }
+        tool_inspect_span(file, span ?? "", if has_max_bytes { max_bytes } else { 1024 }, json_mode)
+        return
     }
     if has_symbols_flag and len(sym_args) > 0 {
         report_error("<cli>", "W5002", 1, 1, "inspect cannot combine --symbol and --symbols")
@@ -20966,12 +21033,22 @@ fn arch_issue(m: ProjectManifest, graph: ToolGraph, loader: ModuleLoader, rule: 
     let status = if violation { "violation" } else { "incomplete" }
     let code = if violation { "W6101" } else { "W6102" }
     let mut to_symbol = ""
-    let mut related = "[]"
+    let mut related: list[str] = []
     if target_index >= 0 {
         let target = graph.nodes[target_index]
         to_symbol = arch_symbol(m, graph, target)
         let span = diag_primary_span_json(target.file, target.line, target.col, arch_source(loader, target.file))
-        related = "[{\"message\":\"Target declaration\",\"line\":" + str(target.line) + ",\"col\":" + str(target.col) + ",\"span\":" + span + "}]"
+        let owner_index = tool_find_node_idx(graph, arch_owner_id(target))
+        if boundary == "unclassified_target" and owner_index >= 0 {
+            let owner = graph.nodes[owner_index]
+            let owner_span = diag_primary_span_json(owner.file, owner.line, owner.col, arch_source(loader, owner.file))
+            related.append("{\"message\":\"Class requiring an architecture role\",\"line\":" + str(owner.line) +
+                ",\"col\":" + str(owner.col) + ",\"span\":" + owner_span + "}")
+        }
+        if boundary != "unclassified_target" or owner_index != target_index {
+            related.append("{\"message\":\"Target declaration\",\"line\":" + str(target.line) +
+                ",\"col\":" + str(target.col) + ",\"span\":" + span + "}")
+        }
     }
     let message = "Architecture rule '" + rule.id + "'" + (if violation {
         " forbids " + relation + " from " + from_symbol + " to " + to_symbol
@@ -21003,7 +21080,7 @@ fn arch_issue(m: ProjectManifest, graph: ToolGraph, loader: ModuleLoader, rule: 
     }
     return ArchitectureIssue {
         code: code, message: message, file: site.file, line: site.line, col: col,
-        data: "{" + join_strings(fields, ",") + "}", related: related,
+        data: "{" + join_strings(fields, ",") + "}", related: "[" + join_strings(related, ",") + "]",
     }
 }
 
@@ -21775,6 +21852,8 @@ fn wpatch_rename_file(src_path: str, dst_path: str) -> bool {
     return mv >= 0
 }
 
+extern "C" fn wysna_host_monotonic_ms() -> int
+
 fn wpatch_test_paths(state: ProjectLockState, root: str) -> list[str] {
     let mut paths = proj_snapshot_paths(state, root, "", false, true)
     if proj_test_exists(state, root + "/wysna.lock") { paths.append("wysna.lock") }
@@ -21821,6 +21900,7 @@ fn wpatch_verify_candidate_tests(state: ProjectLockState, m: ProjectManifest, pa
                                   edit_rels: list[str], edit_actions: list[str], edit_after: list[str],
                                   sdk_sha: str, revision: str, plan_hash: str, discover: bool, frozen: bool,
                                   expected_count: int) -> PatchTestVerification {
+    let staging_started = wysna_host_monotonic_ms()
     let driver = env("WYSNA_SDK_DRIVER") else { "" }
     let stage_env = env("WYSNA_PATCH_TEST_STAGE") else { "" }
     let staging = if stage_env == "" { "" } else { module_canonical_resolved(stage_env) }
@@ -21863,7 +21943,9 @@ fn wpatch_verify_candidate_tests(state: ProjectLockState, m: ProjectManifest, pa
     if frozen { argv.append("--frozen") }
     let exe_buf = lsp_buf_from_str(driver)
     let args_buf = lsp_pack_argv_buf(argv)
+    let test_started = wysna_host_monotonic_ms()
     let rc = wysna_host_process_run(exe_buf, args_buf, 600000)
+    let test_ms = wysna_host_monotonic_ms() - test_started
     wysna_host_close(exe_buf)
     wysna_host_close(args_buf)
     let raw = read_file(report_path) else err { "" }
@@ -21884,7 +21966,7 @@ fn wpatch_verify_candidate_tests(state: ProjectLockState, m: ProjectManifest, pa
     }
 
     let mut rows: list[str] = []
-    let fields: list[str] = ["id", "status", "failure_kind", "exit_code", "duration_ms", "stdout_sha256", "stderr_sha256"]
+    let fields: list[str] = ["id", "status", "failure_kind", "exit_code", "duration_ms", "compile_ms", "run_ms", "stdout_sha256", "stderr_sha256"]
     for record in case_reports.items {
         let mut parts: list[str] = []
         for field in fields {
@@ -21899,7 +21981,8 @@ fn wpatch_verify_candidate_tests(state: ProjectLockState, m: ProjectManifest, pa
     }
     let evidence = "{\"plan_hash\":" + diag_json_quote(plan_hash) + ",\"workspace_revision\":" + diag_json_quote(revision) +
         ",\"test_plan_hash\":" + diag_json_quote(lsp_json_str(report, "plan_hash", "")) +
-        ",\"status\":" + diag_json_quote(status) + ",\"cases\":[" + join_strings(rows, ",") + "]}"
+        ",\"status\":" + diag_json_quote(status) + ",\"cases\":[" + join_strings(rows, ",") + "]" +
+        ",\"timing_ms\":{\"staging\":" + str(test_started - staging_started) + ",\"test_runner\":" + str(test_ms) + "}}"
     return PatchTestVerification { code: rc, evidence: evidence }
 }
 
@@ -24679,6 +24762,15 @@ fn mcp_tool_inspect(state: McpServerState, arguments: LspJson) -> list[str] {
         extra.append("--offset")
         extra.append(str(off.int_val))
     }
+    let span = lsp_json_get(arguments, "span")
+    if span.kind != "null" {
+        if span.kind != "object" or lsp_json_get(arguments, "path").kind != "str" or
+           lsp_json_get(arguments, "source").kind != "null" {
+            return mcp_tool_err("'span' requires a file path and a diagnostic span object")
+        }
+        extra.append("--span")
+        extra.append(mcp_serialize_json_val(span))
+    }
     return mcp_exec_simple_source_tool(state, "inspect", arguments, extra)
 }
 
@@ -24910,7 +25002,7 @@ fn mcp_tools_list_json() -> str {
     ts.append("{\"name\":\"wysna_api\",\"description\":\"Discover standard-library modules and public symbols.\",\"inputSchema\":{\"type\":\"object\",\"properties\":{\"module\":{\"type\":\"string\",\"description\":\"Optional module such as std/json.\"},\"manifest\":{\"type\":\"string\",\"description\":\"Optional path to a wysna.toml manifest inside the server root.\"}}}}")
     ts.append("{\"name\":\"wysna_capabilities\",\"description\":\"Installed commands, targets and their capability contracts.\",\"inputSchema\":{\"type\":\"object\",\"properties\":{}}}")
     ts.append("{\"name\":\"wysna_graph\",\"description\":\"Compile-time semantic relationship graph (interfaces, classes, usages, calls, blast radius).\",\"inputSchema\":{\"type\":\"object\",\"properties\":{" + src_or_path + ",\"manifest\":{\"type\":\"string\",\"description\":\"Project manifest for an impact or architecture role query.\"},\"role\":{\"type\":\"string\",\"description\":\"Configured architecture role.\"},\"target\":{\"type\":\"string\",\"description\":\"Optional project target for the role query.\"},\"symbol\":{\"type\":\"string\",\"description\":\"Optional symbol name or node ID filter.\"},\"relation\":{\"type\":\"string\",\"description\":\"Optional relation filter: implements|hierarchy|usages|callers|callees|impact.\"}}}}")
-    ts.append("{\"name\":\"wysna_inspect\",\"description\":\"Surgical, token-efficient symbol source slice (single or batch), contract, effects, call resolution, and dependency signatures.\",\"inputSchema\":{\"type\":\"object\",\"properties\":{" + src_or_path + ",\"symbol\":{\"type\":\"string\",\"description\":\"Symbol name to extract (omit for compact index).\"},\"symbols\":{\"type\":\"array\",\"items\":{\"type\":\"string\"},\"description\":\"Batch list of symbols to extract under one shared max_bytes budget.\"},\"with_deps\":{\"type\":\"boolean\",\"description\":\"Include signatures of referenced types and callees.\"},\"max_bytes\":{\"type\":\"integer\",\"minimum\":1,\"description\":\"Maximum UTF-8 byte budget for returned source/context.\"},\"source_offset\":{\"type\":\"integer\",\"minimum\":0,\"description\":\"UTF-8 byte offset within target symbol source.\"},\"offset\":{\"type\":\"integer\",\"minimum\":0,\"description\":\"Starting index offset when listing symbols.\"}}}}")
+    ts.append("{\"name\":\"wysna_inspect\",\"description\":\"Surgical, token-efficient symbol source slice (single or batch), contract, effects, call resolution, and dependency signatures.\",\"inputSchema\":{\"type\":\"object\",\"properties\":{" + src_or_path + ",\"symbol\":{\"type\":\"string\",\"description\":\"Symbol name to extract (omit for compact index).\"},\"span\":{\"type\":\"object\",\"description\":\"Read bounded context at a diagnostic span. Requires path and the original source hash.\",\"required\":[\"source_id\",\"source_sha256\",\"start_byte\",\"end_byte\"],\"properties\":{\"source_id\":{\"type\":\"string\"},\"source_sha256\":{\"type\":\"string\"},\"start_byte\":{\"type\":\"integer\",\"minimum\":0},\"end_byte\":{\"type\":\"integer\",\"minimum\":0}}},\"symbols\":{\"type\":\"array\",\"items\":{\"type\":\"string\"},\"description\":\"Batch list of symbols to extract under one shared max_bytes budget.\"},\"with_deps\":{\"type\":\"boolean\",\"description\":\"Include signatures of referenced types and callees.\"},\"max_bytes\":{\"type\":\"integer\",\"minimum\":1,\"description\":\"Maximum UTF-8 byte budget for returned source/context.\"},\"source_offset\":{\"type\":\"integer\",\"minimum\":0,\"description\":\"UTF-8 byte offset within target symbol source.\"},\"offset\":{\"type\":\"integer\",\"minimum\":0,\"description\":\"Starting index offset when listing symbols.\"}}}}")
     ts.append("{\"name\":\"wysna_patch\",\"description\":\"Checked declaration-level or multi-file workspace patch (source, symbol, hunks, create, delete) guarded by graph/plan hash and in-memory typecheck.\",\"inputSchema\":{\"type\":\"object\",\"properties\":{\"path\":{\"type\":\"string\",\"description\":\"Path to a .wysna file inside the server root (single-symbol mode).\"},\"symbol\":{\"type\":\"string\",\"description\":\"Target declaration name or Class.method (single-symbol mode).\"},\"replacement\":{\"type\":\"string\",\"description\":\"Replacement declaration Wysna code (single-symbol mode).\"},\"expect_graph_hash\":{\"type\":\"string\",\"description\":\"Optional optimistic lock graph hash (single-symbol mode).\"},\"manifest\":{\"type\":\"string\",\"description\":\"Path to wysna.toml inside server root (workspace mode).\"},\"edits\":{\"type\":\"array\",\"description\":\"Array of workspace edit objects ({path, source|symbol+replacement|hunks|create+source|delete}) to check and apply together.\"},\"expect_plan_hash\":{\"type\":\"string\",\"description\":\"Plan hash from preview (required with apply=true in workspace mode).\"},\"discover\":{\"type\":\"boolean\",\"description\":\"Discover tests under tests/ (workspace mode).\"},\"frozen\":{\"type\":\"boolean\",\"description\":\"Verify wysna.lock before planning/applying (workspace mode).\"},\"test\":{\"type\":\"boolean\",\"description\":\"Run tests on the staged workspace. Requires --allow-exec.\"},\"apply\":{\"type\":\"boolean\",\"description\":\"Write verified patch to disk (default false).\"}}}}")
     ts.append("{\"name\":\"wysna_project_check\",\"description\":\"Static project-wide typecheck across wysna.toml targets and lockfile verification.\",\"inputSchema\":{\"type\":\"object\",\"properties\":{\"manifest\":{\"type\":\"string\",\"description\":\"Path to wysna.toml inside server root.\"},\"target\":{\"type\":\"string\",\"description\":\"Optional target name from wysna.toml.\"},\"frozen\":{\"type\":\"boolean\",\"description\":\"Verify wysna.lock before checking.\"}},\"required\":[\"manifest\"]}}")
     ts.append("{\"name\":\"wysna_project_test\",\"description\":\"List test plans deterministically (list=true) or execute project tests when MCP server was started with --allow-exec.\",\"inputSchema\":{\"type\":\"object\",\"properties\":{\"manifest\":{\"type\":\"string\",\"description\":\"Path to wysna.toml inside server root.\"},\"list\":{\"type\":\"boolean\",\"description\":\"Return static test plan and plan_hash without executing code.\"},\"discover\":{\"type\":\"boolean\",\"description\":\"Discover test files under tests/.\"},\"frozen\":{\"type\":\"boolean\",\"description\":\"Verify wysna.lock before listing or running tests.\"},\"filter\":{\"type\":\"string\",\"description\":\"Substring filter on test ID/name.\"},\"case\":{\"type\":\"string\",\"description\":\"Run only the specified test case ID.\"},\"expect_plan_hash\":{\"type\":\"string\",\"description\":\"Verify test selection against a previously listed plan_hash.\"}},\"required\":[\"manifest\"]}}")

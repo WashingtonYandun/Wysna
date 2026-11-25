@@ -185,3 +185,17 @@ def test_invalid_classification_is_incomplete(toolchain, architecture_project, f
     assert result['result']['architecture']['status'] == 'incomplete'
     assert result['diagnostics'][0]['code'] == 'W6102'
     assert result['diagnostics'][0]['data']['boundary'] == boundary
+
+
+def test_incomplete_rule_links_to_the_class_that_needs_classification(toolchain, architecture_project):
+    root = architecture_project
+    src = root / 'src/service.wysna'
+    lines = src.read_text(encoding='utf-8').splitlines(keepends=True)
+    src.write_text(''.join(line for line in lines if not line.startswith('@')), encoding='utf-8')
+    code, checked = _check(toolchain, root)
+    assert code == 1, checked
+    issue = checked['diagnostics'][0]
+    assert issue['code'] == 'W6102' and issue['data']['boundary'] == 'unclassified_target'
+    location = next(item for item in issue['related'] if item['message'] == 'Class requiring an architecture role')
+    code, inspected = _json(toolchain, 'inspect', str(src), '--span', json.dumps(location['span']))
+    assert code == 0 and 'class InvoiceService' in inspected['result']['source'], inspected

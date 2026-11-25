@@ -60,7 +60,12 @@ def _diagnostic(rule, graph, revision, root, nodes, origin, relation, site,
         boundary=boundary, graph_hash=graph["graph_hash"], revision=revision,
     )
     if target:
-        error.with_related("Target declaration", file=target["file"], line=target["line"], col=target["col"])
+        owner = nodes.get(target.get("owner"), target)
+        if boundary == "unclassified_target":
+            error.with_related("Class requiring an architecture role",
+                               file=owner["file"], line=owner["line"], col=owner["col"])
+        if boundary != "unclassified_target" or owner != target:
+            error.with_related("Target declaration", file=target["file"], line=target["line"], col=target["col"])
     return error
 
 

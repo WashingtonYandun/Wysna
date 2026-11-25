@@ -5,6 +5,7 @@ import os
 from pathlib import Path, PurePosixPath
 import shutil
 import tempfile
+import time
 
 from compiler.CompilerService import CompilerService
 from error.Error import WysnaError
@@ -67,7 +68,7 @@ def _apply_symbol_edit(resolver, root, name, path, original_bytes, symbol_name, 
     service = CompilerService(project_root=root, project_resolver=resolver)
     checked = service.check_file(path)
     graph = service.graph(checked)
-    node = resolve_graph_symbol(graph, symbol_name, 'patch')
+    node = resolve_graph_symbol(graph, symbol_name, 'patch', checked=checked)
     if node is None:
         raise WysnaError(f"Unknown symbol '{symbol_name}' in '{name}'",
                          file=str(path), code='W1001', stage='patch')
@@ -196,6 +197,7 @@ def _verify_candidate_tests(manifest, snapshot, edits, plan_hash, expected_revis
                             discover, frozen):
     from tooling.ProjectCLI import execute_project_tests
 
+    staging_started = time.perf_counter()
     with tempfile.TemporaryDirectory(prefix='wysna-patch-') as staging:
         candidate = Path(staging).resolve()
         for relative, _ in snapshot:
@@ -230,9 +232,12 @@ def _verify_candidate_tests(manifest, snapshot, edits, plan_hash, expected_revis
             'status': 'empty',
             'cases': [],
         }
+        test_started = time.perf_counter()
+        evidence['timing_ms'] = {'staging': round((test_started - staging_started) * 1000, 3), 'test_runner': 0}
         if not cases:
             return evidence
         report, _ = execute_project_tests(resolver.manifest, cases, plan, frozen, json_mode=True)
+        evidence['timing_ms']['test_runner'] = round((time.perf_counter() - test_started) * 1000, 3)
         if project_revision(resolver)['workspace_revision'] != expected_revision:
             raise WysnaError('Tests changed the staged source revision', code='W5005', stage='patch')
         evidence['status'] = report['status']

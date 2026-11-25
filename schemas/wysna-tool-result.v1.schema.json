@@ -59,6 +59,15 @@
         "properties": { "schema_version": { "const": "wysna.workspace-patch/1" } }
       },
       "then": { "$ref": "#/$defs/WorkspacePatchResult" },
+      "allOf": [
+        {
+          "if": {
+            "required": ["schema_version"],
+            "properties": { "schema_version": { "const": "wysna.inspect-span/1" } }
+          },
+          "then": { "$ref": "#/$defs/InspectSpanResult" }
+        }
+      ],
       "anyOf": [
         { "$ref": "#/$defs/GraphResult" },
         { "$ref": "#/$defs/InspectResult" },
@@ -77,6 +86,27 @@
         "source_sha256": { "type": "string", "pattern": "^[0-9a-f]{64}$" },
         "start_byte": { "type": "integer", "minimum": 0 },
         "end_byte": { "type": "integer", "minimum": 0 }
+      }
+    },
+    "InspectSpanResult": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["schema_version", "span", "source", "context_start_byte", "context_end_byte", "budget"],
+      "properties": {
+        "schema_version": { "const": "wysna.inspect-span/1" },
+        "span": { "$ref": "#/$defs/SourceSpan" },
+        "source": { "type": "string" },
+        "context_start_byte": { "type": "integer", "minimum": 0 },
+        "context_end_byte": { "type": "integer", "minimum": 0 },
+        "budget": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["max_bytes", "used_bytes"],
+          "properties": {
+            "max_bytes": { "type": "integer", "minimum": 1 },
+            "used_bytes": { "type": "integer", "minimum": 0 }
+          }
+        }
       }
     },
     "RelatedLocation": {
@@ -230,7 +260,8 @@
               "file": { "type": "string" },
               "line": { "type": "integer" },
               "col": { "type": "integer" },
-              "signature": { "type": "string" }
+              "signature": { "type": "string" },
+              "span": { "oneOf": [{ "$ref": "#/$defs/SourceSpan" }, { "type": "null" }] }
             }
           }
         }
@@ -458,7 +489,16 @@
         "workspace_revision": { "$ref": "#/$defs/Sha256" },
         "test_plan_hash": { "$ref": "#/$defs/Sha256" },
         "status": { "enum": ["passed", "failed", "empty", "cancelled"] },
-        "cases": { "type": "array", "items": { "$ref": "#/$defs/PatchTestCase" } }
+        "cases": { "type": "array", "items": { "$ref": "#/$defs/PatchTestCase" } },
+        "timing_ms": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["staging", "test_runner"],
+          "properties": {
+            "staging": { "type": "number", "minimum": 0 },
+            "test_runner": { "type": "number", "minimum": 0 }
+          }
+        }
       }
     },
     "Sha256": { "type": "string", "pattern": "^[0-9a-f]{64}$" },
@@ -472,6 +512,8 @@
         "failure_kind": { "type": ["string", "null"] },
         "exit_code": { "type": ["integer", "null"] },
         "duration_ms": { "type": "number", "minimum": 0 },
+        "compile_ms": { "type": "integer", "minimum": 0 },
+        "run_ms": { "type": "integer", "minimum": 0 },
         "stdout_sha256": { "$ref": "#/$defs/Sha256" },
         "stderr_sha256": { "$ref": "#/$defs/Sha256" },
         "stderr": { "type": "string", "maxLength": 2048 }

@@ -79,6 +79,11 @@ TOOLS = [
      "inputSchema": {"type": "object", "properties": {
          **_SOURCE_OR_PATH,
          "symbol": {"type": "string", "description": "Symbol name to extract (omit for compact index)."},
+         "span": {"type": "object", "description": "Read bounded context at a diagnostic span. Requires path and the original source hash.",
+                  "required": ["source_id", "source_sha256", "start_byte", "end_byte"],
+                  "properties": {"source_id": {"type": "string"}, "source_sha256": {"type": "string"},
+                                 "start_byte": {"type": "integer", "minimum": 0},
+                                 "end_byte": {"type": "integer", "minimum": 0}}},
          "symbols": {"type": "array", "items": {"type": "string"}, "description": "Batch list of symbols to extract under one shared max_bytes budget."},
          "with_deps": {"type": "boolean", "description": "Include signatures of referenced types and callees."},
          "max_bytes": {"type": "integer", "minimum": 1, "description": "Maximum UTF-8 byte budget for returned source/context."},
@@ -307,7 +312,23 @@ class McpServer:
             return envelope
 
     def tool_wysna_inspect(self, arguments):
-        from tooling.AgentGraphCLI import inspect_source
+        from tooling.AgentGraphCLI import inspect_source, inspect_span
+
+        if arguments.get("span") is not None:
+            if (not arguments.get("path") or arguments.get("source") is not None
+                    or any(arguments.get(key) for key in ("symbol", "symbols", "with_deps", "source_offset", "offset"))):
+                raise ToolError("'span' requires a file path and cannot be combined with symbol inspection options")
+            with self._resolve_source(arguments) as (path, source):
+                try:
+                    result = inspect_span(path, source, arguments["span"], arguments.get("max_bytes"))
+                except WysnaError as error:
+                    return self._diagnostics_envelope("inspect", error, path, source)
+                except ValueError as error:
+                    raise ToolError(str(error)) from error
+            envelope = tool_result("inspect", "ok", 0)
+            envelope["result"] = result
+            return envelope
+
         with self._resolve_source(arguments) as (path, source):
             try:
                 payload = inspect_source(

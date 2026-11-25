@@ -245,6 +245,8 @@ fn wpatch_rename_file(src_path: str, dst_path: str) -> bool {
     return mv >= 0
 }
 
+extern "C" fn wysna_host_monotonic_ms() -> int
+
 fn wpatch_test_paths(state: ProjectLockState, root: str) -> list[str] {
     let mut paths = proj_snapshot_paths(state, root, "", false, true)
     if proj_test_exists(state, root + "/wysna.lock") { paths.append("wysna.lock") }
@@ -291,6 +293,7 @@ fn wpatch_verify_candidate_tests(state: ProjectLockState, m: ProjectManifest, pa
                                   edit_rels: list[str], edit_actions: list[str], edit_after: list[str],
                                   sdk_sha: str, revision: str, plan_hash: str, discover: bool, frozen: bool,
                                   expected_count: int) -> PatchTestVerification {
+    let staging_started = wysna_host_monotonic_ms()
     let driver = env("WYSNA_SDK_DRIVER") else { "" }
     let stage_env = env("WYSNA_PATCH_TEST_STAGE") else { "" }
     let staging = if stage_env == "" { "" } else { module_canonical_resolved(stage_env) }
@@ -333,7 +336,9 @@ fn wpatch_verify_candidate_tests(state: ProjectLockState, m: ProjectManifest, pa
     if frozen { argv.append("--frozen") }
     let exe_buf = lsp_buf_from_str(driver)
     let args_buf = lsp_pack_argv_buf(argv)
+    let test_started = wysna_host_monotonic_ms()
     let rc = wysna_host_process_run(exe_buf, args_buf, 600000)
+    let test_ms = wysna_host_monotonic_ms() - test_started
     wysna_host_close(exe_buf)
     wysna_host_close(args_buf)
     let raw = read_file(report_path) else err { "" }
@@ -354,7 +359,7 @@ fn wpatch_verify_candidate_tests(state: ProjectLockState, m: ProjectManifest, pa
     }
 
     let mut rows: list[str] = []
-    let fields: list[str] = ["id", "status", "failure_kind", "exit_code", "duration_ms", "stdout_sha256", "stderr_sha256"]
+    let fields: list[str] = ["id", "status", "failure_kind", "exit_code", "duration_ms", "compile_ms", "run_ms", "stdout_sha256", "stderr_sha256"]
     for record in case_reports.items {
         let mut parts: list[str] = []
         for field in fields {
@@ -369,7 +374,8 @@ fn wpatch_verify_candidate_tests(state: ProjectLockState, m: ProjectManifest, pa
     }
     let evidence = "{\"plan_hash\":" + diag_json_quote(plan_hash) + ",\"workspace_revision\":" + diag_json_quote(revision) +
         ",\"test_plan_hash\":" + diag_json_quote(lsp_json_str(report, "plan_hash", "")) +
-        ",\"status\":" + diag_json_quote(status) + ",\"cases\":[" + join_strings(rows, ",") + "]}"
+        ",\"status\":" + diag_json_quote(status) + ",\"cases\":[" + join_strings(rows, ",") + "]" +
+        ",\"timing_ms\":{\"staging\":" + str(test_started - staging_started) + ",\"test_runner\":" + str(test_ms) + "}}"
     return PatchTestVerification { code: rc, evidence: evidence }
 }
 

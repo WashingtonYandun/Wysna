@@ -9,7 +9,7 @@
 
 typedef struct {
     const char *name, *entry, *sha;
-    int64_t timeout, duration;
+    int64_t timeout, duration, compile_duration, run_duration;
     int exit_code, has_exit, output_limited;
     const char *status, *failure_kind;
     char *out, *err, *diagnostics;
@@ -138,8 +138,10 @@ static void sdk_project_test_case(SdkInvocation* invocation, const SdkOptions* o
     compile.test_deadline = started + result->timeout;
     SdkStdioCapture capture;
     if (!sdk_stdio_capture(&capture, out_path, err_path)) goto cleanup;
+    int64_t compile_started = wysna_host_monotonic_ms_internal();
     int rc = sdk_compile_source(invocation, &compile, "--emit-c-mir", result->entry, 1);
     if (!rc) rc = sdk_build(invocation, &compile);
+    result->compile_duration = wysna_host_monotonic_ms_internal() - compile_started;
     sdk_stdio_restore(&capture);
     if (rc == 124 || (rc != 130 && wysna_host_monotonic_ms_internal() >= compile.test_deadline)) {
         result->status = "timed_out"; result->failure_kind = "timed_out";
@@ -168,9 +170,11 @@ static void sdk_project_test_case(SdkInvocation* invocation, const SdkOptions* o
     void* out = wysna_host_buffer_new();
     void* err = wysna_host_buffer_new();
     int64_t remaining = compile.test_deadline - wysna_host_monotonic_ms_internal();
+    int64_t run_started = wysna_host_monotonic_ms_internal();
     int64_t code = wysna_host_process_capture_cancellable(command, arguments, remaining > 0 ? remaining : 1,
                                                           SDK_TEST_OUTPUT_LIMIT, out, err, &sdk_cancellation);
     int64_t host_error = wysna_host_last_error();
+    result->run_duration = wysna_host_monotonic_ms_internal() - run_started;
     WysnaHostEntry* streams[2] = {wysna_host_find(out, 1), wysna_host_find(err, 1)};
     char** buffers[2] = {&result->out, &result->err};
     size_t* lengths[2] = {&result->out_len, &result->err_len};
@@ -253,8 +257,10 @@ static void sdk_project_test_report(FILE* file, const SdkProjectTestPlan* plan, 
             fputs(",\"entry_sha256\":", file); sdk_test_string(file, record->sha);
             fprintf(file, ",\"status\":\"%s\",\"exit_code\":", record->status);
             if (record->has_exit) fprintf(file, "%d", record->exit_code); else fputs("null", file);
-            fprintf(file, ",\"duration_ms\":%" PRId64 ",\"timeout_ms\":%" PRId64 ",\"output_limit_bytes_per_stream\":%d,\"output_limited\":%s,\"failure_kind\":",
-                    record->duration, record->timeout, SDK_TEST_OUTPUT_LIMIT, record->output_limited ? "true" : "false");
+            fprintf(file, ",\"duration_ms\":%" PRId64 ",\"compile_ms\":%" PRId64 ",\"run_ms\":%" PRId64
+                    ",\"timeout_ms\":%" PRId64 ",\"output_limit_bytes_per_stream\":%d,\"output_limited\":%s,\"failure_kind\":",
+                    record->duration, record->compile_duration, record->run_duration, record->timeout,
+                    SDK_TEST_OUTPUT_LIMIT, record->output_limited ? "true" : "false");
             if (record->failure_kind) sdk_test_string(file, record->failure_kind); else fputs("null", file);
             char digest[65]; sdk_test_hash(record->out, record->out_len, digest);
             fputs(",\"stdout_sha256\":", file); sdk_test_string(file, digest);
