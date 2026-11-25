@@ -72,10 +72,11 @@ class ModuleNames:
             return node
         if isinstance(node, (A.NamedType, A.GenericType)) and node.name not in types:
             node.name = self.names.get(node.name, node.name)
-        if isinstance(node, (A.FnDecl, A.MethodDecl, A.LambdaExpr)):
-            for attribute in getattr(node, 'attributes', []):
+        if isinstance(node, (A.FnDecl, A.ClassDecl)):
+            for attribute in node.attributes:
                 if attribute.name not in ('deprecated', 'must_use'):
                     attribute.schema_name = self.names.get(attribute.name, attribute.name)
+        if isinstance(node, (A.FnDecl, A.MethodDecl, A.LambdaExpr)):
             type_scope = types | {parameter.name for parameter in getattr(node, 'type_params', [])}
             for parameter in getattr(node, 'type_params', []):
                 self.visit(parameter.constraint, values, type_scope)

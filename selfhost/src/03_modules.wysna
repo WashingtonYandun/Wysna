@@ -80,7 +80,11 @@ fn module_read_text_or_overlay(path: str) -> list[str] {
 # An import graph belongs to one source expansion.
 struct ModuleNameSite { source: Token, expanded: Token, import_site: bool, rewrite: bool }
 
+struct ModuleDependency { from_file: str, to_file: str }
+
 class ModuleLoader {
+    track_dependencies: bool
+    dependencies: list[ModuleDependency]
     trace_names: bool
     name_sites: list[ModuleNameSite]
     paths: list[str]
@@ -99,6 +103,8 @@ class ModuleLoader {
     dep_roots: list[str]
     fn init() {
         this.trace_names = false
+        this.track_dependencies = false
+        this.dependencies = []
         let initial_sites: list[ModuleNameSite] = []
         this.name_sites = initial_sites
         let initial_paths: list[str] = []
@@ -390,7 +396,11 @@ fn module_load_from_resolved(context: ModuleLoader, resolved: str, requested: st
     if loaded[0] != "1" {
         report_error_at("W1003", token, "module not found: " + requested)
     }
-    return module_expand(context, loaded[1], resolved, false)
+    let index = module_expand(context, loaded[1], resolved, false)
+    if context.track_dependencies {
+        context.dependencies.append(ModuleDependency { from_file: token.file, to_file: context.paths[index] })
+    }
+    return index
 }
 
 fn module_load_source(context: ModuleLoader, canonical: str, requested: str, token: Token) -> int {
@@ -682,9 +692,7 @@ fn module_tokens_with_overlays(src: str, path: str, ov_paths: list[str], ov_text
     let context = ModuleLoader()
     context.ov_paths = ov_paths
     context.ov_texts = ov_texts
-    module_expand(context, src, path, true)
-    context.output.append(Token { kind: "EOF", val: "", line: 1, col: 1, file: module_normalize(path) })
-    return context.output
+    return module_finish(context, src, path)
 }
 
 fn module_tokens_with_project(src: str, path: str, proj_src_root: str, dep_aliases: list[str], dep_roots: list[str]) -> list[Token] {
@@ -692,6 +700,10 @@ fn module_tokens_with_project(src: str, path: str, proj_src_root: str, dep_alias
     context.project_sources_root = proj_src_root
     context.dep_aliases = dep_aliases
     context.dep_roots = dep_roots
+    return module_finish(context, src, path)
+}
+
+fn module_finish(context: ModuleLoader, src: str, path: str) -> list[Token] {
     module_expand(context, src, path, true)
     context.output.append(Token { kind: "EOF", val: "", line: 1, col: 1, file: module_normalize(path) })
     return context.output

@@ -460,6 +460,13 @@ fn proj_handle_workspace_patch(manifest_arg: str, edits_file: str, expected_hash
             }
         }
         let loader = ModuleLoader()
+        let mut enforce_architecture = false
+        if m.architecture.enabled {
+            for target in m.targets {
+                if target.entry == entry { enforce_architecture = true }
+            }
+        }
+        loader.track_dependencies = enforce_architecture
         loader.project_sources_root = m.source_root_abs
         loader.dep_aliases = dep_aliases
         loader.dep_roots = dep_roots
@@ -471,6 +478,15 @@ fn proj_handle_workspace_patch(manifest_arg: str, edits_file: str, expected_hash
         for node in checked.nodes {
             if node.kind == "unsupported" {
                 report_error_at("W2013", node.source, "Compiler native-core-v1 does not support expression " + node.text)
+            }
+        }
+        if enforce_architecture {
+            let graph = tool_build_checked_graph(entry_src, entry_canon, loader, checked, false)
+            let evaluation = arch_evaluate(m, graph, loader)
+            if len(evaluation.issues) > 0 {
+                let diagnostics = arch_report_diagnostics(evaluation, loader, json_mode)
+                if json_mode { diag_write_output(diag_tool_envelope_json("patch", "diagnostic_error", 1, diagnostics, "", "", "[]")) }
+                exit(1)
             }
         }
         mir_verify(mir_build(checked))

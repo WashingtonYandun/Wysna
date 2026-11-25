@@ -10,14 +10,19 @@ fn proj_impact_graph(m: ProjectManifest, entry: str, aliases: list[str], roots: 
         report_error(file, "W5004", 1, 1, "cannot read project entry: " + err.message)
         ""
     }
-    let expanded = module_tokens_with_project(source, file, m.source_root_abs, aliases, roots)
+    let loader = ModuleLoader()
+    loader.track_dependencies = true
+    loader.project_sources_root = m.source_root_abs
+    loader.dep_aliases = aliases
+    loader.dep_roots = roots
+    let expanded = module_finish(loader, source, file)
     let checked = check_program(expanded, file, true)
     for node in checked.nodes {
         if node.kind == "unsupported" {
             report_error_at("W2013", node.source, "Compiler native-core-v1 does not support expression " + node.text)
         }
     }
-    return tool_build_checked_graph(source, file, expanded, checked, [], [], true)
+    return tool_build_checked_graph(source, file, loader, checked, true)
 }
 
 fn proj_impact_matches(a: ToolGraphNode, b: ToolGraphNode) -> bool {

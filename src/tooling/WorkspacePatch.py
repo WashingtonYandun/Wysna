@@ -5,6 +5,7 @@ from pathlib import PurePosixPath
 
 from compiler.CompilerService import CompilerService
 from error.Error import WysnaError
+from project.Architecture import check_architecture
 from project.Resolver import ProjectResolver
 from project.Testing import _snapshot_digest, build_test_plan, project_revision, project_source_snapshot
 from tooling.SourceWrite import write_workspace_operations
@@ -144,6 +145,7 @@ def _load_edits(resolver, root, files, request, protected_entries):
 def _check_overlay(resolver, entries, edits):
     root = resolver.manifest.root
     inputs = {}
+    targets = {target.entry for target in resolver.manifest.targets.values()}
     for entry in entries:
         service = CompilerService(project_root=root, project_resolver=resolver)
         for action, path, _, after in edits.values():
@@ -151,7 +153,16 @@ def _check_overlay(resolver, entries, edits):
                 service.mark_deleted(str(path))
             else:
                 service.set_overlay(str(path), after.decode('utf-8'))
-        service.check_file(root / entry)
+        checked = service.check_file(root / entry)
+        if entry in targets:
+            _, architecture_issues = check_architecture(resolver.manifest, checked)
+            if architecture_issues:
+                error = architecture_issues[0]
+                error.diagnostics = architecture_issues
+                error.source_texts = service.source_texts()
+                manifest = resolver.manifest
+                error.source_texts[str(manifest.path)] = manifest.raw.decode("utf-8")
+                raise error
         inputs[entry] = set(service.source_texts())
     return inputs
 

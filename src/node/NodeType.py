@@ -638,6 +638,7 @@ class ClassDecl(Stmt):
     ):
         super().__init__(line, col)
         self.name = name
+        self.attributes: List[StaticAttribute] = []
         self.superclass = superclass
         self.interfaces = interfaces
         self.fields = fields
@@ -648,6 +649,7 @@ class ClassDecl(Stmt):
         return {
             "kind": "ClassDecl",
             "name": self.name,
+            "attributes": [attribute.to_dict() for attribute in self.attributes],
             "superclass": self.superclass.to_dict() if isinstance(self.superclass, TypeNode) else self.superclass,
             "interfaces": [t.to_dict() if isinstance(t, TypeNode) else t for t in self.interfaces],
             "type_params": [p.to_dict() for p in self.type_params],

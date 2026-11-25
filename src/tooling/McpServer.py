@@ -69,7 +69,9 @@ TOOLS = [
      "description": "Compile-time semantic relationship graph (interfaces, classes, usages, calls, blast radius).",
      "inputSchema": {"type": "object", "properties": {
          **_SOURCE_OR_PATH,
-         "manifest": {"type": "string", "description": "Project manifest for a symbol impact query instead of path or source."},
+         "manifest": {"type": "string", "description": "Project manifest for an impact or architecture role query."},
+         "role": {"type": "string", "description": "Configured architecture role to list within a project target."},
+         "target": {"type": "string", "description": "Optional project target for the role query."},
          "symbol": {"type": "string", "description": "Optional symbol name or node ID filter."},
          "relation": {"type": "string", "description": "Optional relation filter: implements|hierarchy|usages|callers|callees|impact."}}}},
     {"name": "wysna_inspect",
@@ -259,6 +261,16 @@ class McpServer:
         return self._json_cli(["capabilities", "--output-format=json-v1"])
 
     def tool_wysna_graph(self, arguments):
+        if "role" in arguments:
+            role, manifest, target = (arguments.get(key) for key in ("role", "manifest", "target"))
+            if (not isinstance(role, str) or not role or not isinstance(manifest, str)
+                    or (target is not None and (not isinstance(target, str) or not target))
+                    or any(key in arguments for key in ("path", "source", "symbol", "relation"))):
+                raise ToolError("provide manifest, role and optionally target for a role query")
+            argv = ["graph", "--manifest", self._confine(manifest), "--role", role, "--output-format=json-v1"]
+            if target:
+                argv.extend(["--target", target])
+            return self._run_project_subcommand(argv)
         if "manifest" in arguments:
             manifest = arguments["manifest"]
             symbol = arguments.get("symbol")
@@ -392,11 +404,12 @@ class McpServer:
             except WysnaError as error:
                 items = getattr(error, "diagnostics", None) or [error]
                 sources = dict(self.service.source_texts())
+                sources.update(getattr(error, "source_texts", {}))
                 root_dir = manifest_path.parent
                 if isinstance(edits, list):
                     for edit in edits:
                         if isinstance(edit, dict) and isinstance(edit.get("path"), str) and isinstance(edit.get("source"), str):
-                            sources[str((root_dir / edit["path"]).resolve())] = edit["source"]
+                            sources.setdefault(str((root_dir / edit["path"]).resolve()), edit["source"])
                 for item in items:
                     ifile = getattr(item, "file", None)
                     if ifile and ifile not in sources and os.path.isfile(ifile):

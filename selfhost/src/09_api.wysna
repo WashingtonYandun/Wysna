@@ -459,6 +459,8 @@ fn api_extract_module(src: str, file_path: str, module_id: str, package_id: str)
             while schema_cur_kind(c) != "LBRACE" and schema_cur_kind(c) != "EOF" { c.pos = c.pos + 1 }
             let owner = module_id + "#class/" + name
             let sym = ApiSymbol(owner, name, "class", "class " + name, module_id, package_id)
+            sym.attributes = attributes
+            attributes = []
             api_set_doc(sym, lines, line_1)
             if schema_cur_kind(c) == "LBRACE" {
                 c.pos = c.pos + 1
@@ -580,8 +582,10 @@ fn api_symbol_json(s: ApiSymbol) -> str {
     parts.append(",\"kind\":" + diag_json_quote(s.kind))
     parts.append(",\"visibility\":\"public\"")
     parts.append(",\"signature\":" + diag_json_quote(s.signature))
-    if s.kind == "function" or s.kind == "method" {
+    if s.kind == "function" or s.kind == "method" or s.kind == "class" {
         parts.append(",\"attributes\":" + tool_attributes_json(s.attributes))
+    }
+    if s.kind == "function" or s.kind == "method" {
         parts.append(",\"type_parameters\":" + api_str_list_json(s.type_parameters))
         let mut p_parts: list[str] = ["["]
         for i in 0..len(s.parameters) {

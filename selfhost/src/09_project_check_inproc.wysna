@@ -13,6 +13,7 @@ fn proj_execute_check(m: ProjectManifest, target_arg: str, dep_aliases: list[str
         ""
     }
     let loader = ModuleLoader()
+    loader.track_dependencies = m.architecture.enabled
     loader.project_sources_root = m.source_root_abs
     loader.dep_aliases = dep_aliases
     loader.dep_roots = dep_roots
@@ -23,6 +24,18 @@ fn proj_execute_check(m: ProjectManifest, target_arg: str, dep_aliases: list[str
         if node.kind == "unsupported" {
             report_error_at("W2013", node.source, "Compiler native-core-v1 does not support expression " + node.text)
         }
+    }
+    if m.architecture.enabled {
+        let graph = tool_build_checked_graph(src, module_canonical(entry_path), loader, checked, false)
+        let evaluation = arch_evaluate(m, graph, loader)
+        let diagnostics = arch_report_diagnostics(evaluation, loader, json_mode)
+        let failed = len(evaluation.issues) > 0
+        if json_mode {
+            let envelope = proj_check_envelope_json("project.check", if failed { "diagnostic_error" } else { "ok" }, if failed { 1 } else { 0 }, diagnostics, proj_target_meta_json(target.profile), "[]")
+            diag_write_output(slice(envelope, 0, len(envelope) - 1) + ",\"result\":{\"architecture\":" + evaluation.report + "}}")
+            exit(if failed { 1 } else { 0 })
+        }
+        if failed { exit(1) }
     }
     let mod_count = str(len(loader.paths))
     if json_mode {

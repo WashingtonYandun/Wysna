@@ -68,7 +68,44 @@ class ProjectTestCase {
     }
 }
 
+class ProjectArchitectureRule {
+    id: str
+    from_role: str
+    relations: list[str]
+    deny_roles: list[str]
+    severity: str
+    keys: list[str]
+
+    fn init() {
+        this.id = ""
+        this.from_role = ""
+        this.relations = []
+        this.deny_roles = []
+        this.severity = ""
+        this.keys = []
+    }
+}
+
+class ProjectArchitecture {
+    enabled: bool
+    schema_path: str
+    schema_name: str
+    roles: list[str]
+    rules: list[ProjectArchitectureRule]
+    keys: list[str]
+
+    fn init() {
+        this.enabled = false
+        this.schema_path = ""
+        this.schema_name = ""
+        this.roles = []
+        this.rules = []
+        this.keys = []
+    }
+}
+
 class ProjectManifest {
+    architecture: ProjectArchitecture
     ok: bool
     err_code: str
     err_msg: str
@@ -104,6 +141,7 @@ class ProjectManifest {
         this.err_msg = ""
         this.path = path
         this.root = root
+        this.architecture = ProjectArchitecture()
         this.name = ""
         this.version = ""
         this.language_version = ""
@@ -606,6 +644,119 @@ fn proj_parse_inline_preopens(raw_val: str, root_canon: str, target_label: str) 
     return out
 }
 
+fn proj_architecture_strings(raw_value: str) -> list[str] {
+    let value = lsp_trim(raw_value)
+    let n = len(value)
+    if n < 2 or value[0] != "[" or value[n - 1] != "]" { return [] }
+    let mut items: list[str] = []
+    let mut start = 1
+    let mut quote = ""
+    let mut escaped = false
+    for i in 1..n {
+        let ch = value[i]
+        if quote != "" {
+            if escaped { escaped = false }
+            elif quote == "\"" and ch == "\\" { escaped = true }
+            elif ch == quote { quote = "" }
+        } elif ch == "\"" or ch == "'" { quote = ch }
+        elif ch == "," or i == n - 1 {
+            let field = lsp_trim(slice(value, start, i))
+            if field == "" and i == n - 1 { break }
+            let item = proj_parse_toml_string(field)
+            if item[0] != "1" or tool_str_contains(items, item[1]) { return [] }
+            items.append(item[1])
+            start = i + 1
+        }
+    }
+    if quote != "" { return [] }
+    return items
+}
+
+fn proj_architecture_identifier(name: str) -> bool {
+    if name == "" { return false }
+    for i in 0..len(name) {
+        let ch = ord(name[i])
+        let letter = (ch >= 65 and ch <= 90) or (ch >= 97 and ch <= 122) or ch == 95
+        if not letter and not (i > 0 and ch >= 48 and ch <= 57) { return false }
+    }
+    return true
+}
+
+fn proj_architecture_key(policy: ProjectArchitecture, key: str, value: str) -> bool {
+    if tool_str_contains(policy.keys, key) { return false }
+    policy.keys.append(key)
+    if key == "roles" {
+        policy.roles = proj_architecture_strings(value)
+        return len(policy.roles) > 0
+    }
+    if key == "role_attribute" {
+        let parsed = proj_parse_toml_string(value)
+        if parsed[0] != "1" { return false }
+        let identity = parsed[1]
+        for i in 0..len(identity) - 1 {
+            if slice(identity, i, i + 2) == "::" {
+                let path = slice(identity, 0, i)
+                let name = slice(identity, i + 2, len(identity))
+                let relative = proj_safe_rel_path(path, "architecture.role_attribute")
+                if relative[0] != "1" or not proj_str_ends_with(path, ".wysna") or not proj_architecture_identifier(name) { return false }
+                policy.schema_path = path
+                policy.schema_name = name
+                return true
+            }
+        }
+    }
+    return false
+}
+
+fn proj_architecture_rule_key(rule: ProjectArchitectureRule, key: str, value: str) -> bool {
+    if tool_str_contains(rule.keys, key) { return false }
+    rule.keys.append(key)
+    if key == "relations" {
+        rule.relations = proj_architecture_strings(value)
+        return len(rule.relations) > 0
+    }
+    if key == "deny_roles" {
+        rule.deny_roles = proj_architecture_strings(value)
+        return len(rule.deny_roles) > 0
+    }
+    let parsed = proj_parse_toml_string(value)
+    if parsed[0] != "1" { return false }
+    if key == "id" { rule.id = parsed[1] }
+    elif key == "from_role" { rule.from_role = parsed[1] }
+    elif key == "severity" { rule.severity = parsed[1] }
+    else { return false }
+    return true
+}
+
+fn proj_architecture_error(policy: ProjectArchitecture) -> str {
+    if not policy.enabled and len(policy.rules) == 0 { return "" }
+    if policy.schema_path == "" or len(policy.roles) == 0 or len(policy.rules) == 0 {
+        return "architecture requires role_attribute, roles, and at least one rule"
+    }
+    for role in policy.roles {
+        if not proj_architecture_identifier(role) { return "architecture roles must be identifiers" }
+    }
+    let mut ids: list[str] = []
+    for rule in policy.rules {
+        if not proj_valid_name(rule.id) or tool_str_contains(ids, rule.id) {
+            return "architecture rule id must be a unique lowercase name"
+        }
+        ids.append(rule.id)
+        if not tool_str_contains(policy.roles, rule.from_role) or len(rule.deny_roles) == 0 {
+            return "architecture rule requires known from_role and deny_roles"
+        }
+        for denied in rule.deny_roles {
+            if not tool_str_contains(policy.roles, denied) { return "architecture rule refers to an unknown role" }
+        }
+        if len(rule.relations) == 0 { return "architecture rule requires relations" }
+        for relation in rule.relations {
+            if relation != "calls" and relation != "uses_type" { return "architecture relations must contain only calls or uses_type" }
+        }
+        if rule.severity != "error" { return "architecture severity must be 'error'" }
+    }
+    return ""
+}
+
 fn proj_parse_manifest_at(abs_manifest_path: str, visit_stack: list[str]) -> ProjectManifest {
     let norm_m = module_normalize(abs_manifest_path)
     let raw = read_file(norm_m) else err {
@@ -658,6 +809,11 @@ fn proj_parse_manifest_at(abs_manifest_path: str, visit_stack: list[str]) -> Pro
         let nl = len(line)
         if nl >= 4 and slice(line, 0, 2) == "[[" and slice(line, nl - 2, nl) == "]]" {
             let hdr = proj_parse_header_segs(lsp_trim(slice(line, 2, nl - 2)))
+            if len(hdr) == 2 and hdr[0] == "architecture" and hdr[1] == "rules" {
+                cur_sec = "architecture.rules"
+                m.architecture.rules.append(ProjectArchitectureRule())
+                continue
+            }
             if len(hdr) == 1 and hdr[0] == "tests" {
                 cur_sec = "tests"
                 cur_sub = ""
@@ -674,6 +830,12 @@ fn proj_parse_manifest_at(abs_manifest_path: str, visit_stack: list[str]) -> Pro
             let hdr = proj_parse_header_segs(lsp_trim(slice(line, 1, nl - 1)))
             if len(hdr) == 1 {
                 let s = hdr[0]
+                if s == "architecture" {
+                    if m.architecture.enabled { return proj_fail(m, "W5002", "duplicate [architecture] table") }
+                    m.architecture.enabled = true
+                    cur_sec = "architecture"
+                    continue
+                }
                 if s == "package" {
                     if m.has_pkg_table { return proj_fail(m, "W5002", "duplicate [package] table") }
                     m.has_pkg_table = true
@@ -849,6 +1011,19 @@ fn proj_parse_manifest_at(abs_manifest_path: str, visit_stack: list[str]) -> Pro
             m.deps.append(ProjectDep(cur_sub, rel[1], cont[1], dep_manifest.source_root_abs, pkg_id))
             continue
         }
+        if cur_sec == "architecture" {
+            if not proj_architecture_key(m.architecture, key, val) {
+                return proj_fail(m, "W5002", "invalid or duplicate architecture key: " + key)
+            }
+            continue
+        }
+        if cur_sec == "architecture.rules" {
+            let rule = m.architecture.rules[len(m.architecture.rules) - 1]
+            if not proj_architecture_rule_key(rule, key, val) {
+                return proj_fail(m, "W5002", "invalid or duplicate architecture rule key: " + key)
+            }
+            continue
+        }
         if cur_sec == "tests" {
             let label = "tests[" + str(cur_test_idx) + "]"
             if tool_str_contains(m.active_test_keys, key) {
@@ -880,6 +1055,8 @@ fn proj_parse_manifest_at(abs_manifest_path: str, visit_stack: list[str]) -> Pro
         }
     }
 
+    let architecture_error = proj_architecture_error(m.architecture)
+    if architecture_error != "" { return proj_fail(m, "W5002", architecture_error) }
     if len(m.deps) != len(m.seen_dep_aliases) {
         return proj_fail(m, "W5002", "each dependency table requires path")
     }

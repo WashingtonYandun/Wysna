@@ -62,6 +62,9 @@ DIAGNOSTIC_CODES: Dict[str, str] = {
     "W6004": "Call to a deprecated function",
     "W6005": "Required function result is discarded",
     "W6003": "Unreachable match arm is already covered by earlier patterns",
+    # W61xx — Project architecture contracts
+    "W6101": "Architecture rule forbids a verified dependency",
+    "W6102": "Architecture rule could not be verified",
 }
 
 def normalize_diagnostic_code(code: str, default: str = "W0001") -> str:

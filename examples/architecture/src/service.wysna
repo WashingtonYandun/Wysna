@@ -1,0 +1,10 @@
+from .architecture use Architecture
+from .repository use InvoiceRepository
+
+@Architecture(role: "Service")
+pub class InvoiceService {
+    pub fn total() -> int {
+        let repository = InvoiceRepository()
+        return repository.total()
+    }
+}

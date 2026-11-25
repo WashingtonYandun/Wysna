@@ -65,6 +65,7 @@ def validate_static_attributes(checker, program):
                 raise TypeError('Duplicate annotation schema: ' + attribute.name, file=checker.file,
                                 line=attribute.line, col=attribute.col, code='W1002')
             schemas.add(schema.name)
+            attribute.resolved_schema = schema.name
             if set(attribute.arguments) != set(schema.fields):
                 raise TypeError('Annotation fields must match schema ' + attribute.name,
                                 file=checker.file, line=attribute.line, col=attribute.col, code='W2001')

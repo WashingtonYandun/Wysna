@@ -7,10 +7,13 @@ struct ToolUncertainCall {
     file: str
     line: int
     reason: str
+    candidate_owners: list[str]
 }
 
 class ToolGraphNode {
     attributes: list[StaticAttribute]
+    architecture_role: str
+    role_schema: bool
     id: str
     name: str
     qualified_name: str
@@ -48,6 +51,8 @@ class ToolGraphNode {
         this.id = id
         let metadata: list[StaticAttribute] = []
         this.attributes = metadata
+        this.architecture_role = ""
+        this.role_schema = false""
         this.name = name
         this.qualified_name = qualified_name
         this.kind = kind
@@ -94,14 +99,14 @@ class ToolGraphNode {
         this.uncertain_calls = l12
     }
 
-    fn add_uncertain(kind: str, callee: str, file: str, line: int, reason: str) -> unit {
+    fn add_uncertain(kind: str, callee: str, file: str, line: int, reason: str, candidate_owners: list[str]) -> unit {
         let label = if callee == "" { "<indirect>" } else { callee }
         for item in this.uncertain_calls {
             if item.kind == kind and item.callee == label and item.file == file and item.line == line {
                 return
             }
         }
-        this.uncertain_calls.append(ToolUncertainCall { kind: kind, callee: label, file: file, line: line, reason: reason })
+        this.uncertain_calls.append(ToolUncertainCall { kind: kind, callee: label, file: file, line: line, reason: reason, candidate_owners: candidate_owners })
     }
 
     fn add_tag(slot: str, value: str) -> unit {
@@ -146,7 +151,11 @@ class ToolGraph {
     nodes: list[ToolGraphNode]
     edges: list[ToolGraphEdge]
     mod_names: list[str]
+    module_dependencies: list[ModuleDependency]
     callable_indexes: dict[str, int]
+    node_indexes: dict[str, int]
+    nominal_ids: dict[str, str]
+    dispatch_cache: dict[str, list[str]]
 
     fn init(entry_file: str, entry_source: str) {
         this.entry_file = entry_file
@@ -158,8 +167,12 @@ class ToolGraph {
         this.edges = e0
         let m0: list[str] = []
         this.mod_names = m0
+        this.module_dependencies = []
         let callables: dict[str, int] = {}
         this.callable_indexes = callables
+        this.node_indexes = {}
+        this.nominal_ids = {}
+        this.dispatch_cache = {}
     }
 }
 
@@ -182,17 +195,6 @@ fn tool_qualified_name(raw: str) -> str {
     let short = tool_short_name(raw)
     if tag == "entry" { return short }
     return tag + "::" + short
-}
-
-fn tool_is_synthetic_instantiation(raw: str) -> bool {
-    let short = tool_short_name(raw)
-    if len(short) >= 12 and slice(short, 0, 12) == "__wysna_gen_" { return true }
-    for i in 0..len(short) - 1 {
-        if slice(short, i, i + 2) == "__" and i > 0 {
-            return true
-        }
-    }
-    return false
 }
 
 fn tool_format_type(program: CheckedProgram, type_id: int) -> str {
@@ -329,10 +331,12 @@ fn tool_token_span(src: str, file: str, decl_line: int, decl_col: int, has_brace
 }
 
 fn tool_find_node_idx(graph: ToolGraph, node_id: str) -> int {
-    for i in 0..len(graph.nodes) {
-        if graph.nodes[i].id == node_id { return i }
-    }
-    return -1
+    return graph.node_indexes.get(node_id) ?? -1
+}
+
+fn tool_add_graph_node(graph: ToolGraph, node: ToolGraphNode) -> unit {
+    graph.node_indexes[node.id] = len(graph.nodes)
+    graph.nodes.append(node)
 }
 
 fn tool_module_label(graph: ToolGraph, file: str) -> str {
@@ -406,6 +410,10 @@ fn tool_callable_index(graph: ToolGraph, file: str, name: str) -> int {
     return graph.callable_indexes.get(file + "\n" + tool_short_name(name)) ?? -1
 }
 
+fn tool_checked_callable_index(graph: ToolGraph, file: str, owner: str, declaration: str) -> int {
+    return tool_callable_index(graph, file, tool_short_name(owner) + tool_short_name(declaration))
+}
+
 fn tool_add_edge(graph: ToolGraph, from_id: str, to_id: str, kind: str, context: str, file: str, line: int) -> unit {
     for e in graph.edges {
         if e.from_id == from_id and e.to_id == to_id and e.kind == kind and e.context == context and e.line == line {
@@ -415,22 +423,24 @@ fn tool_add_edge(graph: ToolGraph, from_id: str, to_id: str, kind: str, context:
     graph.edges.append(ToolGraphEdge { from_id: from_id, to_id: to_id, kind: kind, context: context, file: file, line: line })
 }
 
+fn tool_module_index(graph: ToolGraph, file: str) -> int {
+    for i in 0..len(graph.mod_names) {
+        if graph.mod_names[i] == file { return i }
+    }
+    return -1
+}
+
+fn tool_checked_name_file(graph: ToolGraph, raw_name: str) -> str {
+    let tag = tool_module_tag(raw_name)
+    if tag == "entry" { return graph.entry_file }
+    let index = lsp_parse_int(slice(tag, 4, len(tag)), -1)
+    return if index >= 0 and index < len(graph.mod_names) { graph.mod_names[index] } else { "" }
+}
+
 fn tool_resolve_nominal_id(graph: ToolGraph, raw_name: str) -> str {
     let short = tool_short_name(raw_name)
-    let qual = tool_qualified_name(raw_name)
-    for node in graph.nodes {
-        let k = node.kind
-        if k == "interface" or k == "class" or k == "struct" or k == "enum" {
-            if node.qualified_name == qual or node.qualified_name == raw_name { return node.id }
-        }
-    }
-    for node in graph.nodes {
-        let k = node.kind
-        if (k == "interface" or k == "class" or k == "struct" or k == "enum") and node.name == short {
-            return node.id
-        }
-    }
-    return ""
+    let file = tool_checked_name_file(graph, raw_name)
+    return graph.nominal_ids.get(file + "\n" + short) ?? ""
 }
 
 fn tool_collect_type_deps(program: CheckedProgram, graph: ToolGraph, type_id: int, from_idx: int, context: str, file: str, line: int) -> unit {
@@ -492,10 +502,12 @@ fn tool_scan_decl_nodes(graph: ToolGraph, program: CheckedProgram, src: str, fil
     let mut is_public = false
     let mut is_async = false
     let mut attributes: list[StaticAttribute] = []
+    let mut attribute_start = -1
     let mut i = 0
     while i < len(tokens) - 1 {
         let tok = tokens[i]
         if depth == 0 and tok.kind == "AT" {
+            attribute_start = i
             let metadata = SemanticContext(false)
             metadata.tokens = tokens
             metadata.pos = i
@@ -538,14 +550,33 @@ fn tool_scan_decl_nodes(graph: ToolGraph, program: CheckedProgram, src: str, fil
             if i + 1 < len(tokens) and tokens[i + 1].kind == "IDENT" {
                 let name = tokens[i + 1].val
                 let qname = if is_entry { name } else { mod_label + "::" + name }
-                let span = tool_token_span(src, file, tok.line, tok.col, true, tokens)
+                let start = if attribute_start >= 0 { tokens[attribute_start] } else { tok }
+                let span = tool_token_span(src, file, start.line, start.col, true, tokens)
                 let vis = if is_public { "public" } else { "private" }
                 let nid = decl_kind + ":" + qname
                 let node = ToolGraphNode(nid, name, qname, decl_kind, mod_label, file, span.start_line, tok.col, span.end_line, span.start_byte, span.end_byte, span.start_char, span.end_char, vis, false, "", "")
+                if decl_kind == "class" and len(attributes) > 0 {
+                    let module_index = tool_module_index(graph, file)
+                    let raw = if is_entry { name } else { module_name(module_index, name) }
+                    let empty: list[StaticAttribute] = []
+                    let resolved = program.class_attributes.get(raw) ?? empty
+                    let mut metadata: list[StaticAttribute] = []
+                    for j in 0..len(resolved) {
+                        let attr = resolved[j]
+                        metadata.append(StaticAttribute {
+                            name: attributes[j].name, message: attr.message, arguments: attr.arguments, source: attr.source,
+                            schema_file: tool_checked_name_file(graph, attr.name), schema_name: tool_short_name(attr.name),
+                        })
+                    }
+                    node.attributes = metadata
+                }
+                attributes = []
+                attribute_start = -1
                 current_owner_idx = len(graph.nodes)
                 current_owner_name = name
                 current_owner_kind = decl_kind
-                graph.nodes.append(node)
+                graph.nominal_ids[file + "\n" + name] = nid
+                tool_add_graph_node(graph, node)
             }
             is_public = false
             is_async = false
@@ -577,12 +608,13 @@ fn tool_scan_decl_nodes(graph: ToolGraph, program: CheckedProgram, src: str, fil
                 node.attributes = attributes
                 let empty_metadata: list[StaticAttribute] = []
                 attributes = empty_metadata
+                attribute_start = -1
                 if is_extern {
                     node.effects.append("ffi.native")
                     node.capabilities.append("native-ffi")
                 }
                 graph.callable_indexes[file + "\n" + name] = len(graph.nodes)
-                graph.nodes.append(node)
+                tool_add_graph_node(graph, node)
             }
             is_public = false
             is_async = false
@@ -611,7 +643,7 @@ fn tool_scan_decl_nodes(graph: ToolGraph, program: CheckedProgram, src: str, fil
             }
             let mnode = ToolGraphNode(nid, mname, qname, mkind, mod_label, file, span.start_line, tok.col, span.end_line, span.start_byte, span.end_byte, span.start_char, span.end_char, vis, is_async, sig_str, graph.nodes[current_owner_idx].id)
             graph.callable_indexes[file + "\n" + short_q] = len(graph.nodes)
-            graph.nodes.append(mnode)
+            tool_add_graph_node(graph, mnode)
             is_public = false
             is_async = false
             i = i + 1
@@ -625,22 +657,59 @@ fn tool_scan_decl_nodes(graph: ToolGraph, program: CheckedProgram, src: str, fil
     }
 }
 
+fn tool_dispatch_candidates(graph: ToolGraph, receiver: int, member: str, direct: int) -> list[str] {
+    if receiver < 0 { return [] }
+    let receiver_id = graph.nodes[receiver].id
+    let cache_key = receiver_id + "\n" + member + "\n" + str(direct)
+    let cached = graph.dispatch_cache.get(cache_key)
+    if cached != None {
+        let empty: list[str] = []
+        return cached ?? empty
+    }
+    let mut owners: list[str] = []
+    for candidate in graph.nodes {
+        if candidate.kind != "class" or candidate.id == receiver_id { continue }
+        let mut current_idx = tool_find_node_idx(graph, candidate.id)
+        let mut method_idx = -1
+        let mut compatible = false
+        while current_idx >= 0 {
+            let current = graph.nodes[current_idx]
+            if method_idx < 0 { method_idx = tool_callable_index(graph, current.file, current.name + "." + member) }
+            if current.id == receiver_id or tool_str_contains(current.implements_list, receiver_id) { compatible = true }
+            current_idx = tool_find_node_idx(graph, current.super_class)
+        }
+        if compatible and method_idx >= 0 and method_idx != direct {
+            let owner = graph.nodes[method_idx].owner
+            if not tool_str_contains(owners, owner) { owners.append(owner) }
+        }
+    }
+    let sorted = tool_sort_strings(owners)
+    graph.dispatch_cache[cache_key] = sorted
+    return sorted
+}
+
 fn tool_walk_subtree(program: CheckedProgram, graph: ToolGraph, caller_idx: int, node_idx: int) -> unit {
     if node_idx < 0 or node_idx >= len(program.nodes) { return }
     let node = program.nodes[node_idx]
     let caller_id = graph.nodes[caller_idx].id
     let line = node.source.line
     let file = node.source.file
+    if node.type_id >= 0 and node.type_id < len(program.types) {
+        let kind = program.types[node.type_id].kind
+        if kind == "class" or kind == "interface" or kind == "struct" or kind == "enum" {
+            tool_collect_type_deps(program, graph, node.type_id, caller_idx, "expression", file, line)
+        }
+    }
     if node.kind == "indirect_call" or node.kind == "virtual_call" {
         graph.nodes[caller_idx].indirect_call = true
     }
     if node.kind == "indirect_call" {
         let ind_name = if node.text != "" { tool_short_name(node.text) } else { "<indirect>" }
-        graph.nodes[caller_idx].add_uncertain("indirect_call", ind_name, file, line, "indirect call through function value or closure")
+        graph.nodes[caller_idx].add_uncertain("indirect_call", ind_name, file, line, "indirect call through function value or closure", [])
     }
     if node.kind == "callee" and node.target >= 0 {
         let signature = program.signatures[node.target]
-        let target_idx = tool_callable_index(graph, signature.source.file, signature.declaration_name)
+        let target_idx = tool_checked_callable_index(graph, signature.source.file, signature.owner, signature.declaration_name)
         if target_idx >= 0 {
             tool_add_edge(graph, caller_id, graph.nodes[target_idx].id, "references_function", signature.name, file, line)
         }
@@ -654,6 +723,16 @@ fn tool_walk_subtree(program: CheckedProgram, graph: ToolGraph, caller_idx: int,
                 graph.nodes[caller_idx].add_tag("instantiates", target_id)
                 graph.nodes[target_idx].add_tag("instantiated_by", caller_id)
                 tool_add_edge(graph, caller_id, target_id, "instantiates", node.kind, file, line)
+                if node.kind == "new" {
+                    let target = graph.nodes[target_idx]
+                    let constructor = tool_callable_index(graph, target.file, target.name + ".init")
+                    if constructor >= 0 {
+                        let init_id = graph.nodes[constructor].id
+                        graph.nodes[caller_idx].add_tag("calls", init_id)
+                        graph.nodes[constructor].add_tag("called_by", caller_id)
+                        tool_add_edge(graph, caller_id, init_id, "calls", target.name + ".init", file, line)
+                    }
+                }
             }
         }
     } elif node.kind == "call" or node.kind == "method" or node.kind == "direct_method" or node.kind == "virtual_call" {
@@ -665,7 +744,7 @@ fn tool_walk_subtree(program: CheckedProgram, graph: ToolGraph, caller_idx: int,
         let mut target_idx = -1
         if node.target >= 0 and node.target < len(program.signatures) {
             let signature = program.signatures[node.target]
-            target_idx = tool_callable_index(graph, signature.source.file, signature.declaration_name)
+            target_idx = tool_checked_callable_index(graph, signature.source.file, signature.owner, signature.declaration_name)
         }
         if target_idx >= 0 {
             let target_id = graph.nodes[target_idx].id
@@ -673,11 +752,18 @@ fn tool_walk_subtree(program: CheckedProgram, graph: ToolGraph, caller_idx: int,
             graph.nodes[target_idx].add_tag("called_by", caller_id)
             tool_add_edge(graph, caller_id, target_id, "calls", callee_short, file, line)
             if graph.nodes[target_idx].kind == "extern" {
-                graph.nodes[caller_idx].add_uncertain("extern_ffi", graph.nodes[target_idx].name, file, line, "foreign C ABI call")
+                graph.nodes[caller_idx].add_uncertain("extern_ffi", graph.nodes[target_idx].name, file, line, "foreign C ABI call", [])
             }
         }
-        if node.kind == "virtual_call" {
-            graph.nodes[caller_idx].add_uncertain("virtual_dispatch", callee_short, file, line, "dynamic dispatch through interface")
+        if node.kind == "virtual_call" and len(node.labels) == 2 {
+            let receiver = tool_find_node_idx(graph, tool_resolve_nominal_id(graph, node.labels[0]))
+            let candidates = tool_dispatch_candidates(graph, receiver, node.labels[1], target_idx)
+            if receiver < 0 or graph.nodes[receiver].kind == "interface" or len(candidates) > 0 {
+                graph.nodes[caller_idx].add_uncertain("virtual_dispatch", callee_short, file, line, "runtime receiver can select a different method", candidates)
+            }
+            if receiver >= 0 {
+                tool_collect_type_deps(program, graph, program.nodes[node.children[0]].type_id, caller_idx, "call_receiver", file, line)
+            }
         }
         let eff = tool_runtime_effect(callee_short)
         if eff != "" {
@@ -688,32 +774,42 @@ fn tool_walk_subtree(program: CheckedProgram, graph: ToolGraph, caller_idx: int,
     } elif node.kind == "let" {
         tool_collect_type_deps(program, graph, node.type_id, caller_idx, "let:" + node.text, file, line)
     }
+    if node.kind == "closure" and node.target >= 0 and node.target < len(program.functions) {
+        tool_walk_subtree(program, graph, caller_idx, program.functions[node.target].body)
+    }
     for child_idx in node.children {
         tool_walk_subtree(program, graph, caller_idx, child_idx)
+    }
+    for arm_index in node.arms {
+        let arm = program.arms[arm_index]
+        tool_walk_subtree(program, graph, caller_idx, arm.guard)
+        tool_walk_subtree(program, graph, caller_idx, arm.body)
     }
 }
 
 fn tool_build_graph_with_overlays(src: str, file: str, ov_paths: list[str], ov_texts: list[str]) -> ToolGraph {
     let canonical = module_canonical(file)
-    let expanded = module_tokens_with_overlays(src, canonical, ov_paths, ov_texts)
-    let program = check_source_with_overlays(src, canonical, ov_paths, ov_texts)
-    return tool_build_checked_graph(src, canonical, expanded, program, ov_paths, ov_texts, false)
+    let loader = ModuleLoader()
+    loader.track_dependencies = true
+    loader.ov_paths = ov_paths
+    loader.ov_texts = ov_texts
+    let program = check_program(module_finish(loader, src, canonical), canonical, true)
+    for node in program.nodes {
+        if node.kind == "unsupported" { report_error_at("W2013", node.source, "Compiler native-core-v1 does not support expression " + node.text) }
+    }
+    return tool_build_checked_graph(src, canonical, loader, program, false)
 }
 
-fn tool_build_checked_graph(src: str, canonical: str, expanded: list[Token], program: CheckedProgram, ov_paths: list[str], ov_texts: list[str], include_entry: bool) -> ToolGraph {
+fn tool_build_checked_graph(src: str, canonical: str, loader: ModuleLoader, program: CheckedProgram, include_entry: bool) -> ToolGraph {
     let graph = ToolGraph(canonical, src)
-    graph.mod_names.append(canonical)
+    graph.mod_names = loader.paths
+    graph.module_dependencies = loader.dependencies
     let mut mod_hashes: list[str] = [canonical + "=" + diag_sha256_hex(src)]
-    for etok in expanded {
-        if etok.file != "" and etok.file != "<unknown>" and not tool_str_contains(graph.mod_names, etok.file) {
-            graph.mod_names.append(etok.file)
-        }
-    }
     tool_scan_decl_nodes(graph, program, src, canonical)
     for file in graph.mod_names {
         if file == canonical { continue }
-        let ext_res = module_read_with_overlays(file, ov_paths, ov_texts)
-        if ext_res[0] == "1" and ext_res[1] != "" {
+        let ext_res = module_read_with_overlays(file, loader.ov_paths, loader.ov_texts)
+        if ext_res[0] == "1" {
             mod_hashes.append(file + "=" + diag_sha256_hex(ext_res[1]))
             tool_scan_decl_nodes(graph, program, ext_res[1], file)
         }
@@ -722,7 +818,6 @@ fn tool_build_checked_graph(src: str, canonical: str, expanded: list[Token], pro
     # Record class inheritance, interfaces, field type dependencies, and enum variants from CheckedRecords
     for record in program.records {
         let rtype = program.types[record.type_id]
-        if tool_is_synthetic_instantiation(rtype.name) { continue }
         let r_id = tool_resolve_nominal_id(graph, rtype.name)
         if r_id == "" { continue }
         let r_idx = tool_find_node_idx(graph, r_id)
@@ -746,7 +841,7 @@ fn tool_build_checked_graph(src: str, canonical: str, expanded: list[Token], pro
                 if i_idx >= 0 { graph.nodes[i_idx].add_tag("implemented_by", r_id) }
                 tool_add_edge(graph, r_id, i_id, "implements", itype.name, canonical, graph.nodes[r_idx].line)
                 for m in record.methods {
-                    let im_id = "method:" + tool_short_name(itype.name) + "." + m.name
+                    let im_id = "method:" + graph.nodes[i_idx].qualified_name + "." + m.name
                     let cm_id = "method:" + graph.nodes[r_idx].qualified_name + "." + m.name
                     let im_idx = tool_find_node_idx(graph, im_id)
                     let cm_idx = tool_find_node_idx(graph, cm_id)
@@ -758,7 +853,12 @@ fn tool_build_checked_graph(src: str, canonical: str, expanded: list[Token], pro
             }
         }
         for f in record.fields {
-            tool_collect_type_deps(program, graph, f.type_id, r_idx, "field:" + f.name, canonical, graph.nodes[r_idx].line)
+            if rtype.kind == "struct" and len(rtype.args) == 0 and f.name == "role" and program.types[f.type_id].kind == "str" {
+                graph.nodes[r_idx].role_schema = true
+            }
+            if f.owner == rtype.name {
+                tool_collect_type_deps(program, graph, f.type_id, r_idx, "field:" + f.name, f.source.file, f.source.line)
+            }
         }
         for v in record.variants {
             graph.nodes[r_idx].add_tag("variants", v.name)
@@ -767,13 +867,13 @@ fn tool_build_checked_graph(src: str, canonical: str, expanded: list[Token], pro
 
     # Walk checked function bodies for calls, instantiations, signature type dependencies, and effects
     for fn_info in program.functions {
-        if fn_info.closure or tool_is_synthetic_instantiation(fn_info.name) { continue }
-        let f_idx = tool_callable_index(graph, fn_info.source.file, fn_info.declaration_name)
+        if fn_info.closure { continue }
+        let f_idx = tool_checked_callable_index(graph, fn_info.source.file, fn_info.owner, fn_info.declaration_name)
         if f_idx < 0 { continue }
-        let f_id = graph.nodes[f_idx].id
         let fn_type = program.types[fn_info.type_id]
-        for a_tid in fn_type.args {
-            tool_collect_type_deps(program, graph, a_tid, f_idx, "signature", canonical, graph.nodes[f_idx].line)
+        let first_param = if graph.nodes[f_idx].owner == "" { 0 } else { 1 }
+        for i in first_param..len(fn_type.args) {
+            tool_collect_type_deps(program, graph, fn_type.args[i], f_idx, "signature", fn_info.source.file, graph.nodes[f_idx].line)
         }
         if fn_info.body >= 0 {
             tool_walk_subtree(program, graph, f_idx, fn_info.body)
@@ -783,7 +883,7 @@ fn tool_build_checked_graph(src: str, canonical: str, expanded: list[Token], pro
     if include_entry and len(program.entry) > 0 {
         let idx = len(graph.nodes)
         let node = ToolGraphNode("fn:__entry__", "__entry__", "__entry__", "entrypoint", "entry", canonical, 1, 1, 1, 0, 0, 0, 0, "private", false, "", "")
-        graph.nodes.append(node)
+        tool_add_graph_node(graph, node)
         for entry_node in program.entry {
             tool_walk_subtree(program, graph, idx, entry_node)
         }
@@ -838,7 +938,8 @@ fn tool_call_resolution_json(n: ToolGraphNode) -> str {
     for i in 0..len(n.uncertain_calls) {
         let u = n.uncertain_calls[i]
         if i > 0 { parts.append(",") }
-        parts.append("{\"kind\":" + diag_json_quote(u.kind) + ",\"callee\":" + diag_json_quote(u.callee) + ",\"file\":" + diag_json_quote(u.file) + ",\"line\":" + str(u.line) + ",\"reason\":" + diag_json_quote(u.reason) + "}")
+        let candidates = if len(u.candidate_owners) == 0 { "" } else { ",\"candidate_owners\":" + tool_str_list_json(u.candidate_owners) }
+        parts.append("{\"kind\":" + diag_json_quote(u.kind) + ",\"callee\":" + diag_json_quote(u.callee) + ",\"file\":" + diag_json_quote(u.file) + ",\"line\":" + str(u.line) + ",\"reason\":" + diag_json_quote(u.reason) + candidates + "}")
     }
     let complete_str = if len(n.uncertain_calls) == 0 { "true" } else { "false" }
     parts.append("],\"complete\":" + complete_str + "}")
@@ -893,6 +994,7 @@ fn tool_utf8_slice_budget(text: str, start_byte: int, has_budget: bool, max_byte
 fn tool_node_json(n: ToolGraphNode) -> str {
     let mut p: list[str] = ["{\"id\":" + diag_json_quote(n.id)]
     if n.indirect_call { p.append(",\"indirect_call\":true") }
+    if n.architecture_role != "" { p.append(",\"architecture_role\":" + diag_json_quote(n.architecture_role)) }
     p.append(",\"name\":" + diag_json_quote(n.name))
     p.append(",\"qualified_name\":" + diag_json_quote(n.qualified_name))
     p.append(",\"kind\":" + diag_json_quote(n.kind))
@@ -906,7 +1008,7 @@ fn tool_node_json(n: ToolGraphNode) -> str {
     p.append(",\"visibility\":" + diag_json_quote(n.visibility))
     p.append(",\"is_async\":" + (if n.is_async { "true" } else { "false" }))
     p.append(",\"signature\":" + diag_json_quote(n.signature))
-    if n.kind == "fn" { p.append(",\"attributes\":" + tool_attributes_json(n.attributes)) }
+    if n.kind == "fn" or n.kind == "class" { p.append(",\"attributes\":" + tool_attributes_json(n.attributes)) }
     p.append(",\"super_class\":" + (if n.super_class == "" { "null" } else { diag_json_quote(n.super_class) }))
     p.append(",\"implements\":" + tool_str_list_json(n.implements_list))
     p.append(",\"implemented_by\":" + tool_str_list_json(n.implemented_by))
@@ -995,7 +1097,14 @@ fn tool_graph_payload_json(graph: ToolGraph, symbol: str, rel: str, idx: int) ->
             let mp = graph.mod_names[i]
             let is_e = mp == graph.entry_file
             let mid = tool_module_label(graph, mp)
-            mods_p.append("{\"id\":" + diag_json_quote(mid) + ",\"file\":" + diag_json_quote(mp) + ",\"is_entry\":" + (if is_e { "true" } else { "false" }) + ",\"dependencies\":[]}")
+            let mut dependencies: list[str] = []
+            for dep in graph.module_dependencies {
+                if dep.from_file == mp {
+                    let label = tool_module_label(graph, dep.to_file)
+                    if not tool_str_contains(dependencies, label) { dependencies.append(label) }
+                }
+            }
+            mods_p.append("{\"id\":" + diag_json_quote(mid) + ",\"file\":" + diag_json_quote(mp) + ",\"is_entry\":" + (if is_e { "true" } else { "false" }) + ",\"dependencies\":" + tool_str_list_json(dependencies) + "}")
         }
         mods_p.append("]")
         let mod_json = join_strings(mods_p, "")
@@ -1086,6 +1195,8 @@ fn tool_explain_code_info(code: str) -> list[str] {
     if code == "W6001" { return ["W6001", "lint", "Pure expression statement result is discarded", "Pure expression value computed as a statement and discarded", "fn f(x: int) -> int { x + 1\n return x }", "fn f(x: int) -> int { return x + 1 }"] }
     if code == "W6003" { return ["W6003", "lint", "Unreachable match arm", "Earlier unguarded patterns cover this arm", "match x { _ => 0, 1 => 1 }", "put specific patterns before covering arms"] }
     if code == "W6004" { return ["W6004", "lint", "Call to deprecated function", "Function marked @deprecated", "old()", "Follow the deprecation message to migrate the call"] }
+    if code == "W6101" { return ["W6101", "architecture", "Verified dependency violates an architecture rule", "The checked source and target roles match a manifest rule", "Controller calls Repository", "Controller calls Service; Service calls Repository"] }
+    if code == "W6102" { return ["W6102", "architecture", "Architecture rule could not be verified", "Inspect diagnostics[].data.boundary to identify the missing role, schema or call evidence", "Controller calls an unclassified project class", "Declare a role or use a statically resolved call"] }
     if code == "W6005" { return ["W6005", "lint", "Required result is discarded", "Function marked @must_use", "answer()", "let value = answer()"] }
     if code == "W6002" { return ["W6002", "lint", "Strong reference cycle between classes can leak under ARC", "Strong cycle between classes detected", "class A { b: B? }\nclass B { a: A? }", "class A { b: B? }\nclass B { a: Weak[A] }"] }
     if code == "W9998" { return ["W9998", "compiler", "Frontend accepted a program backend cannot lower", "Unsupported target construct", "unsupported target construct", "check docs/KNOWN_LIMITS.md"] }
@@ -1120,6 +1231,9 @@ fn tool_is_code_token(s: str) -> bool {
 }
 
 fn tool_handle_graph(args: list[str], json_mode: bool) -> unit {
+    let mut role = ""
+    let mut target = ""
+    let mut frozen = false
     let mut manifest = ""
     let mut file = ""
     let mut symbol = ""
@@ -1140,6 +1254,15 @@ fn tool_handle_graph(args: list[str], json_mode: bool) -> unit {
         } elif a == "--rel" and i + 1 < len(args) {
             rel = args[i + 1]
             i = i + 2
+        } elif a == "--role" and i + 1 < len(args) and args[i + 1] != "" {
+            role = args[i + 1]
+            i = i + 2
+        } elif a == "--target" and i + 1 < len(args) {
+            target = args[i + 1]
+            i = i + 2
+        } elif a == "--frozen" {
+            frozen = true
+            i = i + 1
         } elif len(a) > 0 and a[0] != "-" and file == "" {
             file = a
             i = i + 1
@@ -1147,6 +1270,14 @@ fn tool_handle_graph(args: list[str], json_mode: bool) -> unit {
             report_error("<cli>", "W5002", 1, 1, "unknown option for graph: " + a)
         }
     }
+    if role != "" {
+        if manifest == "" or symbol != "" or rel != "" or (file != "" and target != "") {
+            report_error("<cli>", "W5002", 1, 1, "--role requires --manifest and accepts one source or --target")
+        }
+        arch_handle_role_query(manifest, file, target, role, frozen, json_mode)
+        return
+    }
+    if target != "" or frozen { report_error("<cli>", "W5002", 1, 1, "--target and --frozen require --role") }
     if manifest != "" {
         if file != "" or symbol == "" or rel != "impact" {
             report_error("<cli>", "W5002", 1, 1, "use --manifest PATH --symbol NAME --rel impact without a source file")

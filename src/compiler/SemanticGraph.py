@@ -180,9 +180,9 @@ def _extract_type_names_from_annotation(type_node) -> list[str]:
     while stack:
         current = stack.pop()
         if isinstance(current, A.NamedType):
-            names.append(current.name)
+            names.append(getattr(current, 'resolved_nominal_name', current.name))
         elif isinstance(current, A.GenericType):
-            names.append(current.name)
+            names.append(getattr(current, 'resolved_nominal_name', current.name))
             stack.extend(current.type_args)
         elif isinstance(current, A.OptionalType):
             stack.append(current.inner)
@@ -255,6 +255,7 @@ def build_semantic_graph(checked, *, effects_report=None) -> dict:
     short_to_node_ids = {}
     methods_by_owner_raw = {}
     module_nodes = []
+    dispatch_sites = []
 
     def register_lookup(raw_name: str, short_name: str, qual_name: str, node_id: str) -> None:
         raw_to_node_id[raw_name] = node_id
@@ -336,7 +337,8 @@ def build_semantic_graph(checked, *, effects_report=None) -> dict:
             elif isinstance(stmt, A.ClassDecl):
                 short, qual = _decode_qualified_name(raw_name, entry_mod_id)
                 node_id = f'class:{qual}'
-                s_byte, e_byte, s_line, e_line = span_for(stmt_file, stmt.line, stmt.col, True)
+                first = stmt.attributes[0] if stmt.attributes else stmt
+                s_byte, e_byte, s_line, e_line = span_for(stmt_file, first.line, first.col, True)
                 field_list = [
                     {
                         'name': f.name,
@@ -386,11 +388,12 @@ def build_semantic_graph(checked, *, effects_report=None) -> dict:
                     'module': mod_id,
                     'file': stmt_file,
                     'line': s_line,
-                    'col': stmt.col,
+                    'col': first.col,
                     'start_byte': s_byte,
                     'end_byte': e_byte,
                     'end_line': e_line,
                     'visibility': 'public' if bool(getattr(stmt, 'is_exported', False)) or (not is_entry and raw_name in exports) else 'private',
+                    'attributes': [attribute.metadata() for attribute in stmt.attributes],
                     'super_class': None,
                     'subclasses': [],
                     'implements': [],
@@ -419,6 +422,7 @@ def build_semantic_graph(checked, *, effects_report=None) -> dict:
                     'end_byte': e_byte,
                     'end_line': e_line,
                     'visibility': 'public' if bool(getattr(stmt, 'is_exported', False)) or (not is_entry and raw_name in exports) else 'private',
+                    'type_parameters': [parameter.name for parameter in stmt.type_params],
                     'fields': [
                         {'name': f.name, 'type': _format_type_ann(f.type_ann), 'line': f.line}
                         for f in stmt.fields
@@ -601,7 +605,8 @@ def build_semantic_graph(checked, *, effects_report=None) -> dict:
         if src_id not in nodes[target_id].setdefault('called_by', []):
             nodes[target_id]['called_by'].append(src_id)
 
-    def record_uncertain_call(src_id: str, kind: str, callee_name: str, file: str, line: int, reason: str) -> None:
+    def record_uncertain_call(src_id: str, kind: str, callee_name: str, file: str, line: int,
+                              reason: str, candidate_owners=()) -> None:
         if src_id not in nodes:
             return
         bucket = nodes[src_id].setdefault('uncertain_calls', [])
@@ -613,6 +618,8 @@ def build_semantic_graph(checked, *, effects_report=None) -> dict:
             'line': int(line or 0),
             'reason': reason,
         }
+        if candidate_owners:
+            entry['candidate_owners'] = sorted(candidate_owners)
         dedup = (entry['kind'], entry['callee'], entry['file'], entry['line'])
         if not any((u['kind'], u['callee'], u['file'], u['line']) == dedup for u in bucket):
             bucket.append(entry)
@@ -621,6 +628,11 @@ def build_semantic_graph(checked, *, effects_report=None) -> dict:
     for node_id, raw_name, stmt, stmt_file in decl_ast_pairs:
         if isinstance(stmt, A.ClassDecl):
             cls_node = nodes[node_id]
+            for metadata, attribute in zip(cls_node['attributes'], stmt.attributes):
+                schema_id = resolve_node_id(getattr(attribute, 'resolved_schema', ''), ('struct',))
+                if schema_id is not None:
+                    schema = nodes[schema_id]
+                    metadata['schema'] = {'file': schema['file'], 'name': schema['name']}
             if stmt.superclass:
                 sup_raw = stmt.superclass.name if isinstance(stmt.superclass, A.TypeNode) else str(stmt.superclass)
                 sup_id = resolve_node_id(sup_raw, ('class',))
@@ -758,12 +770,8 @@ def build_semantic_graph(checked, *, effects_report=None) -> dict:
                                 owner_type_id = resolve_node_id(base_type, ('class', 'interface'))
                                 if owner_type_id:
                                     record_type_usage(node_id, base_type, stmt_file, expr_line, 'call_receiver')
-                            if getattr(recv_type, 'kind', None) == 'InterfaceType':
-                                iface_callee = f'{base_type}.{callee.property}' if base_type else callee.property
-                                record_uncertain_call(
-                                    node_id, 'virtual_dispatch', iface_callee,
-                                    stmt_file, expr_line, 'dynamic dispatch through interface',
-                                )
+                            if base_type and owner_type_id and not isinstance(callee.object, A.SuperExpr) and callee.property != 'init':
+                                dispatch_sites.append((node_id, owner_type_id, method_id, callee.property, stmt_file, expr_line))
                             elif indirect:
                                 label = f'{base_type}.{callee.property}' if base_type else callee.property
                                 record_uncertain_call(
@@ -905,6 +913,29 @@ def build_semantic_graph(checked, *, effects_report=None) -> dict:
                         for cap in (_effect_to_capability(eff),) if cap
                     })
                     node['capabilities'] = caps
+
+    for origin, receiver_id, static_target, member, file, line in dispatch_sites:
+        receiver = nodes[receiver_id]
+        candidates = set()
+        for candidate in nodes.values():
+            if candidate['kind'] != 'class' or candidate['id'] == receiver_id:
+                continue
+            # A compatible runtime class may inherit the implementation from another class.
+            current = candidate
+            implementation = None
+            compatible = False
+            while current is not None:
+                if implementation is None:
+                    implementation = next((method['id'] for method in current['methods']
+                                           if method['name'] == member), None)
+                if current['id'] == receiver_id or receiver_id in current['implements']:
+                    compatible = True
+                current = nodes.get(current['super_class'])
+            if compatible and implementation and implementation != static_target:
+                candidates.add(nodes[implementation]['owner'])
+        if candidates or receiver['kind'] == 'interface':
+            record_uncertain_call(origin, 'virtual_dispatch', f"{receiver['name']}.{member}", file, line,
+                                  'runtime receiver can select a different method', candidates)
 
     # Sort all node lists and collections deterministically before computing graph_hash.
     for node in nodes.values():

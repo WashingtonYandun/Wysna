@@ -1833,6 +1833,8 @@ class TypeChecker:
                 resolved = self._resolve_type_node_impl(node)
         if node is not None:
             node.resolved_type_id = self.interner.from_type(resolved)
+            if isinstance(node, (NamedType, GenericType)) and isinstance(resolved, (ClassType, InterfaceType, StructType, EnumType)):
+                node.resolved_nominal_name = getattr(resolved, 'template_name', None) or resolved.name
             node.session_arena_id = self.interner.arena_id
         if not self._collecting_declarations and not self._monomorphize_depth:
             self._validate_pending_dictionary_keys()

@@ -51,6 +51,9 @@
     },
     "telemetry": { "type": ["object", "null"] },
     "result": {
+      "properties": {
+        "architecture": { "$ref": "#/$defs/ArchitectureReport" }
+      },
       "anyOf": [
         { "$ref": "#/$defs/GraphResult" },
         { "$ref": "#/$defs/InspectResult" },
@@ -228,8 +231,54 @@
         }
       }
     },
+    "ArchitectureDiagnosticData": {
+      "type": "object",
+      "required": ["kind", "status", "rule_id", "relation", "from_symbol", "from_role",
+                   "to_symbol", "to_role", "boundary", "graph_hash", "revision"],
+      "properties": {
+        "kind": { "enum": ["architecture_violation", "architecture_incomplete"] },
+        "status": { "enum": ["violation", "incomplete"] },
+        "rule_id": { "type": "string", "minLength": 1 },
+        "relation": { "enum": ["calls", "uses_type"] },
+        "from_symbol": { "type": "string", "minLength": 1 },
+        "from_role": { "type": "string", "minLength": 1 },
+        "to_symbol": { "type": ["string", "null"] },
+        "to_role": { "type": ["string", "null"] },
+        "boundary": { "enum": [null, "missing_role_schema", "unknown_role", "unclassified_target",
+                                "indirect_call", "virtual_dispatch", "unresolved_call"] },
+        "graph_hash": { "type": "string", "pattern": "^graph:[0-9a-f]{16}$" },
+        "revision": { "type": "string", "pattern": "^[0-9a-f]{64}$" }
+      },
+      "additionalProperties": false
+    },
+    "ArchitectureReport": {
+      "type": "object",
+      "required": ["schema_version", "graph_hash", "revision", "status", "rules"],
+      "properties": {
+        "schema_version": { "const": "wysna.architecture/1" },
+        "graph_hash": { "type": "string", "pattern": "^graph:[0-9a-f]{16}$" },
+        "revision": { "type": "string", "pattern": "^[0-9a-f]{64}$" },
+        "status": { "enum": ["verified", "violation", "incomplete"] },
+        "rules": {
+          "type": "array",
+          "minItems": 1,
+          "items": {
+            "type": "object",
+            "required": ["id", "status"],
+            "properties": {
+              "id": { "type": "string", "minLength": 1 },
+              "status": { "enum": ["verified", "violation", "incomplete"] }
+            },
+            "additionalProperties": false
+          }
+        }
+      },
+      "additionalProperties": false
+    },
     "Diagnostic": {
       "type": "object",
+      "if": { "properties": { "code": { "enum": ["W6101", "W6102"] } } },
+      "then": { "properties": { "data": { "$ref": "#/$defs/ArchitectureDiagnosticData" } } },
       "required": ["code", "severity", "stage", "message", "primary_span", "related", "data", "fixes"],
       "properties": {
         "code": { "type": "string", "pattern": "^W[0-9]{4}$" },
@@ -257,6 +306,7 @@
           "enum": ["indirect_call", "virtual_dispatch", "extern_ffi", "unresolved_call"]
         },
         "callee": { "type": "string" },
+        "candidate_owners": { "type": "array", "items": { "type": "string" }, "uniqueItems": true },
         "file": { "type": "string" },
         "line": { "type": "integer", "minimum": 0 },
         "reason": { "type": "string" }

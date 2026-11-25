@@ -48,7 +48,7 @@ fn checked_records(context: SemanticContext) -> list[CheckedRecord] {
                     owner_names = context.generic_types[owner_generic].params
                 }
                 for field in context.fields {
-                    if field.owner == owner_name { fields.append(CheckedField { name: field.name, type_id: sem_substitute_type(context, field.type_id, owner_names, owner_type.args), visible: field.visible }) }
+                    if field.owner == owner_name { fields.append(CheckedField { source: field.source, owner: field.owner, name: field.name, type_id: sem_substitute_type(context, field.type_id, owner_names, owner_type.args), visible: field.visible }) }
                 }
                 for i in 0..len(context.functions) {
                     let function = context.functions[i]

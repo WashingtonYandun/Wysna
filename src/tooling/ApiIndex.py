@@ -192,6 +192,7 @@ def _module_records(source, path, module_id, owner):
                 "kind": "class",
                 "visibility": "public",
                 "signature": f"class {declaration.name}",
+                "attributes": [attribute.metadata() for attribute in declaration.attributes],
                 "methods": methods,
                 "effects": "unknown",
                 "documentation": _leading_documentation(lines, declaration.line),

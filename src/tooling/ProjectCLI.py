@@ -20,6 +20,7 @@ from compiler.CompilerService import CompilerService
 from compiler.NativeToolchain import NativeCompilationError, NativeToolchain
 from compiler.WasiToolchain import WasiCompilationError, WasiToolchain
 from error.Error import ToolchainError, WysnaError
+from project.Architecture import check_architecture
 from project.Manifest import ManifestError, ManifestIOError, Target
 from project.Resolver import ProjectResolver
 from project.Scaffold import ScaffoldError, create_project
@@ -124,10 +125,13 @@ def _parse_arguments(argv):
     return command, options, program_args
 
 
-def _emit(command, status, code, *, diagnostics=(), artifacts=(), target=None, json_mode=False):
+def _emit(command, status, code, *, diagnostics=(), artifacts=(), target=None, result=None, json_mode=False):
     if json_mode:
-        write_tool_result(tool_result(command, status, code, diagnostics=list(diagnostics),
-                                       artifacts=list(artifacts), target=target), sys.stdout)
+        envelope = tool_result(command, status, code, diagnostics=list(diagnostics),
+                               artifacts=list(artifacts), target=target)
+        if result is not None:
+            envelope["result"] = result
+        write_tool_result(envelope, sys.stdout)
     return code
 
 
@@ -165,9 +169,19 @@ def _run_check(resolver, target_name, json_mode):
                          target=_target_metadata(target), json_mode=True)
         print(render_diagnostic(error, service.source_texts()), file=sys.stderr)
         return 1
+    report, issues = check_architecture(manifest, checked)
     if json_mode:
-        return _emit("project.check", "ok", 0,
-                     target=_target_metadata(target), json_mode=True)
+        sources = service.source_texts()
+        if report:
+            sources[str(manifest.path)] = manifest.raw.decode("utf-8")
+        return _emit("project.check", "diagnostic_error" if issues else "ok", int(bool(issues)),
+                     diagnostics=[diagnostic_from_error(issue, sources) for issue in issues],
+                     target=_target_metadata(target), result={"architecture": report} if report else None,
+                     json_mode=True)
+    if issues:
+        for issue in issues:
+            print(render_diagnostic(issue, service.source_texts()), file=sys.stderr)
+        return 1
     print(f"[OK] Project check passed: {manifest.name} ({len(checked.modules)} modules)")
     return 0
 

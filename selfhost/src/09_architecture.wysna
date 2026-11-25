@@ -1,0 +1,238 @@
+# Evaluate checked project architecture metadata before returning or publishing edits.
+
+struct ArchitectureIssue {
+    code: str, message: str, file: str, line: int, col: int, data: str, related: str,
+}
+
+struct ArchitectureEvaluation {
+    report: str, issues: list[ArchitectureIssue],
+}
+
+fn arch_under(file: str, root: str) -> bool {
+    let prefix = if proj_str_ends_with(root, "/") { root } else { root + "/" }
+    return len(file) > len(prefix) and slice(file, 0, len(prefix)) == prefix
+}
+
+fn arch_class_in_scope(n: ToolGraphNode, m: ProjectManifest) -> bool {
+    return n.kind == "class" and arch_under(n.file, m.source_root_abs)
+}
+
+fn arch_roles(m: ProjectManifest, graph: ToolGraph) -> dict[str, str] {
+    let schema_file = module_canonical(m.root + "/" + m.architecture.schema_path)
+    let mut roles: dict[str, str] = {}
+    for n in graph.nodes {
+        if not arch_class_in_scope(n, m) { continue }
+        for attribute in n.attributes {
+            if attribute.schema_file != schema_file or attribute.schema_name != m.architecture.schema_name { continue }
+            let mut role = ""
+            for argument in attribute.arguments {
+                if argument.name == "role" and argument.kind == "str" { role = argument.value }
+            }
+            roles[n.id] = role
+        }
+    }
+    return roles
+}
+
+fn arch_owner_id(n: ToolGraphNode) -> str {
+    return if n.owner == "" { n.id } else { n.owner }
+}
+
+fn arch_symbol(m: ProjectManifest, graph: ToolGraph, n: ToolGraphNode) -> str {
+    let file = if arch_under(n.file, m.root) { slice(n.file, len(m.root) + 1, len(n.file)) } else { n.file }
+    let owner = tool_find_node_idx(graph, n.owner)
+    let name = if owner >= 0 { graph.nodes[owner].name + "." + n.name } else { n.name }
+    return file + "::" + name
+}
+
+fn arch_source(loader: ModuleLoader, file: str) -> str {
+    let loaded = module_read_with_overlays(file, loader.ov_paths, loader.ov_texts)
+    return if loaded[0] == "1" { loaded[1] } else { "" }
+}
+
+fn arch_issue(m: ProjectManifest, graph: ToolGraph, loader: ModuleLoader, rule: ProjectArchitectureRule, revision: str, from_symbol: str, relation: str, site: Token, target_index: int, to_role: str, boundary: str) -> ArchitectureIssue {
+    let violation = boundary == ""
+    let status = if violation { "violation" } else { "incomplete" }
+    let code = if violation { "W6101" } else { "W6102" }
+    let mut to_symbol = ""
+    let mut related = "[]"
+    if target_index >= 0 {
+        let target = graph.nodes[target_index]
+        to_symbol = arch_symbol(m, graph, target)
+        let span = diag_primary_span_json(target.file, target.line, target.col, arch_source(loader, target.file))
+        related = "[{\"message\":\"Target declaration\",\"line\":" + str(target.line) + ",\"col\":" + str(target.col) + ",\"span\":" + span + "}]"
+    }
+    let message = "Architecture rule '" + rule.id + "'" + (if violation {
+        " forbids " + relation + " from " + from_symbol + " to " + to_symbol
+    } else {
+        " cannot verify " + relation + " from " + from_symbol + ": " + boundary
+    })
+    let fields = [
+        "\"kind\":" + diag_json_quote("architecture_" + status),
+        "\"status\":" + diag_json_quote(status),
+        "\"rule_id\":" + diag_json_quote(rule.id),
+        "\"relation\":" + diag_json_quote(relation),
+        "\"from_symbol\":" + diag_json_quote(from_symbol),
+        "\"from_role\":" + diag_json_quote(rule.from_role),
+        "\"to_symbol\":" + (if to_symbol == "" { "null" } else { diag_json_quote(to_symbol) }),
+        "\"to_role\":" + (if to_role == "" { "null" } else { diag_json_quote(to_role) }),
+        "\"boundary\":" + (if boundary == "" { "null" } else { diag_json_quote(boundary) }),
+        "\"graph_hash\":" + diag_json_quote(graph.graph_hash),
+        "\"revision\":" + diag_json_quote(revision),
+    ]
+    let src = arch_source(loader, site.file)
+    let mut col = site.col
+    let start = diag_char_offset_at(src, site.line, col)
+    if start >= 0 {
+        let mut i = start
+        while i < len(src) and (src[i] == " " or src[i] == "\t") {
+            col = col + 1
+            i = i + 1
+        }
+    }
+    return ArchitectureIssue {
+        code: code, message: message, file: site.file, line: site.line, col: col,
+        data: "{" + join_strings(fields, ",") + "}", related: related,
+    }
+}
+
+fn arch_site(file: str, line: int, col: int) -> Token {
+    return Token { kind: "IDENT", val: "", file: file, line: line, col: col }
+}
+
+fn arch_rule_issue(m: ProjectManifest, graph: ToolGraph, loader: ModuleLoader, roles: dict[str, str], rule: ProjectArchitectureRule, revision: str, schema_valid: bool) -> ArchitectureIssue? {
+    let mut incomplete: ArchitectureIssue? = None
+    if not schema_valid {
+        incomplete = arch_issue(m, graph, loader, rule, revision, "wysna.toml::" + m.architecture.schema_name, rule.relations[0], arch_site(m.path, 1, 1), -1, "", "missing_role_schema")
+    }
+    for n in graph.nodes {
+        let role = roles.get(n.id) ?? ""
+        if roles.get(n.id) != None and not tool_str_contains(m.architecture.roles, role) {
+            incomplete = arch_issue(m, graph, loader, rule, revision, arch_symbol(m, graph, n), rule.relations[0], arch_site(n.file, n.line, 1), -1, "", "unknown_role")
+            break
+        }
+    }
+    for relation in ["calls", "uses_type"] {
+        if not tool_str_contains(rule.relations, relation) { continue }
+        for edge in graph.edges {
+            if edge.kind != relation { continue }
+            let source_index = tool_find_node_idx(graph, edge.from_id)
+            let target_index = tool_find_node_idx(graph, edge.to_id)
+            if source_index < 0 or target_index < 0 { continue }
+            let origin = graph.nodes[source_index]
+            if (roles.get(arch_owner_id(origin)) ?? "") != rule.from_role { continue }
+            let target_owner = arch_owner_id(graph.nodes[target_index])
+            if target_owner == arch_owner_id(origin) { continue }
+            let to_role = roles.get(target_owner) ?? ""
+            let site = arch_site(edge.file, edge.line, 1)
+            if tool_str_contains(rule.deny_roles, to_role) {
+                return arch_issue(m, graph, loader, rule, revision, arch_symbol(m, graph, origin), relation, site, target_index, to_role, "")
+            }
+            let target_class = tool_find_node_idx(graph, target_owner)
+            if incomplete == None and to_role == "" and target_class >= 0 and arch_class_in_scope(graph.nodes[target_class], m) {
+                incomplete = arch_issue(m, graph, loader, rule, revision, arch_symbol(m, graph, origin), relation, site, target_index, "", "unclassified_target")
+            }
+        }
+    }
+    if incomplete == None and tool_str_contains(rule.relations, "calls") {
+        for origin in graph.nodes {
+            if (roles.get(arch_owner_id(origin)) ?? "") != rule.from_role { continue }
+            for boundary in origin.uncertain_calls {
+                if boundary.kind == "extern_ffi" { continue }
+                let mut relevant = len(boundary.candidate_owners) == 0
+                for candidate in boundary.candidate_owners {
+                    let role = roles.get(candidate) ?? ""
+                    let index = tool_find_node_idx(graph, candidate)
+                    if tool_str_contains(rule.deny_roles, role) or (role == "" and index >= 0 and arch_class_in_scope(graph.nodes[index], m)) {
+                        relevant = true
+                    }
+                }
+                if not relevant { continue }
+                return arch_issue(m, graph, loader, rule, revision, arch_symbol(m, graph, origin), "calls", arch_site(boundary.file, boundary.line, 1), -1, "", boundary.kind)
+            }
+        }
+    }
+    return incomplete
+}
+
+fn arch_evaluate(m: ProjectManifest, graph: ToolGraph, loader: ModuleLoader) -> ArchitectureEvaluation {
+    let roles = arch_roles(m, graph)
+    let schema_file = module_canonical(m.root + "/" + m.architecture.schema_path)
+    let schema_id = graph.nominal_ids.get(schema_file + "\n" + m.architecture.schema_name) ?? ""
+    let schema_idx = tool_find_node_idx(graph, schema_id)
+    let schema_valid = schema_idx >= 0 and graph.nodes[schema_idx].role_schema
+    let revision = diag_sha256_hex(m.manifest_sha256 + ":" + graph.graph_hash)
+    let mut rules: list[str] = []
+    let mut issues: list[ArchitectureIssue] = []
+    let mut status = "verified"
+    for rule in m.architecture.rules {
+        let mut rule_status = "verified"
+        match arch_rule_issue(m, graph, loader, roles, rule, revision, schema_valid) {
+            Some(issue) => {
+                issues.append(issue)
+                rule_status = if issue.code == "W6101" { "violation" } else { "incomplete" }
+                if status == "verified" or rule_status == "violation" { status = rule_status }
+            },
+            None => {},
+        }
+        rules.append("{\"id\":" + diag_json_quote(rule.id) + ",\"status\":" + diag_json_quote(rule_status) + "}")
+    }
+    let report = "{\"schema_version\":\"wysna.architecture/1\",\"graph_hash\":" + diag_json_quote(graph.graph_hash) + ",\"revision\":" + diag_json_quote(revision) + ",\"status\":" + diag_json_quote(status) + ",\"rules\":[" + join_strings(rules, ",") + "]}"
+    return ArchitectureEvaluation { report: report, issues: issues }
+}
+
+fn arch_report_diagnostics(evaluation: ArchitectureEvaluation, loader: ModuleLoader, json_mode: bool) -> str {
+    let mut records: list[str] = []
+    for issue in evaluation.issues {
+        let src = arch_source(loader, issue.file)
+        if json_mode {
+            records.append(diag_record_json_full(issue.code, "architecture", "error", issue.message, issue.file, issue.line, issue.col, src, issue.data, issue.related))
+        } else {
+            eprint("[" + issue.code + "] " + issue.file + ":" + str(issue.line) + ":" + str(issue.col) + " - " + issue.message)
+            let excerpt = diag_render_source_excerpt(src, issue.line, issue.col)
+            if excerpt != "" { eprint(excerpt) }
+        }
+    }
+    return "[" + join_strings(records, ",") + "]"
+}
+
+fn arch_handle_role_query(manifest: str, source: str, requested_target: str, role: str, frozen: bool, json_mode: bool) -> unit {
+    let m = proj_load_manifest(manifest)
+    if not m.ok { report_error(manifest, m.err_code, 1, 1, m.err_msg) }
+    if not tool_str_contains(m.architecture.roles, role) {
+        report_error(manifest, "W5002", 1, 1, "unknown architecture role '" + role + "'")
+    }
+    if frozen { proj_verify_lock(m, "graph", json_mode) }
+    let mut entry = ""
+    if source != "" {
+        let file = module_canonical(source)
+        if not arch_under(file, m.source_root_abs) {
+            report_error(file, "W5002", 1, 1, "source must belong to the project source root")
+        }
+        entry = slice(file, len(m.root) + 1, len(file))
+    } else {
+        let target = proj_find_target_idx(m, proj_resolve_target_name(m, requested_target))
+        if target < 0 { report_error(manifest, "W5002", 1, 1, "unknown project target") }
+        entry = m.targets[target].entry
+    }
+    let mut aliases: list[str] = []
+    let mut roots: list[str] = []
+    for dep in m.deps {
+        aliases.append(dep.alias)
+        roots.append(dep.source_root_abs)
+    }
+    let graph = proj_impact_graph(m, entry, aliases, roots)
+    let roles = arch_roles(m, graph)
+    let mut rows: list[str] = []
+    for node in graph.nodes {
+        if (roles.get(node.id) ?? "") != role { continue }
+        node.architecture_role = role
+        if json_mode { rows.append(tool_node_json(node)) }
+        else { print(node.qualified_name + " (" + node.file + ":" + str(node.line) + ")") }
+    }
+    if json_mode {
+        let result = "{\"schema_version\":\"wysna.graph/1\",\"mode\":\"role\",\"entry_file\":" + diag_json_quote(graph.entry_file) + ",\"graph_hash\":" + diag_json_quote(graph.graph_hash) + ",\"role\":" + diag_json_quote(role) + ",\"nodes\":[" + join_strings(rows, ",") + "]}"
+        diag_write_output(diag_tool_envelope_json("graph", "ok", 0, "[]", "result", result, "[]"))
+    }
+    exit(0)
+}

@@ -1,0 +1,15 @@
+from .architecture use Architecture as Layer
+from .service use InvoiceService
+
+@Layer(role: "Controller")
+pub class InvoiceController {
+    pub fn total() -> int {
+        let service = InvoiceService()
+        return service.total()
+    }
+}
+
+fn main() -> unit {
+    let controller = InvoiceController()
+    print(controller.total())
+}

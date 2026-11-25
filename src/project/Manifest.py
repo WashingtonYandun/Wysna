@@ -91,6 +91,66 @@ class Target:
 
 
 @dataclass(frozen=True)
+class ArchitectureRule:
+    id: str
+    from_role: str
+    relations: tuple[str, ...]
+    deny_roles: tuple[str, ...]
+
+
+@dataclass(frozen=True)
+class ArchitecturePolicy:
+    schema_path: str
+    schema_name: str
+    roles: tuple[str, ...]
+    rules: tuple[ArchitectureRule, ...]
+
+
+def _architecture_strings(value, label):
+    if not isinstance(value, list) or not value or any(not isinstance(item, str) for item in value):
+        raise ManifestError(f"{label} must be a non-empty array of strings")
+    if len(value) != len(set(value)):
+        raise ManifestError(f"{label} must not contain duplicates")
+    return tuple(value)
+
+
+def _architecture_policy(raw):
+    _keys(raw, {"role_attribute", "roles", "rules"}, "architecture")
+    identity = _required_string(raw.get("role_attribute"), "architecture.role_attribute")
+    file, separator, name = identity.partition("::")
+    identifier = re.compile(r"[A-Za-z_][A-Za-z0-9_]*")
+    if not separator or not file.endswith(".wysna") or not identifier.fullmatch(name):
+        raise ManifestError("architecture.role_attribute must be a relative .wysna path followed by ::Schema")
+    _safe_relative_path(file, "architecture.role_attribute")
+    roles = _architecture_strings(raw.get("roles"), "architecture.roles")
+    if any(not identifier.fullmatch(role) for role in roles):
+        raise ManifestError("architecture.roles must contain identifiers")
+    raw_rules = raw.get("rules")
+    if not isinstance(raw_rules, list) or not raw_rules:
+        raise ManifestError("architecture.rules must be a non-empty array of tables")
+    rules = []
+    ids = set()
+    for index, item in enumerate(raw_rules):
+        label = f"architecture.rules[{index}]"
+        _keys(item, {"id", "from_role", "relations", "deny_roles", "severity"}, label)
+        rule_id = _required_string(item.get("id"), f"{label}.id")
+        if not _NAME.fullmatch(rule_id) or rule_id in ids:
+            raise ManifestError(f"{label}.id must be a unique lowercase name")
+        ids.add(rule_id)
+        from_role = _required_string(item.get("from_role"), f"{label}.from_role")
+        denied = _architecture_strings(item.get("deny_roles"), f"{label}.deny_roles")
+        if from_role not in roles or not set(denied).issubset(roles):
+            raise ManifestError(f"{label} refers to an unknown role")
+        relations = _architecture_strings(item.get("relations"), f"{label}.relations")
+        if not set(relations).issubset({"calls", "uses_type"}):
+            raise ManifestError(f"{label}.relations must contain only calls or uses_type")
+        if item.get("severity") != "error":
+            raise ManifestError(f"{label}.severity must be 'error'")
+        rules.append(ArchitectureRule(rule_id, from_role, relations, denied))
+    return ArchitecturePolicy(file, name, roles, tuple(rules))
+
+
+@dataclass(frozen=True)
 class ProjectManifest:
     path: Path
     root: Path
@@ -104,6 +164,7 @@ class ProjectManifest:
     tests: tuple
     raw_sha256: str
     raw: bytes
+    architecture: ArchitecturePolicy | None = None
 
     @classmethod
     def load(cls, path):
@@ -117,7 +178,7 @@ class ProjectManifest:
             raise ManifestError(f"cannot read manifest '{manifest_path}': {error}") from error
         if not isinstance(data, dict):
             raise ManifestError("manifest root must be a table")
-        _keys(data, {"manifest_version", "package", "toolchain", "sources", "targets", "dependencies", "tests"}, "manifest")
+        _keys(data, {"manifest_version", "package", "toolchain", "sources", "targets", "dependencies", "tests", "architecture"}, "manifest")
         if isinstance(data.get("manifest_version"), bool) or data.get("manifest_version") != 1:
             raise ManifestError("manifest_version must be exactly 1")
 
@@ -241,7 +302,8 @@ class ProjectManifest:
 
         return cls(manifest_path, root, name, version, language, compiler_version,
                    source_root, targets, dependencies, tuple(tests),
-                   hashlib.sha256(raw).hexdigest(), raw)
+                   hashlib.sha256(raw).hexdigest(), raw,
+                   _architecture_policy(data["architecture"]) if "architecture" in data else None)
 
 
 def _contained_path(root, relative, label, *, require_exists):

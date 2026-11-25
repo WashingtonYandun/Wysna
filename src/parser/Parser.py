@@ -591,10 +591,10 @@ class Parser:
     # Statement & Declaration Parsing
     # ==========================================
 
-    def parse_attributed_function(self, allow_top_level):
+    def parse_attributed_declaration(self, allow_top_level):
         start = self.at()
         if not allow_top_level:
-            raise ParserError('Static attributes require a top-level function declaration',
+            raise ParserError('Static attributes require a top-level function or class declaration',
                               file=self.file, line=start.line, col=start.col, code='W0006')
         attributes, names = [], set()
         while self.match(TokenType.AT):
@@ -652,9 +652,14 @@ class Parser:
             self._skip_statement_separators()
             start = self.at()
         declaration = self.parse_stmt(allow_top_level=True)
-        if not isinstance(declaration, FnDecl) or isinstance(declaration, ExternFnDecl):
-            raise ParserError('Static attributes require a top-level function declaration', file=self.file,
+        if not isinstance(declaration, (FnDecl, ClassDecl)) or isinstance(declaration, ExternFnDecl):
+            raise ParserError('Static attributes require a top-level function or class declaration', file=self.file,
                               line=declaration.line, col=declaration.col, code='W0006')
+        if isinstance(declaration, ClassDecl):
+            for attribute in attributes:
+                if attribute.name in ('deprecated', 'must_use'):
+                    raise ParserError('@' + attribute.name + ' requires a function declaration',
+                                      file=self.file, line=attribute.line, col=attribute.col, code='W0006')
         declaration.attributes = attributes
         return declaration
 
@@ -669,7 +674,7 @@ class Parser:
     def parse_stmt(self, allow_top_level: bool = False) -> Stmt:
         self._reject_legacy_visibility()
         if self.check(TokenType.AT):
-            return self.parse_attributed_function(allow_top_level)
+            return self.parse_attributed_declaration(allow_top_level)
         if self.match(TokenType.PUB, TokenType.PRIV):
             visibility = self.tokens[self.pos - 1]
             if self.at().type in (TokenType.PUB, TokenType.PRIV):
@@ -1813,7 +1818,7 @@ class Parser:
             return self.parse_match_expr()
 
         if token.type == TokenType.AT:
-            raise ParserError('Static attributes require a top-level function declaration',
+            raise ParserError('Static attributes require a top-level function or class declaration',
                               file=self.file, line=token.line, col=token.col, code='W0006')
         raise ParserError(
             message=f"Unexpected token '{token.type.name}' in expression",
