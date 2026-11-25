@@ -4,11 +4,11 @@
 
 # Wysna
 
-**A compiled language for automation and tools that developers and coding agents can maintain together.**
+**A compiled, Agent-First systems programming language that developers and coding agents can maintain together.**
 
-Wysna is statically typed and builds native executables through C99. Use it to process JSON, validate data before saving it, or share a business rule between a command-line tool and the browser. The compiler provides structured diagnostics and a semantic graph that editors and agents can query to see how a change affects the project.
+Wysna is statically typed and compiles to native executables via C99 with an 8-byte NaN-boxed `WVal` ABI, atomic ARC with Copy-on-Write value semantics, stackless CPS `async`/`await`, typed recoverable error channels (`T ! E`), and verifiable contracts (`requires` / `ensures`). The compiler exposes deterministic structured diagnostics, a compile-time semantic graph, bounded context inspection, and guarded multi-file patching so AI coding agents can analyze, edit, and test projects safely without guessing.
 
-[Downloads](https://github.com/WashingtonYandun/Wysna/releases) · [First project](#first-project) · [Project impact](#project-impact) · [Documentation](docs/README.md)
+**[Official Website & Handbook](https://wysna.wysofia.com/)** · [Downloads](https://github.com/WashingtonYandun/Wysna/releases) · [First project](#first-project) · [Agent-First tooling](#agent-first-tooling) · [Documentation](docs/README.md)
 
 [![CI on main](https://github.com/WashingtonYandun/Wysna/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/WashingtonYandun/Wysna/actions/workflows/ci.yml)
 [![Latest release](https://img.shields.io/github/v/release/WashingtonYandun/Wysna)](https://github.com/WashingtonYandun/Wysna/releases/latest)
@@ -16,18 +16,18 @@ Wysna is statically typed and builds native executables through C99. Use it to p
 
 ## Installation
 
-Selecciona tu distribución en [GitHub Releases](https://github.com/WashingtonYandun/Wysna/releases). Los flujos mostrados aquí requieren **Wysna 0.9.0 o posterior**. Para proyectos existentes, sigue la [guía de migración 0.8 → 0.9](docs/MIGRATING_0_8_TO_0_9.md).
+Visit the official site at **[wysna.wysofia.com](https://wysna.wysofia.com/)** for guides and installation instructions, or download release archives directly from [GitHub Releases](https://github.com/WashingtonYandun/Wysna/releases). The native SDK and agent workflows documented below target **Wysna 0.9.5 or later** (if upgrading from 0.8, follow the [0.8 → 0.9 migration guide](docs/MIGRATING_0_8_TO_0_9.md)).
 
 | Distribution | Use it for | Platforms |
 | --- | --- | --- |
-| [Native SDK](docs/NATIVE_SDK.md) | C99 projects, tests, and agent tools. It includes the self-hosted compiler, Zig, and the standard library. It runs without Python. | Windows x64, macOS arm64, Linux x64 |
-| [Seed](docs/SEED_DISTRIBUTION.md) | WebAssembly, WASI, direct LLVM compilation, and the reference interpreter and REPL. Installers include CPython and Zig. | Windows x64, macOS arm64, Linux x64 |
+| [Native SDK](docs/NATIVE_SDK.md) | Native C99 projects, lockfiles, tests, and Agent-First tools (`graph`, `inspect`, `patch`, `mcp`, `lsp`). Bundles the self-hosted compiler, Zig, and stdlib with zero Python runtime dependency. | Windows x64, macOS arm64, Linux x64 |
+| [Seed](docs/SEED_DISTRIBUTION.md) | WebAssembly, WASI (`wasm32-wasip1`), browser libraries, experimental direct LLVM compilation, and reference engine/REPL. Installers bundle CPython and Zig. | Windows x64, macOS arm64, Linux x64 |
 
-To use the native SDK, verify the archive against `SHA256SUMS`, extract it, and add its `bin` directory to your PATH. On Windows, you can also open `open-terminal.cmd` from the extracted folder. Confirm the installation with `wysna --version`.
+To install the Native SDK manually, verify the archive against `SHA256SUMS`, extract it, and add its `bin` directory to your `PATH` (or run `open-terminal.cmd` on Windows). Confirm with `wysna --version`.
 
 ## First project
 
-Save this program as `quote.wysna`. The contract requires a positive quantity and a nonnegative price. The calculation represents prices in integer cents.
+Save this program as `quote.wysna`. Contracts verify a positive quantity and nonnegative unit price (in integer cents):
 
 ```wysna
 pub fn quote_total(quantity: int, unit_price_cents: int) -> int
@@ -46,9 +46,9 @@ wysna run quote.wysna
 wysna build quote.wysna -o quote
 ```
 
-The program prints `3897`. The resulting executable runs without Python. If your program links against external libraries, follow your platform's rules for distributing them.
+The program prints `3897`, and the compiled binary runs standalone without Python.
 
-Create a project with a manifest and an initial test:
+Initialize and verify a manifest-backed project (`wysna.toml` + deterministic SHA-256 `wysna.lock`):
 
 ```sh
 wysna project new my-app
@@ -57,48 +57,49 @@ wysna project lock
 wysna project test --frozen
 ```
 
-The native SDK generates and verifies lockfiles for projects with or without local package dependencies. See the [project guide](docs/PROJECTS.md) for manifests, local dependencies, and build targets.
+See [Wysna Projects](docs/PROJECTS.md) for manifest configuration, offline SHA-256 package archives (`wysna packages`), C FFI linking, and WASI/browser targets.
 
-## Project impact
+## Agent-First tooling
 
-The semantic graph traces relationships in code checked by the compiler. In the [quote example](examples/shared-browser-app/README.md), the CLI, service, and browser share a pricing rule. From a checkout of this repository, run this query to see which project entries to retest when that rule changes:
+Wysna treats AI coding agents and IDE extensions as first-class compiler clients through `--output-format=json-v1` (validated against [schemas/wysna-tool-result.v1.schema.json](schemas/wysna-tool-result.v1.schema.json)) and an in-memory stdio MCP daemon (`wysna mcp`).
+
+Trace cross-target impact in a multi-target project such as the [quote example](examples/shared-browser-app/README.md):
 
 ```sh
 wysna graph --manifest examples/shared-browser-app/wysna.toml --symbol quote_validation_code --rel impact
 ```
 
-Each affected entry comes with a chain of relationships that leads to the changed symbol, including references to functions passed as values. The report marks uncertain entries when the compiler cannot resolve an indirect call or sees a boundary such as JavaScript or linked C code. Run **Wysna: Show Project Impact** in VS Code, or call `wysna_graph` over MCP for the same report.
+Every `graph` / `inspect` response identifies symbols by canonical declaration identity (returning `[W1005]` candidates on ambiguity), tracks `call_resolution` and `analysis_boundaries` (`virtual-dispatch`, `indirect-call`, `c-ffi`), and enforces byte budgets with resumable handles (`--max-bytes`, `omitted[].ref`).
 
-| Task | Tool |
-| --- | --- |
-| Find dependent code and inspect a focused excerpt | `graph` and `inspect --with-deps` |
-| Read structured compiler diagnostics | `check --output-format=json-v1` |
-| Edit a declaration against an expected graph revision | `patch --expect-graph-hash` |
-| Inspect effects and describe tool inputs | `explain` and `schema` |
-| Connect an editor or a coding agent | `lsp`, `mcp`, and the [VS Code extension](editors/vscode-wysna/README.md) |
+| Capability | CLI / MCP Interface | Highlights in 0.9.5 |
+| --- | --- | --- |
+| **Semantic graph & impact** | `graph`, `wysna_graph` | Declaration-level disambiguation (`W1005`), callers/callees/usages/implements/impact, uncertainty & boundary flags |
+| **Bounded & batch inspect** | `inspect`, `wysna_inspect` | Single or batch (`--symbols a,b` / `symbols: [...]`) inspection sharing `--max-bytes`, Seed/Selfhost parity |
+| **Structured diagnostics** | `check`, `project check`, `wysna_check`, `wysna_project_check` | Selfhost multi-error recovery (up to 100 diagnostics with cascade suppression) + typed `data` and `related` spans |
+| **Atomic semantic patching** | `patch`, `wysna_patch` | Memory dry-run by default; single-symbol `--expect-graph-hash` or multi-file `--manifest --edits` (`source`, `symbol`, `hunks`, `create`, `delete`) with `--expect-plan-hash` and rollback |
+| **Project tests & isolation** | `project test`, `wysna_project_test` | Frozen test plans, `--list` discovery, isolated temp fixtures, and opt-in execution over MCP (`--allow-exec`) |
+| **Schemas, auto-fix & LSP** | `schema`, `fix`, `explain`, `api`, `lsp`, `skills` | Draft 2020-12 `@AgentTool` schemas, mechanical `W3001`/`W1001` autofixes, and [VS Code extension](editors/vscode-wysna/README.md) |
 
-The [agent guide](docs/AI_AGENT_GUIDE.md) covers the workflow and output formats. The [evaluation tools](bench/ai_eval/README.md) compare model-selected graph queries with source reads and measure test impact against observed changes in real projects.
+Read the [AI Agent Guide](docs/AI_AGENT_GUIDE.md) and [agent benchmark harness](bench/ai_eval/README.md) for the complete protocol, deterministic quotas (`--max-steps`, `--max-heap-mb`), and effect trace replay (`--record-trace`, `--replay-trace`).
 
 ## Examples
 
 | Project | What it demonstrates |
 | --- | --- |
-| [Operations audit](examples/wysofia-ops/README.md) | Validate JSON events and produce an audit report, with an optional SQLite target. |
-| [Measurement sync](examples/automation-sync/README.md) | Fetch a bounded batch and import it into SQLite in a transaction. |
-| [Quote application](examples/shared-browser-app/README.md) | Share validation and pricing logic across a CLI, a service, and WebAssembly. |
+| [Operations audit](examples/wysofia-ops/README.md) | Validated JSON event auditing with contracts, `T ! E`, and optional SQLite storage built with the Native SDK. |
+| [Measurement sync](examples/automation-sync/README.md) | Bounded remote/file batch ingestion into SQLite inside an explicit transaction. |
+| [Quote application](examples/shared-browser-app/README.md) | Shared pricing and validation logic across native CLI, service, and WebAssembly targets. |
 
-## Status and architecture
+## Architecture and current scope
 
-Wysna is pre-1.0. C99 is the primary native target, with verified intermediate representations before C generation. Seed is the Python reference implementation. The native SDK uses the self-hosted compiler written in Wysna. The [compiler architecture](docs/COMPILER_ARCHITECTURE.md) and [conformance matrix](docs/ENGINE_PARITY_MATRIX.md) describe the engines and the behavior covered by their tests.
+- **Dual-engine parity & native C99 backend:** Seed is the Python reference oracle; the Self-Hosted compiler (`selfhost/`) powers the standalone Native SDK through a verified AST → HIR → MIR → C99 pipeline with C99-accelerated JSON handling, loop hoisting/borrowing, and dead-code elimination. Direct LLVM emission remains experimental. See [Compiler Architecture](docs/COMPILER_ARCHITECTURE.md) and [Engine Parity Matrix](docs/ENGINE_PARITY_MATRIX.md).
+- **Safety & concurrency:** Static types, custom typed static metadata attributes (`struct` schemas), algebraic pattern matching with exhaustiveness checks, atomic ARC + Copy-on-Write (`Weak[C]`), isolated-ownership parallel workers (`std/algorithms`, `std/async.spawn`), and `--sandbox` / OS-boundary controls. See [Scope](docs/SCOPE.md), [Known Limits](docs/KNOWN_LIMITS.md), [Effects](docs/EFFECTS.md), and [Security Policy](SECURITY.md).
 
-Wysna supports contracts, typed errors, pattern matching, generics, and `async`/`await`. The runtime uses reference counting and copy-on-write collections. The direct LLVM backend is experimental. See the [supported scope](docs/SCOPE.md) and [known limits](docs/KNOWN_LIMITS.md).
+## Documentation and community
 
-Native executables inherit the permissions of their process. See the [effect model](docs/EFFECTS.md) and [security policy](SECURITY.md) for the boundaries of effect analysis and enforcement, including calls into external C code.
+- **Web & Handbook:** [https://wysna.wysofia.com/](https://wysna.wysofia.com/)
+- **Language specs:** [Syntax reference](WYSNA_SINTAXIS.md) · [Language specification](SPEC.md) · [Standard library](docs/STDLIB.md)
+- **Guides & releases:** [Documentation index](docs/README.md) · [Changelog](CHANGELOG.md) · [0.9.5 Release Notes](docs/release-notes/v0.9.5.md)
+- **Contributing:** [Contributing](CONTRIBUTING.md) · [Code of conduct](CODE_OF_CONDUCT.md)
 
-## Documentation and contribution
-
-- [Syntax reference](WYSNA_SINTAXIS.md) · [Language specification](SPEC.md) · [Standard library](docs/STDLIB.md)
-- [Documentation index](docs/README.md) · [Changelog](CHANGELOG.md)
-- [Contributing](CONTRIBUTING.md) · [Code of conduct](CODE_OF_CONDUCT.md)
-
-Wysna is distributed under the [Apache License 2.0](LICENSE). See [NOTICE](NOTICE) for attribution.
+Wysna is licensed under the [Apache License 2.0](LICENSE). See [NOTICE](NOTICE) for attribution.
