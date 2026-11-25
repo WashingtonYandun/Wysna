@@ -545,7 +545,7 @@ fn sem_type(context: SemanticContext) -> int {
                 if context.collecting_declarations {
                     context.pending_key_types.append(args[0])
                     context.pending_key_sources.append(source)
-                } elif not sem_key(context, args[0]) { report_error_at("W2010", source, "invalid dictionary key") }
+                } elif not sem_key(context, args[0]) { sem_record_error(context, "W2010", source, "invalid dictionary key", "", "[]") }
             }
             result = sem_intern(context, kind, "", args)
         } else {
@@ -570,6 +570,7 @@ fn sem_type(context: SemanticContext) -> int {
     return result
 }
 fn sem_key(context: SemanticContext, type_id: int) -> bool {
+    if type_id < 0 or (context.error_type >= 0 and type_id == context.error_type) { return true }
     let mut pending: list[int] = [type_id]
     let mut seen: list[int] = []
     let mut active: list[int] = []
@@ -578,6 +579,8 @@ fn sem_key(context: SemanticContext, type_id: int) -> bool {
         if current < 0 {
             active.pop()
             seen.append(-current - 1)
+        } elif context.error_type >= 0 and current == context.error_type {
+            continue
         } elif current != context.integer_type and current != context.string_type and current != context.boolean_type and sem_kind(context, current) != "u8" {
             let type_ = context.types[current]
             if type_.kind == "tuple" {
@@ -655,15 +658,18 @@ fn sem_mutable_at(context: SemanticContext, root: str, location: Token) {
         let variable = sem_lookup(context, root)
         if variable >= 0 {
             let v = context.variables[variable]
-            let rel = if v.source.file != "" and v.source.line >= 1 {
-                "[" + diag_related_record_json("'" + v.name + "' declared as immutable here", v.source.file, v.source.line, v.source.col) + "]"
-            } else { "[]" }
             if context.capture_depth >= 0 and v.depth < context.capture_depth {
+                let rel = if v.source.file != "" and v.source.line >= 1 {
+                    "[" + diag_related_record_json("'" + v.name + "' declared as immutable here", v.source.file, v.source.line, v.source.col) + "]"
+                } else { "[]" }
                 let cap_data = "{\"kind\":\"captured_snapshot_mutation\",\"binding\":" + diag_json_quote(v.name) + ",\"symbol\":" + diag_json_quote(v.name) + ",\"help\":\"Closures capture values as immutable snapshots by design. Return the updated value from the closure.\"}"
                 sem_record_error(context, "W3001", location, "captured snapshots are immutable (return the updated value; classes cannot cross worker boundaries)", cap_data, rel)
                 return
             }
             if not v.mutable {
+                let rel = if v.source.file != "" and v.source.line >= 1 {
+                    "[" + diag_related_record_json("'" + v.name + "' declared as immutable here", v.source.file, v.source.line, v.source.col) + "]"
+                } else { "[]" }
                 let mut_data = "{\"kind\":\"immutable_mutation\",\"binding\":" + diag_json_quote(v.name) + ",\"symbol\":" + diag_json_quote(v.name) + ",\"declared_line\":" + str(v.source.line) + ",\"declared_col\":" + str(v.source.col) + ",\"help\":" + diag_json_quote("Declare '" + v.name + "' as mutable: 'let mut " + v.name + "'.") + "}"
                 sem_record_error(context, "W3001", location, "mutation of immutable binding", mut_data, rel)
             }
@@ -1555,7 +1561,7 @@ fn sem_prefix(context: SemanticContext, allow_struct: bool, statement: bool) -> 
         let key_value = sem_expression(context, 0, true)
         let key = key_value.type_id
         context.expected_type = expected_container
-        if not sem_key(context, key) { report_error_at("W2010", key_source, "invalid dictionary key") }
+        if not sem_key(context, key) { sem_record_error(context, "W2010", key_source, "invalid dictionary key", "", "[]") }
         if expected_key >= 0 { sem_require_at(context, key, expected_key, "W2001", key_source) }
         sem_expect(context, "COLON")
         context.expected_type = expected_value
