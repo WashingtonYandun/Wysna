@@ -105,6 +105,12 @@ wysna lsp
 
 `wysna inspect` enforces UTF-8 byte budgets via `--max-bytes` (`--source-offset` / `--offset`), returns resumable fetch handles in `omitted[].ref`, and surfaces `call_resolution` plus `analysis_boundaries` (`virtual-dispatch`, `indirect-call`, `c-ffi`) across `graph` and `inspect`. Both Seed and the Native SDK (`patch --manifest ... --edits ...` and `wysna_patch` MCP) support checked multi-file workspace patches with unified diffs, impact selection, plan-hash validation (`W5005`), and staged publication with rollback if a later operation fails.
 
+Para comprobar restricciones entre clases, declara roles con un atributo
+tipado y reglas en `wysna.toml`. Usa `wysna_graph` con `manifest` y `role`
+para localizar clases. `wysna_project_check` y `wysna_patch` informan
+`W6101` si hay una arista prohibida y `W6102` si falta evidencia.
+[Contratos de arquitectura](ARCHITECTURE_CONTRACTS.md).
+
 `wysna patch` rejects stale `graph:...` hashes with `W5005` and verifies types in
 memory before mutating disk. When applying edits via Seed CLI or MCP (`wysna patch --apply`
 and `wysna fix --apply`), cooperating Wysna writers serialize per file with a cooperative

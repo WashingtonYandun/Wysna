@@ -1,0 +1,28 @@
+manifest_version = 1
+
+[package]
+name = "architecture-example"
+version = "0.1.0"
+language = "0.9"
+
+[toolchain]
+compiler = "0.9.5"
+stdlib = "bundled"
+
+[sources]
+root = "src"
+
+[targets.app]
+entry = "src/main.wysna"
+profile = "native-cli"
+
+[architecture]
+role_attribute = "src/architecture.wysna::Architecture"
+roles = ["Controller", "Service", "Repository"]
+
+[[architecture.rules]]
+id = "controller-no-repository"
+from_role = "Controller"
+relations = ["calls", "uses_type"]
+deny_roles = ["Repository"]
+severity = "error"

@@ -45,40 +45,49 @@ fn sem_static_attributes(context: SemanticContext) -> list[StaticAttribute] {
             }
             sem_expect(context, "RPAREN")
         }
-        attributes.append(StaticAttribute { name: name, message: message, arguments: arguments, source: source })
+        attributes.append(StaticAttribute { name: name, message: message, arguments: arguments, source: source, schema_file: "", schema_name: "" })
         sem_skip_separators(context)
     }
     return attributes
 }
 
-fn sem_validate_attributes(context: SemanticContext) {
-    for function in context.functions {
-        for attribute in function.attributes {
-            if attribute.name == "deprecated" or attribute.name == "must_use" { continue }
-            let mut schema = -1
-            for i in 0..len(context.types) {
-                if context.types[i].name == attribute.name and context.types[i].kind == "struct" { schema = i }
-            }
-            if schema < 0 or sem_generic_type(context, attribute.name) >= 0 {
-                report_error_at("W0006", attribute.source, "annotation requires a non-generic struct schema: " + attribute.name)
-            }
-            let mut count = 0
-            for field in context.fields {
-                if field.owner != attribute.name { continue }
-                count = count + 1
-                let mut found = false
-                for argument in attribute.arguments {
-                    if argument.name == field.name {
-                        found = true
-                        if argument.kind != sem_kind(context, field.type_id) {
-                            report_error_at("W2001", attribute.source, "annotation field type mismatch: " + field.name)
-                        }
+fn sem_validate_attribute_list(context: SemanticContext, attributes: list[StaticAttribute]) {
+    for attribute in attributes {
+        if attribute.name == "deprecated" or attribute.name == "must_use" { continue }
+        let mut schema = -1
+        for i in 0..len(context.types) {
+            if context.types[i].name == attribute.name and context.types[i].kind == "struct" { schema = i }
+        }
+        if schema < 0 or sem_generic_type(context, attribute.name) >= 0 {
+            report_error_at("W0006", attribute.source, "annotation requires a non-generic struct schema: " + attribute.name)
+        }
+        let mut count = 0
+        for field in context.fields {
+            if field.owner != attribute.name { continue }
+            count = count + 1
+            let mut found = false
+            for argument in attribute.arguments {
+                if argument.name == field.name {
+                    found = true
+                    if argument.kind != sem_kind(context, field.type_id) {
+                        report_error_at("W2001", attribute.source, "annotation field type mismatch: " + field.name)
                     }
                 }
-                if not found { report_error_at("W2001", attribute.source, "missing annotation field: " + field.name) }
             }
-            if count != len(attribute.arguments) { report_error_at("W2001", attribute.source, "annotation fields must match schema") }
+            if not found { report_error_at("W2001", attribute.source, "missing annotation field: " + field.name) }
         }
+        if count != len(attribute.arguments) { report_error_at("W2001", attribute.source, "annotation fields must match schema") }
+    }
+}
+
+fn sem_validate_attributes(context: SemanticContext) {
+    for function in context.functions {
+        sem_validate_attribute_list(context, function.attributes)
+    }
+    for class_ in context.classes {
+        let attributes = context.class_attributes.get(class_.name)
+        let empty: list[StaticAttribute] = []
+        sem_validate_attribute_list(context, attributes ?? empty)
     }
 }
 
@@ -103,7 +112,10 @@ fn tool_attributes_json(attributes: list[StaticAttribute]) -> str {
             let value = if argument.kind == "str" { diag_json_quote(argument.value) } elif argument.kind == "int" { str(int(argument.value)) } else { argument.value }
             arguments.append(diag_json_quote(argument.name) + ":" + value)
         }
-        items.append("{\"name\":" + diag_json_quote(attribute.name) + ",\"arguments\":{" + join_strings(arguments, ",") + "}}")
+        let schema = if attribute.schema_file == "" { "" } else {
+            ",\"schema\":{\"file\":" + diag_json_quote(attribute.schema_file) + ",\"name\":" + diag_json_quote(attribute.schema_name) + "}"
+        }
+        items.append("{\"name\":" + diag_json_quote(attribute.name) + ",\"arguments\":{" + join_strings(arguments, ",") + "}" + schema + "}")
     }
     return "[" + join_strings(items, ",") + "]"
 }

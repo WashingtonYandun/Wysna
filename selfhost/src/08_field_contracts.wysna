@@ -105,7 +105,7 @@ fn sem_struct_contracts(context: SemanticContext, value: SemValue, source: Token
     nodes.append(sem_node(context, "binding", value.type_id, definition, temporary, [], binding, -1))
     let body = sem_node(context, "block", value.type_id, definition, "", nodes, -1, -1)
     if context.capture_nodes {
-        context.checked_functions.append(CheckedFunction { declaration_name: name, captures: [], closure: false, name: name, type_id: signature, params: [binding], body: body, source: definition, is_async: false, async_return_type: value.type_id })
+        context.checked_functions.append(CheckedFunction { owner: "", declaration_name: name, captures: [], closure: false, name: name, type_id: signature, params: [binding], body: body, source: definition, is_async: false, async_return_type: value.type_id })
     } else {
         while len(context.obligations) > previous_obligations { context.obligations.pop() }
     }

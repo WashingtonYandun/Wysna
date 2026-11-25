@@ -378,7 +378,7 @@ fn lsp_check_and_publish(state: LspServerState, doc_idx: int) -> unit {
         let texts = lsp_overlay_texts(state)
         let loader = lsp_load_source(doc.text, doc.path, paths, texts)
         let program = check_program(loader.output, doc.path, true)
-        doc.graph = tool_build_checked_graph(doc.text, doc.path, loader.output, program, paths, texts, false)
+        doc.graph = tool_build_checked_graph(doc.text, doc.path, loader, program, false)
         doc.function_sites = lsp_collect_function_sites(loader, program)
         doc.has_graph = true
         doc.clean_ok = true

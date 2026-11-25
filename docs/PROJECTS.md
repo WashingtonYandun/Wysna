@@ -89,6 +89,32 @@ WASI build provenance includes the target triple, artifact kind, compiler identi
 module imports/exports, configured capabilities, fuel, memory and stack limits, and
 preopens.
 
+## Arquitectura y paquetes
+
+Un manifiesto puede declarar reglas opcionales sobre roles de clases. `project
+check` y los parches de proyecto las comprueban antes de devolver éxito.
+[Contratos de arquitectura](ARCHITECTURE_CONTRACTS.md).
+
+El SDK nativo incluye un gestor de paquetes local. `packages pack` produce un
+archivo USTAR reproducible. `packages fetch` comprueba el SHA-256 y prepara
+el contenido en `vendor/<sha256>` y en la caché. `packages add` registra el
+alias en `[dependencies.<alias>]`. Después de generar `wysna.lock`, la caché
+permite restaurar las dependencias fijadas sin red.
+
+```sh
+wysna packages pack --manifest dependency/wysna.toml -o dependency.tar --output-format=json-v1
+wysna packages fetch --manifest wysna.toml --archive dependency.tar --sha256 SHA256
+wysna packages add dependency --manifest wysna.toml --path vendor/SHA256
+wysna project lock --manifest wysna.toml
+wysna packages restore --manifest wysna.toml
+wysna project check --manifest wysna.toml --frozen
+```
+
+Usa el valor `result.archive_sha256` del empaquetado en los dos comandos.
+`wysna packages remove <alias>` elimina la declaración del manifiesto y
+conserva el contenido descargado. El flujo usa rutas y archivos fijados por hash.
+La resolución por rangos y un registro de paquetes quedan fuera de esta versión.
+
 ## Browser library
 
 The `browser-library` profile uses Seed-generated C99 and Emscripten 5.0.1 to produce

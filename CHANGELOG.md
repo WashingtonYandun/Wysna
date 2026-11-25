@@ -8,6 +8,7 @@
 - Adds `--max-bytes` bounded context with resumable `omitted[].ref` handles, batch inspection (`--symbols`, repeatable `--symbol`, MCP `symbols`), and full Seed/Selfhost `wysna.inspect/1` schema parity.
 - Adds atomic multi-file `workspace patch` across Seed, Selfhost, and MCP supporting `source`, `symbol` + `replacement`, `hunks`, `create: true`, and `delete: true` with `--expect-plan-hash`, virtual overlay confinement, and automatic rollback on validation/publication failure.
 - Expands MCP to 13 tools by adding read-only `wysna_project_check` and opt-in `wysna_project_test` (gated behind `--allow-exec`, wired via `WYSNA_SDK_DRIVER` and `--diag-out` in `driver.c`).
+- Adds checked architecture contracts (`#196`): static role attributes on top-level classes, declarative `wysna.toml` policies enforced in `project check`, `workspace patch`, and MCP with structured `W6101`/`W6102` diagnostics and `wysna graph --role` queries.
 
 ### Runtime, JSON, MIR & Compiler Scalability
 - Accelerates C99 runtime JSON serialization/extraction, single-thread ARC fast paths, ABI hotpaths, small-struct pooling, and 2-buffer stable sort.

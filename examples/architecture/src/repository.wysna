@@ -1,0 +1,6 @@
+from .architecture use Architecture
+
+@Architecture(role: "Repository")
+pub class InvoiceRepository {
+    pub fn total() -> int { return 42 }
+}

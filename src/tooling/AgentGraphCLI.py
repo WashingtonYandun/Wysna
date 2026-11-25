@@ -62,7 +62,7 @@ def _handle_cli_error(command: str, error: Exception, service: CompilerService |
     code = 1 if semantic else 3 if filesystem else 2
     if json_output:
         if semantic:
-            sources = service.source_texts() if service is not None else {}
+            sources = getattr(error, 'source_texts', None) or (service.source_texts() if service is not None else {})
             diagnostics = [
                 diagnostic_from_error(item, sources)
                 for item in getattr(error, 'diagnostics', (error,))
@@ -94,6 +94,8 @@ def run_graph_command(argv) -> int:
     )
     parser.add_argument('--manifest', type=Path)
     parser.add_argument('--frozen', action='store_true')
+    parser.add_argument('--role', help='List classes with this configured architecture role')
+    parser.add_argument('--target', help='Select the project target for --role')
     parser.add_argument('--no-effects', action='store_true', help='Skip MIR effect enrichment')
     parser.add_argument('--output-format', choices=('json-v1',))
     json_output = '--output-format=json-v1' in argv or '--output-format' in argv
@@ -101,6 +103,39 @@ def run_graph_command(argv) -> int:
     try:
         options = parser.parse_args(list(argv))
         json_output = options.output_format == 'json-v1'
+        if options.role is not None:
+            from project.Architecture import select_role
+            from project.Resolver import ProjectResolver
+
+            if not options.manifest or options.symbol or options.rel or (options.source and options.target):
+                raise ValueError('--role requires --manifest and accepts one source or --target')
+            resolver = ProjectResolver.load(options.manifest)
+            manifest = resolver.manifest
+            if options.source:
+                source = Path(options.source)
+            else:
+                default_target = next(iter(manifest.targets)) if len(manifest.targets) == 1 else 'app'
+                target = manifest.targets.get(options.target or default_target)
+                if target is None:
+                    raise ValueError('Unknown project target')
+                source = manifest.root / target.entry
+            service, _, checked = _load_checked(source, options.manifest, options.frozen)
+            graph = service.graph(checked, include_effects=False)
+            payload = {
+                'schema_version': 'wysna.graph/1', 'mode': 'role', 'entry_file': graph['entry_file'],
+                'graph_hash': graph['graph_hash'], 'role': options.role,
+                'nodes': select_role(manifest, graph, options.role),
+            }
+            if json_output:
+                envelope = tool_result('graph', 'ok', 0)
+                envelope['result'] = payload
+                write_tool_result(envelope, sys.stdout)
+            else:
+                for node in payload['nodes']:
+                    print(f"{node['qualified_name']} ({node['file']}:{node['line']})")
+            return 0
+        if options.target:
+            raise ValueError('--target requires --role')
         if options.source is None:
             if options.manifest is None or not options.symbol or options.rel != 'impact':
                 raise ValueError('Provide a source path or use --manifest PATH --symbol NAME --rel impact')

@@ -69,6 +69,7 @@ class ProjectTestCase {
 }
 
 class ProjectManifest {
+    architecture: ProjectArchitecture
     ok: bool
     err_code: str
     err_msg: str
@@ -104,6 +105,7 @@ class ProjectManifest {
         this.err_msg = ""
         this.path = path
         this.root = root
+        this.architecture = ProjectArchitecture()
         this.name = ""
         this.version = ""
         this.language_version = ""
@@ -658,6 +660,11 @@ fn proj_parse_manifest_at(abs_manifest_path: str, visit_stack: list[str]) -> Pro
         let nl = len(line)
         if nl >= 4 and slice(line, 0, 2) == "[[" and slice(line, nl - 2, nl) == "]]" {
             let hdr = proj_parse_header_segs(lsp_trim(slice(line, 2, nl - 2)))
+            if len(hdr) == 2 and hdr[0] == "architecture" and hdr[1] == "rules" {
+                cur_sec = "architecture.rules"
+                m.architecture.rules.append(ProjectArchitectureRule())
+                continue
+            }
             if len(hdr) == 1 and hdr[0] == "tests" {
                 cur_sec = "tests"
                 cur_sub = ""
@@ -674,6 +681,12 @@ fn proj_parse_manifest_at(abs_manifest_path: str, visit_stack: list[str]) -> Pro
             let hdr = proj_parse_header_segs(lsp_trim(slice(line, 1, nl - 1)))
             if len(hdr) == 1 {
                 let s = hdr[0]
+                if s == "architecture" {
+                    if m.architecture.enabled { return proj_fail(m, "W5002", "duplicate [architecture] table") }
+                    m.architecture.enabled = true
+                    cur_sec = "architecture"
+                    continue
+                }
                 if s == "package" {
                     if m.has_pkg_table { return proj_fail(m, "W5002", "duplicate [package] table") }
                     m.has_pkg_table = true
@@ -849,6 +862,19 @@ fn proj_parse_manifest_at(abs_manifest_path: str, visit_stack: list[str]) -> Pro
             m.deps.append(ProjectDep(cur_sub, rel[1], cont[1], dep_manifest.source_root_abs, pkg_id))
             continue
         }
+        if cur_sec == "architecture" {
+            if not proj_architecture_key(m.architecture, key, val) {
+                return proj_fail(m, "W5002", "invalid or duplicate architecture key: " + key)
+            }
+            continue
+        }
+        if cur_sec == "architecture.rules" {
+            let rule = m.architecture.rules[len(m.architecture.rules) - 1]
+            if not proj_architecture_rule_key(rule, key, val) {
+                return proj_fail(m, "W5002", "invalid or duplicate architecture rule key: " + key)
+            }
+            continue
+        }
         if cur_sec == "tests" {
             let label = "tests[" + str(cur_test_idx) + "]"
             if tool_str_contains(m.active_test_keys, key) {
@@ -880,6 +906,8 @@ fn proj_parse_manifest_at(abs_manifest_path: str, visit_stack: list[str]) -> Pro
         }
     }
 
+    let architecture_error = proj_architecture_error(m.architecture)
+    if architecture_error != "" { return proj_fail(m, "W5002", architecture_error) }
     if len(m.deps) != len(m.seen_dep_aliases) {
         return proj_fail(m, "W5002", "each dependency table requires path")
     }

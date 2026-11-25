@@ -356,12 +356,12 @@ fn sem_resolve_async_task_type(context: SemanticContext, inner_tid: int) -> int 
     }
     let empty: list[int] = []
     let tid = sem_intern(context, "struct", task_name, empty)
-    context.fields.append(SemField { owner: task_name, name: "id", type_id: context.integer_type, visible: true, requires: [] })
-    context.fields.append(SemField { owner: task_name, name: "handle", type_id: context.integer_type, visible: true, requires: [] })
-    context.fields.append(SemField { owner: task_name, name: "is_ready", type_id: context.boolean_type, visible: true, requires: [] })
-    context.fields.append(SemField { owner: task_name, name: "is_failed", type_id: context.boolean_type, visible: true, requires: [] })
-    context.fields.append(SemField { owner: task_name, name: "value", type_id: sem_wrap(context, "optional", inner_tid), visible: true, requires: [] })
-    context.fields.append(SemField { owner: task_name, name: "error", type_id: sem_wrap(context, "optional", context.string_type), visible: true, requires: [] })
+    context.fields.append(SemField { source: context.tokens[0], owner: task_name, name: "id", type_id: context.integer_type, visible: true, requires: [] })
+    context.fields.append(SemField { source: context.tokens[0], owner: task_name, name: "handle", type_id: context.integer_type, visible: true, requires: [] })
+    context.fields.append(SemField { source: context.tokens[0], owner: task_name, name: "is_ready", type_id: context.boolean_type, visible: true, requires: [] })
+    context.fields.append(SemField { source: context.tokens[0], owner: task_name, name: "is_failed", type_id: context.boolean_type, visible: true, requires: [] })
+    context.fields.append(SemField { source: context.tokens[0], owner: task_name, name: "value", type_id: sem_wrap(context, "optional", inner_tid), visible: true, requires: [] })
+    context.fields.append(SemField { source: context.tokens[0], owner: task_name, name: "error", type_id: sem_wrap(context, "optional", context.string_type), visible: true, requires: [] })
     return tid
 }
 fn sem_external_async_signature(context: SemanticContext, fn_tid: int) -> int {
@@ -876,7 +876,8 @@ fn sem_collect_record(context: SemanticContext, kind: str) {
             context.variant_payloads.append(payload_types)
             sem_match(context, "COMMA")
         } else {
-            let field = sem_expect(context, "IDENT").val
+            let field_token = sem_expect(context, "IDENT")
+            let field = field_token.val
             sem_expect(context, "COLON")
             let field_type = sem_type(context)
             let mut field_requires: list[Token] = []
@@ -892,7 +893,7 @@ fn sem_collect_record(context: SemanticContext, kind: str) {
                     field_requires.append(sem_take(context))
                 }
             }
-            context.fields.append(SemField { owner: name, name: field, type_id: field_type, visible: visible, requires: field_requires })
+            context.fields.append(SemField { source: field_token, owner: name, name: field, type_id: field_type, visible: visible, requires: field_requires })
             sem_match(context, "COMMA")
         }
     }
@@ -3194,7 +3195,7 @@ fn sem_check_function(context: SemanticContext, function: SemFunction) {
         let raw_type_id = if function.is_async { sem_external_async_signature(context, function.type_id) } else { function.type_id }
         let type_id = if context.owner == "" { raw_type_id } else { checked_receiver_signature(context, sem_function_owner_type(context, function), raw_type_id) }
         let captures: list[int] = []
-        context.checked_functions.append(CheckedFunction { declaration_name: function.declaration_name, captures: captures, closure: false, name: function.name, type_id: type_id, params: parameters, body: flow.node, source: context.tokens[function.body], is_async: function.is_async, async_return_type: context.return_type })
+        context.checked_functions.append(CheckedFunction { owner: function.owner, declaration_name: function.declaration_name, captures: captures, closure: false, name: function.name, type_id: type_id, params: parameters, body: flow.node, source: context.tokens[function.body], is_async: function.is_async, async_return_type: context.return_type })
     }
     context.pos = previous_position
     sem_leave_scope(context, scope)
@@ -3277,8 +3278,8 @@ fn sem_initialize(context: SemanticContext, tokens: list[Token]) {
     sem_intern(context, "struct", "IoError", empty)
     sem_intern(context, "struct", "NetError", empty)
     sem_intern(context, "opaque", "opaque", empty)
-    context.fields.append(SemField { owner: "IoError", name: "message", type_id: context.string_type, visible: true, requires: [] })
-    context.fields.append(SemField { owner: "NetError", name: "message", type_id: context.string_type, visible: true, requires: [] })
+    context.fields.append(SemField { source: context.tokens[0], owner: "IoError", name: "message", type_id: context.string_type, visible: true, requires: [] })
+    context.fields.append(SemField { source: context.tokens[0], owner: "NetError", name: "message", type_id: context.string_type, visible: true, requires: [] })
     for i in 0..len(tokens) - 1 {
         let kind = tokens[i].kind
         if kind == "STRUCT" or kind == "CLASS" or kind == "INTERFACE" or kind == "ENUM" {
@@ -3337,7 +3338,9 @@ fn sem_validate(context: SemanticContext, tokens: list[Token]) {
         let mut decl_is_async = false
         if sem_is(context, "IDENT") and sem_at(context).val == "async" and context.tokens[context.pos + 1].kind == "FN" { sem_take(context) decl_is_async = true }
         let declaration_source = sem_at(context)
-        if len(attributes) > 0 and not sem_is(context, "FN") { report_error_at("W0006", declaration_source, "static attributes require a top-level function declaration") }
+        if len(attributes) > 0 and not sem_is(context, "FN") and not sem_is(context, "CLASS") {
+            report_error_at("W0006", declaration_source, "static attributes require a top-level function or class declaration")
+        }
         if sem_match(context, "EXTERN") {
             if decl_is_async { report_error_at("W2001", declaration_source, "C FFI extern functions cannot be async") }
             if sem_expect(context, "STR").val != "C" { report_error_at("W2013", declaration_source, "only C ABI is supported") }
@@ -3350,7 +3353,18 @@ fn sem_validate(context: SemanticContext, tokens: list[Token]) {
         }
         elif sem_is(context, "FN") and context.tokens[context.pos + 1].kind == "IDENT" { sem_collect_function(context, "", true, decl_is_async) sem_attach_attributes(context, attributes) }
         elif sem_is(context, "STRUCT") { sem_collect_record(context, "struct") }
-        elif sem_is(context, "CLASS") { sem_collect_record(context, "class") }
+        elif sem_is(context, "CLASS") {
+            if len(attributes) > 0 {
+                let name = context.tokens[context.pos + 1].val
+                for attribute in attributes {
+                    if attribute.name == "deprecated" or attribute.name == "must_use" {
+                        report_error_at("W0006", attribute.source, "@" + attribute.name + " requires a function declaration")
+                    }
+                }
+                context.class_attributes[name] = attributes
+            }
+            sem_collect_record(context, "class")
+        }
         elif sem_is(context, "INTERFACE") { sem_collect_record(context, "interface") }
         elif sem_is(context, "ENUM") { sem_collect_record(context, "enum") }
         else { sem_take(context) }
@@ -3512,7 +3526,7 @@ fn sem_lambda(context: SemanticContext) -> SemValue {
         }
         let id = len(context.checked_functions)
         let sig_args = context.types[signature].args
-        context.checked_functions.append(CheckedFunction { declaration_name: "", captures: capture_bindings, closure: true, name: "closure_" + str(id), type_id: signature, params: parameter_bindings, body: body, source: token, is_async: false, async_return_type: sig_args[len(sig_args) - 1] })
+        context.checked_functions.append(CheckedFunction { owner: "", declaration_name: "", captures: capture_bindings, closure: true, name: "closure_" + str(id), type_id: signature, params: parameter_bindings, body: body, source: token, is_async: false, async_return_type: sig_args[len(sig_args) - 1] })
         return sem_expr(context, "closure", sem_value(signature), token, "", [], -1, id)
     }
     return sem_value(signature)

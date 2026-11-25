@@ -73,7 +73,8 @@ Every `graph` / `inspect` response identifies symbols by canonical declaration i
 
 | Capability | CLI / MCP Interface | Highlights in 0.9.5 |
 | --- | --- | --- |
-| **Semantic graph & impact** | `graph`, `wysna_graph` | Declaration-level disambiguation (`W1005`), callers/callees/usages/implements/impact, uncertainty & boundary flags |
+| **Semantic graph & impact** | `graph`, `wysna_graph` | Declaration-level disambiguation (`W1005`), callers/callees/usages/implements/impact, role queries (`--role`), uncertainty & boundary flags |
+| **Architecture contracts** | `project check`, `patch`, `wysna_project_check` | Class-level typed role attributes + `wysna.toml` rules enforced at check/patch time (`W6101`/`W6102`) — [guide](docs/ARCHITECTURE_CONTRACTS.md) |
 | **Bounded & batch inspect** | `inspect`, `wysna_inspect` | Single or batch (`--symbols a,b` / `symbols: [...]`) inspection sharing `--max-bytes`, Seed/Selfhost parity |
 | **Structured diagnostics** | `check`, `project check`, `wysna_check`, `wysna_project_check` | Selfhost multi-error recovery (up to 100 diagnostics with cascade suppression) + typed `data` and `related` spans |
 | **Atomic semantic patching** | `patch`, `wysna_patch` | Memory dry-run by default; single-symbol `--expect-graph-hash` or multi-file `--manifest --edits` (`source`, `symbol`, `hunks`, `create`, `delete`) with `--expect-plan-hash` and rollback |
@@ -89,11 +90,12 @@ Read the [AI Agent Guide](docs/AI_AGENT_GUIDE.md) and [agent benchmark harness](
 | [Operations audit](examples/wysofia-ops/README.md) | Validated JSON event auditing with contracts, `T ! E`, and optional SQLite storage built with the Native SDK. |
 | [Measurement sync](examples/automation-sync/README.md) | Bounded remote/file batch ingestion into SQLite inside an explicit transaction. |
 | [Quote application](examples/shared-browser-app/README.md) | Shared pricing and validation logic across native CLI, service, and WebAssembly targets. |
+| [Architecture contracts](examples/architecture/wysna.toml) | Role annotations on classes and declarative dependency rules enforced at check and patch time. |
 
 ## Architecture and current scope
 
 - **Dual-engine parity & native C99 backend:** Seed is the Python reference oracle; the Self-Hosted compiler (`selfhost/`) powers the standalone Native SDK through a verified AST → HIR → MIR → C99 pipeline with C99-accelerated JSON handling, loop hoisting/borrowing, and dead-code elimination. Direct LLVM emission remains experimental. See [Compiler Architecture](docs/COMPILER_ARCHITECTURE.md) and [Engine Parity Matrix](docs/ENGINE_PARITY_MATRIX.md).
-- **Safety & concurrency:** Static types, custom typed static metadata attributes (`struct` schemas), algebraic pattern matching with exhaustiveness checks, atomic ARC + Copy-on-Write (`Weak[C]`), isolated-ownership parallel workers (`std/algorithms`, `std/async.spawn`), and `--sandbox` / OS-boundary controls. See [Scope](docs/SCOPE.md), [Known Limits](docs/KNOWN_LIMITS.md), [Effects](docs/EFFECTS.md), and [Security Policy](SECURITY.md).
+- **Safety & concurrency:** Static types, custom typed static metadata attributes (`struct` schemas on functions and classes) with checked architecture policies ([Architecture Contracts](docs/ARCHITECTURE_CONTRACTS.md)), algebraic pattern matching with exhaustiveness checks, atomic ARC + Copy-on-Write (`Weak[C]`), isolated-ownership parallel workers (`std/algorithms`, `std/async.spawn`), and `--sandbox` / OS-boundary controls. See [Scope](docs/SCOPE.md), [Known Limits](docs/KNOWN_LIMITS.md), [Effects](docs/EFFECTS.md), and [Security Policy](SECURITY.md).
 
 ## Documentation and community
 
