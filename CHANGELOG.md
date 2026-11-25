@@ -1,5 +1,19 @@
 # Changelog
 
+## 0.9.5 — 2026-11-24
+
+### Agent-First Waves 1 & 2 (Protocol, Graph, Workspace Patch & MCP)
+- Resolves `wysna graph`, `wysna inspect`, `wysna patch`, and MCP lookups by canonical declaration identity, returning `[W1005]` candidates on ambiguity and surfacing `call_resolution` plus `analysis_boundaries` (`virtual-dispatch`, `indirect-call`, `c-ffi`).
+- Enables multi-error recovery (up to 100 unique diagnostics per pass with `error_type` cascade suppression) in the self-hosted compiler (`check`, `project check`, `patch`, `mcp`) and emits structured `data` facts + `related` declaration spans for `W1002`, `W2001`, `W2002`, `W2003`, `W2004`, `W2005`, and `W3001`, backed by strict `schemas/wysna-tool-result.v1.schema.json`.
+- Adds `--max-bytes` bounded context with resumable `omitted[].ref` handles, batch inspection (`--symbols`, repeatable `--symbol`, MCP `symbols`), and full Seed/Selfhost `wysna.inspect/1` schema parity.
+- Adds atomic multi-file `workspace patch` across Seed, Selfhost, and MCP supporting `source`, `symbol` + `replacement`, `hunks`, `create: true`, and `delete: true` with `--expect-plan-hash`, virtual overlay confinement, and automatic rollback on validation/publication failure.
+- Expands MCP to 13 tools by adding read-only `wysna_project_check` and opt-in `wysna_project_test` (gated behind `--allow-exec`, wired via `WYSNA_SDK_DRIVER` and `--diag-out` in `driver.c`).
+- Adds checked architecture contracts (`#196`): static role attributes on top-level classes, declarative `wysna.toml` policies enforced in `project check`, `workspace patch`, and MCP with structured `W6101`/`W6102` diagnostics and `wysna graph --role` queries.
+
+### Runtime, JSON, MIR & Compiler Scalability
+- Accelerates C99 runtime JSON serialization/extraction, single-thread ARC fast paths, ABI hotpaths, small-struct pooling, and 2-buffer stable sort.
+- Improves compiler scaling across module/import reuse, path normalization, signature indexing, dead-function elimination, MIR read-clone elision, hoisted/borrowed `for`-loops, and lazy diagnostic span hashing in Selfhost.
+
 ## 0.9.0 — 2026-11-22
 
 ### Arquitectura híbrida y tooling nativo
