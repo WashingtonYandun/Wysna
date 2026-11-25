@@ -140,7 +140,7 @@ if launch_args.payload(["runner", "child", "first"]) != ["first"] { exit(1) }
     require(b'Syntax Quick Reference' in output, output[-1000:])
 
 
-def sqlite(pilot, app, use_span, include_dir, library_dir):
+def sqlite(pilot, app, use_span, sqlite_source):
     call = 'audit.compute_risk_points(ev.status_code, ev.latency_ms)'
     cli = read(app / 'src/sqlite_cli.wysna')
     require(cli.count(call) == 1, 'SQLite call fixture changed')
@@ -157,12 +157,11 @@ def sqlite(pilot, app, use_span, include_dir, library_dir):
     pilot.repair(app, bad, edits, use_span, 'sqlite-audit')
     db = pilot.work / 'audit.db'
     output = pilot.work / ('audit.exe' if os.name == 'nt' else 'audit')
-    library = ['--link', app / 'native/ops_sqlite.c', '--library', 'sqlite3']
-    if include_dir:
-        library += ['--include-dir', include_dir]
-    if library_dir:
-        library += ['--library-dir', library_dir]
-    pilot.command('build_sqlite', app, 'project', 'build', '--target', 'sqlite-audit', '--frozen', '-o', output, *library)
+    pilot.command(
+        'build_sqlite', app, 'project', 'build', '--target', 'sqlite-audit', '--frozen', '-o', output,
+        '--link', app / 'native/ops_sqlite.c', '--link', sqlite_source / 'sqlite3.c',
+        '--include-dir', sqlite_source,
+    )
     pilot.env['WYSNA_OPS_DB'] = str(db)
     transcript = pilot.command('exercise', app, executable=output)
     require(b'sqlite_total=3 critical=1' in transcript, transcript)
@@ -183,14 +182,14 @@ def late_slice(sdk, work):
     return pilot.latency['inspect_late_utf8']
 
 
-def run_trial(sdk, work, example, pilot_fn, use_span, include_dir, library_dir):
+def run_trial(sdk, work, example, pilot_fn, use_span, sqlite_source):
     work.mkdir()
     pilot = Pilot(sdk, work)
     app = work / example
     shutil.copytree(REPO / 'examples' / example, app)
     pilot.restore(app)
     if pilot_fn is sqlite:
-        pilot_fn(pilot, app, use_span, include_dir, library_dir)
+        pilot_fn(pilot, app, use_span, sqlite_source)
     else:
         pilot_fn(pilot, app, use_span)
     repair_steps = ('diagnose', 'context', 'reject_regression', 'preview', 'apply')
@@ -209,16 +208,20 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--baseline-sdk', type=Path, required=True, help='Path to baseline bin/wysna')
     parser.add_argument('--candidate-sdk', type=Path, required=True, help='Path to candidate bin/wysna')
-    parser.add_argument('--sqlite-include-dir', type=Path, help='Directory containing sqlite3.h')
-    parser.add_argument('--sqlite-library-dir', type=Path, help='Directory containing the SQLite library')
+    parser.add_argument('--sqlite-source-dir', type=Path, required=True, help='Directory with sqlite3.c and sqlite3.h')
     parser.add_argument('--repeats', type=int, default=3)
     parser.add_argument('--output', type=Path, required=True)
     args = parser.parse_args()
     if args.repeats < 1:
         parser.error('--repeats must be positive')
+    sqlite_source = args.sqlite_source_dir.resolve()
+    if not all((sqlite_source / name).is_file() for name in ('sqlite3.c', 'sqlite3.h')):
+        parser.error('--sqlite-source-dir must contain sqlite3.c and sqlite3.h')
     report = {'schema_version': 'wysna.agent-repair-benchmark/1',
               'platform': platform.system() + ' ' + platform.machine(),
               'repeats': args.repeats,
+              'sqlite_source_sha256': {name: hashlib.sha256((sqlite_source / name).read_bytes()).hexdigest()
+                                       for name in ('sqlite3.c', 'sqlite3.h')},
               'sdks': {'baseline': sdk_identity(args.baseline_sdk), 'candidate': sdk_identity(args.candidate_sdk)},
               'pilots': {}, 'late_utf8_inspect': {}}
     with tempfile.TemporaryDirectory(prefix='wysna-repair-bench-') as stage:
@@ -228,7 +231,7 @@ def main():
             for index in range(args.repeats + 1):
                 for label, sdk in (('baseline', args.baseline_sdk), ('candidate', args.candidate_sdk)):
                     row = run_trial(sdk, root / f'{example}-{label}-{index}', example, function,
-                                    label == 'candidate', args.sqlite_include_dir, args.sqlite_library_dir)
+                                    label == 'candidate', sqlite_source)
                     if index:
                         rows[label].append(row)
         for label, sdk in (('baseline', args.baseline_sdk), ('candidate', args.candidate_sdk)):
