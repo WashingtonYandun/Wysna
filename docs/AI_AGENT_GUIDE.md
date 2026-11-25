@@ -103,7 +103,7 @@ wysna patch --manifest wysna.toml --edits changes.json --apply --expect-plan-has
 wysna lsp
 ```
 
-`wysna inspect` enforces UTF-8 byte budgets via `--max-bytes` (`--source-offset` / `--offset`), returns resumable fetch handles in `omitted[].ref`, and surfaces `call_resolution` plus `analysis_boundaries` (`virtual-dispatch`, `indirect-call`, `c-ffi`) across `graph` and `inspect`. Both Seed and the Native SDK (`patch --manifest ... --edits ...` and `wysna_patch` MCP) support checked multi-file workspace patches with unified diffs, impact selection, plan-hash validation (`W5005`), and staged atomic commit/rollback.
+`wysna inspect` enforces UTF-8 byte budgets via `--max-bytes` (`--source-offset` / `--offset`), returns resumable fetch handles in `omitted[].ref`, and surfaces `call_resolution` plus `analysis_boundaries` (`virtual-dispatch`, `indirect-call`, `c-ffi`) across `graph` and `inspect`. Both Seed and the Native SDK (`patch --manifest ... --edits ...` and `wysna_patch` MCP) support checked multi-file workspace patches with unified diffs, impact selection, plan-hash validation (`W5005`), and staged publication with rollback if a later operation fails.
 
 `wysna patch` rejects stale `graph:...` hashes with `W5005` and verifies types in
 memory before mutating disk. When applying edits via Seed CLI or MCP (`wysna patch --apply`

@@ -1,6 +1,8 @@
 """Keep patch previews and test plans bound to the same checked source revision."""
 import json
+import os
 from pathlib import Path
+import stat
 import subprocess
 import sys
 
@@ -68,6 +70,8 @@ def test_workspace_patch_checks_and_applies_all_edits_together(toolchain, tmp_pa
     root = project(tmp_path)
     manifest = root / 'wysna.toml'
     provider, app, request = _paired_edits(root)
+    if os.name != 'nt':
+        provider.chmod(0o600)
     baseline = [file.read_bytes() for file in (provider, app)]
 
     bad_edit_file = root / 'bad_changes.json'
@@ -296,3 +300,50 @@ def test_workspace_operations_rolls_back_mixed_create_modify_delete(tmp_path, mo
     assert keep.read_bytes() == b'old keep'
     assert remove_me.read_bytes() == b'old remove'
     assert not create_me.exists()
+
+
+def test_native_workspace_patch_does_not_publish_a_failed_delete(tmp_path):
+    root = project(tmp_path)
+    parent = root / 'src/protected'
+    parent.mkdir()
+    victim = parent / 'old.wysna'
+    victim.write_text('fn unused() -> int { return 1 }\n', encoding='utf-8')
+    source = root / 'src/main.wysna'
+    before = {path: path.read_bytes() for path in (victim, source)}
+    edits = root / 'changes.json'
+    edits.write_text(json.dumps([
+        {'path': 'src/main.wysna', 'source': 'print("replacement")\n'},
+        {'path': 'src/protected/old.wysna', 'delete': True},
+    ]), encoding='utf-8')
+    cli = [ensure_selfhost_compiler_binary(str(ROOT))]
+    args = ['patch', '--manifest', str(root / 'wysna.toml'), '--edits', str(edits),
+            '--output-format=json-v1']
+    preview = _run_cli(cli, *args)
+    assert preview.returncode == 0, preview.stderr + preview.stdout
+    plan_hash = json.loads(preview.stdout)['result']['plan_hash']
+
+    immutable = hasattr(os, 'chflags') and hasattr(stat, 'UF_IMMUTABLE')
+    if immutable:
+        try:
+            os.chflags(victim, stat.UF_IMMUTABLE)
+        except OSError:
+            immutable = False
+    if os.name == 'nt':
+        victim.chmod(stat.S_IREAD)
+    elif not immutable:
+        if os.geteuid() == 0:
+            pytest.skip('Root can delete files from a read-only directory')
+        parent.chmod(0o555)
+    try:
+        applied = _run_cli(cli, *args, '--apply', '--expect-plan-hash', plan_hash)
+        assert applied.returncode != 0, applied.stdout
+        assert json.loads(applied.stdout)['diagnostics'][0]['code'] == 'W5004'
+        assert {path: path.read_bytes() for path in before} == before
+        assert not list(root.rglob('*.wysna_tmp_*'))
+    finally:
+        if immutable:
+            os.chflags(victim, 0)
+        elif os.name == 'nt':
+            victim.chmod(stat.S_IREAD | stat.S_IWRITE)
+        else:
+            parent.chmod(0o755)

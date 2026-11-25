@@ -104,7 +104,7 @@ def path_text(handle):
 def file_open(handle, mode):
     global _error_code, _error_domain
     path = path_text(handle)
-    if path is None or mode not in (0, 1, 2, 3):
+    if path is None or mode not in (0, 1, 2, 3, 4):
         failure(OSError(errno.EINVAL, 'invalid path or mode'))
         return 0
     if _active_trace is not None and _active_trace.is_replaying:
@@ -118,7 +118,10 @@ def file_open(handle, mode):
             return 0
         return allocate('file', {'replayed_path': path, 'mode': mode})
     try:
-        opened = open(path, ('rb', 'wb', 'ab', 'xb')[mode])
+        if mode == 4:
+            opened = open(path, 'xb', opener=lambda name, flags: os.open(name, flags, 0o600))
+        else:
+            opened = open(path, ('rb', 'wb', 'ab', 'xb')[mode])
         if _active_trace is not None and _active_trace.is_recording:
             _active_trace.record('host.file_open', [path, mode], ok=True, result={'status': 'opened'})
         return allocate('file', opened)
@@ -217,8 +220,9 @@ def file_write(file_handle, buffer_handle):
 
 def filesystem(first, second, operation):
     text = path_text(first)
-    other = path_text(second) if operation == 4 else None
-    if text is None or (operation == 4 and other is None):
+    uses_second_path = operation in (4, 7)
+    other = path_text(second) if uses_second_path else None
+    if text is None or (uses_second_path and other is None):
         return failure(OSError(errno.EINVAL, 'invalid path'))
     if _active_trace is not None and _active_trace.is_replaying:
         ok, payload = _active_trace.replay('host.filesystem', [text, other, operation])
@@ -256,6 +260,12 @@ def filesystem(first, second, operation):
             path.rmdir() if path.is_dir() else path.unlink()
         elif operation == 4:
             os.replace(path, other)
+        elif operation == 7:
+            if os.name != 'nt':
+                mode = path.stat().st_mode
+                if not stat.S_ISREG(mode):
+                    raise OSError(errno.EINVAL, 'expected a regular staging source')
+                os.chmod(other, mode & 0o777)
         else:
             return -1
         if _active_trace is not None and _active_trace.is_recording:

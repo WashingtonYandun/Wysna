@@ -172,22 +172,33 @@ fn wpatch_live_revision(state: ProjectLockState, m: ProjectManifest, sdk_sha: st
     let lock_path = m.root + "/wysna.lock"
     let lock_sha = if proj_test_exists(state, lock_path) { proj_lock_host_text(state, lock_path, "hash") } else { "" }
     let ws_sha = proj_workspace_sha256(state, m.root)
-    let parts = proj_workspace_revision_parts(m.manifest_sha256, lock_sha, sdk_sha, ws_sha)
+    let live_manifest_sha = proj_lock_host_text(state, m.path, "hash")
+    let parts = proj_workspace_revision_parts(live_manifest_sha, lock_sha, sdk_sha, ws_sha)
     return parts[1]
 }
 
-fn wpatch_unlink_all(paths: list[str]) -> unit {
-    let empty_buf = tool_buf_from_str("")
-    for p in paths {
-        if p == "" { continue }
-        let p_buf = tool_buf_from_str(p)
-        let _rm = wysna_host_fs(p_buf, empty_buf, 3)
-        wysna_host_close(p_buf)
-    }
-    wysna_host_close(empty_buf)
+fn wpatch_remove(path: str) -> bool {
+    let first = tool_buf_from_str(path)
+    let second = tool_buf_from_str("")
+    let result = wysna_host_fs(first, second, 3)
+    wysna_host_close(first)
+    wysna_host_close(second)
+    return result == 0
 }
 
-fn wpatch_stage_temp_file(target_abs: str, stamp: str, idx: int, content: str) -> str {
+fn wpatch_unlink_all(paths: list[str]) -> unit {
+    for path in paths {
+        if path != "" { let _removed = wpatch_remove(path) }
+    }
+}
+
+fn wpatch_matches(path: str, expected_sha: str) -> bool {
+    if module_canonical_resolved(path) != path { return false }
+    let text = read_file(path) else err { return false }
+    return diag_sha256_hex(text) == expected_sha
+}
+
+fn wpatch_stage_temp_file(target_abs: str, stamp: str, idx: int, content: str, mode_from: str) -> str {
     let empty_buf = tool_buf_from_str("")
     let mut tmp_path = ""
     let mut fh = empty_buf
@@ -195,7 +206,7 @@ fn wpatch_stage_temp_file(target_abs: str, stamp: str, idx: int, content: str) -
     for attempt in 0..32 {
         let candidate = target_abs + ".wysna_tmp_" + stamp + "_" + str(idx) + "_" + str(attempt)
         let c_buf = tool_buf_from_str(candidate)
-        let handle = wysna_host_file_open(c_buf, 3)
+        let handle = wysna_host_file_open(c_buf, if mode_from == "" { 3 } else { 4 })
         wysna_host_close(c_buf)
         if wysna_host_is_open(handle) == 1 {
             tmp_path = candidate
@@ -213,6 +224,14 @@ fn wpatch_stage_temp_file(target_abs: str, stamp: str, idx: int, content: str) -
     if wr != 0 or cl != 0 {
         wpatch_unlink_all([tmp_path])
         return ""
+    }
+    if mode_from != "" {
+        let original = tool_buf_from_str(mode_from)
+        let staged = tool_buf_from_str(tmp_path)
+        let matched = wysna_host_fs(original, staged, 7)
+        wysna_host_close(original)
+        wysna_host_close(staged)
+        if matched != 0 { wpatch_unlink_all([tmp_path]); return "" }
     }
     return tmp_path
 }
@@ -561,83 +580,88 @@ fn proj_handle_workspace_patch(manifest_arg: str, edits_file: str, expected_hash
 
     if apply {
         let stamp = str(unix_time())
-        let mut created_dirs: list[str] = []
         let mut tmp_paths: list[str] = []
+        let mut backups: list[str] = []
         for k in 0..len(edit_abs) {
             let act = edit_actions[k]
-            if act == "create" {
-                if not wpatch_ensure_parents(m.root, edit_rels[k]) {
-                    wpatch_unlink_all(tmp_paths)
-                    proj_emit_error_and_exit("patch", json_mode, "W5004", "failed creating parent directory: " + edit_rels[k])
-                }
-                let staged = wpatch_stage_temp_file(edit_abs[k], stamp, k, edit_after[k])
-                if staged == "" {
-                    wpatch_unlink_all(tmp_paths)
-                    proj_emit_error_and_exit("patch", json_mode, "W5004", "failed staging workspace creation: " + edit_rels[k])
-                }
-                tmp_paths.append(staged)
-            } elif act == "modify" {
-                let staged = wpatch_stage_temp_file(edit_abs[k], stamp, k, edit_after[k])
-                if staged == "" {
-                    wpatch_unlink_all(tmp_paths)
-                    proj_emit_error_and_exit("patch", json_mode, "W5004", "failed staging workspace replacement: " + edit_rels[k])
-                }
-                tmp_paths.append(staged)
-            } else {
-                tmp_paths.append("")
+            let path = edit_abs[k]
+            let backup = if act == "create" { "" }
+                else { wpatch_stage_temp_file(path, stamp + "_backup", k, edit_before[k], path) }
+            backups.append(backup)
+            if act != "create" and backup == "" {
+                wpatch_unlink_all(tmp_paths)
+                wpatch_unlink_all(backups)
+                proj_emit_error_and_exit("patch", json_mode, "W5004", "failed staging workspace backup: " + edit_rels[k])
+            }
+            if act == "create" and not wpatch_ensure_parents(m.root, edit_rels[k]) {
+                wpatch_unlink_all(tmp_paths)
+                wpatch_unlink_all(backups)
+                proj_emit_error_and_exit("patch", json_mode, "W5004", "failed creating parent directory: " + edit_rels[k])
+            }
+            let staged = if act == "delete" { "" } else { wpatch_stage_temp_file(path, stamp, k, edit_after[k], if act == "modify" { path } else { "" }) }
+            tmp_paths.append(staged)
+            if act != "delete" and staged == "" {
+                wpatch_unlink_all(tmp_paths)
+                wpatch_unlink_all(backups)
+                proj_emit_error_and_exit("patch", json_mode, "W5004", "failed staging workspace operation: " + edit_rels[k])
             }
         }
         let live_commit = wpatch_live_revision(state, m, sdk_sha)
         if live_commit != test_plan.revision {
             wpatch_unlink_all(tmp_paths)
+            wpatch_unlink_all(backups)
             proj_emit_error_and_exit("patch", json_mode, "W5005", "Workspace changed during edit planning")
         }
-        let mut committed: list[int] = []
-        let mut failed_idx = -1
+        let mut published = 0
+        let mut failure_code = ""
         for k in 0..len(edit_abs) {
             let act = edit_actions[k]
-            if act == "delete" {
-                if not proj_path_exists(edit_abs[k]) {
-                    failed_idx = k
-                    break
-                }
-                wpatch_unlink_all([edit_abs[k]])
-                committed.append(k)
-            } elif act == "create" {
-                if proj_path_exists(edit_abs[k]) or not wpatch_rename_file(tmp_paths[k], edit_abs[k]) {
-                    failed_idx = k
-                    break
-                }
-                committed.append(k)
-            } else {
-                if not wpatch_rename_file(tmp_paths[k], edit_abs[k]) {
-                    failed_idx = k
-                    break
-                }
-                committed.append(k)
+            let path = edit_abs[k]
+            let current_matches = if act == "create" {
+                not proj_path_exists(path) and wpatch_no_symlink_ancestors(m.root, edit_rels[k])
+            } else { wpatch_matches(path, edit_before_sha[k]) }
+            if not current_matches {
+                failure_code = "W5005"
+                break
             }
-        }
-        if failed_idx >= 0 {
-            let mut leftover: list[str] = []
-            for k in failed_idx..len(tmp_paths) { leftover.append(tmp_paths[k]) }
-            wpatch_unlink_all(leftover)
-            let mut r_idx = len(committed) - 1
-            while r_idx >= 0 {
-                let c_idx = committed[r_idx]
-                let rb_act = edit_actions[c_idx]
-                if rb_act == "create" {
-                    wpatch_unlink_all([edit_abs[c_idx]])
-                } else {
-                    let rb_tmp = wpatch_stage_temp_file(edit_abs[c_idx], stamp + "_rb", r_idx, edit_before[c_idx])
-                    if rb_tmp != "" {
-                        let _ok = wpatch_rename_file(rb_tmp, edit_abs[c_idx])
-                        wpatch_unlink_all([rb_tmp])
-                    }
-                }
-                r_idx = r_idx - 1
+            let committed = if act == "delete" { wpatch_remove(path) }
+                else { wpatch_rename_file(tmp_paths[k], path) }
+            if not committed {
+                failure_code = "W5004"
+                break
             }
-            proj_emit_error_and_exit("patch", json_mode, "W5004", "failed committing workspace operation: " + edit_rels[failed_idx])
+            published = published + 1
         }
+        wpatch_unlink_all(tmp_paths)
+        if failure_code != "" {
+            let mut failed_restores: list[str] = []
+            let mut index = published - 1
+            while index >= 0 {
+                let act = edit_actions[index]
+                let path = edit_abs[index]
+                let current_matches = if act == "delete" {
+                    not proj_path_exists(path) and wpatch_no_symlink_ancestors(m.root, edit_rels[index])
+                } else { wpatch_matches(path, edit_after_sha[index]) }
+                let restored = current_matches and (if act == "create" { wpatch_remove(path) }
+                    else { wpatch_rename_file(backups[index], path) })
+                if not restored {
+                    let backup = backups[index]
+                    let info = if backup == "" { "" } else { " (backup " + backup + ")" }
+                    failed_restores.append(path + info)
+                    backups[index] = ""
+                }
+                index = index - 1
+            }
+            wpatch_unlink_all(backups)
+            if len(failed_restores) > 0 {
+                proj_emit_error_and_exit("patch", json_mode, "W5004",
+                    "Workspace publication failed; could not restore " + join_strings(failed_restores, ", "))
+            }
+            let message = if failure_code == "W5005" { "Source changed before workspace apply: " }
+                else { "failed committing workspace operation: " }
+            proj_emit_error_and_exit("patch", json_mode, failure_code, message + edit_rels[published])
+        }
+        wpatch_unlink_all(backups)
     }
 
     let written_str = if apply { "true" } else { "false" }

@@ -286,11 +286,12 @@ instrucciones al agente desde la herramienta instalada.
 
 ### Cambios coordinados con el mismo plan de pruebas
 
-En la CLI Seed, `wysna patch --manifest wysna.toml --edits changes.json --output-format=json-v1`
-previsualiza un lote de reemplazos. `changes.json` contiene un array de objetos
-con `path` relativo al proyecto y `source` con el texto completo de cada archivo
-`.wysna` existente. Usa `--discover` y `--frozen` si el plan de pruebas también
-los usa.
+`wysna patch --manifest wysna.toml --edits changes.json --output-format=json-v1`
+previsualiza un lote en Seed y en el SDK nativo. Cada edición incluye un
+`path` relativo a un archivo `.wysna`. Usa `source`, `symbol` y
+`replacement`, o `hunks` para modificarlo. Usa `create: true` con
+`source` para crearlo y `delete: true` para borrarlo. Conserva las opciones
+`--discover` y `--frozen` del plan de pruebas.
 
 La previsualización comprueba los destinos, pruebas y archivos editados en memoria.
 Devuelve diffs y hashes, los IDs de las pruebas seleccionadas y la revisión esperada
@@ -298,13 +299,14 @@ tras aplicar el cambio. Una prueba que carga un archivo editado aparece como
 `affected`. Las demás se incluyen de forma conservadora como `uncertain`.
 
 Para aplicar el lote, usa los mismos argumentos con `--apply --expect-plan-hash HASH`.
-La CLI verifica la revisión bajo los locks de los archivos editados, prepara todos
-los reemplazos y revierte los ya publicados si falla un reemplazo posterior.
-Si un escritor externo impide recuperar el contenido, el error identifica la copia
-conservada. Los lectores externos y las terminaciones abruptas del proceso quedan
-fuera de esta garantía de reversión.
+Ambos motores vuelven a comprobar la revisión, preparan las copias antes de
+publicar y revierten las operaciones publicadas si falla una posterior. Seed
+también serializa escritores cooperativos con locks por archivo. Si un cambio
+externo impide restaurar un archivo, el error identifica la copia conservada
+cuando existe. Los lectores externos pueden observar pasos intermedios. La
+reversión requiere que el proceso siga ejecutándose.
 
-Después de aplicar, ejecuta `wysna project test --engine=seed --list --output-format=json-v1`
-con la misma selección. `result.workspace_revision` debe coincidir con
+Después de aplicar, ejecuta `wysna project test --list --output-format=json-v1`
+con el mismo motor y la misma selección. `result.workspace_revision` debe coincidir con
 `workspace_revision_after` del parche. Ejecuta entonces las pruebas con el
 `--expect-plan-hash` de ese listado, conservando la selección y las opciones.
