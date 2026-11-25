@@ -1,14 +1,18 @@
 """Check coordinated source edits (modify/symbol/hunks/create/delete) against one project revision before applying."""
 import difflib
 import hashlib
-from pathlib import PurePosixPath
+import os
+from pathlib import Path, PurePosixPath
+import shutil
+import tempfile
 
 from compiler.CompilerService import CompilerService
 from error.Error import WysnaError
 from project.Architecture import check_architecture
-from project.Resolver import ProjectResolver
+from project.Resolver import ProjectResolver, _IGNORED_DIRECTORY_NAMES
 from project.Testing import _snapshot_digest, build_test_plan, project_revision, project_source_snapshot
 from tooling.SourceWrite import write_workspace_operations
+from tooling.ToolResult import tool_result
 
 
 def _validate_rel_wysna(name):
@@ -167,8 +171,91 @@ def _check_overlay(resolver, entries, edits):
     return inputs
 
 
+def _test_input_snapshot(root):
+    """Include data files used by tests and frozen dependencies."""
+    files = []
+    for directory, children, names in os.walk(root):
+        folder = Path(directory)
+        if folder == root:
+            children[:] = [name for name in children if name not in _IGNORED_DIRECTORY_NAMES]
+        for name in children + names:
+            path = folder / name
+            if path.is_symlink():
+                raise ValueError(f"Workspace test snapshot does not follow symbolic links: '{path}'")
+            if name in names and path.is_file() and (name not in {'wysna.lock', 'wysna.lock.tmp'}
+                                                   or path == root / 'wysna.lock'):
+                digest = hashlib.sha256()
+                with path.open('rb') as stream:
+                    for chunk in iter(lambda: stream.read(1024 * 1024), b''):
+                        digest.update(chunk)
+                files.append((path.relative_to(root).as_posix(), digest.hexdigest()))
+    return sorted(files)
+
+
+def _verify_candidate_tests(manifest, snapshot, edits, plan_hash, expected_revision, *,
+                            discover, frozen):
+    from tooling.ProjectCLI import execute_project_tests
+
+    with tempfile.TemporaryDirectory(prefix='wysna-patch-') as staging:
+        candidate = Path(staging).resolve()
+        for relative, _ in snapshot:
+            source = manifest.root / relative
+            if source.resolve() != source or not source.is_file():
+                raise WysnaError('Workspace test input changed during staging', code='W5005', stage='patch')
+            destination = candidate / relative
+            destination.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copyfile(source, destination)
+        if _test_input_snapshot(candidate) != snapshot:
+            raise WysnaError('Workspace test snapshot changed during staging', code='W5005', stage='patch')
+
+        for name, (action, _, _, source) in edits.items():
+            path = candidate / name
+            if action == 'delete':
+                path.unlink()
+            else:
+                path.parent.mkdir(parents=True, exist_ok=True)
+                path.write_bytes(source)
+
+        resolver = ProjectResolver.load(candidate / manifest.path.name)
+        if frozen:
+            resolver.verify_lock()
+        cases, plan = build_test_plan(resolver, discover=discover)
+        if plan['workspace_revision'] != expected_revision:
+            raise WysnaError('Staged workspace differs from the checked patch', code='W5005', stage='patch')
+
+        evidence = {
+            'plan_hash': plan_hash,
+            'workspace_revision': expected_revision,
+            'test_plan_hash': plan['plan_hash'],
+            'status': 'empty',
+            'cases': [],
+        }
+        if not cases:
+            return evidence
+        report, _ = execute_project_tests(resolver.manifest, cases, plan, frozen, json_mode=True)
+        if project_revision(resolver)['workspace_revision'] != expected_revision:
+            raise WysnaError('Tests changed the staged source revision', code='W5005', stage='patch')
+        evidence['status'] = report['status']
+        fields = ('id', 'status', 'failure_kind', 'exit_code', 'duration_ms', 'stdout_sha256', 'stderr_sha256')
+        for record in report['cases']:
+            row = {field: record[field] for field in fields}
+            if record['status'] != 'passed':
+                row['stderr'] = record['stderr'][:2048]
+            evidence['cases'].append(row)
+        return evidence
+
+
+def workspace_patch_envelope(result):
+    verification = result.get('test_verification', {})
+    code = {'failed': 1, 'empty': 2, 'cancelled': 130}.get(verification.get('status'), 0)
+    status = 'ok' if code == 0 else 'usage_error' if code == 2 else 'runtime_error'
+    envelope = tool_result('patch', status, code)
+    envelope['result'] = result
+    return envelope
+
+
 def plan_workspace_patch(manifest_path, request, *, expected_hash=None, apply=False,
-                         discover=False, frozen=False):
+                         discover=False, frozen=False, test=False):
     if apply and not expected_hash:
         raise ValueError('Applying workspace edits requires --expect-plan-hash from a successful preview')
     resolver = ProjectResolver.load(manifest_path)
@@ -185,6 +272,11 @@ def plan_workspace_patch(manifest_path, request, *, expected_hash=None, apply=Fa
     cases = tests['cases']
     protected = set(targets) | {case['entry'] for case in cases}
     edits = _load_edits(resolver, root, files, request, protected)
+    if test and discover:
+        for name, (action, path, _, _) in sorted(edits.items()):
+            if (action == 'create' and name.startswith('tests/')
+                    and (path.name.startswith('test_') or path.name.endswith('_test.wysna'))):
+                cases.append({'id': f'test:auto:{name}', 'entry': name})
     active_edits = [name for name, (action, _, _, _) in edits.items() if action != 'delete']
     entries = sorted(set([*targets, *active_edits, *[case['entry'] for case in cases]]))
     inputs = _check_overlay(resolver, entries, edits)
@@ -219,6 +311,9 @@ def plan_workspace_patch(manifest_path, request, *, expected_hash=None, apply=Fa
                'workspace_revision_after': after['workspace_revision'],
                'changes': modifications, 'checked': entries, 'tests': impact,
                'selected_test_ids': [case['id'] for case in cases]}
+    test_snapshot = _test_input_snapshot(root) if test else None
+    if test:
+        payload['test_inputs_sha256'] = _snapshot_digest(test_snapshot)
     plan_hash = _snapshot_digest(payload)
 
     def verify_revision():
@@ -228,6 +323,18 @@ def plan_workspace_patch(manifest_path, request, *, expected_hash=None, apply=Fa
     verify_revision()
     if expected_hash and plan_hash != expected_hash:
         raise WysnaError('Workspace edit plan is stale', code='W5005', stage='patch')
+    result = {**payload, 'plan_hash': plan_hash, 'written': False}
+    if test:
+        evidence = _verify_candidate_tests(manifest, test_snapshot, edits, plan_hash,
+                                           after['workspace_revision'], discover=discover, frozen=frozen)
+        verify_revision()
+        if _test_input_snapshot(root) != test_snapshot:
+            raise WysnaError('Workspace test inputs changed during verification', code='W5005', stage='patch')
+        result['test_verification'] = evidence
+        if evidence['status'] != 'passed':
+            return result
+
     if apply:
         write_workspace_operations(edits.values(), verify_revision)
-    return {**payload, 'plan_hash': plan_hash, 'written': apply}
+        result['written'] = True
+    return result

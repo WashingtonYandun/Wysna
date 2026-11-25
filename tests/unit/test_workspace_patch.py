@@ -347,3 +347,102 @@ def test_native_workspace_patch_does_not_publish_a_failed_delete(tmp_path):
             victim.chmod(stat.S_IREAD | stat.S_IWRITE)
         else:
             parent.chmod(0o755)
+
+
+def test_tested_patch_runs_candidate_and_guards_apply(tmp_path):
+    root = project(tmp_path)
+    provider, _, request = _paired_edits(root)
+    (root / 'tests/example.wysna').write_text(
+        'import "provider.wysna" as source\n'
+        'let data = read_file("fixture.txt") else err { exit(8) }\n'
+        'write_file("ran.txt", data) else err { exit(9) }\n'
+        'if source.value(1) != 2 { eprint("unexpected value") exit(1) }\n',
+        encoding='utf-8',
+    )
+    data = root / 'fixture.txt'
+    data.write_text('fixture\n', encoding='utf-8')
+    original = provider.read_bytes()
+    manifest = root / 'wysna.toml'
+    edits = tmp_path / 'edits.json'
+    args = ['patch', '--manifest', str(manifest), '--edits', str(edits), '--output-format=json-v1']
+    correct_source = request[0]['source']
+    request[0]['source'] = correct_source.replace('v + 1', 'v + 2')
+    edits.write_text(json.dumps(request), encoding='utf-8')
+
+    failed = _run_cli(SEED, *args, '--test')
+    assert failed.returncode == 1, failed.stderr + failed.stdout
+    failure = json.loads(failed.stdout)['result']
+    assert failure['written'] is False
+    assert failure['test_verification']['status'] == 'failed'
+    case, = failure['test_verification']['cases']
+    assert case['exit_code'] == 1 and 'unexpected value' in case['stderr']
+    retry = _run_cli(SEED, *args, '--test', '--apply', '--expect-plan-hash', failure['plan_hash'])
+    assert retry.returncode == 1 and json.loads(retry.stdout)['result']['written'] is False
+    assert provider.read_bytes() == original and not (root / 'ran.txt').exists()
+
+    request[0]['source'] = correct_source
+    edits.write_text(json.dumps(request), encoding='utf-8')
+    previewed = _run_cli(SEED, *args, '--test')
+    assert previewed.returncode == 0, previewed.stderr + previewed.stdout
+    preview = json.loads(previewed.stdout)['result']
+    checks = preview['test_verification']
+    assert checks['plan_hash'] == preview['plan_hash']
+    assert checks['workspace_revision'] == preview['workspace_revision_after']
+    assert checks['cases'][0]['status'] == 'passed'
+    assert preview['written'] is False and not (root / 'ran.txt').exists()
+
+    apply = [*args, '--apply', '--expect-plan-hash', preview['plan_hash']]
+    for flags in ([], ['--test']):
+        if flags:
+            data.write_text('modified fixture\n', encoding='utf-8')
+        stale = _run_cli(SEED, *apply, *flags)
+        assert stale.returncode != 0 and json.loads(stale.stdout)['diagnostics'][0]['code'] == 'W5005'
+        assert provider.read_bytes() == original
+
+    data.write_text('fixture\n', encoding='utf-8')
+    applied = _run_cli(SEED, *apply, '--test')
+    assert applied.returncode == 0, applied.stderr + applied.stdout
+    assert json.loads(applied.stdout)['result']['written'] is True
+    assert provider.read_text(encoding='utf-8') == correct_source
+    assert not (root / 'ran.txt').exists()
+
+
+def test_tested_patch_discovers_new_candidate_tests(tmp_path):
+    root = project(tmp_path)
+    edits = [
+        {'path': 'src/main.wysna', 'source': 'print("candidate")\n'},
+        {'path': 'tests/test_candidate.wysna', 'create': True, 'source': 'exit(1)\n'},
+    ]
+    result = plan_workspace_patch(root / 'wysna.toml', edits, discover=True, test=True)
+    discovered = 'test:auto:tests/test_candidate.wysna'
+    assert discovered in result['selected_test_ids']
+    assert result['test_verification']['status'] == 'failed'
+    assert {case['id']: case['status'] for case in result['test_verification']['cases']} == {
+        'test:example': 'passed', discovered: 'failed',
+    }
+    assert not (root / 'tests/test_candidate.wysna').exists()
+
+
+def test_tested_patch_mcp_requires_exec(toolchain, tmp_path):
+    root = project(tmp_path, 'write_file("ran.txt", "yes")\n')
+    _, _, edits = _paired_edits(root)
+    failed, denied = _call_mcp(toolchain, root, 'wysna_patch', {
+        'manifest': 'wysna.toml', 'edits': edits, 'test': True,
+    })
+    assert not failed and denied['status'] == 'usage_error'
+    assert denied['diagnostics'][0]['code'] == 'W5002'
+    assert not (root / 'ran.txt').exists()
+
+
+def test_tested_patch_requires_at_least_one_case(tmp_path):
+    root = project(tmp_path)
+    manifest = root / 'wysna.toml'
+    manifest.write_text(manifest.read_text(encoding='utf-8').split('[[tests]]', 1)[0], encoding='utf-8')
+    source = root / 'src/main.wysna'
+    original = source.read_bytes()
+    edits = [{'path': 'src/main.wysna', 'source': 'print("candidate")\n'}]
+    preview = plan_workspace_patch(manifest, edits, test=True)
+    result = plan_workspace_patch(manifest, edits, test=True, apply=True, expected_hash=preview['plan_hash'])
+    assert result['test_verification']['status'] == 'empty'
+    assert result['test_verification']['cases'] == []
+    assert result['written'] is False and source.read_bytes() == original

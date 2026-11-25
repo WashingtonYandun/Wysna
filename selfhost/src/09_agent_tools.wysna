@@ -1602,6 +1602,7 @@ fn tool_handle_patch(args: list[str], json_mode: bool) -> unit {
     let mut manifest = ""
     let mut edits_file = ""
     let mut expect_plan_hash = ""
+    let mut test = false
     let mut discover = false
     let mut frozen = false
     let mut apply = false
@@ -1640,6 +1641,9 @@ fn tool_handle_patch(args: list[str], json_mode: bool) -> unit {
         } elif a == "--frozen" {
             frozen = true
             i = i + 1
+        } elif a == "--test" {
+            test = true
+            i = i + 1
         } elif a == "--apply" {
             apply = true
             i = i + 1
@@ -1654,10 +1658,10 @@ fn tool_handle_patch(args: list[str], json_mode: bool) -> unit {
         if manifest == "" or file != "" or symbol != "" or has_with or with_file != "" or expect_hash != "" {
             report_error("<cli>", "W5002", 1, 1, "workspace patch requires --manifest and --edits without single-source options")
         }
-        proj_handle_workspace_patch(manifest, edits_file, expect_plan_hash, apply, discover, frozen, json_mode)
+        proj_handle_workspace_patch(manifest, edits_file, expect_plan_hash, apply, discover, frozen, test, json_mode)
         return
     }
-    if file == "" or symbol == "" or manifest != "" or expect_plan_hash != "" or discover or frozen {
+    if file == "" or symbol == "" or manifest != "" or expect_plan_hash != "" or discover or frozen or test {
         report_error("<cli>", "W5002", 1, 1, "patch requires a file path and --symbol")
     }
     if with_file != "" {

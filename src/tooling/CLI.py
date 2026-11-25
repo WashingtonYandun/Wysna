@@ -101,7 +101,7 @@ def print_help(prog: Optional[str] = None) -> None:
     print(f"  {prog} graph <file.wysna> [--symbol NAME] [--rel implements|hierarchy|usages|callers|callees|impact] [--output-format=json-v1] # Compile-time semantic relationship graph")
     print(f"  {prog} inspect <file.wysna> [--symbol NAME] [--with-deps] [--output-format=json-v1] # Surgical symbol slice and dependency context")
     print(f"  {prog} patch <file.wysna> --symbol NAME (--with CODE | --with-file PATH) [--expect-graph-hash HASH] [--apply] [--output-format=json-v1] # Checked semantic patch")
-    print(f"  {prog} patch --manifest MANIFEST --edits FILE [--apply --expect-plan-hash HASH] [--output-format=json-v1] # Checked Seed workspace edits")
+    print(f"  {prog} patch --manifest MANIFEST --edits FILE [--test] [--apply --expect-plan-hash HASH] [--output-format=json-v1] # Checked Seed workspace edits")
     print(f"  {prog} skills [topic] [--output-format=json-v1]  # Embedded version-matched agent coding guides")
     print(f"  {prog} explain <file.wysna|--code Wxxxx> [--function NAME] [--output-format=json-v1] # Effects report or diagnostic explanation")
     print(f"  {prog} project <new|lock|check|build|run|test> [options] # Reproducible local projects")

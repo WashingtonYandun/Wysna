@@ -120,6 +120,32 @@ and file permissions. External editors that write directly without using Wysna t
 not hold the cooperative lock; optimistic revision verification still rejects stale snapshots
 detected before replacement.
 
+### Probar el candidato antes de aplicar
+
+```sh
+wysna patch --manifest wysna.toml --edits changes.json --test --discover --output-format=json-v1
+wysna patch --manifest wysna.toml --edits changes.json --test --discover --apply --expect-plan-hash HASH --output-format=json-v1
+```
+
+Usa `result.plan_hash` de la primera llamada como `HASH`. Con `--test`, Seed y el
+SDK nativo ejecutan `project test` sobre una copia temporal del candidato con sus
+datos de prueba y dependencias locales. Ejecutan toda la selección declarada
+y, con `--discover`, incluyen los casos descubiertos en `tests/`, incluso los
+creados por el candidato. `result.tests` indica qué cambios alcanza cada caso.
+Si el alcance no se puede demostrar, el caso queda como `uncertain` y se ejecuta.
+
+`result.test_verification` vincula el estado, las duraciones, los motivos de
+fallo y los hashes de salida al plan y a la revisión del candidato. Una suite
+vacía, cancelada o fallida deja `written: false`. El paso de aplicación vuelve
+a ejecutar las pruebas. Si cambian los archivos de entrada desde la
+previsualización, se devuelve `W5005`. Guarda las salidas de las herramientas
+fuera del proyecto o en un directorio de compilación ignorado.
+
+En MCP, pasa `test: true` en `wysna_patch` y habilita `--allow-exec` al iniciar
+el servidor. La copia temporal aísla las escrituras relativas del proyecto.
+Las pruebas nativas conservan los permisos del proceso, incluido el acceso a
+rutas absolutas. Ejecuta suites de confianza.
+
 ### Seleccionar el símbolo que se quiere consultar o editar
 
 Si un nombre corto coincide con varias declaraciones, `graph`, `inspect` y
