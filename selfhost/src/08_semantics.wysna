@@ -693,7 +693,7 @@ fn sem_skip_block(context: SemanticContext) -> int {
     return context.pos
 }
 fn sem_collect_function(context: SemanticContext, owner: str, visible: bool, is_async: bool) {
-    sem_expect(context, "FN")
+    let declaration_source = sem_expect(context, "FN")
     let local_tok = sem_expect(context, "IDENT")
     let local = local_tok.val
     let previous_type_params = context.type_params
@@ -769,7 +769,6 @@ fn sem_collect_function(context: SemanticContext, owner: str, visible: bool, is_
     let mut end = context.pos
     if sem_is(context, "LBRACE") { body = context.pos end = sem_skip_block(context) }
     context.type_params = previous_type_params
-    let declaration_source = if body >= 0 { context.tokens[body] } else { context.tokens[if end > 0 { end - 1 } else { 0 }] }
     context.functions.append(SemFunction { source: declaration_source, declaration_name: local, attributes: [], abi_params: abi_params, abi_return: abi_return, name: name, params: params, type_params: type_params, constraints: constraints, type_id: signature, body: body, end: end, owner: owner, visible: visible, contract_start: contract_start, is_async: is_async })
 }
 fn sem_collect_record(context: SemanticContext, kind: str) {
