@@ -233,11 +233,11 @@ def _verify_candidate_tests(manifest, snapshot, edits, plan_hash, expected_revis
             'cases': [],
         }
         test_started = time.perf_counter()
-        evidence['timing_ms'] = {'staging': round((test_started - staging_started) * 1000, 3), 'test_runner': 0}
+        timings = {'staging': round((test_started - staging_started) * 1000, 3), 'test_runner': 0}
         if not cases:
-            return evidence
+            return evidence, timings
         report, _ = execute_project_tests(resolver.manifest, cases, plan, frozen, json_mode=True)
-        evidence['timing_ms']['test_runner'] = round((time.perf_counter() - test_started) * 1000, 3)
+        timings['test_runner'] = round((time.perf_counter() - test_started) * 1000, 3)
         if project_revision(resolver)['workspace_revision'] != expected_revision:
             raise WysnaError('Tests changed the staged source revision', code='W5005', stage='patch')
         evidence['status'] = report['status']
@@ -247,7 +247,7 @@ def _verify_candidate_tests(manifest, snapshot, edits, plan_hash, expected_revis
             if record['status'] != 'passed':
                 row['stderr'] = record['stderr'][:2048]
             evidence['cases'].append(row)
-        return evidence
+        return evidence, timings
 
 
 def workspace_patch_envelope(result):
@@ -330,12 +330,13 @@ def plan_workspace_patch(manifest_path, request, *, expected_hash=None, apply=Fa
         raise WysnaError('Workspace edit plan is stale', code='W5005', stage='patch')
     result = {**payload, 'plan_hash': plan_hash, 'written': False}
     if test:
-        evidence = _verify_candidate_tests(manifest, test_snapshot, edits, plan_hash,
-                                           after['workspace_revision'], discover=discover, frozen=frozen)
+        evidence, timings = _verify_candidate_tests(manifest, test_snapshot, edits, plan_hash,
+                                                    after['workspace_revision'], discover=discover, frozen=frozen)
         verify_revision()
         if _test_input_snapshot(root) != test_snapshot:
             raise WysnaError('Workspace test inputs changed during verification', code='W5005', stage='patch')
         result['test_verification'] = evidence
+        result['test_timing_ms'] = timings
         if evidence['status'] != 'passed':
             return result
 

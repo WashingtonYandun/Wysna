@@ -287,7 +287,7 @@ fn wpatch_copy_test_input(source: str, destination: str) -> bool {
     return ok and closed_input == 0 and closed_output == 0
 }
 
-struct PatchTestVerification { code: int, evidence: str }
+struct PatchTestVerification { code: int, evidence: str, timings: str }
 
 fn wpatch_verify_candidate_tests(state: ProjectLockState, m: ProjectManifest, paths: list[str], inputs_sha: str,
                                   edit_rels: list[str], edit_actions: list[str], edit_after: list[str],
@@ -359,8 +359,12 @@ fn wpatch_verify_candidate_tests(state: ProjectLockState, m: ProjectManifest, pa
     }
 
     let mut rows: list[str] = []
-    let fields: list[str] = ["id", "status", "failure_kind", "exit_code", "duration_ms", "compile_ms", "run_ms", "stdout_sha256", "stderr_sha256"]
+    let mut timings: list[str] = []
+    let fields: list[str] = ["id", "status", "failure_kind", "exit_code", "duration_ms", "stdout_sha256", "stderr_sha256"]
     for record in case_reports.items {
+        timings.append("{\"id\":" + diag_json_quote(lsp_json_str(record, "id", "")) +
+            ",\"compile_ms\":" + str(lsp_json_int(record, "compile_ms", 0)) +
+            ",\"run_ms\":" + str(lsp_json_int(record, "run_ms", 0)) + "}")
         let mut parts: list[str] = []
         for field in fields {
             parts.append(diag_json_quote(field) + ":" + mcp_serialize_json_val(lsp_json_get(record, field)))
@@ -374,9 +378,10 @@ fn wpatch_verify_candidate_tests(state: ProjectLockState, m: ProjectManifest, pa
     }
     let evidence = "{\"plan_hash\":" + diag_json_quote(plan_hash) + ",\"workspace_revision\":" + diag_json_quote(revision) +
         ",\"test_plan_hash\":" + diag_json_quote(lsp_json_str(report, "plan_hash", "")) +
-        ",\"status\":" + diag_json_quote(status) + ",\"cases\":[" + join_strings(rows, ",") + "]" +
-        ",\"timing_ms\":{\"staging\":" + str(test_started - staging_started) + ",\"test_runner\":" + str(test_ms) + "}}"
-    return PatchTestVerification { code: rc, evidence: evidence }
+        ",\"status\":" + diag_json_quote(status) + ",\"cases\":[" + join_strings(rows, ",") + "]}"
+    let timing_json = "{\"staging\":" + str(test_started - staging_started) + ",\"test_runner\":" + str(test_ms) +
+        ",\"cases\":[" + join_strings(timings, ",") + "]}"
+    return PatchTestVerification { code: rc, evidence: evidence, timings: timing_json }
 }
 
 fn proj_handle_workspace_patch(manifest_arg: str, edits_file: str, expected_hash: str, apply: bool, discover: bool, frozen: bool, test: bool, json_mode: bool) -> unit {
@@ -751,7 +756,7 @@ fn proj_handle_workspace_patch(manifest_arg: str, edits_file: str, expected_hash
         let verification = wpatch_verify_candidate_tests(state, m, test_paths, test_inputs_sha,
             edit_rels, edit_actions, edit_after, sdk_sha, after_rev, plan_hash, discover, frozen, len(patch_cases))
         test_code = verification.code
-        evidence = ",\"test_verification\":" + verification.evidence
+        evidence = ",\"test_verification\":" + verification.evidence + ",\"test_timing_ms\":" + verification.timings
         if wpatch_live_revision(state, m, sdk_sha) != test_plan.revision or
            wpatch_test_inputs_sha(state, m.root, wpatch_test_paths(state, m.root)) != test_inputs_sha {
             state.fail("W5005", "Workspace test inputs changed during verification")

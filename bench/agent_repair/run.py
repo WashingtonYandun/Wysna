@@ -114,11 +114,12 @@ class Pilot:
         self.phases = {}
         for phase, payload in (('reject', rejected), ('preview', checked), ('apply', applied)):
             evidence = payload['test_verification']
-            timings = {**evidence.get('timing_ms', {}),
-                       'case_total': sum(case['duration_ms'] for case in evidence['cases'])}
+            timings = dict(payload.get('test_timing_ms', {}))
+            case_timings = timings.pop('cases', [])
+            timings['case_total'] = sum(case['duration_ms'] for case in evidence['cases'])
             for field in ('compile_ms', 'run_ms'):
-                if all(field in case for case in evidence['cases']):
-                    timings[field] = sum(case[field] for case in evidence['cases'])
+                if case_timings:
+                    timings[field] = sum(case[field] for case in case_timings)
             self.phases[phase] = timings
 
 
@@ -144,13 +145,15 @@ def sqlite(pilot, app, use_span, include_dir):
     cli = read(app / 'src/sqlite_cli.wysna')
     require(cli.count(call) == 1, 'SQLite call fixture changed')
     write(app / 'src/sqlite_cli.wysna', cli.replace(call, 'audit.compute_risk_points(ev.status_code)'))
-    audit = SUPPORT + read(app / 'src/audit.wysna').replace('penalty += 30', 'penalty += repair_policy.risk_points()')
-    write(app / 'src/audit.wysna', audit.replace('penalty += repair_policy.risk_points()',
-                                               'penalty += repair_policy.risk_points() + 1'))
+    audit_source = read(app / 'src/audit.wysna')
+    require(audit_source.count('points += 30') == 1, 'SQLite risk calculation fixture changed')
+    audit = SUPPORT + audit_source.replace('points += 30', 'points += repair_policy.risk_points()')
+    write(app / 'src/audit.wysna', audit.replace('points += repair_policy.risk_points()',
+                                               'points += repair_policy.risk_points() + 1'))
     good_cli = cli.replace(call, 'audit.compute_risk_points(ev.status_code, ev.latency_ms + 0)')
     edits = [{'path': 'src/sqlite_cli.wysna', 'source': good_cli}, {'path': 'src/audit.wysna', 'source': audit}]
-    bad = [edits[0], dict(edits[1], source=audit.replace('penalty += repair_policy.risk_points()',
-                                                     'penalty += repair_policy.risk_points() + 2'))]
+    bad = [edits[0], dict(edits[1], source=audit.replace('points += repair_policy.risk_points()',
+                                                     'points += repair_policy.risk_points() + 2'))]
     pilot.repair(app, bad, edits, use_span, 'sqlite-audit')
     db = pilot.work / 'audit.db'
     output = pilot.work / ('audit.exe' if os.name == 'nt' else 'audit')
@@ -188,8 +191,16 @@ def run_trial(sdk, work, example, pilot_fn, use_span, include_dir):
         pilot_fn(pilot, app, use_span, include_dir)
     else:
         pilot_fn(pilot, app, use_span)
+    repair_steps = ('diagnose', 'context', 'reject_regression', 'preview', 'apply')
     return {'calls': pilot.calls, 'context_reads': 1, 'repair_attempts': 2,
-            'context_bytes': pilot.context_bytes, 'calls_ms': pilot.latency, 'patch_phases_ms': pilot.phases}
+            'context_bytes': pilot.context_bytes, 'calls_ms': pilot.latency, 'patch_phases_ms': pilot.phases,
+            'repair_ms': round(sum(pilot.latency[step] for step in repair_steps), 3)}
+
+
+def sdk_identity(executable):
+    root = executable.resolve().parent.parent
+    manifest = json.loads((root / 'native-sdk.json').read_text(encoding='utf-8'))
+    return {key: manifest[key] for key in ('source_commit', 'compiler_fingerprint', 'version', 'target')}
 
 
 def main():
@@ -204,7 +215,9 @@ def main():
         parser.error('--repeats must be positive')
     report = {'schema_version': 'wysna.agent-repair-benchmark/1',
               'platform': platform.system() + ' ' + platform.machine(),
-              'repeats': args.repeats, 'pilots': {}, 'late_utf8_inspect': {}}
+              'repeats': args.repeats,
+              'sdks': {'baseline': sdk_identity(args.baseline_sdk), 'candidate': sdk_identity(args.candidate_sdk)},
+              'pilots': {}, 'late_utf8_inspect': {}}
     with tempfile.TemporaryDirectory(prefix='wysna-repair-bench-') as stage:
         root = Path(stage).resolve()
         for example, function in (('automation', automation), ('wysofia-ops', sqlite)):

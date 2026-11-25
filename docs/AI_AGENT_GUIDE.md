@@ -155,7 +155,7 @@ datos de prueba y dependencias locales. Ejecutan toda la selección declarada
 y, con `--discover`, incluyen los casos descubiertos en `tests/`, incluso los
 creados por el candidato. `result.tests` indica qué cambios alcanza cada caso.
 Si el alcance no se puede demostrar, el caso queda como `uncertain` y se ejecuta.
-`test_verification.timing_ms` separa la preparación del candidato del tiempo
+`result.test_timing_ms` separa la preparación del candidato del tiempo
 del ejecutor. El SDK nativo incluye `compile_ms` y `run_ms` por caso.
 
 `result.test_verification` vincula el estado, las duraciones, los motivos de

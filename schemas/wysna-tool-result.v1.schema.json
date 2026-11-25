@@ -489,16 +489,7 @@
         "workspace_revision": { "$ref": "#/$defs/Sha256" },
         "test_plan_hash": { "$ref": "#/$defs/Sha256" },
         "status": { "enum": ["passed", "failed", "empty", "cancelled"] },
-        "cases": { "type": "array", "items": { "$ref": "#/$defs/PatchTestCase" } },
-        "timing_ms": {
-          "type": "object",
-          "additionalProperties": false,
-          "required": ["staging", "test_runner"],
-          "properties": {
-            "staging": { "type": "number", "minimum": 0 },
-            "test_runner": { "type": "number", "minimum": 0 }
-          }
-        }
+        "cases": { "type": "array", "items": { "$ref": "#/$defs/PatchTestCase" } }
       }
     },
     "Sha256": { "type": "string", "pattern": "^[0-9a-f]{64}$" },
@@ -512,8 +503,6 @@
         "failure_kind": { "type": ["string", "null"] },
         "exit_code": { "type": ["integer", "null"] },
         "duration_ms": { "type": "number", "minimum": 0 },
-        "compile_ms": { "type": "integer", "minimum": 0 },
-        "run_ms": { "type": "integer", "minimum": 0 },
         "stdout_sha256": { "$ref": "#/$defs/Sha256" },
         "stderr_sha256": { "$ref": "#/$defs/Sha256" },
         "stderr": { "type": "string", "maxLength": 2048 }
@@ -546,6 +535,28 @@
         "selected_test_ids": { "type": "array", "items": { "type": "string" } },
         "test_inputs_sha256": { "$ref": "#/$defs/Sha256" },
         "test_verification": { "$ref": "#/$defs/PatchTestVerification" },
+        "test_timing_ms": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["staging", "test_runner"],
+          "properties": {
+            "staging": { "type": "number", "minimum": 0 },
+            "test_runner": { "type": "number", "minimum": 0 },
+            "cases": {
+              "type": "array",
+              "items": {
+                "type": "object",
+                "additionalProperties": false,
+                "required": ["id", "compile_ms", "run_ms"],
+                "properties": {
+                  "id": { "type": "string" },
+                  "compile_ms": { "type": "integer", "minimum": 0 },
+                  "run_ms": { "type": "integer", "minimum": 0 }
+                }
+              }
+            }
+          }
+        },
         "plan_hash": { "$ref": "#/$defs/Sha256" },
         "written": { "type": "boolean" }
       }
