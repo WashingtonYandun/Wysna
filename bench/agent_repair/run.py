@@ -140,7 +140,7 @@ if launch_args.payload(["runner", "child", "first"]) != ["first"] { exit(1) }
     require(b'Syntax Quick Reference' in output, output[-1000:])
 
 
-def sqlite(pilot, app, use_span, include_dir):
+def sqlite(pilot, app, use_span, include_dir, library_dir):
     call = 'audit.compute_risk_points(ev.status_code, ev.latency_ms)'
     cli = read(app / 'src/sqlite_cli.wysna')
     require(cli.count(call) == 1, 'SQLite call fixture changed')
@@ -160,6 +160,8 @@ def sqlite(pilot, app, use_span, include_dir):
     library = ['--link', app / 'native/ops_sqlite.c', '--library', 'sqlite3']
     if include_dir:
         library += ['--include-dir', include_dir]
+    if library_dir:
+        library += ['--library-dir', library_dir]
     pilot.command('build_sqlite', app, 'project', 'build', '--target', 'sqlite-audit', '--frozen', '-o', output, *library)
     pilot.env['WYSNA_OPS_DB'] = str(db)
     transcript = pilot.command('exercise', app, executable=output)
@@ -181,14 +183,14 @@ def late_slice(sdk, work):
     return pilot.latency['inspect_late_utf8']
 
 
-def run_trial(sdk, work, example, pilot_fn, use_span, include_dir):
+def run_trial(sdk, work, example, pilot_fn, use_span, include_dir, library_dir):
     work.mkdir()
     pilot = Pilot(sdk, work)
     app = work / example
     shutil.copytree(REPO / 'examples' / example, app)
     pilot.restore(app)
     if pilot_fn is sqlite:
-        pilot_fn(pilot, app, use_span, include_dir)
+        pilot_fn(pilot, app, use_span, include_dir, library_dir)
     else:
         pilot_fn(pilot, app, use_span)
     repair_steps = ('diagnose', 'context', 'reject_regression', 'preview', 'apply')
@@ -208,6 +210,7 @@ def main():
     parser.add_argument('--baseline-sdk', type=Path, required=True, help='Path to baseline bin/wysna')
     parser.add_argument('--candidate-sdk', type=Path, required=True, help='Path to candidate bin/wysna')
     parser.add_argument('--sqlite-include-dir', type=Path, help='Directory containing sqlite3.h')
+    parser.add_argument('--sqlite-library-dir', type=Path, help='Directory containing the SQLite library')
     parser.add_argument('--repeats', type=int, default=3)
     parser.add_argument('--output', type=Path, required=True)
     args = parser.parse_args()
@@ -225,7 +228,7 @@ def main():
             for index in range(args.repeats + 1):
                 for label, sdk in (('baseline', args.baseline_sdk), ('candidate', args.candidate_sdk)):
                     row = run_trial(sdk, root / f'{example}-{label}-{index}', example, function,
-                                    label == 'candidate', args.sqlite_include_dir)
+                                    label == 'candidate', args.sqlite_include_dir, args.sqlite_library_dir)
                     if index:
                         rows[label].append(row)
         for label, sdk in (('baseline', args.baseline_sdk), ('candidate', args.candidate_sdk)):
