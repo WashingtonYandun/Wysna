@@ -666,6 +666,22 @@ fn lsp_buf_from_str(text: str) -> opaque {
     return buf
 }
 
+fn tool_utf8_bytes_to_str(bs: list[int]) -> str {
+    let mut parts: list[str] = []
+    let mut i = 0
+    while i < len(bs) {
+        let first = bs[i]
+        let width = if first < 128 { 1 } elif first < 224 { 2 } elif first < 240 { 3 } else { 4 }
+        let mut cp = if width == 1 { first } elif width == 2 { first % 32 } elif width == 3 { first % 16 } else { first % 8 }
+        for off in 1..width {
+            if i + off < len(bs) { cp = cp * 64 + (bs[i + off] % 64) }
+        }
+        parts.append(chr(cp))
+        i = i + width
+    }
+    return join_strings(parts, "")
+}
+
 fn lsp_buf_to_str(buf: opaque, count: int) -> str {
     let mut parts: list[str] = []
     let mut i = 0
@@ -13867,6 +13883,10 @@ fn tool_utf8_slice_budget(text: str, start_byte: int, has_budget: bool, max_byte
     let mut last = if has_budget and max_bytes < total - first { first + max_bytes } else { total }
     while last < total and raw[last] >= 128 and raw[last] < 192 { last = last - 1 }
     if first == 0 and last == total { return [text, "0", str(total), str(total)] }
+    if has_budget {
+        let snippet = tool_utf8_bytes_to_str(slice(raw, first, last))
+        return [snippet, str(first), str(last - first), str(total)]
+    }
     let mut char_start = 0
     for i in 0..first {
         if raw[i] < 128 or raw[i] >= 192 { char_start = char_start + 1 }
@@ -21756,23 +21776,7 @@ fn wpatch_apply_symbol_edit(abs_p: str, before_src: str, sym_name: str, replacem
     for i in 0..n.start_byte { prefix_b.append(orig_bytes[i]) }
     let mut suffix_b: list[int] = []
     for i in n.end_byte..len(orig_bytes) { suffix_b.append(orig_bytes[i]) }
-    return wpatch_utf8_bytes_to_str(prefix_b) + replacement + wpatch_utf8_bytes_to_str(suffix_b)
-}
-
-fn wpatch_utf8_bytes_to_str(bs: list[int]) -> str {
-    let mut parts: list[str] = []
-    let mut i = 0
-    while i < len(bs) {
-        let first = bs[i]
-        let width = if first < 128 { 1 } elif first < 224 { 2 } elif first < 240 { 3 } else { 4 }
-        let mut cp = if width == 1 { first } elif width == 2 { first % 32 } elif width == 3 { first % 16 } else { first % 8 }
-        for off in 1..width {
-            if i + off < len(bs) { cp = cp * 64 + (bs[i + off] % 64) }
-        }
-        parts.append(chr(cp))
-        i = i + width
-    }
-    return join_strings(parts, "")
+    return tool_utf8_bytes_to_str(prefix_b) + replacement + tool_utf8_bytes_to_str(suffix_b)
 }
 
 fn wpatch_live_revision(state: ProjectLockState, m: ProjectManifest, sdk_sha: str) -> str {

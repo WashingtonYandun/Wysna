@@ -970,6 +970,10 @@ fn tool_utf8_slice_budget(text: str, start_byte: int, has_budget: bool, max_byte
     let mut last = if has_budget and max_bytes < total - first { first + max_bytes } else { total }
     while last < total and raw[last] >= 128 and raw[last] < 192 { last = last - 1 }
     if first == 0 and last == total { return [text, "0", str(total), str(total)] }
+    if has_budget {
+        let snippet = tool_utf8_bytes_to_str(slice(raw, first, last))
+        return [snippet, str(first), str(last - first), str(total)]
+    }
     let mut char_start = 0
     for i in 0..first {
         if raw[i] < 128 or raw[i] >= 192 { char_start = char_start + 1 }
