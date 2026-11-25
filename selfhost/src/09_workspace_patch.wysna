@@ -1,0 +1,376 @@
+# Checked multi-file workspace patch planning, atomic commit, and rollback for native SDK.
+
+fn wpatch_valid_rel_wysna(name: str) -> bool {
+    if name == "" or name[0] == "/" or name[len(name) - 1] == "/" { return false }
+    if len(name) <= 6 or not proj_str_ends_with(name, ".wysna") { return false }
+    for i in 0..len(name) {
+        if name[i] == "\\" { return false }
+    }
+    let mut seg = ""
+    for i in 0..len(name) + 1 {
+        if i == len(name) or name[i] == "/" {
+            if seg == "" or seg == "." or seg == ".." { return false }
+            seg = ""
+        } else {
+            seg = seg + name[i]
+        }
+    }
+    return true
+}
+
+fn wpatch_unified_diff(rel_path: str, old_text: str, new_text: str) -> str {
+    if old_text == new_text { return "" }
+    let old_lines = schema_split_lines(old_text)
+    let new_lines = schema_split_lines(new_text)
+    let mut prefix = 0
+    while prefix < len(old_lines) and prefix < len(new_lines) and old_lines[prefix] == new_lines[prefix] {
+        prefix = prefix + 1
+    }
+    let mut old_end = len(old_lines)
+    let mut new_end = len(new_lines)
+    while old_end > prefix and new_end > prefix and old_lines[old_end - 1] == new_lines[new_end - 1] {
+        old_end = old_end - 1
+        new_end = new_end - 1
+    }
+    let old_count = old_end - prefix
+    let new_count = new_end - prefix
+    let old_start = if old_count == 0 { prefix } else { prefix + 1 }
+    let new_start = if new_count == 0 { prefix } else { prefix + 1 }
+    let mut parts: list[str] = [
+        "--- a/" + rel_path + "\n",
+        "+++ b/" + rel_path + "\n",
+        "@@ -" + str(old_start) + "," + str(old_count) + " +" + str(new_start) + "," + str(new_count) + " @@\n",
+    ]
+    for i in prefix..old_end { parts.append("-" + old_lines[i] + "\n") }
+    for i in prefix..new_end { parts.append("+" + new_lines[i] + "\n") }
+    return join_strings(parts, "")
+}
+
+fn wpatch_live_revision(state: ProjectLockState, m: ProjectManifest, sdk_sha: str) -> str {
+    let lock_path = m.root + "/wysna.lock"
+    let lock_sha = if proj_test_exists(state, lock_path) { proj_lock_host_text(state, lock_path, "hash") } else { "" }
+    let ws_sha = proj_workspace_sha256(state, m.root)
+    let parts = proj_workspace_revision_parts(m.manifest_sha256, lock_sha, sdk_sha, ws_sha)
+    return parts[1]
+}
+
+fn wpatch_unlink_all(paths: list[str]) -> unit {
+    let empty_buf = tool_buf_from_str("")
+    for p in paths {
+        if p == "" { continue }
+        let p_buf = tool_buf_from_str(p)
+        let _rm = wysna_host_fs(p_buf, empty_buf, 3)
+        wysna_host_close(p_buf)
+    }
+    wysna_host_close(empty_buf)
+}
+
+fn wpatch_stage_temp_file(target_abs: str, stamp: str, idx: int, content: str) -> str {
+    let empty_buf = tool_buf_from_str("")
+    let mut tmp_path = ""
+    let mut fh = empty_buf
+    let mut opened = false
+    for attempt in 0..32 {
+        let candidate = target_abs + ".wysna_tmp_" + stamp + "_" + str(idx) + "_" + str(attempt)
+        let c_buf = tool_buf_from_str(candidate)
+        let handle = wysna_host_file_open(c_buf, 3)
+        wysna_host_close(c_buf)
+        if wysna_host_is_open(handle) == 1 {
+            tmp_path = candidate
+            fh = handle
+            opened = true
+            break
+        }
+    }
+    wysna_host_close(empty_buf)
+    if not opened { return "" }
+    let data_buf = tool_buf_from_str(content)
+    let wr = wysna_host_file_write(fh, data_buf)
+    let cl = wysna_host_close(fh)
+    wysna_host_close(data_buf)
+    if wr != 0 or cl != 0 {
+        wpatch_unlink_all([tmp_path])
+        return ""
+    }
+    return tmp_path
+}
+
+fn wpatch_rename_file(src_path: str, dst_path: str) -> bool {
+    let s_buf = tool_buf_from_str(src_path)
+    let d_buf = tool_buf_from_str(dst_path)
+    let mv = wysna_host_fs(s_buf, d_buf, 4)
+    wysna_host_close(s_buf)
+    wysna_host_close(d_buf)
+    return mv >= 0
+}
+
+fn proj_handle_workspace_patch(manifest_arg: str, edits_file: str, expected_hash: str, apply: bool, discover: bool, frozen: bool, json_mode: bool) -> unit {
+    if apply and expected_hash == "" {
+        proj_emit_error_and_exit("patch", json_mode, "W5002", "Applying workspace edits requires --expect-plan-hash from a successful preview")
+    }
+    let m = proj_load_manifest(manifest_arg)
+    if not m.ok {
+        proj_emit_error_and_exit("patch", json_mode, m.err_code, m.err_msg)
+    }
+    if frozen { proj_verify_lock(m, "patch", json_mode) }
+
+    let state = ProjectLockState("patch", json_mode, m.root)
+    let snap_paths = tool_sort_strings(proj_snapshot_paths(state, m.root, "", true, true))
+    proj_lock_verify_collisions(state, snap_paths)
+    let mut snap_hashes: list[str] = []
+    for p in snap_paths {
+        snap_hashes.append(proj_lock_host_text(state, m.root + "/" + p, "hash"))
+    }
+    let sdk_sha = proj_sdk_fingerprint(state)
+    let test_plan = proj_test_plan(m, discover, "", false, "", json_mode)
+    let live_start = wpatch_live_revision(state, m, sdk_sha)
+    if test_plan.revision != live_start {
+        proj_emit_error_and_exit("patch", json_mode, "W5005", "Workspace changed during edit planning")
+    }
+
+    let raw_edits = read_file(edits_file) else err {
+        proj_emit_error_and_exit("patch", json_mode, "W5003", "cannot read --edits file: " + edits_file)
+        ""
+    }
+    let parsed_edits = mcp_parse_json_strict(raw_edits)
+    if parsed_edits.kind != "array" or len(parsed_edits.items) == 0 {
+        proj_emit_error_and_exit("patch", json_mode, "W5002", "Workspace edits must be a nonempty array")
+    }
+
+    let mut seen_rel: list[str] = []
+    let mut edit_rels: list[str] = []
+    let mut edit_abs: list[str] = []
+    let mut edit_canon: list[str] = []
+    let mut edit_before: list[str] = []
+    let mut edit_after: list[str] = []
+    let mut edit_before_sha: list[str] = []
+    let mut edit_after_sha: list[str] = []
+
+    for item in parsed_edits.items {
+        if item.kind != "object" or len(item.keys) != 2 or not lsp_json_has(item, "path") or not lsp_json_has(item, "source") {
+            proj_emit_error_and_exit("patch", json_mode, "W5002", "Each workspace edit requires path and source")
+        }
+        let pv = lsp_json_get(item, "path")
+        let sv = lsp_json_get(item, "source")
+        if pv.kind != "str" or sv.kind != "str" {
+            proj_emit_error_and_exit("patch", json_mode, "W5002", "Workspace edit path and source must be strings")
+        }
+        let rel = pv.str_val
+        let after_src = sv.str_val
+        if not wpatch_valid_rel_wysna(rel) or tool_str_contains(seen_rel, rel) {
+            proj_emit_error_and_exit("patch", json_mode, "W5002", "Workspace edit must identify one existing project source: " + rel)
+        }
+        let mut snap_idx = -1
+        for k in 0..len(snap_paths) {
+            if snap_paths[k] == rel { snap_idx = k break }
+        }
+        if snap_idx < 0 {
+            proj_emit_error_and_exit("patch", json_mode, "W5002", "Workspace edit must identify one existing project source: " + rel)
+        }
+        seen_rel.append(rel)
+        let abs_p = m.root + "/" + rel
+        if module_canonical_resolved(abs_p) != abs_p {
+            proj_emit_error_and_exit("patch", json_mode, "W5002", "Workspace edit must use a direct project source path: " + rel)
+        }
+        let before_src = read_file(abs_p) else err {
+            proj_emit_error_and_exit("patch", json_mode, "W5003", "cannot read workspace source: " + abs_p)
+            ""
+        }
+        let b_sha = diag_sha256_hex(before_src)
+        if b_sha != snap_hashes[snap_idx] {
+            proj_emit_error_and_exit("patch", json_mode, "W5005", "Source changed during workspace planning: " + rel)
+        }
+        if before_src != after_src {
+            edit_rels.append(rel)
+            edit_abs.append(abs_p)
+            edit_canon.append(module_canonical(abs_p))
+            edit_before.append(before_src)
+            edit_after.append(after_src)
+            edit_before_sha.append(b_sha)
+            edit_after_sha.append(diag_sha256_hex(after_src))
+        }
+    }
+    if len(edit_rels) == 0 {
+        proj_emit_error_and_exit("patch", json_mode, "W5002", "Workspace edit contains no changes")
+    }
+
+    let mut entries: list[str] = []
+    for t in m.targets {
+        if not tool_str_contains(entries, t.entry) { entries.append(t.entry) }
+    }
+    for rel in edit_rels {
+        if not tool_str_contains(entries, rel) { entries.append(rel) }
+    }
+    for tc in test_plan.cases {
+        if not tool_str_contains(entries, tc.entry) { entries.append(tc.entry) }
+    }
+    let sorted_entries = tool_sort_strings(entries)
+
+    let mut dep_aliases: list[str] = []
+    let mut dep_roots: list[str] = []
+    for d in m.deps {
+        dep_aliases.append(d.alias)
+        dep_roots.append(d.source_root_abs)
+    }
+
+    let mut entry_inputs: list[list[str]] = []
+    for entry in sorted_entries {
+        let entry_abs = m.root + "/" + entry
+        let entry_canon = module_canonical(entry_abs)
+        let mut entry_src = ""
+        let mut edited_hit = -1
+        for k in 0..len(edit_canon) {
+            if edit_canon[k] == entry_canon { edited_hit = k break }
+        }
+        if edited_hit >= 0 {
+            entry_src = edit_after[edited_hit]
+        } else {
+            entry_src = read_file(entry_abs) else err {
+                proj_emit_error_and_exit("patch", json_mode, "W5003", "cannot read workspace entry: " + entry_abs)
+                ""
+            }
+        }
+        let loader = ModuleLoader()
+        loader.project_sources_root = m.source_root_abs
+        loader.dep_aliases = dep_aliases
+        loader.dep_roots = dep_roots
+        loader.ov_paths = edit_canon
+        loader.ov_texts = edit_after
+        module_expand(loader, entry_src, entry_canon, true)
+        loader.output.append(Token { kind: "EOF", val: "", line: 1, col: 1, file: module_normalize(entry_canon) })
+        let checked = check_program(loader.output, entry_canon, true)
+        for node in checked.nodes {
+            if node.kind == "unsupported" {
+                report_error_at("W2013", node.source, "Compiler native-core-v1 does not support expression " + node.text)
+            }
+        }
+        mir_verify(mir_build(checked))
+        entry_inputs.append(loader.paths)
+    }
+
+    let sorted_edit_rels = tool_sort_strings(edit_rels)
+    let mut changes_rows: list[str] = []
+    for srel in sorted_edit_rels {
+        let mut eidx = 0
+        for k in 0..len(edit_rels) {
+            if edit_rels[k] == srel { eidx = k break }
+        }
+        let diff = wpatch_unified_diff(srel, edit_before[eidx], edit_after[eidx])
+        changes_rows.append("{\"path\":" + diag_json_quote(srel) + ",\"before_sha256\":" + diag_json_quote(edit_before_sha[eidx]) +
+            ",\"after_sha256\":" + diag_json_quote(edit_after_sha[eidx]) + ",\"diff\":" + diag_json_quote(diff) + "}")
+    }
+
+    let mut after_ws_rows: list[str] = []
+    for k in 0..len(snap_paths) {
+        let p = snap_paths[k]
+        let mut f_sha = snap_hashes[k]
+        for ek in 0..len(edit_rels) {
+            if edit_rels[ek] == p { f_sha = edit_after_sha[ek] break }
+        }
+        after_ws_rows.append("[" + diag_json_quote(p) + "," + diag_json_quote(f_sha) + "]")
+    }
+    let after_ws_sha = diag_sha256_hex("[" + join_strings(after_ws_rows, ",") + "]")
+    let after_rev_parts = proj_workspace_revision_parts(m.manifest_sha256, test_plan.lock_sha, sdk_sha, after_ws_sha)
+    let after_rev = after_rev_parts[1]
+
+    let mut impact_rows: list[str] = []
+    let mut selected_ids: list[str] = []
+    for tc in test_plan.cases {
+        let tid = "test:" + tc.name
+        selected_ids.append(diag_json_quote(tid))
+        let mut entry_pos = -1
+        for k in 0..len(sorted_entries) {
+            if sorted_entries[k] == tc.entry { entry_pos = k break }
+        }
+        let mut causes: list[str] = []
+        if entry_pos >= 0 {
+            let paths_for_case = entry_inputs[entry_pos]
+            for srel in sorted_edit_rels {
+                let mut eidx = 0
+                for k in 0..len(edit_rels) {
+                    if edit_rels[k] == srel { eidx = k break }
+                }
+                if tool_str_contains(paths_for_case, edit_canon[eidx]) {
+                    causes.append(srel)
+                }
+            }
+        }
+        let imp_status = if len(causes) > 0 { "affected" } else { "uncertain" }
+        let mut cause_q: list[str] = []
+        for c in causes { cause_q.append(diag_json_quote(c)) }
+        impact_rows.append("{\"id\":" + diag_json_quote(tid) + ",\"entry\":" + diag_json_quote(tc.entry) +
+            ",\"impact_status\":" + diag_json_quote(imp_status) + ",\"sources\":[" + join_strings(cause_q, ",") + "]}")
+    }
+
+    let mut checked_q: list[str] = []
+    for e in sorted_entries { checked_q.append(diag_json_quote(e)) }
+    let payload_body = "{\"schema_version\":\"wysna.workspace-patch/1\"" +
+        ",\"workspace_revision_before\":" + diag_json_quote(test_plan.revision) +
+        ",\"workspace_revision_after\":" + diag_json_quote(after_rev) +
+        ",\"changes\":[" + join_strings(changes_rows, ",") + "]" +
+        ",\"checked\":[" + join_strings(checked_q, ",") + "]" +
+        ",\"tests\":[" + join_strings(impact_rows, ",") + "]" +
+        ",\"selected_test_ids\":[" + join_strings(selected_ids, ",") + "]}"
+    let plan_hash = diag_sha256_hex(payload_body)
+
+    let live_mid = wpatch_live_revision(state, m, sdk_sha)
+    if live_mid != test_plan.revision {
+        proj_emit_error_and_exit("patch", json_mode, "W5005", "Workspace changed during edit planning")
+    }
+    if expected_hash != "" and plan_hash != expected_hash {
+        proj_emit_error_and_exit("patch", json_mode, "W5005", "Workspace edit plan is stale")
+    }
+
+    if apply {
+        let stamp = str(unix_time())
+        let mut tmp_paths: list[str] = []
+        for k in 0..len(edit_abs) {
+            let staged = wpatch_stage_temp_file(edit_abs[k], stamp, k, edit_after[k])
+            if staged == "" {
+                wpatch_unlink_all(tmp_paths)
+                proj_emit_error_and_exit("patch", json_mode, "W5004", "failed staging workspace replacement: " + edit_rels[k])
+            }
+            tmp_paths.append(staged)
+        }
+        let live_commit = wpatch_live_revision(state, m, sdk_sha)
+        if live_commit != test_plan.revision {
+            wpatch_unlink_all(tmp_paths)
+            proj_emit_error_and_exit("patch", json_mode, "W5005", "Workspace changed during edit planning")
+        }
+        let mut committed: list[int] = []
+        let mut failed_idx = -1
+        for k in 0..len(edit_abs) {
+            if not wpatch_rename_file(tmp_paths[k], edit_abs[k]) {
+                failed_idx = k
+                break
+            }
+            committed.append(k)
+        }
+        if failed_idx >= 0 {
+            let mut leftover: list[str] = []
+            for k in failed_idx..len(tmp_paths) { leftover.append(tmp_paths[k]) }
+            wpatch_unlink_all(leftover)
+            let mut r_idx = len(committed) - 1
+            while r_idx >= 0 {
+                let c_idx = committed[r_idx]
+                let rb_tmp = wpatch_stage_temp_file(edit_abs[c_idx], stamp + "_rb", r_idx, edit_before[c_idx])
+                if rb_tmp != "" {
+                    let _ok = wpatch_rename_file(rb_tmp, edit_abs[c_idx])
+                    wpatch_unlink_all([rb_tmp])
+                }
+                r_idx = r_idx - 1
+            }
+            proj_emit_error_and_exit("patch", json_mode, "W5004", "failed committing workspace replacement: " + edit_rels[failed_idx])
+        }
+    }
+
+    let written_str = if apply { "true" } else { "false" }
+    let full_result = slice(payload_body, 0, len(payload_body) - 1) +
+        ",\"plan_hash\":" + diag_json_quote(plan_hash) + ",\"written\":" + written_str + "}"
+    if json_mode {
+        diag_write_output(diag_tool_envelope_json("patch", "ok", 0, "[]", "result", full_result, "[]"))
+    } else {
+        print(full_result)
+    }
+    exit(0)
+}

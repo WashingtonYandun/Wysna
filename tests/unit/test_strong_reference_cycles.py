@@ -153,11 +153,11 @@ class StrongReferenceCyclesTests(unittest.TestCase):
     def test_compiler_service_integration(self):
         source = (
             "class Parent {\n"
-            "    public child: Child?\n"
+            "    pub child: Child?\n"
             "    fn init() { this.child = None }\n"
             "}\n"
             "class Child {\n"
-            "    public parent: Parent?\n"
+            "    pub parent: Parent?\n"
             "    fn init() { this.parent = None }\n"
             "}\n"
         )
@@ -179,11 +179,11 @@ class StrongReferenceCyclesTests(unittest.TestCase):
         root = Path(get_repo_root())
         source = (
             "class Parent {\n"
-            "    public child: Child?\n"
+            "    pub child: Child?\n"
             "    fn init() { this.child = None }\n"
             "}\n"
             "class Child {\n"
-            "    public parent: Parent?\n"
+            "    pub parent: Parent?\n"
             "    fn init() { this.parent = None }\n"
             "}\n"
         )

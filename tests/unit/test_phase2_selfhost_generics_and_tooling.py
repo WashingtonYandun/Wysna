@@ -26,7 +26,7 @@ class ConsoleLogger implements Logger {
         this.prefix = prefix
     }
 
-    public fn log(msg: str) -> str {
+    pub fn log(msg: str) -> str {
         return this.prefix + ": " + msg
     }
 }
@@ -175,7 +175,7 @@ def test_selfhost_graph_inspect_patch_and_explain_end_to_end(tmp_path):
         "patch", target,
         "--symbol", "ConsoleLogger.log",
         "--expect-graph-hash", current_hash,
-        "--with", "public fn log(msg: str) -> int { return 42 }",
+        "--with", "pub fn log(msg: str) -> int { return 42 }",
         "--apply",
         "--output-format=json-v1",
     )
@@ -186,7 +186,7 @@ def test_selfhost_graph_inspect_patch_and_explain_end_to_end(tmp_path):
     assert target.read_text(encoding="utf-8") == SAMPLE_OOP
 
     # 5. Dry-run patch checks cleanly without writing disk
-    new_log = 'public fn log(msg: str) -> str {\n        return "[" + this.prefix + "] " + msg\n    }'
+    new_log = 'pub fn log(msg: str) -> str {\n        return "[" + this.prefix + "] " + msg\n    }'
     res_dry = _run_compiler(
         "patch", target,
         "--symbol", "ConsoleLogger.log",
@@ -236,7 +236,7 @@ def test_selfhost_cross_module_graph_and_native_driver_c_passthrough(tmp_path):
     app.write_text(
         'from "contracts.wysna" use { Store }\n'
         "class DiskStore implements Store {\n"
-        "    public fn save(key: str) -> int { return len(key) }\n"
+        "    pub fn save(key: str) -> int { return len(key) }\n"
         "}\n"
         "fn main() { let s = DiskStore()\nprint(s.save(\"hi\")) }\n",
         encoding="utf-8",

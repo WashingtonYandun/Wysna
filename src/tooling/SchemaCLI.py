@@ -6,14 +6,16 @@ structured outputs and agent tool-calling without external schema libraries.
 """
 
 import argparse
+import hashlib
 import json
+import os
 from pathlib import Path
 import sys
 
 from common.Version import WYSNA_VERSION
 from compiler.CompilerService import CompilerService
 from error.Error import WysnaError
-from node.NodeType import EnumDecl, FnDecl, StructDecl
+from node.NodeType import EnumDecl, FnDecl, Node, StructDecl
 from tooling.ApiIndex import _leading_documentation, _type_name
 from tooling.ToolResult import (
     diagnostic_from_error,
@@ -52,7 +54,7 @@ def _type_node_to_schema(node, known_defs):
             return {"type": "null"}
         if name in known_defs:
             return {"$ref": f"#/$defs/{name}"}
-        return {"type": "string", "x-wysna-type": name}
+        return {"x-wysna-type": name, "x-wysna-unrepresentable": True}
     if kind == "OptionalType":
         return {"anyOf": [_type_node_to_schema(node.inner, known_defs), {"type": "null"}]}
     if kind == "ListType":
@@ -302,7 +304,7 @@ def _enum_schema(decl, lines, known_defs):
     return schema
 
 
-def _tool_definition(fn_decl, lines, known_defs, effect_row):
+def _tool_definition(fn_decl, lines, known_defs, effect_row, *, spelling=None):
     properties = {}
     required = []
     for param in fn_decl.params:
@@ -335,8 +337,9 @@ def _tool_definition(fn_decl, lines, known_defs, effect_row):
     if fn_ens and isinstance(output_schema, dict):
         _apply_expr_to_schemas_for_result(fn_ens, output_schema)
 
-    params_sig = ", ".join(f"{p.name}: {_type_name(p.type_ann)}" for p in fn_decl.params)
-    ret_sig = _type_name(ret_node) if ret_node is not None else "unit"
+    spelling = spelling or fn_decl
+    params_sig = ", ".join(f"{p.name}: {_type_name(p.type_ann)}" for p in spelling.params)
+    ret_sig = _type_name(spelling.return_type) if spelling.return_type is not None else "unit"
     type_params = [str(item) for item in getattr(fn_decl, "type_params", ())]
     generic_prefix = f"[{', '.join(type_params)}]" if type_params else ""
     signature = f"fn {fn_decl.name}{generic_prefix}({params_sig}) -> {ret_sig}"
@@ -419,7 +422,7 @@ def _decode_scalar_expr(val_expr, type_node, known_defs):
     return None
 
 
-def generate_codecs_source(declarations) -> str:
+def generate_codecs_source(declarations, *, strict=False) -> str:
     """Synthesize type-safe Wysna JSON encoder/decoder functions for nominal structs and enums."""
     struct_decls = [d for d in declarations if isinstance(d, StructDecl) and not getattr(d, "type_params", ())]
     enum_decls = [d for d in declarations if isinstance(d, EnumDecl) and not getattr(d, "type_params", ())]
@@ -514,6 +517,10 @@ def generate_codecs_source(declarations) -> str:
         name = decl.name
         enc_lines = ["    let mut _fields: dict[str, json.Value] = {}"]
         dec_lines = []
+        if strict:
+            names = ', '.join(json.dumps(field.name) for field in decl.fields)
+            dec_lines.append(f'    let allowed_fields: list[str] = [{names}]')
+            dec_lines.append('    let _ = agent_members(raw_val, allowed_fields)?')
         ctor_fields = []
         supported = True
 
@@ -660,8 +667,58 @@ def generate_codecs_source(declarations) -> str:
     return "\n\n".join(blocks) + "\n"
 
 
+def _schema_definition_key(declaration, entry):
+    if declaration.source_file == entry:
+        return declaration.name
+    short_name = declaration.name.split('__', 2)[-1] if declaration.name.startswith('__wysna_module_') else declaration.name
+    try:
+        relative = os.path.relpath(declaration.source_file, Path(entry).parent)
+    except ValueError:
+        relative = declaration.source_file
+    digest = hashlib.sha256(relative.replace('\\', '/').encode('utf-8')).hexdigest()[:16]
+    return f'{short_name}__{digest}'
+
+
+def _schema_type_nodes(nodes):
+    pending = list(nodes)
+    while pending:
+        item = pending.pop()
+        if isinstance(item, (list, tuple)):
+            pending.extend(item)
+        elif isinstance(item, Node):
+            if type(item).__name__ in ('NamedType', 'GenericType'):
+                yield item
+            pending.extend(child for child in vars(item).values() if isinstance(child, (Node, list, tuple)))
+
+
+def _schema_projection(service, checked, declarations, selected):
+    linked = service.link(checked).body
+    entry = checked.source.file
+    records = {item.name: item for item in linked if isinstance(item, (StructDecl, EnumDecl))}
+    functions = {item.name: item for item in linked if isinstance(item, FnDecl) and item.source_file == entry}
+    projected = [functions[item.name] for item in selected]
+    source_names = {item.name for item in declarations if isinstance(item, (StructDecl, EnumDecl))}
+    reachable = {name: item for name, item in records.items()
+                 if item.source_file == entry and name in source_names}
+    pending = [*[function.return_type for function in projected],
+               *[function.params for function in projected], *reachable.values()]
+    while pending:
+        for annotation in _schema_type_nodes([pending.pop()]):
+            name = annotation.name
+            if name in records and name not in reachable:
+                reachable[name] = records[name]
+                pending.append(records[name])
+    keys = {name: _schema_definition_key(item, entry) for name, item in reachable.items()}
+    for item in [*projected, *reachable.values()]:
+        for annotation in _schema_type_nodes([item]):
+            annotation.name = keys.get(annotation.name, annotation.name)
+    for name, item in reachable.items():
+        item.name = keys[name]
+    return projected, reachable.values()
+
+
 def generate_schemas(path, source=None, *, include_all=False, function_name=None,
-                     emit_codecs=False, service=None):
+                     emit_codecs=False, emit_tool=False, service=None):
     """Type-check ``path`` (or ``source``) and return JSON Schemas and tool definitions."""
     owns_service = service is None
     if owns_service:
@@ -677,17 +734,8 @@ def generate_schemas(path, source=None, *, include_all=False, function_name=None
     effect_by_name = {row["name"]: row for row in explain_report.get("functions", ())}
 
     lines = source.splitlines()
-    declarations = checked.ast.body
-    struct_decls = [d for d in declarations if isinstance(d, StructDecl)]
-    enum_decls = [d for d in declarations if isinstance(d, EnumDecl)]
+    declarations = service.parse(source, checked.source.file).program.body
     fn_decls = [d for d in declarations if isinstance(d, FnDecl)]
-
-    known_defs = {d.name for d in struct_decls} | {d.name for d in enum_decls}
-    defs = {}
-    for decl in struct_decls:
-        defs[decl.name] = _struct_schema(decl, lines, known_defs)
-    for decl in enum_decls:
-        defs[decl.name] = _enum_schema(decl, lines, known_defs)
 
     if function_name is not None:
         selected_fns = [d for d in fn_decls if d.name == function_name]
@@ -703,9 +751,18 @@ def generate_schemas(path, source=None, *, include_all=False, function_name=None
             non_main = [d for d in fn_decls if d.name != "main"]
             selected_fns = non_main if non_main else fn_decls
 
+    projected, records = _schema_projection(service, checked, declarations, selected_fns)
+    known_defs = {item.name for item in records}
+    defs = {}
+    source_lines = {checked.source.file: lines}
+    for item in records:
+        if item.source_file not in source_lines:
+            source_lines[item.source_file] = service.source_text(item.source_file).splitlines()
+        definition = _struct_schema if isinstance(item, StructDecl) else _enum_schema
+        defs[item.name] = definition(item, source_lines[item.source_file], known_defs)
     tools = [
-        _tool_definition(fn_decl, lines, known_defs, effect_by_name.get(fn_decl.name))
-        for fn_decl in selected_fns
+        _tool_definition(function, lines, known_defs, effect_by_name.get(function.name), spelling=original)
+        for original, function in zip(selected_fns, projected)
     ]
 
     result = {
@@ -717,6 +774,16 @@ def generate_schemas(path, source=None, *, include_all=False, function_name=None
     }
     if emit_codecs:
         result["codecs_source"] = generate_codecs_source(declarations)
+    if emit_tool:
+        if not function_name or len(tools) != 1:
+            raise ValueError('--emit-tool requires --function NAME')
+        from tooling.AgentAdapter import emit_agent_adapter
+        result['agent_adapter'] = emit_agent_adapter(checked.source.file, selected_fns[0],
+                                                     projected[0], records, tools[0])
+        from tooling.CapabilityPolicy import enforce_resolved_capability_policy
+        report, untrusted = service.explain_with_foreign_bindings(checked)
+        enforce_resolved_capability_policy(report, 'allow', set(), checked.source.file,
+                                           untrusted_bindings=untrusted)
     return result
 
 
@@ -726,6 +793,7 @@ def run_schema_command(argv):
     parser.add_argument("--all", action="store_true", dest="include_all",
                         help="Include private top-level functions even when 'pub fn' declarations exist")
     parser.add_argument("--function", help="Emit tool schema for a single named function")
+    parser.add_argument("--emit-tool", action="store_true", help="Generate a typed @AgentTool JSON adapter")
     parser.add_argument("--emit-codecs", action="store_true",
                         help="Generate type-safe Wysna JSON codec functions for structs and enums")
     parser.add_argument("-o", "--output", dest="output_path",
@@ -738,19 +806,26 @@ def run_schema_command(argv):
     try:
         options = parser.parse_args(list(argv))
         json_output = options.output_format == "json-v1"
+        if options.emit_tool and options.emit_codecs:
+            raise ValueError('Choose either --emit-tool or --emit-codecs')
         try:
             payload = generate_schemas(
                 options.source,
                 include_all=options.include_all,
                 function_name=options.function,
                 emit_codecs=options.emit_codecs,
+                emit_tool=options.emit_tool,
                 service=service,
             )
         except UnicodeDecodeError as error:
             raise WysnaError("Source is not valid UTF-8",
                              file=str(Path(options.source).resolve()),
                              code="W1001", stage="lexer") from error
-        if options.output_path:
+        if options.emit_tool and options.output_path:
+            destination = Path(options.output_path)
+            with destination.open('x', encoding='utf-8', newline='\n') as stream:
+                stream.write(payload['agent_adapter']['source'])
+        elif options.output_path:
             out_content = (
                 payload["codecs_source"]
                 if options.emit_codecs and not json_output
@@ -762,7 +837,9 @@ def run_schema_command(argv):
             envelope["result"] = payload
             write_tool_result(envelope, sys.stdout)
         elif not options.output_path:
-            if options.emit_codecs:
+            if options.emit_tool:
+                print(payload['agent_adapter']['source'], end='')
+            elif options.emit_codecs:
                 print(payload["codecs_source"], end="")
             else:
                 print(json.dumps(payload, indent=2))

@@ -242,7 +242,7 @@ def test_aud07_qualified_implements_extends_and_no_redundant_index_backtrack(tmp
         "    fn save(key: str) -> int\n"
         "}\n"
         "pub class BaseStore {\n"
-        "    public prefix: str\n"
+        "    pub prefix: str\n"
         "    fn init(p: str) { this.prefix = p }\n"
         "}\n",
         encoding="utf-8",
@@ -252,7 +252,7 @@ def test_aud07_qualified_implements_extends_and_no_redundant_index_backtrack(tmp
         'import "contracts.wysna" as contracts\n'
         "class DiskStore extends contracts.BaseStore implements contracts.Store {\n"
         "    fn init(p: str) { super.init(p) }\n"
-        "    public fn save(key: str) -> int { return len(this.prefix) + len(key) }\n"
+        "    pub fn save(key: str) -> int { return len(this.prefix) + len(key) }\n"
         "}\n"
         "fn persist(store: contracts.Store, k: str) -> int {\n"
         "    return store.save(k)\n"

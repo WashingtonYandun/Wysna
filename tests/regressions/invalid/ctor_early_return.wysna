@@ -1,5 +1,5 @@
 class C {
- public text: str
+ pub text: str
  fn init(should_return: bool) {
   if should_return {
    return

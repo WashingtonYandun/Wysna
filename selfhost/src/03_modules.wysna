@@ -410,7 +410,7 @@ fn module_expand(context: ModuleLoader, src: str, path: str, entry: bool) -> int
 
         if top_depth == 0 and token.kind == "IMPORT" {
             let public_import = position > 0 and tokens[position - 1].kind == "PUB"
-            if public_import and len(body) > 0 and body[len(body) - 1].kind == "PUB" { body.pop() }
+            if len(body) > 0 and (body[len(body) - 1].kind == "PUB" or body[len(body) - 1].kind == "PRIV") { body.pop() }
             let requested = tokens[position + 1].val
             let dependency = module_load_source(context, canonical, requested, token)
             let mut alias = extract_module_ns(requested)
@@ -426,7 +426,7 @@ fn module_expand(context: ModuleLoader, src: str, path: str, entry: bool) -> int
             if public_import { context.public_names[index].append(alias) }
         } elif from_hdr.found {
             let public_use = position > 0 and tokens[position - 1].kind == "PUB"
-            if public_use and len(body) > 0 and body[len(body) - 1].kind == "PUB" { body.pop() }
+            if len(body) > 0 and (body[len(body) - 1].kind == "PUB" or body[len(body) - 1].kind == "PRIV") { body.pop() }
             let requested = from_hdr.requested
             let base_req = module_strip_wysna_ext(requested)
             let mut base_resolved = false

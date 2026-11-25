@@ -1,6 +1,6 @@
 class Person {
-    public name: str
-    public age: int
+    pub name: str
+    pub age: int
 
     fn init(name: str) {
         this.name = name

@@ -32,11 +32,11 @@ def rejected(module, interner):
 
 
 def test_verifier_rejects_wrong_call_identity():
-    module, interner = checked('class C { public fn append(x: int) -> int { return x } }\nprint(C().append(7))')
+    module, interner = checked('class C { pub fn append(x: int) -> int { return x } }\nprint(C().append(7))')
     call = module.top_level_stmts[0].expr.args[0]
     call.target = CollectionCallTarget('list', 'append')
     rejected(module, interner)
-    module, interner = checked('class C { public fn answer() -> int { return 7 } }\nprint(C().answer())')
+    module, interner = checked('class C { pub fn answer() -> int { return 7 } }\nprint(C().answer())')
     call = module.top_level_stmts[0].expr.args[0]
     call.target.slot = 999
     rejected(module, interner)

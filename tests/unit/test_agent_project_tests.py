@@ -24,7 +24,7 @@ def project(tmp_path, source='print("hello")\n'):
 
 
 def machine(root, *arguments):
-    result = run_cli(root, 'project', 'test', '--output-format=json-v1', *arguments)
+    result = run_cli(root, 'project', 'test', '--engine=seed', '--output-format=json-v1', *arguments)
     payload = json.loads(result.stdout)
     assert payload['schema_version'] == 'wysna.tool-result/1'
     assert result.stderr == ''
@@ -64,6 +64,20 @@ def test_stale_plan_never_starts_the_selected_entry(tmp_path):
     assert result.returncode == 2
     assert error['diagnostics'][0]['code'] == 'W5005'
     assert not (root / 'executed.txt').exists()
+
+
+def test_test_plan_covers_transitive_project_sources(tmp_path):
+    root = project(tmp_path, 'import "helper.wysna" as helper\nprint(helper.value())\n')
+    helper = root / 'src/helper.wysna'
+    helper.write_text('pub fn value() -> int { 1 }\n', encoding='utf-8')
+    _, original = machine(root, '--list')
+    verified, report = machine(root, '--expect-plan-hash', original['result']['plan_hash'])
+    assert verified.returncode == 0, report
+    assert report['result']['workspace_revision'] == original['result']['workspace_revision']
+    helper.write_text('pub fn value() -> int { 2 }\n', encoding='utf-8')
+    result, payload = machine(root, '--expect-plan-hash', original['result']['plan_hash'])
+    assert result.returncode == 2
+    assert payload['diagnostics'][0]['code'] == 'W5005'
 
 
 def test_discovery_is_opt_in_and_has_stable_ids(tmp_path):
@@ -190,7 +204,11 @@ def test_native_listing_matches_seed_and_preserves_path_encoding(native_sdk, tmp
     _, seed = machine(root, '--list', '--discover', '--frozen')
     result, native = native_machine(native_sdk, root, '--list', '--discover', '--frozen')
     assert result.returncode == 0, native
-    assert native['result'] == seed['result']
+    agree = ('schema_version', 'project', 'manifest_sha256', 'lock_sha256', 'toolchain',
+             'workspace_sha256', 'cases', 'selected')
+    assert {key: native['result'][key] for key in agree} == {key: seed['result'][key] for key in agree}
+    assert len(native['result']['sdk_fingerprint']) == len(seed['result']['sdk_fingerprint']) == 64
+    assert native['result']['plan_hash'] != seed['result']['plan_hash']
     stale, error = native_machine(native_sdk, root, '--expect-plan-hash', '0' * 64)
     assert stale.returncode == 2 and error['diagnostics'][0]['code'] == 'W5005'
 
@@ -198,10 +216,14 @@ def test_native_listing_matches_seed_and_preserves_path_encoding(native_sdk, tmp
 @pytest.mark.skipif(os.name == 'nt', reason='POSIX test compiler shim; real Windows SDK acceptance covers execution')
 def test_native_machine_execution_reports_and_diagnostics(native_sdk, tmp_path):
     root = project(tmp_path, 'print("a\\0b")\neprint("details")\n')
+    listed, plan = native_machine(native_sdk, root, '--case', 'test:example', '--list')
+    assert listed.returncode == 0, plan
     result, payload = native_machine(native_sdk, root, '--case', 'test:example',
+                                     '--expect-plan-hash', plan['result']['plan_hash'],
                                      '--report-json', 'test.json', '--report-junit', 'test.xml')
     assert result.returncode == 0, payload
     report = payload['result']
+    assert report['workspace_revision'] == plan['result']['workspace_revision']
     assert report['cases'][0]['stdout'] == 'a\0b\n'
     assert json.loads((root / 'test.json').read_text()) == report
     assert ET.parse(root / 'test.xml').find('testcase/system-out').text == 'a\ufffdb\n'

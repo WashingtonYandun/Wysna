@@ -13,56 +13,56 @@ interface Renderable {
 }
 
 class Shape implements Measurable, Renderable {
-    private id: int
-    public name: str
-    public origin: Point
-    public fn init(id: int, name: str, origin: Point) -> unit {
+    priv id: int
+    pub name: str
+    pub origin: Point
+    pub fn init(id: int, name: str, origin: Point) -> unit {
         this.id = id
         this.name = name
         this.origin = origin
     }
-    public fn get_id() -> int {
+    pub fn get_id() -> int {
         return this.id
     }
-    public fn move_by(dx: int, dy: int) -> unit {
+    pub fn move_by(dx: int, dy: int) -> unit {
         this.origin = Point { x: this.origin.x + dx, y: this.origin.y + dy }
     }
-    public fn area() -> int {
+    pub fn area() -> int {
         return 0
     }
-    public fn perimeter() -> int {
+    pub fn perimeter() -> int {
         return 0
     }
-    public fn render() -> str {
+    pub fn render() -> str {
         return "#" + str(this.id) + " " + this.name + "@(" + str(this.origin.x) + "," + str(this.origin.y) + ")"
     }
 }
 
 class Rectangle extends Shape implements Measurable, Renderable {
-    private width: int
-    private height: int
-    public fn init(id: int, origin: Point, width: int, height: int) -> unit {
+    priv width: int
+    priv height: int
+    pub fn init(id: int, origin: Point, width: int, height: int) -> unit {
         super.init(id, "Rect", origin)
         this.width = width
         this.height = height
     }
-    public fn scale(factor: int) -> unit {
+    pub fn scale(factor: int) -> unit {
         this.width = this.width * factor
         this.height = this.height * factor
     }
-    public fn area() -> int {
+    pub fn area() -> int {
         return this.width * this.height
     }
-    public fn perimeter() -> int {
+    pub fn perimeter() -> int {
         return 2 * (this.width + this.height)
     }
-    public fn render() -> str {
+    pub fn render() -> str {
         return super.render() + " [" + str(this.width) + "x" + str(this.height) + "] area=" + str(this.area())
     }
 }
 
 class Square extends Rectangle {
-    public fn init(id: int, origin: Point, side: int) -> unit {
+    pub fn init(id: int, origin: Point, side: int) -> unit {
         super.init(id, origin, side, side)
         this.name = "Square"
     }

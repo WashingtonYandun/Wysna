@@ -3,41 +3,41 @@ interface Describable {
 }
 
 class Account implements Describable {
-    public owner: str
-    private balance: int
+    pub owner: str
+    priv balance: int
 
     fn init(owner: str, initial: int) {
         this.owner = owner
         this.balance = initial
     }
 
-    public fn deposit(amount: int) {
+    pub fn deposit(amount: int) {
         this.balance = this.balance + amount
     }
 
-    public fn get_balance() -> int {
+    pub fn get_balance() -> int {
         return this.balance
     }
 
-    public fn describe() -> str {
+    pub fn describe() -> str {
         return this.owner + ": " + str(this.balance)
     }
 }
 
 class SavingsAccount extends Account {
-    private rate_pct: int
+    priv rate_pct: int
 
     fn init(owner: str, initial: int, rate_pct: int) {
         super.init(owner, initial)
         this.rate_pct = rate_pct
     }
 
-    public fn apply_interest() {
+    pub fn apply_interest() {
         let interest = (this.get_balance() * this.rate_pct) / 100
         this.deposit(interest)
     }
 
-    public fn describe() -> str {
+    pub fn describe() -> str {
         return super.describe() + " (Savings " + str(this.rate_pct) + "%)"
     }
 }

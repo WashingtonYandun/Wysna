@@ -5,22 +5,22 @@ interface Op {
 }
 
 class AddOp implements Op {
-    public offset: int
+    pub offset: int
     fn init(o: int) {
         this.offset = o
     }
-    public fn eval(x: int) -> int {
+    pub fn eval(x: int) -> int {
         return x + this.offset
     }
 }
 
 class LinearOp extends AddOp implements Op {
-    public factor: int
+    pub factor: int
     fn init(f: int, o: int) {
         super.init(o)
         this.factor = f
     }
-    public fn eval(x: int) -> int {
+    pub fn eval(x: int) -> int {
         return x * this.factor + this.offset
     }
 }

@@ -658,19 +658,32 @@ class Parser:
         declaration.attributes = attributes
         return declaration
 
+    def _reject_legacy_visibility(self):
+        token = self.at()
+        replacements = {TokenType.PUBLIC: "pub", TokenType.PRIVATE: "priv"}
+        if token.type in replacements:
+            replacement = replacements[token.type]
+            raise ParserError(f"Use '{replacement}' in place of '{token.value}'", file=self.file,
+                              line=token.line, col=token.col, code="W0006")
+
     def parse_stmt(self, allow_top_level: bool = False) -> Stmt:
+        self._reject_legacy_visibility()
         if self.check(TokenType.AT):
             return self.parse_attributed_function(allow_top_level)
-        if self.match(TokenType.PUB):
+        if self.match(TokenType.PUB, TokenType.PRIV):
+            visibility = self.tokens[self.pos - 1]
+            if self.at().type in (TokenType.PUB, TokenType.PRIV):
+                raise ParserError("A declaration takes one visibility modifier", file=self.file,
+                                  line=self.at().line, col=self.at().col, code="W0006")
             if self.check(TokenType.AT):
                 raise ParserError('Place static attributes before pub', file=self.file,
                                   line=self.at().line, col=self.at().col, code='W0006')
             if not allow_top_level:
-                raise ParserError("pub requires a top-level declaration", file=self.file, code="W0006")
+                raise ParserError(f"{visibility.value} requires a top-level declaration", file=self.file, code="W0006")
             statement = self.parse_stmt(allow_top_level=True)
             if not isinstance(statement, (FnDecl, StructDecl, EnumDecl, ClassDecl, InterfaceDecl, LetDecl, ImportDecl)):
-                raise ParserError("pub requires a declaration", file=self.file, code="W0006")
-            statement.is_exported = True
+                raise ParserError(f"{visibility.value} requires a declaration", file=self.file, code="W0006")
+            statement.is_exported = visibility.type == TokenType.PUB
             return statement
         if self.match(TokenType.EXTERN):
             token = self.tokens[self.pos - 1]
@@ -882,7 +895,8 @@ class Parser:
             self._skip_statement_separators()
             if self.check(TokenType.RBRACE) or self.is_at_end():
                 break
-            self.match(TokenType.PUBLIC)
+            self._reject_legacy_visibility()
+            self.match(TokenType.PUB)
             fn_tok = self.expect(TokenType.FN, code="W0006", msg="Expected 'fn' in interface method declaration")
             m_name = self.expect(TokenType.IDENTIFIER, code="W0006", msg="Expected method name after 'fn'")
             if self.check(TokenType.LBRACKET):
@@ -963,11 +977,10 @@ class Parser:
             self._skip_statement_separators()
             if self.check(TokenType.RBRACE) or self.is_at_end():
                 break
-            is_public = True
-            if self.match(TokenType.PUBLIC):
-                is_public = True
-            elif self.match(TokenType.PRIVATE):
-                is_public = False
+            self._reject_legacy_visibility()
+            is_public = not self.match(TokenType.PRIV)
+            if is_public:
+                self.match(TokenType.PUB)
 
             if self.check(TokenType.FN):
                 fn_tok = self.advance()

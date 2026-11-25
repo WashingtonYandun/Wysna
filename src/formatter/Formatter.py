@@ -130,9 +130,11 @@ class Formatter:
 
     def format_stmt(self, stmt: Stmt, level: int) -> str:
         rendered = self._format_stmt(stmt, level)
-        if getattr(stmt, "is_exported", False):
+        exported = getattr(stmt, "is_exported", None)
+        if exported is not None:
             indent = self._indent(level)
-            rendered = indent + "pub " + rendered[len(indent):]
+            modifier = "pub " if exported else "priv "
+            rendered = indent + modifier + rendered[len(indent):]
         attributes = getattr(stmt, 'attributes', [])
         if attributes:
             lines = []
@@ -230,10 +232,10 @@ class Formatter:
                 return f"{header} {{}}"
             member_lines: List[str] = []
             for f in stmt.fields:
-                vis = "public " if f.is_public else "private "
+                vis = "pub " if f.is_public else "priv "
                 member_lines.append(f"{self._indent(level + 1)}{vis}{f.name}: {self.format_type(f.type_ann)}")
             for m in stmt.methods:
-                vis = "public " if m.is_public else "private "
+                vis = "pub " if m.is_public else "priv "
                 m_tparams = f"[{', '.join(str(p) for p in m.type_params)}]" if getattr(m, "type_params", None) else ""
                 params_str = ", ".join([f"{p.name}: {self.format_type(p.type_ann)}" for p in m.params])
                 ret_str = self.format_type(m.return_type)

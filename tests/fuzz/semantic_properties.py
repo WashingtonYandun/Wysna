@@ -22,7 +22,7 @@ def generate_properties(seed):
     expression = str(right) if operation == 'value' else f'({original} {operation} {right})'
     source = f'''
 struct {pair} {{ left: int, right: int, third: int }}
-class {worker} {{ public fn {method}(value: int) -> int {{ return value + {count} }} }}
+class {worker} {{ pub fn {method}(value: int) -> int {{ return value + {count} }} }}
 let mut hits{suffix} = 0
 let mut data{suffix} = [{original}, 2]
 fn index{suffix}() -> int {{ hits{suffix} = hits{suffix} + 1

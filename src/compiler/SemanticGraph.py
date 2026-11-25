@@ -10,6 +10,7 @@ import json
 from pathlib import Path
 import re
 
+from error.Error import WysnaError
 from lexer.Lexer import Lexer
 from node import NodeType as A
 from tokens.TokenType import TokenType
@@ -18,8 +19,7 @@ from tokens.TokenType import TokenType
 _MODIFIER_TOKENS = frozenset({
     TokenType.PUB,
     TokenType.ASYNC,
-    TokenType.PUBLIC,
-    TokenType.PRIVATE,
+    TokenType.PRIV,
 })
 
 _OPEN_DELIMITERS = frozenset({TokenType.LPAREN, TokenType.LBRACKET, TokenType.LBRACE})
@@ -221,6 +221,13 @@ def _walk_expressions(node):
     elif isinstance(node, list):
         for item in node:
             yield from _walk_expressions(item)
+
+
+def _identifier_target(expr, fallback):
+    symbol = getattr(expr, 'resolved_symbol', None)
+    if symbol is None:
+        return fallback
+    return symbol.declaration_name or symbol.name
 
 
 def build_semantic_graph(checked, *, effects_report=None) -> dict:
@@ -594,6 +601,22 @@ def build_semantic_graph(checked, *, effects_report=None) -> dict:
         if src_id not in nodes[target_id].setdefault('called_by', []):
             nodes[target_id]['called_by'].append(src_id)
 
+    def record_uncertain_call(src_id: str, kind: str, callee_name: str, file: str, line: int, reason: str) -> None:
+        if src_id not in nodes:
+            return
+        bucket = nodes[src_id].setdefault('uncertain_calls', [])
+        clean_callee = callee_name or '<indirect>'
+        entry = {
+            'kind': kind,
+            'callee': clean_callee,
+            'file': file,
+            'line': int(line or 0),
+            'reason': reason,
+        }
+        dedup = (entry['kind'], entry['callee'], entry['file'], entry['line'])
+        if not any((u['kind'], u['callee'], u['file'], u['line']) == dedup for u in bucket):
+            bucket.append(entry)
+
     # Second pass: resolve structural, inheritance, type usage, instantiation, and call edges.
     for node_id, raw_name, stmt, stmt_file in decl_ast_pairs:
         if isinstance(stmt, A.ClassDecl):
@@ -671,12 +694,12 @@ def build_semantic_graph(checked, *, effects_report=None) -> dict:
                 elif isinstance(expr, A.StructInitExpr):
                     record_instantiation(node_id, expr.struct_name, stmt_file, expr_line)
                 elif isinstance(expr, A.CallExpr):
-                    if is_indirect_call(expr):
+                    indirect = is_indirect_call(expr)
+                    if indirect:
                         nodes[node_id]['indirect_call'] = True
                     callee = expr.callee
                     if isinstance(callee, A.IdentExpr):
-                        sym = getattr(callee, 'resolved_symbol', None)
-                        callee_raw = sym.name if sym is not None else callee.name
+                        callee_raw = _identifier_target(callee, callee.name)
                         ctor_target = resolve_node_id(callee_raw, ('class', 'struct'))
                         if ctor_target is not None:
                             record_instantiation(node_id, callee_raw, stmt_file, expr_line)
@@ -685,7 +708,18 @@ def build_semantic_graph(checked, *, effects_report=None) -> dict:
                                 if init_target:
                                     record_call(node_id, init_target, stmt_file, expr_line)
                         else:
-                            record_call(node_id, resolve_node_id(callee_raw, ('fn', 'extern')), stmt_file, expr_line)
+                            resolved_id = resolve_node_id(callee_raw, ('fn', 'extern'))
+                            record_call(node_id, resolved_id, stmt_file, expr_line)
+                            if resolved_id and resolved_id.startswith('extern:'):
+                                record_uncertain_call(
+                                    node_id, 'extern_ffi', nodes[resolved_id]['name'],
+                                    stmt_file, expr_line, 'foreign C ABI call',
+                                )
+                            elif indirect:
+                                record_uncertain_call(
+                                    node_id, 'indirect_call', _decode_qualified_name(callee_raw, '')[0],
+                                    stmt_file, expr_line, 'indirect call through function value or closure',
+                                )
                     elif isinstance(callee, A.MemberExpr):
                         mod_member = getattr(callee, 'resolved_module_member', None)
                         if mod_member:
@@ -697,7 +731,18 @@ def build_semantic_graph(checked, *, effects_report=None) -> dict:
                                     if init_target:
                                         record_call(node_id, init_target, stmt_file, expr_line)
                             else:
-                                record_call(node_id, resolve_node_id(mod_member, ('fn', 'extern')), stmt_file, expr_line)
+                                resolved_id = resolve_node_id(mod_member, ('fn', 'extern'))
+                                record_call(node_id, resolved_id, stmt_file, expr_line)
+                                if resolved_id and resolved_id.startswith('extern:'):
+                                    record_uncertain_call(
+                                        node_id, 'extern_ffi', nodes[resolved_id]['name'],
+                                        stmt_file, expr_line, 'foreign C ABI call',
+                                    )
+                                elif indirect:
+                                    record_uncertain_call(
+                                        node_id, 'indirect_call', _decode_qualified_name(mod_member, '')[0],
+                                        stmt_file, expr_line, 'indirect call through function value or closure',
+                                    )
                         else:
                             recv_type = getattr(callee.object, 'inferred_type', None)
                             if recv_type is None and isinstance(callee.object, A.ThisExpr) and owner_cls_id:
@@ -713,10 +758,27 @@ def build_semantic_graph(checked, *, effects_report=None) -> dict:
                                 owner_type_id = resolve_node_id(base_type, ('class', 'interface'))
                                 if owner_type_id:
                                     record_type_usage(node_id, base_type, stmt_file, expr_line, 'call_receiver')
+                            if getattr(recv_type, 'kind', None) == 'InterfaceType':
+                                iface_callee = f'{base_type}.{callee.property}' if base_type else callee.property
+                                record_uncertain_call(
+                                    node_id, 'virtual_dispatch', iface_callee,
+                                    stmt_file, expr_line, 'dynamic dispatch through interface',
+                                )
+                            elif indirect:
+                                label = f'{base_type}.{callee.property}' if base_type else callee.property
+                                record_uncertain_call(
+                                    node_id, 'indirect_call', label,
+                                    stmt_file, expr_line, 'indirect call through function value or closure',
+                                )
+                    elif indirect:
+                        record_uncertain_call(
+                            node_id, 'indirect_call', '<indirect>',
+                            stmt_file, expr_line, 'indirect call through function value or closure',
+                        )
 
                 reference = getattr(expr, 'function_reference', None)
                 if reference:
-                    target = resolve_node_id(reference, ('fn', 'extern'))
+                    target = resolve_node_id(_identifier_target(expr, reference), ('fn', 'extern'))
                     add_edge(node_id, target, 'references_function', file=stmt_file, line=expr_line)
                 inferred = getattr(expr, 'inferred_type', None)
                 if inferred is not None and getattr(inferred, 'kind', '') in ('ClassType', 'InterfaceType', 'StructType', 'EnumType'):
@@ -729,6 +791,7 @@ def build_semantic_graph(checked, *, effects_report=None) -> dict:
     top_calls = []
     top_references = []
     top_indirect_call = False
+    top_uncertain = []
     top_instantiations = []
     top_type_usages = []
     for stmt in getattr(entry_program, 'body', ()):
@@ -738,7 +801,7 @@ def build_semantic_graph(checked, *, effects_report=None) -> dict:
             expr_line = getattr(expr, 'line', getattr(stmt, 'line', 1))
             reference = getattr(expr, 'function_reference', None)
             if reference:
-                top_references.append((reference, expr_line))
+                top_references.append((_identifier_target(expr, reference), expr_line))
             if isinstance(expr, A.LetDecl) and expr.type_ann is not None:
                 for type_ref in _extract_type_names_from_annotation(expr.type_ann):
                     top_type_usages.append((type_ref, expr.line, 'local'))
@@ -748,11 +811,11 @@ def build_semantic_graph(checked, *, effects_report=None) -> dict:
             elif isinstance(expr, A.StructInitExpr):
                 top_instantiations.append((expr.struct_name, expr_line))
             elif isinstance(expr, A.CallExpr):
-                top_indirect_call |= is_indirect_call(expr)
+                indirect = is_indirect_call(expr)
+                top_indirect_call |= indirect
                 callee = expr.callee
                 if isinstance(callee, A.IdentExpr):
-                    sym = getattr(callee, 'resolved_symbol', None)
-                    callee_raw = sym.name if sym is not None else callee.name
+                    callee_raw = _identifier_target(callee, callee.name)
                     ctor_target = resolve_node_id(callee_raw, ('class', 'struct'))
                     if ctor_target is not None:
                         top_instantiations.append((callee_raw, expr_line))
@@ -760,6 +823,8 @@ def build_semantic_graph(checked, *, effects_report=None) -> dict:
                             top_calls.append((f'{callee_raw}.init', ('method',), expr_line))
                     else:
                         top_calls.append((callee_raw, ('fn', 'extern'), expr_line))
+                        if indirect:
+                            top_uncertain.append(('indirect_call', _decode_qualified_name(callee_raw, '')[0], expr_line, 'indirect call through function value or closure'))
                 elif isinstance(callee, A.MemberExpr):
                     mod_member = getattr(callee, 'resolved_module_member', None)
                     if mod_member:
@@ -770,12 +835,22 @@ def build_semantic_graph(checked, *, effects_report=None) -> dict:
                                 top_calls.append((f'{mod_member}.init', ('method',), expr_line))
                         else:
                             top_calls.append((mod_member, ('fn', 'extern'), expr_line))
+                            if indirect:
+                                top_uncertain.append(('indirect_call', _decode_qualified_name(mod_member, '')[0], expr_line, 'indirect call through function value or closure'))
                     else:
                         recv_type = getattr(callee.object, 'inferred_type', None)
                         recv_display = getattr(recv_type, 'display', '') if recv_type is not None else ''
                         base_type = recv_display.split('[', 1)[0].strip() if recv_display else ''
                         if base_type:
                             top_calls.append(('method_lookup', (base_type, callee.property), expr_line))
+                        if getattr(recv_type, 'kind', None) == 'InterfaceType':
+                            iface_callee = f'{base_type}.{callee.property}' if base_type else callee.property
+                            top_uncertain.append(('virtual_dispatch', iface_callee, expr_line, 'dynamic dispatch through interface'))
+                        elif indirect:
+                            label = f'{base_type}.{callee.property}' if base_type else callee.property
+                            top_uncertain.append(('indirect_call', label, expr_line, 'indirect call through function value or closure'))
+                elif indirect:
+                    top_uncertain.append(('indirect_call', '<indirect>', expr_line, 'indirect call through function value or closure'))
 
     if top_calls or top_instantiations or top_type_usages or top_references or top_indirect_call:
         nodes[script_node_id] = {
@@ -796,6 +871,8 @@ def build_semantic_graph(checked, *, effects_report=None) -> dict:
         }
         if top_indirect_call:
             nodes[script_node_id]['indirect_call'] = True
+        for kind, cname, expr_line, reason in top_uncertain:
+            record_uncertain_call(script_node_id, kind, cname, entry_file, expr_line, reason)
         for reference, expr_line in top_references:
             target = resolve_node_id(reference, ('fn', 'extern'))
             add_edge(script_node_id, target, 'references_function', file=entry_file, line=expr_line)
@@ -808,7 +885,10 @@ def build_semantic_graph(checked, *, effects_report=None) -> dict:
                 base_t, prop = target_kinds
                 record_call(script_node_id, resolve_method_id(base_t, prop), entry_file, expr_line)
             else:
-                record_call(script_node_id, resolve_node_id(target_ref, target_kinds), entry_file, expr_line)
+                resolved_id = resolve_node_id(target_ref, target_kinds)
+                record_call(script_node_id, resolved_id, entry_file, expr_line)
+                if resolved_id and resolved_id.startswith('extern:'):
+                    record_uncertain_call(script_node_id, 'extern_ffi', nodes[resolved_id]['name'], entry_file, expr_line, 'foreign C ABI call')
 
     # Merge static effects from Explain analysis when available.
     if effects_report and isinstance(effects_report, dict):
@@ -835,6 +915,16 @@ def build_semantic_graph(checked, *, effects_report=None) -> dict:
         ):
             if key in node and isinstance(node[key], list):
                 node[key] = sorted(set(node[key]))
+        uncertain = sorted(
+            node.pop('uncertain_calls', []),
+            key=lambda u: (u['line'], u['kind'], u['callee'], u['file']),
+        )
+        if node['kind'] in ('fn', 'method', 'interface_method', 'entrypoint') or uncertain:
+            node['call_resolution'] = {
+                'resolved_calls': list(node.get('calls', [])),
+                'uncertain_calls': uncertain,
+                'complete': len(uncertain) == 0,
+            }
 
     sorted_nodes = [nodes[key] for key in sorted(nodes)]
     sorted_edges = sorted(
@@ -864,7 +954,30 @@ def build_semantic_graph(checked, *, effects_report=None) -> dict:
         'modules': sorted(module_nodes, key=lambda m: m['id']),
         'nodes': sorted_nodes,
         'edges': sorted_edges,
+        'analysis_boundaries': analysis_boundaries_for_nodes(sorted_nodes),
     }
+
+
+_BOUNDARY_TAGS = {
+    'virtual_dispatch': 'virtual-dispatch',
+    'indirect_call': 'indirect-call',
+    'extern_ffi': 'c-ffi',
+    'unresolved_call': 'unresolved-call',
+}
+
+
+def analysis_boundaries_for_nodes(node_list) -> list[str]:
+    """Return sorted unique boundary tags across the provided graph nodes."""
+    boundaries = set()
+    for node in node_list:
+        resolution = node.get('call_resolution') or {}
+        for item in resolution.get('uncertain_calls', ()):
+            tag = _BOUNDARY_TAGS.get(item.get('kind'))
+            if tag:
+                boundaries.add(tag)
+        if node.get('indirect_call') and 'virtual-dispatch' not in boundaries:
+            boundaries.add('indirect-call')
+    return sorted(boundaries)
 
 
 def _effect_to_capability(effect: str) -> str | None:
@@ -910,6 +1023,30 @@ def find_graph_node(graph: dict, symbol: str) -> dict | None:
     return suffix_matches[0] if len(suffix_matches) == 1 else None
 
 
+def resolve_graph_symbol(graph: dict, symbol: str, stage: str) -> dict | None:
+    """Resolve user-supplied selectors without choosing among homonyms."""
+    nodes = graph['nodes']
+    for field in ('id', 'qualified_name', 'name'):
+        matches = [node for node in nodes if node[field] == symbol
+                   and not (field == 'qualified_name' and node['name'] == symbol)]
+        if matches:
+            break
+    else:
+        matches = [node for node in nodes
+                   if node['qualified_name'].endswith(('::' + symbol, '.' + symbol))]
+    if len(matches) < 2:
+        return matches[0] if matches else None
+    fields = ('id', 'qualified_name', 'kind', 'file', 'line', 'col', 'signature')
+    candidates = [{field: node.get(field, '') for field in fields}
+                  for node in sorted(matches, key=lambda item: (item['id'], item['file'], item['line']))]
+    choices = ', '.join(candidate['id'] for candidate in candidates)
+    error = WysnaError(f"Ambiguous symbol '{symbol}'; pass a candidate ID to --symbol: {choices}",
+                       file=graph['entry_file'], code='W1005', stage=stage)
+    error.data = {'kind': 'ambiguous_symbol', 'symbol': symbol,
+                  'graph_hash': graph['graph_hash'], 'candidates': candidates}
+    raise error
+
+
 def compute_blast_radius(graph: dict, target_id: str) -> dict:
     """Compute direct and transitive reverse dependents for a target graph node."""
     edges = graph.get('edges', [])
@@ -946,7 +1083,7 @@ def query_semantic_graph(graph: dict, *, symbol: str | None = None, relation: st
     if symbol is None and relation is None:
         return graph
 
-    node = find_graph_node(graph, symbol) if symbol else None
+    node = resolve_graph_symbol(graph, symbol, 'graph') if symbol else None
     if symbol and node is None:
         return {
             'schema_version': graph['schema_version'],
@@ -968,6 +1105,7 @@ def query_semantic_graph(graph: dict, *, symbol: str | None = None, relation: st
             'query': {'symbol': None, 'relation': relation},
             'edges': filtered_edges,
             'summary': graph['summary'],
+            'analysis_boundaries': analysis_boundaries_for_nodes(graph.get('nodes', ())),
         }
 
     node_id = node['id']
@@ -998,4 +1136,5 @@ def query_semantic_graph(graph: dict, *, symbol: str | None = None, relation: st
         'node': node,
         'impact': blast,
         'edges': related_edges,
+        'analysis_boundaries': analysis_boundaries_for_nodes([node]),
     }

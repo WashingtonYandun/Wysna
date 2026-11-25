@@ -5,7 +5,7 @@ fn explicit() -> unit { effect() }
 fn defaulted() { ["owned"] }
 fn grouped() -> (unit) { "discarded" }
 fn optional() -> unit? { None }
-class Worker { public fn run() -> unit { effect() } }
+class Worker { pub fn run() -> unit { effect() } }
 let callback = |value: int| -> unit { str(value) }
 print(explicit(), defaulted(), grouped(), Worker().run(), callback(3), optional())
 fn tail_error() -> unit ! str { Err("tail") }

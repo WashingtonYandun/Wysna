@@ -11,22 +11,22 @@ pub struct BufferError { message: str }
 
 # Compact mutable bytes have reference identity. Clone explicitly for a snapshot.
 pub class Bytes {
-    private handle: opaque
-    public fn init() { this.handle = wysna_host_buffer_new() }
-    public fn size() -> int { return wysna_host_buffer_size(this.handle) }
-    public fn get(index: int) -> int ! BufferError {
+    priv handle: opaque
+    pub fn init() { this.handle = wysna_host_buffer_new() }
+    pub fn size() -> int { return wysna_host_buffer_size(this.handle) }
+    pub fn get(index: int) -> int ! BufferError {
         let value = wysna_host_buffer_get(this.handle, index)
         if value < 0 { return Err(BufferError { message: "closed buffer or invalid index" }) }
         return value
     }
-    public fn append(value: int) -> unit ! BufferError {
+    pub fn append(value: int) -> unit ! BufferError {
         if wysna_host_buffer_append(this.handle, value) != 0 {
             return Err(BufferError { message: "closed buffer or byte outside 0..255" })
         }
     }
-    public fn close() -> int { return wysna_host_close(this.handle) }
+    pub fn close() -> int { return wysna_host_close(this.handle) }
     # Internal interoperability boundary; retaining the ID does not extend its lifetime.
-    public fn borrow() -> opaque { return wysna_host_borrow(this.handle) }
+    pub fn borrow() -> opaque { return wysna_host_borrow(this.handle) }
 }
 
 pub fn from_text(text: str) -> Bytes {

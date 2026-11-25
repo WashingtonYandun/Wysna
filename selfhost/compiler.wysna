@@ -204,15 +204,27 @@ fn diag_primary_span_json(file: str, line: int, col: int, src: str) -> str {
     return "{\"source_id\":" + diag_json_quote(file) + ",\"source_sha256\":" + diag_json_quote(sha) + ",\"start_byte\":" + str(start_byte) + ",\"end_byte\":" + str(end_byte) + "}"
 }
 
+fn diag_related_record_json(message: str, file: str, line: int, col: int) -> str {
+    let src = if file != "" and file != "<stdin>" and file != "<unknown>" and file != "<cli>" {
+        diag_read_snippet_source(file)
+    } else { "" }
+    let span_json = diag_primary_span_json(file, line, col, src)
+    return "{\"message\":" + diag_json_quote(message) + ",\"line\":" + str(line) + ",\"col\":" + str(col) + ",\"span\":" + span_json + "}"
+}
+
 fn diag_record_json(code: str, stage: str, severity: str, msg: str, file: str, line: int, col: int, src: str) -> str {
     let data_json = if stage == "type" { fix_mismatch_data_json(msg) } else { "{}" }
-    return diag_record_json_data(code, stage, severity, msg, file, line, col, src, data_json)
+    return diag_record_json_full(code, stage, severity, msg, file, line, col, src, data_json, "[]")
 }
 
 fn diag_record_json_data(code: str, stage: str, severity: str, msg: str, file: str, line: int, col: int, src: str, data_json: str) -> str {
+    return diag_record_json_full(code, stage, severity, msg, file, line, col, src, data_json, "[]")
+}
+
+fn diag_record_json_full(code: str, stage: str, severity: str, msg: str, file: str, line: int, col: int, src: str, data_json: str, related_json: str) -> str {
     let span_json = diag_primary_span_json(file, line, col, src)
     let fixes_json = if span_json != "null" { fix_diagnostic_edits_json(code, msg, file, src, line, col) } else { "[]" }
-    return "{\"code\":" + diag_json_quote(code) + ",\"severity\":" + diag_json_quote(severity) + ",\"stage\":" + diag_json_quote(stage) + ",\"message\":" + diag_json_quote(msg) + ",\"primary_span\":" + span_json + ",\"related\":[],\"data\":" + data_json + ",\"fixes\":" + fixes_json + "}"
+    return "{\"code\":" + diag_json_quote(code) + ",\"severity\":" + diag_json_quote(severity) + ",\"stage\":" + diag_json_quote(stage) + ",\"message\":" + diag_json_quote(msg) + ",\"primary_span\":" + span_json + ",\"related\":" + related_json + ",\"data\":" + data_json + ",\"fixes\":" + fixes_json + "}"
 }
 
 fn diag_tool_envelope_json(command: str, status: str, exit_code: int, diagnostics_json: str, result_key: str, result_json: str, artifacts_json: str) -> str {
@@ -366,10 +378,14 @@ fn diag_render_source_excerpt(src: str, target_line: int, target_col: int) -> st
 }
 
 fn diag_emit_and_exit(file: str, code: str, line: int, col: int, msg: str) -> unit {
-    diag_emit_and_exit_data(file, code, line, col, msg, "")
+    diag_emit_and_exit_full(file, code, line, col, msg, "", "[]")
 }
 
 fn diag_emit_and_exit_data(file: str, code: str, line: int, col: int, msg: str, data: str) -> unit {
+    diag_emit_and_exit_full(file, code, line, col, msg, data, "[]")
+}
+
+fn diag_emit_and_exit_full(file: str, code: str, line: int, col: int, msg: str, data: str, related_json: str) -> unit {
     let mode = diag_cli_json_mode()
     let mut src = ""
     if file != "" and file != "<stdin>" and file != "<unknown>" and file != "<cli>" {
@@ -382,7 +398,10 @@ fn diag_emit_and_exit_data(file: str, code: str, line: int, col: int, msg: str, 
         exit(1)
     }
     let stage = diag_stage_for_code(code)
-    let diag_json = if data == "" { diag_record_json(code, stage, "error", msg, file, line, col, src) } else { diag_record_json_data(code, stage, "error", msg, file, line, col, src, data) }
+    let eff_data = if data == "" {
+        if stage == "type" { fix_mismatch_data_json(msg) } else { "{}" }
+    } else { data }
+    let diag_json = diag_record_json_full(code, stage, "error", msg, file, line, col, src, eff_data, related_json)
     if mode == "array" { diag_write_output("[" + diag_json + "]"); exit(1) }
     if mode == "check-json" {
         diag_write_output(("{\"schema_version\":\"wysna.cli.result/1\",\"compiler_version\":\"" + tool_compiler_version() + "\",\"command\":\"check\",\"ok\":false,\"exit_code\":1,\"diagnostics\":[") + diag_json + "],\"data\":null}")
@@ -406,6 +425,10 @@ fn report_error_at(code: str, token: Token, msg: str) -> unit {
 
 fn report_error_at_data(code: str, token: Token, msg: str, data: str) -> unit {
     diag_emit_and_exit_data(token.file, code, token.line, token.col, msg, data)
+}
+
+fn report_error_at_full(code: str, token: Token, msg: str, data: str, related: str) -> unit {
+    diag_emit_and_exit_full(token.file, code, token.line, token.col, msg, data, related)
 }
 
 fn report_error_at_location(code: str, file: str, line: int, col: int, msg: str) -> unit {
@@ -1279,14 +1302,14 @@ fn tool_compiler_version() -> str { return "0.9.0" }
 fn tool_language_version() -> str { return "0.9" }
 fn tool_skills_available_topics() -> str { return "agent-loop, contracts, graph, overview, patch, project-tests, stdlib, syntax, workers" }
 fn tool_skills_topic_content(topic: str) -> str {
-    if topic == "agent-loop" { return "# Agent Coding Loop (Token-Efficient, Hash-Guarded)\n1. Discover relationships: `wysna graph <file.wysna> --output-format=json-v1`\n2. Inspect one symbol instead of reading whole files: `wysna inspect <file.wysna> --symbol <name> --with-deps --output-format=json-v1`\n3. Submit checked edits guarded by graph hash: `wysna patch <file.wysna> --symbol <name> --expect-graph-hash <hash> --with <code> --apply`\n4. Auto-repair mechanical diagnostics: `wysna fix --apply --output-format=json-v1 <file.wysna>`\n5. Decode any Wxxxx error: `wysna explain --code W2001 --output-format=json-v1`\n6. Verify & bound runtime: `wysna run --max-steps=100000 --max-heap-mb=64 <file.wysna>`" }
-    if topic == "contracts" { return "# Contracts, Schemas, Quotas & Trace Replay\n- Pre/postconditions: `fn f(x: int) -> int requires x > 0 ensures result >= 0 { ... }` (runtime `[W4005]`).\n- Tool Schema export: `wysna schema --emit-codecs --output-format=json-v1 <file.wysna>`.\n- Deterministic quotas: `--max-steps=<N>`, `--max-heap-mb=<N>` (fail-stop `[W4004]`).\n- Offline effect cassettes: `--record-trace <path>`, `--replay-trace <path>`.\n- Solo los errores recuperables usan `T ! E`; W4001–W4005 son traps, sin recuperación mediante `else err`.\n- JSON Schema exporta solo restricciones representables; los contratos generales requieren validación ejecutable.\n- Cuotas y replay cubren el runtime y efectos instrumentados; FFI y binarios nativos necesitan aislamiento del sistema operativo." }
-    if topic == "graph" { return "# Semantic Relationship Graph (`wysna graph`)\n- `wysna graph <file> --output-format=json-v1`: full nodes, edges, and `graph_hash`.\n- `--symbol <name> --rel implements`: find all classes implementing an interface (or vice-versa).\n- `--symbol <name> --rel usages`: find every class, function, field, and param using the type.\n- `--symbol <name> --rel callers|callees`: traverse the resolved call graph.\n- `--symbol <name> --rel impact`: compute transitive blast radius before refactoring." }
+    if topic == "agent-loop" { return "# Agent Coding Loop (Token-Efficient, Hash-Guarded)\n1. Discover relationships: `wysna graph <file.wysna> --output-format=json-v1`\n2. Inspect one symbol within a byte budget: `wysna inspect <file.wysna> --symbol <name> --with-deps --max-bytes 2048 --output-format=json-v1` (follow `omitted[].ref` for truncated context)\n3. Submit checked edits guarded by graph/plan hash: `wysna patch <file.wysna> --symbol <name> --expect-graph-hash <hash> --with <code> --apply`\n4. Auto-repair mechanical diagnostics: `wysna fix --apply --output-format=json-v1 <file.wysna>`\n5. Decode any Wxxxx error: `wysna explain --code W2001 --output-format=json-v1`\n6. Verify & bound runtime: `wysna run --max-steps=100000 --max-heap-mb=64 <file.wysna>`" }
+    if topic == "contracts" { return "# Contracts, Schemas, Quotas & Trace Replay\n- Pre/postconditions: `fn f(x: int) -> int requires x > 0 ensures result >= 0 { ... }` (runtime `[W4005]`).\n- Tool Schema export: `wysna schema --emit-codecs --output-format=json-v1 <file.wysna>`.\n- Invoke a typed `@AgentTool(id: \"ops.lookup\", version: 1)`: `wysna schema <file.wysna> --function NAME --emit-tool -o adapter.wysna`.\n- Deterministic quotas: `--max-steps=<N>`, `--max-heap-mb=<N>` (fail-stop `[W4004]`).\n- Offline effect cassettes: `--record-trace <path>`, `--replay-trace <path>`.\n- Solo los errores recuperables usan `T ! E`; W4001–W4005 son traps, sin recuperación mediante `else err`.\n- JSON Schema exporta solo restricciones representables; los contratos generales requieren validación ejecutable.\n- Cuotas y replay cubren el runtime y efectos instrumentados; FFI y binarios nativos necesitan aislamiento del sistema operativo." }
+    if topic == "graph" { return "# Semantic Relationship Graph (`wysna graph`)\n- `wysna graph <file> --output-format=json-v1`: full nodes, edges, `graph_hash`, `call_resolution`, and `analysis_boundaries`.\n- `--symbol <name> --rel implements`: find all classes implementing an interface (or vice-versa).\n- `--symbol <name> --rel usages`: find every class, function, field, and param using the type.\n- `--symbol <name> --rel callers|callees`: traverse the resolved call graph and inspect `uncertain_calls` (`indirect_call`, `virtual_dispatch`, `extern_ffi`).\n- `--symbol <name> --rel impact`: compute transitive blast radius before refactoring." }
     if topic == "overview" { return "# Wysna v0.9.0 — Agent-First Native Language & Toolchain\n- Default workflow uses checked static inspection before execution.\n- Memory model: Atomic ARC + Copy-on-Write (`Weak[C]` breaks strong cycles); workers require closed callbacks and privately owned value graphs; classes and opaque handles cannot cross worker boundaries.\n- Error channel: Recoverable typed values `T ! E`; runtime traps terminate execution. Unwrap with `?` or `else err { fallback }`.\n- Core agent loop: `wysna skills` -> `wysna graph` -> `wysna inspect` -> `wysna patch` -> `wysna fix` -> `wysna check`.\n- Topics available: overview, agent-loop, syntax, graph, patch, project-tests, contracts, stdlib." }
-    if topic == "patch" { return "# Checked Semantic Patching (`wysna patch`)\n- Dry-run check in memory (default): validates syntax, types, and interface contracts before disk writes.\n- Optimistic locking: pass `--expect-graph-hash graph:...`; stale hashes fail with `[W5005]`.\n- Target classes, interfaces, structs, enums, functions, or `ClassName.method`." }
+    if topic == "patch" { return "# Checked Semantic Patching (`wysna patch`)\n- Dry-run check in memory (default): validates syntax, types, and interface contracts before disk writes.\n- Optimistic locking: pass `--expect-graph-hash graph:...`; stale hashes fail with `[W5005]`.\n- Target classes, interfaces, structs, enums, functions, or `ClassName.method`.\n- Coordinated workspace edits (Seed & Native SDK): preview with `wysna patch --manifest wysna.toml --edits changes.json --output-format=json-v1`. Apply using `--apply --expect-plan-hash HASH`." }
     if topic == "project-tests" { return "# Pruebas de proyecto para agentes\n1. Lista sin ejecutar: `wysna project test --discover --list --frozen --output-format=json-v1`.\n2. Usa los IDs exactos de result.cases: `--case test:example`; --filter conserva selección por subcadena.\n3. Ejecuta con `--expect-plan-hash <result.plan_hash> --output-format=json-v1 --report-json tests.json --report-junit tests.xml`.\n4. Lee result.cases[].failure_kind, diagnostics y los hashes de stdout/stderr; no interpretes texto de terminal.\n5. W5005 indica plan obsoleto: vuelve a listar. Una suite vacía devuelve 2; una cancelación devuelve 130.\n6. std/test ofrece igualdad genérica, tolerancia flotante, opcionales y fixture_directory(); los fixtures se eliminan después del caso.\nEl hash cubre manifiesto, lock, versión y entradas seleccionadas, no todos los imports. El SDK native-core-v1 ejecuta estos comandos sin Python.\n7. Dependencias: `wysna packages pack --manifest dependency/wysna.toml -o dependency.tar`; adquiere con `packages fetch --manifest wysna.toml --archive dependency.tar --sha256 <pin> --cache <cache>`, agrega con `packages add alias --path vendor/<pin>` y ejecuta `project lock`.\n8. Restaura con `packages restore --cache <cache>` y verifica con `project test --frozen`; todas las operaciones admiten `--output-format=json-v1`, sin hooks ni registro remoto.\n" }
     if topic == "stdlib" { return "# Standard Library (18 Modules)\n- Data & Text: `std/math`, `std/text`, `std/bytes`, `std/regex`, `std/collections`, `std/json`, `std/csv` (`parse`, `parse_records`, `stringify`), `std/parse`.\n- Systems & I/O: `std/fs`, `std/files`, `std/buffer`, `std/env`, `std/path`, `std/process`, `std/time`.\n- Network, Concurrency & Security: `std/http`, `std/async`, `std/algorithms` (`parallel_map`), `std/crypto`." }
-    if topic == "syntax" { return "# Wysna Canonical Syntax Quick Reference\n- Bindings: `let x = 1` (immutable), `let mut y = 2` (mutable).\n- Functions: `fn add(a: int, b: int) -> int { return a + b }` (`pub fn` at module level; `public`/`private` inside classes).\n- Control flow & logic: `if c { ... } elif d { ... } else { ... }` (`else if` also accepted); boolean operators are `and`, `or`, `not` (never `&&`, `||`, `!`).\n- Cooperative Async: `async fn fetch_id() -> int { ... }`, `let v = await task`.\n- Optionals & Errors: `T?`, `T ! E`, unwrap `?`, recover `expr else err { fallback }`.\n- OOP & Contracts: `interface Drawable { fn draw() -> str }`, `class Rect implements Drawable { public fn draw() -> str { ... } }`.\n- Lambdas: `|n: int| => n * n` (capture outer variables by immutable snapshot by design; return updated values for mutable state; classes cannot cross worker boundaries).\n- Canonical forms: `Class(...)`, `None`, `_ =>`, parenthesized tuple patterns.\n- Match patterns: alternatives `1 | 2`, Int64 ranges `0..=10`, nested `Point { x, .. }`; W6003 reports unreachable arms.\n- Static attributes on top-level functions: `@deprecated(\"message\")` (W6004), `@must_use` (W6005); custom typed metadata: `struct AgentTool { name: str }`, `@AgentTool(name: \"lookup\")`; literal str/bool/int fields, no macros or evaluation.\n- Ranges & Loops: `for i in 0..10 { ... }`, inclusive `0..=10`.\n- Non-exhaustive match W2003 includes data.uncovered_pattern_families for checked repairs." }
+    if topic == "syntax" { return "# Wysna Canonical Syntax Quick Reference\n- Bindings: `let x = 1` (immutable), `let mut y = 2` (mutable).\n- Functions: `fn add(a: int, b: int) -> int { return a + b }` (`pub` and `priv` at module scope and inside classes).\n- Control flow & logic: `if c { ... } elif d { ... } else { ... }` (`else if` also accepted); boolean operators are `and`, `or`, `not` (never `&&`, `||`, `!`).\n- Cooperative Async: `async fn fetch_id() -> int { ... }`, `let v = await task`.\n- Optionals & Errors: `T?`, `T ! E`, unwrap `?`, recover `expr else err { fallback }`.\n- OOP & Contracts: `interface Drawable { fn draw() -> str }`, `class Rect implements Drawable { pub fn draw() -> str { ... } }`.\n- Lambdas: `|n: int| => n * n` (capture outer variables by immutable snapshot by design; return updated values for mutable state; classes cannot cross worker boundaries).\n- Canonical forms: `Class(...)`, `None`, `_ =>`, parenthesized tuple patterns.\n- Match patterns: alternatives `1 | 2`, Int64 ranges `0..=10`, nested `Point { x, .. }`; W6003 reports unreachable arms.\n- Static attributes on top-level functions: `@deprecated(\"message\")` (W6004), `@must_use` (W6005); custom typed metadata: `struct ReviewTag { name: str }`, `@ReviewTag(name: \"lookup\")`; literal str/bool/int fields, no macros or evaluation.\n- Ranges & Loops: `for i in 0..10 { ... }`, inclusive `0..=10`.\n- Non-exhaustive match W2003 includes data.uncovered_pattern_families for checked repairs." }
     if topic == "workers" { return "# Workers con propiedad aislada\n- `std/algorithms.parallel_map`, `parallel_filter`, `parallel_batch` y el mapper de `parallel_reduce`, además de `std/async.spawn` y `run_group`, exigen callbacks comprobables.\n- Usa funciones nombradas o lambdas y alias inmutables. Solo escalares, strings y compuestos de valores transferibles; W2014 rechaza clases, interfaces, Weak, handles y datos función.\n- W2015 rechaza globals no capturados, efectos transitivos, FFI, scheduler, callbacks sin resolver y workers anidados. Captura valores explícitamente o pásalos como parámetros.\n- Entradas, capturas y resultados se copian como grafos privados. CoW dentro de cada worker; profundidad máxima de snapshot 256.\n- `parallel_reduce` mapea en paralelo y combina mediante fold izquierdo secuencial. El orden de resultados no promete orden de efectos.\n- `run_group` acota trabajo de CPU y devuelve resultados por índice. Usa `group_cancelled()` en callbacks largos. I/O cooperativo permanece en el scheduler." }
     return ""
 }
@@ -1294,7 +1317,7 @@ fn tool_skills_payload_json(topic: str) -> str {
     return "{\"schema_version\":\"wysna.skills/1\",\"compiler_version\":\"0.9.0\",\"available_topics\":[\"agent-loop\",\"contracts\",\"graph\",\"overview\",\"patch\",\"project-tests\",\"stdlib\",\"syntax\",\"workers\"],\"topic\":" + diag_json_quote(topic) + ",\"content\":" + diag_json_quote(tool_skills_topic_content(topic)) + "}"
 }
 fn tool_capabilities_payload_json() -> str {
-    return "{\"schema_version\":\"wysna.capabilities/1\",\"compiler_version\":\"0.9.0\",\"commands\":[\"run\",\"check\",\"fmt\",\"ast\",\"mir\",\"tokens\",\"emit-c\",\"emit-mir\",\"build\",\"test\",\"project.new\",\"project.lock\",\"project.check\",\"project.build\",\"project.run\",\"project.test\",\"packages.pack\",\"packages.fetch\",\"packages.add\",\"packages.remove\",\"packages.restore\",\"api\",\"capabilities\",\"explain\",\"graph\",\"inspect\",\"patch\",\"skills\",\"fix\",\"schema\",\"mcp\",\"lsp\"],\"machine_output\":{\"format\":\"json-v1\",\"commands\":[\"check\",\"fmt\",\"project.new\",\"project.lock\",\"project.check\",\"project.test\",\"packages.pack\",\"packages.fetch\",\"packages.add\",\"packages.remove\",\"packages.restore\",\"api\",\"capabilities\",\"explain\",\"graph\",\"inspect\",\"patch\",\"skills\",\"fix\",\"schema\"]},\"profiles\":[\"native-cli\",\"wasi-command\",\"browser-library\",\"c99-source\"],\"targets\":[\"native\",\"wasm32-wasip1\",\"wasm32-unknown-emscripten\"],\"runtimes\":{\"wasi-command\":\"wasmtime-python==50.0.1\",\"browser-library\":\"browser or Node.js\"},\"capabilities\":{\"native-cli\":[\"stdio\",\"filesystem\",\"environment\",\"processes\",\"network\",\"native-ffi\"],\"wasi-command\":[\"stdio\",\"arguments\",\"clock\",\"random\",\"manifest-declared-preopens\"],\"browser-library\":[\"linear-memory\",\"generated-utf8-abi\",\"bigint-int64\"]},\"target_profiles\":[{\"profile\":\"native-cli\",\"engine\":\"wysna-selfhost\",\"backend\":\"c99\",\"triple\":null,\"artifact_kind\":\"native_executable\",\"capabilities\":[\"stdio\",\"filesystem\",\"environment\",\"processes\",\"network\",\"native-ffi\"],\"build_requirements\":[{\"name\":\"c99-compiler\",\"version\":null,\"provided_by\":\"Host C99 toolchain\"}],\"run_requirements\":[{\"name\":\"host-operating-system\",\"version\":null,\"provided_by\":null}]},{\"profile\":\"wasi-command\",\"engine\":\"wysna-selfhost\",\"backend\":\"c99\",\"triple\":\"wasm32-wasip1\",\"artifact_kind\":\"wasm_module\",\"capabilities\":[\"stdio\",\"arguments\",\"clock\",\"random\",\"runner-declared-preopens\"],\"build_requirements\":[{\"name\":\"zig\",\"version\":\"0.15.2\",\"provided_by\":\"Native SDK\"}],\"run_requirements\":[{\"name\":\"wasmtime-python\",\"version\":\"50.0.1\",\"provided_by\":null}]},{\"profile\":\"browser-library\",\"engine\":\"wysna-seed\",\"backend\":\"c99\",\"triple\":\"wasm32-unknown-emscripten\",\"artifact_kind\":\"wasm_module\",\"capabilities\":[\"linear-memory\",\"generated-utf8-abi\",\"bigint-int64\"],\"build_requirements\":[{\"name\":\"emscripten\",\"version\":\"5.0.1\",\"provided_by\":null}],\"run_requirements\":[{\"name\":\"browser-or-nodejs\",\"version\":null,\"provided_by\":null}]}],\"requirements\":{\"std/http\":{\"interpreter\":\"install wysna[http] with libcurl 8.3.0 or newer\",\"native\":\"install libcurl 8.3.0 or newer development files and expose curl-config on PATH\",\"wasi-command\":\"unavailable\",\"browser-library\":\"unavailable\"}},\"limitations\":[\"native-cli capabilities describe host access and are not a sandbox\",\"WASI Preview 1 does not provide networking, child processes, or native FFI\",\"The Native SDK builds standalone WASI commands; use Seed for WASI projects and execution\",\"browser-library exposes only generated scalar and UTF-8 exports; WVal and pointers remain internal\",\"dependencies use local paths or SHA-256-pinned offline USTAR archives; no remote version resolution or public registry\",\"project lockfiles do not claim bit-for-bit binary reproducibility\",\"CPU workers reject host effects, uncaptured globals, classes, Weak and opaque handles\",\"worker snapshots copy full value graphs; boundary transfer is not constant-time\"],\"worker_safety\":{\"contract\":\"closed-callback-v1\",\"ownership\":\"private-value-graphs\",\"diagnostics\":[\"W2014\",\"W2015\"],\"snapshots\":[\"inputs\",\"captures\",\"results\"],\"maximum_snapshot_depth\":256,\"nested_workers\":false,\"shared_mutable_objects\":false,\"unknown_callbacks\":\"rejected\",\"parallel_reduce\":\"parallel-map-sequential-left-fold\",\"task_groups\":false,\"public_cancellation\":false}}"
+    return "{\"schema_version\":\"wysna.capabilities/1\",\"compiler_version\":\"0.9.0\",\"commands\":[\"run\",\"check\",\"fmt\",\"ast\",\"mir\",\"tokens\",\"emit-c\",\"emit-mir\",\"build\",\"test\",\"project.new\",\"project.lock\",\"project.check\",\"project.build\",\"project.run\",\"project.test\",\"packages.pack\",\"packages.fetch\",\"packages.add\",\"packages.remove\",\"packages.restore\",\"api\",\"capabilities\",\"explain\",\"graph\",\"inspect\",\"patch\",\"skills\",\"fix\",\"schema\",\"mcp\",\"lsp\"],\"machine_output\":{\"format\":\"json-v1\",\"commands\":[\"check\",\"fmt\",\"project.new\",\"project.lock\",\"project.check\",\"project.test\",\"packages.pack\",\"packages.fetch\",\"packages.add\",\"packages.remove\",\"packages.restore\",\"api\",\"capabilities\",\"explain\",\"graph\",\"inspect\",\"patch\",\"skills\",\"fix\",\"schema\"]},\"profiles\":[\"native-cli\",\"wasi-command\",\"browser-library\",\"c99-source\"],\"targets\":[\"native\",\"wasm32-wasip1\",\"wasm32-unknown-emscripten\"],\"runtimes\":{\"wasi-command\":\"wasmtime-python==50.0.1\",\"browser-library\":\"browser or Node.js\"},\"capabilities\":{\"native-cli\":[\"stdio\",\"filesystem\",\"environment\",\"processes\",\"network\",\"native-ffi\"],\"wasi-command\":[\"stdio\",\"arguments\",\"clock\",\"random\",\"manifest-declared-preopens\"],\"browser-library\":[\"linear-memory\",\"generated-utf8-abi\",\"bigint-int64\"]},\"target_profiles\":[{\"profile\":\"native-cli\",\"engine\":\"wysna-selfhost\",\"backend\":\"c99\",\"triple\":null,\"artifact_kind\":\"native_executable\",\"capabilities\":[\"stdio\",\"filesystem\",\"environment\",\"processes\",\"network\",\"native-ffi\"],\"build_requirements\":[{\"name\":\"c99-compiler\",\"version\":null,\"provided_by\":\"Host C99 toolchain\"}],\"run_requirements\":[{\"name\":\"host-operating-system\",\"version\":null,\"provided_by\":null}]},{\"profile\":\"wasi-command\",\"engine\":\"wysna-selfhost\",\"backend\":\"c99\",\"triple\":\"wasm32-wasip1\",\"artifact_kind\":\"wasm_module\",\"capabilities\":[\"stdio\",\"arguments\",\"clock\",\"random\",\"runner-declared-preopens\"],\"build_requirements\":[{\"name\":\"zig\",\"version\":\"0.15.2\",\"provided_by\":\"Native SDK\"}],\"run_requirements\":[{\"name\":\"wasmtime-python\",\"version\":\"50.0.1\",\"provided_by\":null}]},{\"profile\":\"browser-library\",\"engine\":\"wysna-seed\",\"backend\":\"c99\",\"triple\":\"wasm32-unknown-emscripten\",\"artifact_kind\":\"wasm_module\",\"capabilities\":[\"linear-memory\",\"generated-utf8-abi\",\"bigint-int64\"],\"build_requirements\":[{\"name\":\"emscripten\",\"version\":\"5.0.1\",\"provided_by\":null}],\"run_requirements\":[{\"name\":\"browser-or-nodejs\",\"version\":null,\"provided_by\":null}]}],\"requirements\":{\"std/http\":{\"interpreter\":\"install wysna[http] with libcurl 8.3.0 or newer\",\"native\":\"install libcurl 8.3.0 or newer development files and expose curl-config on PATH\",\"wasi-command\":\"unavailable\",\"browser-library\":\"unavailable\"}},\"limitations\":[\"native-cli capabilities describe host access and are not a sandbox\",\"WASI Preview 1 does not provide networking, child processes, or native FFI\",\"The Native SDK builds standalone WASI commands; use Seed for WASI projects and execution\",\"browser-library exposes only generated scalar and UTF-8 exports; WVal and pointers remain internal\",\"dependencies use local paths or SHA-256-pinned offline USTAR archives; no remote version resolution or public registry\",\"project lockfiles do not claim bit-for-bit binary reproducibility\",\"CPU workers reject host effects, uncaptured globals, classes, Weak and opaque handles\",\"worker snapshots copy full value graphs; boundary transfer is not constant-time\"],\"worker_safety\":{\"contract\":\"closed-callback-v1\",\"ownership\":\"private-value-graphs\",\"diagnostics\":[\"W2014\",\"W2015\"],\"snapshots\":[\"inputs\",\"captures\",\"results\"],\"maximum_snapshot_depth\":256,\"nested_workers\":false,\"shared_mutable_objects\":false,\"unknown_callbacks\":\"rejected\",\"parallel_reduce\":\"parallel-map-sequential-left-fold\",\"task_groups\":true,\"public_cancellation\":true}}"
 }
 fn line_terminates_statement(kind: str) -> bool {
     return kind == "INT" or kind == "FLOAT" or kind == "STR" or kind == "TRUE" or kind == "FALSE" or kind == "IDENT" or kind == "THIS" or kind == "SUPER" or kind == "RPAREN" or kind == "RBRACKET" or kind == "RBRACE" or kind == "QUESTION" or kind == "BREAK" or kind == "CONTINUE"
@@ -1303,6 +1326,7 @@ fn line_terminates_statement(kind: str) -> bool {
 fn keyword_kind(word: str) -> str {
     if word == "as" { return "AS" }
     if word == "pub" { return "PUB" }
+    if word == "priv" { return "PRIV" }
     if word == "extern" { return "EXTERN" }
     if word == "fn" {
         return "FN"
@@ -2507,7 +2531,7 @@ fn module_expand(context: ModuleLoader, src: str, path: str, entry: bool) -> int
 
         if top_depth == 0 and token.kind == "IMPORT" {
             let public_import = position > 0 and tokens[position - 1].kind == "PUB"
-            if public_import and len(body) > 0 and body[len(body) - 1].kind == "PUB" { body.pop() }
+            if len(body) > 0 and (body[len(body) - 1].kind == "PUB" or body[len(body) - 1].kind == "PRIV") { body.pop() }
             let requested = tokens[position + 1].val
             let dependency = module_load_source(context, canonical, requested, token)
             let mut alias = extract_module_ns(requested)
@@ -2523,7 +2547,7 @@ fn module_expand(context: ModuleLoader, src: str, path: str, entry: bool) -> int
             if public_import { context.public_names[index].append(alias) }
         } elif from_hdr.found {
             let public_use = position > 0 and tokens[position - 1].kind == "PUB"
-            if public_use and len(body) > 0 and body[len(body) - 1].kind == "PUB" { body.pop() }
+            if len(body) > 0 and (body[len(body) - 1].kind == "PUB" or body[len(body) - 1].kind == "PRIV") { body.pop() }
             let requested = from_hdr.requested
             let base_req = module_strip_wysna_ext(requested)
             let mut base_resolved = false
@@ -3733,6 +3757,41 @@ fn sem_require_at(context: SemanticContext, source: int, target: int, code: str,
         report_error_at(code, location, "incompatible types: expected '" + sem_diagnostic_type(context, target, 0) + "', found '" + sem_diagnostic_type(context, source, 0) + "'")
     }
 }
+fn sem_callee_clean_name(fn_rec: SemFunction) -> str {
+    let raw = if fn_rec.declaration_name != "" { fn_rec.declaration_name } else { fn_rec.name }
+    return sem_demangle_name(raw)
+}
+fn sem_fn_related_json(context: SemanticContext, fn_idx: int) -> str {
+    if fn_idx < 0 or fn_idx >= len(context.functions) { return "[]" }
+    let src_tok = context.functions[fn_idx].source
+    if src_tok.file == "" or src_tok.line < 1 or src_tok.col < 1 { return "[]" }
+    return "[" + diag_related_record_json("declared here", src_tok.file, src_tok.line, src_tok.col) + "]"
+}
+fn sem_require_at_call(context: SemanticContext, source: int, target: int, code: str, location: Token, callee_fn_idx: int, arg_index: int) {
+    if not sem_assignable(context, source, target) {
+        let exp_str = sem_diagnostic_type(context, target, 0)
+        let found_str = sem_diagnostic_type(context, source, 0)
+        let msg = "incompatible types: expected '" + exp_str + "', found '" + found_str + "'"
+        let mut data = "{\"kind\":\"type_mismatch\",\"context\":\"argument\",\"expected\":" + diag_json_quote(exp_str) + ",\"found\":" + diag_json_quote(found_str) + ",\"argument_index\":" + str(arg_index + 1)
+        if callee_fn_idx >= 0 and callee_fn_idx < len(context.functions) {
+            let fn_rec = context.functions[callee_fn_idx]
+            if arg_index >= 0 and arg_index < len(fn_rec.params) {
+                data = data + ",\"parameter_name\":" + diag_json_quote(fn_rec.params[arg_index])
+            }
+            let cname = sem_callee_clean_name(fn_rec)
+            if cname != "" {
+                data = data + ",\"callee\":" + diag_json_quote(cname)
+            }
+        }
+        let req = fix_propagation_requirement(exp_str, found_str)
+        if req != "" {
+            let help = "'?' can return early and requires " + req + " on the enclosing function. Use 'else' for a local fallback."
+            data = data + ",\"unwrap_hint\":\"?\",\"help\":" + diag_json_quote(help)
+        }
+        data = data + "}"
+        report_error_at_full(code, location, msg, data, sem_fn_related_json(context, callee_fn_idx))
+    }
+}
 fn sem_source_at(context: SemanticContext, sources: list[Token], index: int) -> Token {
     if index >= 0 and index < len(sources) { return sources[index] }
     return sem_at(context)
@@ -4080,7 +4139,10 @@ fn sem_collect_record(context: SemanticContext, kind: str) {
         if sem_is(context, "RBRACE") { break }
         let mut visible = true
         if sem_is(context, "AT") { sem_error(context, "W0006", "static attributes require a top-level function declaration") }
-        if sem_match(context, "PRIVATE") { visible = false } else { sem_match(context, "PUBLIC") }
+        if sem_match(context, "PRIV") {
+            if kind == "interface" { sem_error(context, "W0006", "interface methods are public") }
+            visible = false
+        } else { sem_match(context, "PUB") }
         let mut method_is_async = false
         if sem_is(context, "IDENT") and sem_at(context).val == "async" and context.tokens[context.pos + 1].kind == "FN" { sem_take(context) method_is_async = true }
         if sem_is(context, "FN") {
@@ -4132,15 +4194,20 @@ fn sem_builtin(name: str) -> bool {
     if name == "u8" or name == "__wysna_json_parse" or name == "__wysna_json_parse_int" or name == "__wysna_json_get_int" or name == "__wysna_json_get_bool" or name == "__wysna_json_get_str" or name == "__wysna_json_get_float" or name == "__wysna_json_quote_str" { return true }
     return name == "join_strings" or name == "print" or name == "eprint" or name == "len" or name == "int" or name == "float" or name == "str" or name == "ord" or name == "chr" or name == "bytes" or name == "slice" or name == "args" or name == "env" or name == "unix_time" or name == "exit" or name == "enumerate" or name == "dict_items" or name == "read_file" or name == "write_file" or name == "Some" or name == "Ok" or name == "Err" or name == "weak" or name == "upgrade" or name == "contract_assert"
 }
+fn sem_arity_data_json(expected_arity: int, found_arity: int, callee: str) -> str {
+    let mut data = "{\"kind\":\"arity_mismatch\",\"expected_arity\":" + str(expected_arity) + ",\"found_arity\":" + str(found_arity)
+    if callee != "" { data = data + ",\"callee\":" + diag_json_quote(callee) }
+    return data + "}"
+}
 fn sem_call_builtin(context: SemanticContext, name: str, args: list[int], sources: list[Token], discard: bool) -> int {
     let count = len(args)
     if name == "print" or name == "eprint" { return context.unit_type }
     if name == "contract_assert" {
-        if count != 2 { sem_error(context, "W2005", "contract_assert arity") }
+        if count != 2 { report_error_at_full("W2005", sem_at(context), "contract_assert arity", sem_arity_data_json(2, count, "contract_assert"), "[]") }
         return context.unit_type
     }
     if name == "args" or name == "unix_time" {
-        if count != 0 { sem_error(context, "W2005", name + " arity") }
+        if count != 0 { report_error_at_full("W2005", sem_at(context), name + " arity", sem_arity_data_json(0, count, name), "[]") }
         if name == "unix_time" { return context.integer_type }
         return sem_wrap(context, "list", context.string_type)
     }
@@ -4148,7 +4215,7 @@ fn sem_call_builtin(context: SemanticContext, name: str, args: list[int], source
     if name == "slice" { arity = 3 }
     if name == "write_file" or name == "join_strings" or name == "__wysna_json_get_int" or name == "__wysna_json_get_bool" or name == "__wysna_json_get_str" or name == "__wysna_json_get_float" { arity = 2 }
     if name == "__wysna_json_parse" { arity = 6 }
-    if count != arity { sem_error(context, "W2005", "builtin arity: " + name) }
+    if count != arity { report_error_at_full("W2005", sem_at(context), "builtin arity: " + name, sem_arity_data_json(arity, count, name), "[]") }
     if name == "join_strings" {
         if count != 2 { sem_error(context, "W2005", "join_strings arity") }
         sem_require_at(context, args[0], sem_wrap(context, "list", context.string_type), "W2001", sem_source_at(context, sources, 0))
@@ -4258,6 +4325,9 @@ fn sem_call_builtin(context: SemanticContext, name: str, args: list[int], source
     return context.unit_type
 }
 fn sem_check_call(context: SemanticContext, signature: int, args: list[int], sources: list[Token], discard: bool) -> int {
+    return sem_check_call_with_callee(context, signature, args, sources, discard, -1, sem_at(context))
+}
+fn sem_check_call_with_callee(context: SemanticContext, signature: int, args: list[int], sources: list[Token], discard: bool, callee_fn_idx: int, call_token: Token) -> int {
     let unification = SemUnification()
     let type_ = context.types[signature]
     if type_.kind == "builtin" { return sem_call_builtin(context, type_.name, args, sources, discard) }
@@ -4268,11 +4338,11 @@ fn sem_check_call(context: SemanticContext, signature: int, args: list[int], sou
         let owner = slice(type_.name, 0, separator)
         let variant = slice(type_.name, separator + 1, len(type_.name))
         if owner == "Option" and variant == "Some" {
-            if len(args) != 1 { sem_error(context, "W2005", "Option.Some arity") }
+            if len(args) != 1 { report_error_at_full("W2005", call_token, "Option.Some arity", sem_arity_data_json(1, len(args), "Option.Some"), "[]") }
             return sem_wrap(context, "optional", args[0])
         }
         if owner == "Result" and (variant == "Ok" or variant == "Err") {
-            if len(args) != 1 { sem_error(context, "W2005", "Result constructor arity") }
+            if len(args) != 1 { report_error_at_full("W2005", call_token, "Result constructor arity", sem_arity_data_json(1, len(args), owner + "." + variant), "[]") }
             if context.expected_type >= 0 and sem_kind(context, context.expected_type) == "result" {
                 let expected = context.types[context.expected_type]
                 if variant == "Ok" { if not discard or expected.args[0] != context.unit_type { sem_require_at(context, args[0], expected.args[0], "W2001", sem_source_at(context, sources, 0)) } }
@@ -4286,7 +4356,10 @@ fn sem_check_call(context: SemanticContext, signature: int, args: list[int], sou
         let generic = sem_generic_type(context, owner)
         let mut payload_types: list[int] = []
         for i in 1..len(type_.args) { payload_types.append(type_.args[i]) }
-        if len(args) != len(payload_types) { sem_error(context, "W2005", "enum constructor arity: " + owner + "." + variant) }
+        if len(args) != len(payload_types) {
+            let ctor_label = sem_demangle_name(owner) + "." + variant
+            report_error_at_full("W2005", call_token, "enum constructor arity: " + owner + "." + variant, sem_arity_data_json(len(payload_types), len(args), ctor_label), "[]")
+        }
         if generic >= 0 and len(context.types[target].args) == 0 {
             let empty_names: list[str] = []
             let empty_types: list[int] = []
@@ -4320,7 +4393,9 @@ fn sem_check_call(context: SemanticContext, signature: int, args: list[int], sou
         if len(type_.args) == 1 { target = type_.args[0] explicit = true }
         let mut fields: list[int] = []
         for i in 0..len(context.fields) { if context.fields[i].owner == type_.name { fields.append(i) } }
-        if len(args) != len(fields) { sem_error(context, "W2005", "struct constructor arity: " + type_.name) }
+        if len(args) != len(fields) {
+            report_error_at_full("W2005", call_token, "struct constructor arity: " + type_.name, sem_arity_data_json(len(fields), len(args), sem_demangle_name(type_.name)), "[]")
+        }
         let empty_names: list[str] = []
         let empty_types: list[int] = []
         unification.names = empty_names
@@ -4357,14 +4432,23 @@ fn sem_check_call(context: SemanticContext, signature: int, args: list[int], sou
             let owner_type = context.types[owner_type_id]
             let generic = sem_generic_type(context, owner_type.name)
             if generic >= 0 { selected = sem_substitute_type(context, selected, context.generic_types[generic].params, owner_type.args) }
-            sem_check_call(context, selected, args, sources, false)
+            sem_check_call_with_callee(context, selected, args, sources, false, method, call_token)
         }
-        elif len(args) != 0 { sem_error(context, "W2005", "constructor arity") }
+        elif len(args) != 0 {
+            report_error_at_full("W2005", call_token, "constructor arity", sem_arity_data_json(0, len(args), sem_demangle_name(context.types[target].name)), "[]")
+        }
         return target
     }
     if type_.kind == "dependent" and sem_defer(context, "call", [signature]) { return signature }
-    if type_.kind != "function" { sem_error(context, "W2005", "value is not callable") }
-    if len(type_.args) != len(args) + 1 { sem_error(context, "W2005", "call arity") }
+    if type_.kind != "function" {
+        let not_callable_data = "{\"kind\":\"not_callable\",\"found\":" + diag_json_quote(sem_diagnostic_type(context, signature, 0)) + "}"
+        report_error_at_full("W2005", call_token, "value is not callable", not_callable_data, "[]")
+    }
+    let expected_arity = if len(type_.args) > 0 { len(type_.args) - 1 } else { 0 }
+    if len(type_.args) != len(args) + 1 {
+        let cname = if callee_fn_idx >= 0 and callee_fn_idx < len(context.functions) { sem_callee_clean_name(context.functions[callee_fn_idx]) } else { "" }
+        report_error_at_full("W2005", call_token, "call arity", sem_arity_data_json(expected_arity, len(args), cname), sem_fn_related_json(context, callee_fn_idx))
+    }
     let empty_names: list[str] = []
     let empty_types: list[int] = []
     unification.names = empty_names
@@ -4372,7 +4456,7 @@ fn sem_check_call(context: SemanticContext, signature: int, args: list[int], sou
     for i in 0..len(args) { sem_unify_type(context, unification, type_.args[i], args[i]) }
     for i in 0..len(args) {
         let expected = sem_substitute_type(context, type_.args[i], unification.names, unification.types)
-        sem_require_at(context, args[i], expected, "W2001", sem_source_at(context, sources, i))
+        sem_require_at_call(context, args[i], expected, "W2001", sem_source_at(context, sources, i), callee_fn_idx, i)
     }
     return sem_substitute_type(context, type_.args[len(args)], unification.names, unification.types)
 }
@@ -5157,14 +5241,17 @@ fn sem_expression(context: SemanticContext, minimum: int, allow_struct: bool) ->
                     }
                 }
             }
+            let mut callee_fn_idx = -1
             let mut call_was_symbolic_async = false
             if len(callee.root) >= 3 and slice(callee.root, 0, 3) == "fn:" {
-                let fn_idx = sem_function(context, slice(callee.root, 3, len(callee.root)))
-                if fn_idx >= 0 and context.functions[fn_idx].is_async and sem_symbolic(context, callee.type_id) {
+                callee_fn_idx = sem_function(context, slice(callee.root, 3, len(callee.root)))
+                if callee_fn_idx >= 0 and context.functions[callee_fn_idx].is_async and sem_symbolic(context, callee.type_id) {
                     call_was_symbolic_async = true
                 }
+            } elif callee.root == "#method" and active_method_template >= 0 {
+                callee_fn_idx = active_method_template
             }
-            let mut actual = sem_check_call(context, left.type_id, args, arg_sources, statement)
+            let mut actual = sem_check_call_with_callee(context, left.type_id, args, arg_sources, statement, callee_fn_idx, call_token)
             if call_was_symbolic_async and not sem_symbolic(context, actual) {
                 actual = sem_resolve_async_task_type(context, actual)
             }
@@ -6453,7 +6540,10 @@ fn sem_validate(context: SemanticContext, tokens: list[Token]) {
         sem_skip_separators(context)
         if sem_is(context, "EOF") { break }
         let attributes = sem_static_attributes(context)
-        sem_match(context, "PUB")
+        let visibility = sem_match(context, "PUB") or sem_match(context, "PRIV")
+        if visibility and (sem_is(context, "PUB") or sem_is(context, "PRIV")) {
+            sem_error(context, "W0006", "a declaration takes one visibility modifier")
+        }
         if sem_is(context, "AT") { sem_error(context, "W0006", "static attributes must precede pub") }
         let mut decl_is_async = false
         if sem_is(context, "IDENT") and sem_at(context).val == "async" and context.tokens[context.pos + 1].kind == "FN" { sem_take(context) decl_is_async = true }
@@ -6490,7 +6580,10 @@ fn sem_validate(context: SemanticContext, tokens: list[Token]) {
         sem_skip_separators(context)
         if sem_is(context, "RBRACE") or sem_is(context, "EOF") { break }
         sem_static_attributes(context)
-        sem_match(context, "PUB")
+        let visibility = sem_match(context, "PUB") or sem_match(context, "PRIV")
+        if visibility and (sem_is(context, "PUB") or sem_is(context, "PRIV")) {
+            sem_error(context, "W0006", "a declaration takes one visibility modifier")
+        }
         if sem_is(context, "AT") { sem_error(context, "W0006", "static attributes must precede pub") }
         if sem_is(context, "IDENT") and sem_at(context).val == "async" and context.tokens[context.pos + 1].kind == "FN" { sem_take(context) }
         let mut declaration = false
@@ -7625,6 +7718,8 @@ fn check_delimiters(tokens: list[Token]) -> unit {
     let mut delim_tokens: list[Token] = []
     for tok in tokens {
         let k = tok.kind
+        if k == "PUBLIC" { report_error_at("W0006", tok, "Use 'pub' in place of 'public'") }
+        if k == "PRIVATE" { report_error_at("W0006", tok, "Use 'priv' in place of 'private'") }
         if k == "LPAREN" or k == "LBRACE" or k == "LBRACKET" {
             delim_kinds.append(k)
             delim_tokens.append(tok)
@@ -12482,6 +12577,14 @@ fn lint_pattern_subsumed(program: CheckedProgram, previous: list[int], id: int) 
 # Agent-first semantic graph, symbol inspection, hash-guarded checked patching, and diagnostic explain tools.
 # Shared host externs live in 01_tool_common.wysna.
 
+struct ToolUncertainCall {
+    kind: str
+    callee: str
+    file: str
+    line: int
+    reason: str
+}
+
 class ToolGraphNode {
     attributes: list[StaticAttribute]
     id: str
@@ -12515,6 +12618,7 @@ class ToolGraphNode {
     effects: list[str]
     capabilities: list[str]
     variants: list[str]
+    uncertain_calls: list[ToolUncertainCall]
 
     fn init(id: str, name: str, qualified_name: str, kind: str, module_name: str, file: str, line: int, col: int, end_line: int, start_byte: int, end_byte: int, start_char: int, end_char: int, visibility: str, is_async: bool, signature: str, owner: str) {
         this.id = id
@@ -12562,6 +12666,18 @@ class ToolGraphNode {
         this.capabilities = l10
         let l11: list[str] = []
         this.variants = l11
+        let l12: list[ToolUncertainCall] = []
+        this.uncertain_calls = l12
+    }
+
+    fn add_uncertain(kind: str, callee: str, file: str, line: int, reason: str) -> unit {
+        let label = if callee == "" { "<indirect>" } else { callee }
+        for item in this.uncertain_calls {
+            if item.kind == kind and item.callee == label and item.file == file and item.line == line {
+                return
+            }
+        }
+        this.uncertain_calls.append(ToolUncertainCall { kind: kind, callee: label, file: file, line: line, reason: reason })
     }
 
     fn add_tag(slot: str, value: str) -> unit {
@@ -12606,6 +12722,7 @@ class ToolGraph {
     nodes: list[ToolGraphNode]
     edges: list[ToolGraphEdge]
     mod_names: list[str]
+    callable_indexes: dict[str, int]
 
     fn init(entry_file: str, entry_source: str) {
         this.entry_file = entry_file
@@ -12617,6 +12734,8 @@ class ToolGraph {
         this.edges = e0
         let m0: list[str] = []
         this.mod_names = m0
+        let callables: dict[str, int] = {}
+        this.callable_indexes = callables
     }
 }
 
@@ -12704,8 +12823,8 @@ fn tool_format_signature(program: CheckedProgram, short_name: str, params: list[
 }
 
 fn tool_is_decl_modifier(tok: Token) -> bool {
-    if tok.kind == "PUB" or tok.kind == "PUBLIC" or tok.kind == "PRIVATE" { return true }
-    if tok.kind == "IDENT" and (tok.val == "async" or tok.val == "pub" or tok.val == "public" or tok.val == "private") { return true }
+    if tok.kind == "PUB" or tok.kind == "PRIV" { return true }
+    if tok.kind == "IDENT" and (tok.val == "async" or tok.val == "pub" or tok.val == "priv") { return true }
     return false
 }
 
@@ -12792,39 +12911,75 @@ fn tool_find_node_idx(graph: ToolGraph, node_id: str) -> int {
     return -1
 }
 
-fn tool_resolve_node_idx(graph: ToolGraph, query: str) -> int {
-    if query == "" { return -1 }
-    for i in 0..len(graph.nodes) {
-        if graph.nodes[i].id == query { return i }
+fn tool_module_label(graph: ToolGraph, file: str) -> str {
+    if file == graph.entry_file { return "entry" }
+    let label = tool_basename(file)
+    for other in graph.mod_names {
+        if other != file and other != graph.entry_file and tool_basename(other) == label { return file }
     }
+    return label
+}
+
+fn tool_symbol_candidates(graph: ToolGraph, query: str) -> list[int] {
+    let mut ids: list[int] = []
+    let mut qualified: list[int] = []
+    let mut names: list[int] = []
+    let mut suffixes: list[int] = []
     for i in 0..len(graph.nodes) {
-        if graph.nodes[i].qualified_name == query { return i }
+        let node = graph.nodes[i]
+        if node.id == query { ids.append(i) }
+        elif node.name != query and node.qualified_name == query { qualified.append(i) }
+        elif node.name == query { names.append(i) }
+        elif len(node.qualified_name) > len(query) {
+            let end = len(node.qualified_name)
+            let suffix = slice(node.qualified_name, end - len(query) - 1, end)
+            if suffix == ":" + query or suffix == "." + query { suffixes.append(i) }
+        }
     }
-    let mut matches: list[int] = []
-    for i in 0..len(graph.nodes) {
-        if graph.nodes[i].name == query { matches.append(i) }
-    }
+    if len(ids) > 0 { return ids }
+    if len(qualified) > 0 { return qualified }
+    if len(names) > 0 { return names }
+    return suffixes
+}
+
+fn tool_require_symbol(graph: ToolGraph, query: str, command: str, json_mode: bool) -> int {
+    let matches = tool_symbol_candidates(graph, query)
     if len(matches) == 1 { return matches[0] }
+    let mut code = "W1001"
+    let mut message = "Symbol '" + query + "' not found in semantic graph"
+    let mut data = "{}"
     if len(matches) > 1 {
-        let mut top: list[int] = []
-        for idx in matches {
-            let k = graph.nodes[idx].kind
-            if k != "method" and k != "interface_method" { top.append(idx) }
+        let mut by_id: dict[str, str] = {}
+        let mut ids: list[str] = []
+        for index in matches {
+            let node = graph.nodes[index]
+            ids.append(node.id)
+            by_id[node.id] = "{\"id\":" + diag_json_quote(node.id) +
+                ",\"qualified_name\":" + diag_json_quote(node.qualified_name) +
+                ",\"kind\":" + diag_json_quote(node.kind) + ",\"file\":" + diag_json_quote(node.file) +
+                ",\"line\":" + str(node.line) + ",\"col\":" + str(node.col) +
+                ",\"signature\":" + diag_json_quote(node.signature) + "}"
         }
-        if len(top) == 1 { return top[0] }
-        return matches[0]
+        let mut rows: list[str] = []
+        let ordered = tool_sort_strings(ids)
+        for id in ordered { rows.append(by_id[id]) }
+        code = "W1005"
+        message = "Ambiguous symbol '" + query + "'; pass a candidate ID to --symbol: " + join_strings(ordered, ", ")
+        data = "{\"kind\":\"ambiguous_symbol\",\"symbol\":" + diag_json_quote(query) +
+            ",\"graph_hash\":" + diag_json_quote(graph.graph_hash) + ",\"candidates\":[" + join_strings(rows, ",") + "]}"
     }
-    let mut suffix_matches: list[int] = []
-    for i in 0..len(graph.nodes) {
-        let qn = graph.nodes[i].qualified_name
-        if len(qn) > len(query) + 2 and slice(qn, len(qn) - len(query) - 2, len(qn)) == "::" + query {
-            suffix_matches.append(i)
-        } elif len(qn) > len(query) + 1 and slice(qn, len(qn) - len(query) - 1, len(qn)) == "." + query {
-            suffix_matches.append(i)
-        }
+    if json_mode {
+        let diag = diag_record_json_data(code, command, "error", message, graph.entry_file, 0, 0, "", data)
+        diag_write_output(diag_tool_envelope_json(command, "diagnostic_error", 1, "[" + diag + "]", "", "", "[]"))
+    } else {
+        eprint("[" + code + "] " + message)
     }
-    if len(suffix_matches) == 1 { return suffix_matches[0] }
+    exit(1)
     return -1
+}
+
+fn tool_callable_index(graph: ToolGraph, file: str, name: str) -> int {
+    return graph.callable_indexes.get(file + "\n" + tool_short_name(name)) ?? -1
 }
 
 fn tool_add_edge(graph: ToolGraph, from_id: str, to_id: str, kind: str, context: str, file: str, line: int) -> unit {
@@ -12904,7 +13059,7 @@ fn tool_effect_to_cap(eff: str) -> str {
 
 fn tool_scan_decl_nodes(graph: ToolGraph, program: CheckedProgram, src: str, file: str) -> unit {
     let is_entry = file == graph.entry_file
-    let mod_label = if is_entry { "entry" } else { tool_basename(file) }
+    let mod_label = tool_module_label(graph, file)
     let tokens = tokenize(src, file)
     let mut depth = 0
     let mut current_owner_idx = -1
@@ -12924,7 +13079,7 @@ fn tool_scan_decl_nodes(graph: ToolGraph, program: CheckedProgram, src: str, fil
             i = metadata.pos
             continue
         }
-        if tok.kind == "PUB" or (tok.kind == "IDENT" and tok.val == "pub") or tok.kind == "PUBLIC" {
+        if tok.kind == "PUB" or (tok.kind == "IDENT" and tok.val == "pub") {
             is_public = true
             i = i + 1
             continue
@@ -12989,7 +13144,7 @@ fn tool_scan_decl_nodes(graph: ToolGraph, program: CheckedProgram, src: str, fil
                 let nid = decl_kind + ":" + qname
                 let mut sig_str = (if is_async { "async fn " } else { "fn " }) + name + "()"
                 for sig in program.signatures {
-                    if tool_short_name(sig.name) == name and len(sig.params) >= 0 {
+                    if sig.source.file == file and tool_short_name(sig.name) == name {
                         sig_str = tool_format_signature(program, name, sig.params, sig.type_id, is_async)
                         break
                     }
@@ -13002,11 +13157,16 @@ fn tool_scan_decl_nodes(graph: ToolGraph, program: CheckedProgram, src: str, fil
                     node.effects.append("ffi.native")
                     node.capabilities.append("native-ffi")
                 }
+                graph.callable_indexes[file + "\n" + name] = len(graph.nodes)
                 graph.nodes.append(node)
             }
             is_public = false
             is_async = false
-            i = i + 1
+            if is_extern and name_pos < len(tokens) {
+                i = name_pos + 1
+            } else {
+                i = i + 1
+            }
             continue
         }
         if depth == 1 and current_owner_idx >= 0 and tok.kind == "FN" and i + 1 < len(tokens) and tokens[i + 1].kind == "IDENT" {
@@ -13020,12 +13180,13 @@ fn tool_scan_decl_nodes(graph: ToolGraph, program: CheckedProgram, src: str, fil
             let vis = if is_public { "public" } else { "private" }
             let mut sig_str = "fn " + mname + "()"
             for sig in program.signatures {
-                if tool_short_name(sig.name) == short_q {
+                if sig.source.file == file and tool_short_name(sig.name) == short_q {
                     sig_str = tool_format_signature(program, mname, sig.params, sig.type_id, is_async)
                     break
                 }
             }
             let mnode = ToolGraphNode(nid, mname, qname, mkind, mod_label, file, span.start_line, tok.col, span.end_line, span.start_byte, span.end_byte, span.start_char, span.end_char, vis, is_async, sig_str, graph.nodes[current_owner_idx].id)
+            graph.callable_indexes[file + "\n" + short_q] = len(graph.nodes)
             graph.nodes.append(mnode)
             is_public = false
             is_async = false
@@ -13049,23 +13210,15 @@ fn tool_walk_subtree(program: CheckedProgram, graph: ToolGraph, caller_idx: int,
     if node.kind == "indirect_call" or node.kind == "virtual_call" {
         graph.nodes[caller_idx].indirect_call = true
     }
+    if node.kind == "indirect_call" {
+        let ind_name = if node.text != "" { tool_short_name(node.text) } else { "<indirect>" }
+        graph.nodes[caller_idx].add_uncertain("indirect_call", ind_name, file, line, "indirect call through function value or closure")
+    }
     if node.kind == "callee" and node.target >= 0 {
-        let name = program.signatures[node.target].name
-        let short_name = tool_short_name(name)
-        let mut target_idx = -1
-        for function in program.functions {
-            if function.name != name { continue }
-            for i in 0..len(graph.nodes) {
-                if graph.nodes[i].kind == "fn" and graph.nodes[i].name == short_name and
-                     graph.nodes[i].file == function.source.file {
-                    target_idx = i
-                    break
-                }
-            }
-            break
-        }
+        let signature = program.signatures[node.target]
+        let target_idx = tool_callable_index(graph, signature.source.file, signature.declaration_name)
         if target_idx >= 0 {
-            tool_add_edge(graph, caller_id, graph.nodes[target_idx].id, "references_function", name, file, line)
+            tool_add_edge(graph, caller_id, graph.nodes[target_idx].id, "references_function", signature.name, file, line)
         }
     }
     if node.kind == "new" or node.kind == "struct" or node.kind == "struct_call" {
@@ -13085,12 +13238,22 @@ fn tool_walk_subtree(program: CheckedProgram, graph: ToolGraph, caller_idx: int,
             let owner_short = tool_short_name(node.labels[0])
             callee_short = owner_short + "." + node.labels[1]
         }
-        let target_idx = tool_resolve_node_idx(graph, callee_short)
+        let mut target_idx = -1
+        if node.target >= 0 and node.target < len(program.signatures) {
+            let signature = program.signatures[node.target]
+            target_idx = tool_callable_index(graph, signature.source.file, signature.declaration_name)
+        }
         if target_idx >= 0 {
             let target_id = graph.nodes[target_idx].id
             graph.nodes[caller_idx].add_tag("calls", target_id)
             graph.nodes[target_idx].add_tag("called_by", caller_id)
             tool_add_edge(graph, caller_id, target_id, "calls", callee_short, file, line)
+            if graph.nodes[target_idx].kind == "extern" {
+                graph.nodes[caller_idx].add_uncertain("extern_ffi", graph.nodes[target_idx].name, file, line, "foreign C ABI call")
+            }
+        }
+        if node.kind == "virtual_call" {
+            graph.nodes[caller_idx].add_uncertain("virtual_dispatch", callee_short, file, line, "dynamic dispatch through interface")
         }
         let eff = tool_runtime_effect(callee_short)
         if eff != "" {
@@ -13117,16 +13280,18 @@ fn tool_build_checked_graph(src: str, canonical: str, expanded: list[Token], pro
     let graph = ToolGraph(canonical, src)
     graph.mod_names.append(canonical)
     let mut mod_hashes: list[str] = [canonical + "=" + diag_sha256_hex(src)]
-    tool_scan_decl_nodes(graph, program, src, canonical)
     for etok in expanded {
         if etok.file != "" and etok.file != "<unknown>" and not tool_str_contains(graph.mod_names, etok.file) {
             graph.mod_names.append(etok.file)
-            let ext_res = module_read_with_overlays(etok.file, ov_paths, ov_texts)
-            let ext_src = if ext_res[0] == "1" { ext_res[1] } else { "" }
-            if ext_src != "" {
-                mod_hashes.append(etok.file + "=" + diag_sha256_hex(ext_src))
-                tool_scan_decl_nodes(graph, program, ext_src, etok.file)
-            }
+        }
+    }
+    tool_scan_decl_nodes(graph, program, src, canonical)
+    for file in graph.mod_names {
+        if file == canonical { continue }
+        let ext_res = module_read_with_overlays(file, ov_paths, ov_texts)
+        if ext_res[0] == "1" and ext_res[1] != "" {
+            mod_hashes.append(file + "=" + diag_sha256_hex(ext_res[1]))
+            tool_scan_decl_nodes(graph, program, ext_res[1], file)
         }
     }
 
@@ -13179,8 +13344,7 @@ fn tool_build_checked_graph(src: str, canonical: str, expanded: list[Token], pro
     # Walk checked function bodies for calls, instantiations, signature type dependencies, and effects
     for fn_info in program.functions {
         if fn_info.closure or tool_is_synthetic_instantiation(fn_info.name) { continue }
-        let short = tool_short_name(fn_info.name)
-        let f_idx = tool_resolve_node_idx(graph, short)
+        let f_idx = tool_callable_index(graph, fn_info.source.file, fn_info.declaration_name)
         if f_idx < 0 { continue }
         let f_id = graph.nodes[f_idx].id
         let fn_type = program.types[fn_info.type_id]
@@ -13237,6 +13401,71 @@ fn tool_edge_json(e: ToolGraphEdge) -> str {
     return "{\"from\":" + diag_json_quote(e.from_id) + ",\"to\":" + diag_json_quote(e.to_id) + ",\"kind\":" + diag_json_quote(e.kind) + ",\"context\":" + diag_json_quote(e.context) + ",\"file\":" + diag_json_quote(e.file) + ",\"line\":" + str(e.line) + "}"
 }
 
+fn tool_boundary_for_uncertain(kind: str) -> str {
+    if kind == "virtual_dispatch" { return "virtual-dispatch" }
+    if kind == "indirect_call" { return "indirect-call" }
+    if kind == "extern_ffi" { return "c-ffi" }
+    if kind == "unresolved_call" { return "unresolved-call" }
+    return ""
+}
+
+fn tool_call_resolution_json(n: ToolGraphNode) -> str {
+    let mut parts: list[str] = ["{\"resolved_calls\":" + tool_str_list_json(n.calls) + ",\"uncertain_calls\":["]
+    for i in 0..len(n.uncertain_calls) {
+        let u = n.uncertain_calls[i]
+        if i > 0 { parts.append(",") }
+        parts.append("{\"kind\":" + diag_json_quote(u.kind) + ",\"callee\":" + diag_json_quote(u.callee) + ",\"file\":" + diag_json_quote(u.file) + ",\"line\":" + str(u.line) + ",\"reason\":" + diag_json_quote(u.reason) + "}")
+    }
+    let complete_str = if len(n.uncertain_calls) == 0 { "true" } else { "false" }
+    parts.append("],\"complete\":" + complete_str + "}")
+    return join_strings(parts, "")
+}
+
+fn tool_boundaries_for_nodes_json(nodes: list[ToolGraphNode]) -> str {
+    let mut tags: list[str] = []
+    for n in nodes {
+        for u in n.uncertain_calls {
+            let tag = tool_boundary_for_uncertain(u.kind)
+            if tag != "" and not tool_str_contains(tags, tag) { tags.append(tag) }
+        }
+        if n.indirect_call and not tool_str_contains(tags, "virtual-dispatch") and not tool_str_contains(tags, "indirect-call") {
+            tags.append("indirect-call")
+        }
+    }
+    return tool_str_list_json(tags)
+}
+
+fn tool_utf8_slice_budget(text: str, start_byte: int, has_budget: bool, max_bytes: int) -> list[str] {
+    let total_bytes = len(bytes(text))
+    let mut byte_pos = 0
+    let mut char_start = len(text)
+    let mut clamped_start = total_bytes
+    for i in 0..len(text) {
+        if byte_pos >= start_byte {
+            char_start = i
+            clamped_start = byte_pos
+            break
+        }
+        byte_pos = byte_pos + len(bytes(text[i]))
+    }
+    if not has_budget {
+        let sliced = slice(text, char_start, len(text))
+        return [sliced, str(clamped_start), str(total_bytes - clamped_start), str(total_bytes)]
+    }
+    let mut used = 0
+    let mut char_end = char_start
+    let mut j = char_start
+    while j < len(text) {
+        let w = len(bytes(text[j]))
+        if used + w > max_bytes { break }
+        used = used + w
+        j = j + 1
+        char_end = j
+    }
+    let sliced = slice(text, char_start, char_end)
+    return [sliced, str(clamped_start), str(used), str(total_bytes)]
+}
+
 fn tool_node_json(n: ToolGraphNode) -> str {
     let mut p: list[str] = ["{\"id\":" + diag_json_quote(n.id)]
     if n.indirect_call { p.append(",\"indirect_call\":true") }
@@ -13267,6 +13496,9 @@ fn tool_node_json(n: ToolGraphNode) -> str {
     p.append(",\"effects\":" + tool_str_list_json(n.effects))
     p.append(",\"capabilities\":" + tool_str_list_json(n.capabilities))
     p.append(",\"variants\":" + tool_str_list_json(n.variants))
+    if n.kind == "fn" or n.kind == "method" or n.kind == "interface_method" or n.kind == "entrypoint" or len(n.uncertain_calls) > 0 {
+        p.append(",\"call_resolution\":" + tool_call_resolution_json(n))
+    }
     p.append("}")
     return join_strings(p, "")
 }
@@ -13319,7 +13551,7 @@ fn tool_graph_summary_json(graph: ToolGraph) -> str {
     return "{\"modules\":" + str(len(graph.mod_names)) + ",\"nodes\":" + str(len(graph.nodes)) + ",\"edges\":" + str(len(graph.edges)) + ",\"interfaces\":" + str(ifaces) + ",\"classes\":" + str(classes) + ",\"structs\":" + str(structs) + ",\"enums\":" + str(enums) + ",\"functions\":" + str(fns) + ",\"methods\":" + str(methods) + "}"
 }
 
-fn tool_graph_payload_json(graph: ToolGraph, symbol: str, rel: str) -> str {
+fn tool_graph_payload_json(graph: ToolGraph, symbol: str, rel: str, idx: int) -> str {
     if symbol == "" and rel == "" {
         let mut nodes_p: list[str] = ["["]
         for i in 0..len(graph.nodes) {
@@ -13338,18 +13570,15 @@ fn tool_graph_payload_json(graph: ToolGraph, symbol: str, rel: str) -> str {
             if i > 0 { mods_p.append(",") }
             let mp = graph.mod_names[i]
             let is_e = mp == graph.entry_file
-            let mid = if is_e { "entry" } else { tool_basename(mp) }
+            let mid = tool_module_label(graph, mp)
             mods_p.append("{\"id\":" + diag_json_quote(mid) + ",\"file\":" + diag_json_quote(mp) + ",\"is_entry\":" + (if is_e { "true" } else { "false" }) + ",\"dependencies\":[]}")
         }
         mods_p.append("]")
         let mod_json = join_strings(mods_p, "")
-        return "{\"schema_version\":\"wysna.graph/1\",\"graph_hash\":" + diag_json_quote(graph.graph_hash) + ",\"entry_file\":" + diag_json_quote(graph.entry_file) + ",\"summary\":" + tool_graph_summary_json(graph) + ",\"modules\":" + mod_json + ",\"nodes\":" + join_strings(nodes_p, "") + ",\"edges\":" + join_strings(edges_p, "") + "}"
+        let bounds = tool_boundaries_for_nodes_json(graph.nodes)
+        return "{\"schema_version\":\"wysna.graph/1\",\"graph_hash\":" + diag_json_quote(graph.graph_hash) + ",\"entry_file\":" + diag_json_quote(graph.entry_file) + ",\"summary\":" + tool_graph_summary_json(graph) + ",\"modules\":" + mod_json + ",\"nodes\":" + join_strings(nodes_p, "") + ",\"edges\":" + join_strings(edges_p, "") + ",\"analysis_boundaries\":" + bounds + "}"
     }
     if symbol != "" {
-        let idx = tool_resolve_node_idx(graph, symbol)
-        if idx < 0 {
-            return "{\"schema_version\":\"wysna.graph/1\",\"graph_hash\":" + diag_json_quote(graph.graph_hash) + ",\"query\":{\"symbol\":" + diag_json_quote(symbol) + ",\"relation\":" + (if rel == "" { "null" } else { diag_json_quote(rel) }) + "},\"found\":false,\"node\":null,\"edges\":[]}"
-        }
         let nid = graph.nodes[idx].id
         let affected = if rel == "impact" { tool_impact_ids(graph, nid) } else { [nid] }
         let mut rel_edges: list[str] = ["["]
@@ -13371,7 +13600,8 @@ fn tool_graph_payload_json(graph: ToolGraph, symbol: str, rel: str) -> str {
             }
         }
         rel_edges.append("]")
-        return "{\"schema_version\":\"wysna.graph/1\",\"graph_hash\":" + diag_json_quote(graph.graph_hash) + ",\"query\":{\"symbol\":" + diag_json_quote(symbol) + ",\"relation\":" + (if rel == "" { "null" } else { diag_json_quote(rel) }) + "},\"found\":true,\"node\":" + tool_node_json(graph.nodes[idx]) + ",\"impact\":" + tool_impact_json(graph, nid) + ",\"edges\":" + join_strings(rel_edges, "") + "}"
+        let node_bounds = tool_boundaries_for_nodes_json([graph.nodes[idx]])
+        return "{\"schema_version\":\"wysna.graph/1\",\"graph_hash\":" + diag_json_quote(graph.graph_hash) + ",\"query\":{\"symbol\":" + diag_json_quote(symbol) + ",\"relation\":" + (if rel == "" { "null" } else { diag_json_quote(rel) }) + "},\"found\":true,\"node\":" + tool_node_json(graph.nodes[idx]) + ",\"impact\":" + tool_impact_json(graph, nid) + ",\"edges\":" + join_strings(rel_edges, "") + ",\"analysis_boundaries\":" + node_bounds + "}"
     }
     let mut filt_edges: list[str] = ["["]
     let mut ecount = 0
@@ -13384,7 +13614,8 @@ fn tool_graph_payload_json(graph: ToolGraph, symbol: str, rel: str) -> str {
         }
     }
     filt_edges.append("]")
-    return "{\"schema_version\":\"wysna.graph/1\",\"graph_hash\":" + diag_json_quote(graph.graph_hash) + ",\"query\":{\"symbol\":null,\"relation\":" + diag_json_quote(rel) + "},\"edges\":" + join_strings(filt_edges, "") + ",\"summary\":" + tool_graph_summary_json(graph) + "}"
+    let all_bounds = tool_boundaries_for_nodes_json(graph.nodes)
+    return "{\"schema_version\":\"wysna.graph/1\",\"graph_hash\":" + diag_json_quote(graph.graph_hash) + ",\"query\":{\"symbol\":null,\"relation\":" + diag_json_quote(rel) + "},\"edges\":" + join_strings(filt_edges, "") + ",\"summary\":" + tool_graph_summary_json(graph) + ",\"analysis_boundaries\":" + all_bounds + "}"
 }
 
 fn tool_explain_code_info(code: str) -> list[str] {
@@ -13399,6 +13630,7 @@ fn tool_explain_code_info(code: str) -> list[str] {
     if code == "W1002" { return ["W1002", "semantic", "Duplicate declaration", "Two declarations share the same name or use reserved __wysna_ prefix", "let x = 1\nlet x = 2", "let x = 1\nlet y = 2"] }
     if code == "W1003" { return ["W1003", "module", "Module resolution or circular import error", "Import target path cannot be resolved or introduces a dependency cycle", "import \"missing.wysna\"", "import \"std/json\""] }
     if code == "W1004" { return ["W1004", "semantic", "Invalid control-flow or lexical context", "Using break/continue outside loop, or this/super outside a class method", "fn f() { break }", "for i in 0..3 { break }"] }
+    if code == "W1005" { return ["W1005", "graph", "Ambiguous symbol selector", "Multiple declarations match the selector", "wysna graph main.wysna --symbol score", "Pass a candidate ID from diagnostics to --symbol"] }
     if code == "W2001" { return ["W2001", "typecheck", "Type mismatch", "Expression, argument, or initializer type does not match annotation/expectation", "let n: int = \"42\"", "let n: int = 42"] }
     if code == "W2002" { return ["W2002", "typecheck", "Invalid assignment target", "Assigning to a non-place expression (literal or call result)", "foo() = 10", "let mut v = foo()\nv = 10"] }
     if code == "W2003" { return ["W2003", "typecheck", "Non-exhaustive match expression", "match arms do not cover every enum variant, bool value, or error alternative", "match opt { Some(v) => v }", "match opt { Some(v) => v, None => 0 }"] }
@@ -13505,13 +13737,15 @@ fn tool_handle_graph(args: list[str], json_mode: bool) -> unit {
     }
     let src = loaded[1]
     let graph = tool_build_graph(src, file)
-    let payload = tool_graph_payload_json(graph, symbol, rel)
+    let query_idx = if symbol == "" { -1 } else { tool_require_symbol(graph, symbol, "graph", json_mode) }
+    let payload = tool_graph_payload_json(graph, symbol, rel, query_idx)
     if json_mode {
         diag_write_output(diag_tool_envelope_json("graph", "ok", 0, "[]", "result", payload, "[]"))
     } else {
         print("Semantic Graph (" + graph.graph_hash + ") — " + str(len(graph.nodes)) + " nodes, " + str(len(graph.edges)) + " edges")
-        for n in graph.nodes {
-            if symbol == "" or n.name == symbol or n.qualified_name == symbol or n.id == symbol {
+        for index in 0..len(graph.nodes) {
+            if query_idx < 0 or index == query_idx {
+                let n = graph.nodes[index]
                 print("  " + n.id + " (" + n.file + ":" + str(n.line) + ")")
             }
         }
@@ -13529,6 +13763,10 @@ fn tool_handle_inspect(args: list[str], json_mode: bool) -> unit {
     let mut file = ""
     let mut symbol = ""
     let mut with_deps = false
+    let mut has_max_bytes = false
+    let mut max_bytes = 0
+    let mut source_offset = 0
+    let mut index_offset = 0
     let mut i = 1
     while i < len(args) {
         let a = args[i]
@@ -13541,6 +13779,38 @@ fn tool_handle_inspect(args: list[str], json_mode: bool) -> unit {
             i = i + 2
         } elif a == "--with-deps" {
             with_deps = true
+            i = i + 1
+        } elif a == "--max-bytes" and i + 1 < len(args) {
+            let parsed = lsp_parse_int(args[i + 1], -999999)
+            if parsed < 1 { report_error("<cli>", "W5002", 1, 1, "--max-bytes must be a positive integer") }
+            has_max_bytes = true
+            max_bytes = parsed
+            i = i + 2
+        } elif len(a) > 12 and slice(a, 0, 12) == "--max-bytes=" {
+            let parsed = lsp_parse_int(slice(a, 12, len(a)), -999999)
+            if parsed < 1 { report_error("<cli>", "W5002", 1, 1, "--max-bytes must be a positive integer") }
+            has_max_bytes = true
+            max_bytes = parsed
+            i = i + 1
+        } elif a == "--source-offset" and i + 1 < len(args) {
+            let parsed = lsp_parse_int(args[i + 1], -999999)
+            if parsed < 0 { report_error("<cli>", "W5002", 1, 1, "--source-offset must be a non-negative integer") }
+            source_offset = parsed
+            i = i + 2
+        } elif len(a) > 16 and slice(a, 0, 16) == "--source-offset=" {
+            let parsed = lsp_parse_int(slice(a, 16, len(a)), -999999)
+            if parsed < 0 { report_error("<cli>", "W5002", 1, 1, "--source-offset must be a non-negative integer") }
+            source_offset = parsed
+            i = i + 1
+        } elif a == "--offset" and i + 1 < len(args) {
+            let parsed = lsp_parse_int(args[i + 1], -999999)
+            if parsed < 0 { report_error("<cli>", "W5002", 1, 1, "--offset must be a non-negative integer") }
+            index_offset = parsed
+            i = i + 2
+        } elif len(a) > 9 and slice(a, 0, 9) == "--offset=" {
+            let parsed = lsp_parse_int(slice(a, 9, len(a)), -999999)
+            if parsed < 0 { report_error("<cli>", "W5002", 1, 1, "--offset must be a non-negative integer") }
+            index_offset = parsed
             i = i + 1
         } elif len(a) > 0 and a[0] != "-" and file == "" {
             file = a
@@ -13556,27 +13826,65 @@ fn tool_handle_inspect(args: list[str], json_mode: bool) -> unit {
     }
     let src = loaded[1]
     let graph = tool_build_graph(src, file)
+    let budget_max_json = if has_max_bytes { str(max_bytes) } else { "null" }
     if symbol == "" {
+        let total_syms = len(graph.nodes)
+        let clamped_off = if index_offset < total_syms { index_offset } else { total_syms }
         let mut syms: list[str] = ["["]
-        for idx in 0..len(graph.nodes) {
+        let mut used_bytes = 0
+        let mut next_idx = clamped_off
+        let mut truncated = false
+        let mut scount = 0
+        for idx in clamped_off..total_syms {
             let n = graph.nodes[idx]
-            if idx > 0 { syms.append(",") }
-            syms.append("{\"id\":" + diag_json_quote(n.id) + ",\"name\":" + diag_json_quote(n.name) + ",\"qualified_name\":" + diag_json_quote(n.qualified_name) + ",\"kind\":" + diag_json_quote(n.kind) + ",\"file\":" + diag_json_quote(n.file) + ",\"line\":" + str(n.line) + ",\"end_line\":" + str(n.end_line) + ",\"signature\":" + diag_json_quote(n.signature) + "}")
+            let row = "{\"id\":" + diag_json_quote(n.id) + ",\"name\":" + diag_json_quote(n.name) + ",\"qualified_name\":" + diag_json_quote(n.qualified_name) + ",\"kind\":" + diag_json_quote(n.kind) + ",\"file\":" + diag_json_quote(n.file) + ",\"line\":" + str(n.line) + ",\"end_line\":" + str(n.end_line) + ",\"signature\":" + diag_json_quote(n.signature) + "}"
+            let row_bytes = len(bytes(row))
+            if has_max_bytes and used_bytes + row_bytes > max_bytes {
+                truncated = true
+                break
+            }
+            if scount > 0 { syms.append(",") }
+            scount = scount + 1
+            syms.append(row)
+            used_bytes = used_bytes + row_bytes
+            next_idx = idx + 1
         }
         syms.append("]")
-        let res_json = "{\"schema_version\":\"wysna.inspect/1\",\"file\":" + diag_json_quote(graph.entry_file) + ",\"graph_hash\":" + diag_json_quote(graph.graph_hash) + ",\"symbols\":" + join_strings(syms, "") + "}"
+        let remaining = total_syms - next_idx
+        let omitted_json = if truncated and remaining > 0 {
+            "[{\"kind\":\"symbol_index\",\"omitted_count\":" + str(remaining) + ",\"next_offset\":" + str(next_idx) + ",\"ref\":{\"command\":\"inspect\",\"offset\":" + str(next_idx) + "}}]"
+        } else { "[]" }
+        let trunc_str = if truncated and remaining > 0 { "true" } else { "false" }
+        let om_count = if truncated and remaining > 0 { remaining } else { 0 }
+        let budget_json = "{\"max_bytes\":" + budget_max_json + ",\"used_bytes\":" + str(used_bytes) + ",\"offset\":" + str(clamped_off) + ",\"total_symbols\":" + str(total_syms) + ",\"truncated\":" + trunc_str + ",\"omitted_count\":" + str(om_count) + "}"
+        let bounds = tool_boundaries_for_nodes_json(graph.nodes)
+        let res_json = "{\"schema_version\":\"wysna.inspect/1\",\"file\":" + diag_json_quote(graph.entry_file) + ",\"graph_hash\":" + diag_json_quote(graph.graph_hash) + ",\"symbols\":" + join_strings(syms, "") + ",\"budget\":" + budget_json + ",\"omitted\":" + omitted_json + ",\"analysis_boundaries\":" + bounds + "}"
         if json_mode {
             diag_write_output(diag_tool_envelope_json("inspect", "ok", 0, "[]", "result", res_json, "[]"))
         } else {
             print("Symbols in " + file + " (" + graph.graph_hash + "):")
-            for n in graph.nodes { print("  [" + n.kind + "] " + n.qualified_name + " (L" + str(n.line) + "-" + str(n.end_line) + ")") }
+            for idx in clamped_off..next_idx {
+                let n = graph.nodes[idx]
+                print("  [" + n.kind + "] " + n.qualified_name + " (L" + str(n.line) + "-" + str(n.end_line) + ")")
+            }
         }
         exit(0)
     }
-    let n_idx = tool_resolve_node_idx(graph, symbol)
-    if n_idx < 0 { report_error(file, "W1001", 1, 1, "symbol not found: " + symbol) }
+    let n_idx = tool_require_symbol(graph, symbol, "inspect", json_mode)
     let n = graph.nodes[n_idx]
-    let decl_src = tool_node_source_text(graph, n)
+    let full_src = tool_node_source_text(graph, n)
+    let sliced = tool_utf8_slice_budget(full_src, source_offset, has_max_bytes, max_bytes)
+    let decl_src = sliced[0]
+    let clamped_src_off = lsp_parse_int(sliced[1], 0)
+    let src_used = lsp_parse_int(sliced[2], 0)
+    let src_total = lsp_parse_int(sliced[3], 0)
+    let next_src_off = clamped_src_off + src_used
+    let mut used_bytes = src_used
+    let mut omitted_rows: list[str] = []
+    if next_src_off < src_total {
+        omitted_rows.append("{\"kind\":\"source_slice\",\"symbol_id\":" + diag_json_quote(n.id) + ",\"file\":" + diag_json_quote(n.file) + ",\"start_byte\":" + str(n.start_byte + next_src_off) + ",\"end_byte\":" + str(n.end_byte) + ",\"omitted_bytes\":" + str(src_total - next_src_off) + ",\"ref\":{\"command\":\"inspect\",\"symbol\":" + diag_json_quote(n.id) + ",\"source_offset\":" + str(next_src_off) + "}}")
+    }
+    let mut included_nodes: list[ToolGraphNode] = [n]
     let mut deps_json = "[]"
     if with_deps {
         let mut dep_ids: list[str] = []
@@ -13588,19 +13896,33 @@ fn tool_handle_inspect(args: list[str], json_mode: bool) -> unit {
         let mut deps_p: list[str] = ["["]
         let mut dcount = 0
         for did in tool_sort_strings(dep_ids) {
+            if did == n.id { continue }
             let d_idx = tool_find_node_idx(graph, did)
             if d_idx >= 0 {
                 let d = graph.nodes[d_idx]
+                let d_src = tool_node_source_text(graph, d)
+                let dep_row = "{\"id\":" + diag_json_quote(d.id) + ",\"name\":" + diag_json_quote(d.name) + ",\"kind\":" + diag_json_quote(d.kind) + ",\"signature\":" + diag_json_quote(d.signature) + ",\"file\":" + diag_json_quote(d.file) + ",\"line\":" + str(d.line) + ",\"source\":" + diag_json_quote(d_src) + "}"
+                let dep_bytes = len(bytes(dep_row))
+                if has_max_bytes and used_bytes + dep_bytes > max_bytes {
+                    omitted_rows.append("{\"kind\":\"dependency\",\"symbol_id\":" + diag_json_quote(d.id) + ",\"name\":" + diag_json_quote(d.name) + ",\"signature\":" + diag_json_quote(d.signature) + ",\"file\":" + diag_json_quote(d.file) + ",\"line\":" + str(d.line) + ",\"estimated_bytes\":" + str(dep_bytes) + ",\"ref\":{\"command\":\"inspect\",\"symbol\":" + diag_json_quote(d.id) + "}}")
+                    continue
+                }
                 if dcount > 0 { deps_p.append(",") }
                 dcount = dcount + 1
-                let d_src = tool_node_source_text(graph, d)
-                deps_p.append("{\"id\":" + diag_json_quote(d.id) + ",\"name\":" + diag_json_quote(d.name) + ",\"kind\":" + diag_json_quote(d.kind) + ",\"signature\":" + diag_json_quote(d.signature) + ",\"source\":" + diag_json_quote(d_src) + "}")
+                deps_p.append(dep_row)
+                included_nodes.append(d)
+                used_bytes = used_bytes + dep_bytes
             }
         }
         deps_p.append("]")
         deps_json = join_strings(deps_p, "")
     }
-    let res_json = "{\"schema_version\":\"wysna.inspect/1\",\"file\":" + diag_json_quote(n.file) + ",\"graph_hash\":" + diag_json_quote(graph.graph_hash) + ",\"node\":" + tool_node_json(n) + ",\"source\":" + diag_json_quote(decl_src) + ",\"dependencies\":" + deps_json + "}"
+    let trunc_sym = if len(omitted_rows) > 0 { "true" } else { "false" }
+    let budget_json = "{\"max_bytes\":" + budget_max_json + ",\"used_bytes\":" + str(used_bytes) + ",\"source_offset\":" + str(clamped_src_off) + ",\"source_total_bytes\":" + str(src_total) + ",\"truncated\":" + trunc_sym + ",\"omitted_count\":" + str(len(omitted_rows)) + "}"
+    let omitted_json = "[" + join_strings(omitted_rows, ",") + "]"
+    let call_res_json = tool_call_resolution_json(n)
+    let bounds_json = tool_boundaries_for_nodes_json(included_nodes)
+    let res_json = "{\"schema_version\":\"wysna.inspect/1\",\"file\":" + diag_json_quote(n.file) + ",\"graph_hash\":" + diag_json_quote(graph.graph_hash) + ",\"node\":" + tool_node_json(n) + ",\"source\":" + diag_json_quote(decl_src) + ",\"dependencies\":" + deps_json + ",\"call_resolution\":" + call_res_json + ",\"budget\":" + budget_json + ",\"omitted\":" + omitted_json + ",\"analysis_boundaries\":" + bounds_json + "}"
     if json_mode {
         diag_write_output(diag_tool_envelope_json("inspect", "ok", 0, "[]", "result", res_json, "[]"))
     } else {
@@ -13617,6 +13939,11 @@ fn tool_handle_patch(args: list[str], json_mode: bool) -> unit {
     let mut has_with = false
     let mut with_file = ""
     let mut expect_hash = ""
+    let mut manifest = ""
+    let mut edits_file = ""
+    let mut expect_plan_hash = ""
+    let mut discover = false
+    let mut frozen = false
     let mut apply = false
     let mut i = 1
     while i < len(args) {
@@ -13638,6 +13965,21 @@ fn tool_handle_patch(args: list[str], json_mode: bool) -> unit {
         } elif a == "--expect-graph-hash" and i + 1 < len(args) {
             expect_hash = args[i + 1]
             i = i + 2
+        } elif a == "--manifest" and i + 1 < len(args) {
+            manifest = args[i + 1]
+            i = i + 2
+        } elif a == "--edits" and i + 1 < len(args) {
+            edits_file = args[i + 1]
+            i = i + 2
+        } elif a == "--expect-plan-hash" and i + 1 < len(args) {
+            expect_plan_hash = args[i + 1]
+            i = i + 2
+        } elif a == "--discover" {
+            discover = true
+            i = i + 1
+        } elif a == "--frozen" {
+            frozen = true
+            i = i + 1
         } elif a == "--apply" {
             apply = true
             i = i + 1
@@ -13648,7 +13990,16 @@ fn tool_handle_patch(args: list[str], json_mode: bool) -> unit {
             report_error("<cli>", "W5002", 1, 1, "unknown option for patch: " + a)
         }
     }
-    if file == "" or symbol == "" { report_error("<cli>", "W5002", 1, 1, "patch requires a file path and --symbol") }
+    if edits_file != "" {
+        if manifest == "" or file != "" or symbol != "" or has_with or with_file != "" or expect_hash != "" {
+            report_error("<cli>", "W5002", 1, 1, "workspace patch requires --manifest and --edits without single-source options")
+        }
+        proj_handle_workspace_patch(manifest, edits_file, expect_plan_hash, apply, discover, frozen, json_mode)
+        return
+    }
+    if file == "" or symbol == "" or manifest != "" or expect_plan_hash != "" or discover or frozen {
+        report_error("<cli>", "W5002", 1, 1, "patch requires a file path and --symbol")
+    }
     if with_file != "" {
         replacement = read_file(with_file) else err {
             report_error(with_file, "W5003", 1, 1, "cannot read --with-file: " + with_file)
@@ -13667,9 +14018,14 @@ fn tool_handle_patch(args: list[str], json_mode: bool) -> unit {
     if expect_hash != "" and expect_hash != before.graph_hash {
         report_error(file, "W5005", 1, 1, "stale semantic graph hash: expected '" + expect_hash + "', current '" + before.graph_hash + "'")
     }
-    let n_idx = tool_resolve_node_idx(before, symbol)
-    if n_idx < 0 { report_error(file, "W1001", 1, 1, "symbol not found: " + symbol) }
+    let n_idx = tool_require_symbol(before, symbol, "patch", json_mode)
     let target = before.nodes[n_idx]
+    if target.file != before.entry_file {
+        report_error(file, "W5002", 1, 1, "symbol is declared in a different file: " + target.file)
+    }
+    if target.start_char >= target.end_char {
+        report_error(file, "W5002", 1, 1, "patch target has no editable declaration range")
+    }
     let candidate = slice(src, 0, target.start_char) + replacement + slice(src, target.end_char, len(src))
     let canonical = module_canonical(file)
     let checked_after = check_source(candidate, canonical)
@@ -15143,7 +15499,7 @@ fn lsp_handle_completion(doc: LspDocument, pos_obj: LspJson) -> str {
         }
     }
     if qual == "" {
-        let kws: list[str] = ["fn", "async", "struct", "class", "interface", "enum", "let", "mut", "if", "elif", "else", "for", "while", "match", "return", "await", "import", "pub", "true", "false", "None", "Some", "Ok", "Err"]
+        let kws: list[str] = ["fn", "async", "struct", "class", "interface", "enum", "let", "mut", "if", "elif", "else", "for", "while", "match", "return", "await", "import", "pub", "priv", "true", "false", "None", "Some", "Ok", "Err"]
         for kw in kws {
             if prefix != "" and (len(kw) < len(prefix) or slice(kw, 0, len(prefix)) != prefix) { continue }
             if not tool_str_contains(seen_labels, kw) {
@@ -15170,7 +15526,7 @@ fn lsp_semantic_tok_type(tok: Token) -> int {
     let k = tok.kind
     if k == "STR" or k == "FSTR" { return 11 }
     if k == "INT" or k == "FLOAT" { return 12 }
-    if k == "FN" or k == "LET" or k == "MUT" or k == "STRUCT" or k == "CLASS" or k == "INTERFACE" or k == "ENUM" or k == "IF" or k == "ELIF" or k == "ELSE" or k == "FOR" or k == "IN" or k == "WHILE" or k == "RETURN" or k == "MATCH" or k == "IMPORT" or k == "FROM" or k == "AS" or k == "PUB" or k == "TRUE" or k == "FALSE" or k == "THIS" or k == "SUPER" or k == "EXTERN" or k == "AND" or k == "OR" or k == "NOT" or k == "REQUIRES" or k == "ENSURES" {
+    if k == "FN" or k == "LET" or k == "MUT" or k == "STRUCT" or k == "CLASS" or k == "INTERFACE" or k == "ENUM" or k == "IF" or k == "ELIF" or k == "ELSE" or k == "FOR" or k == "IN" or k == "WHILE" or k == "RETURN" or k == "MATCH" or k == "IMPORT" or k == "FROM" or k == "AS" or k == "PUB" or k == "PRIV" or k == "TRUE" or k == "FALSE" or k == "THIS" or k == "SUPER" or k == "EXTERN" or k == "AND" or k == "OR" or k == "NOT" or k == "REQUIRES" or k == "ENSURES" {
         return 0
     }
     if k == "IDENT" {
@@ -15816,12 +16172,16 @@ class SchemaField {
 
 class SchemaStruct {
     name: str
+    file: str
+    is_pub: bool
     line: int
     has_type_params: bool
     fields: list[SchemaField]
 
     fn init(name: str, line: int, has_type_params: bool) {
         this.name = name
+        this.file = ""
+        this.is_pub = false
         this.line = line
         this.has_type_params = has_type_params
         let fs: list[SchemaField] = []
@@ -15842,12 +16202,16 @@ class SchemaVariant {
 
 class SchemaEnum {
     name: str
+    file: str
+    is_pub: bool
     line: int
     has_type_params: bool
     variants: list[SchemaVariant]
 
     fn init(name: str, line: int, has_type_params: bool) {
         this.name = name
+        this.file = ""
+        this.is_pub = false
         this.line = line
         this.has_type_params = has_type_params
         let vs: list[SchemaVariant] = []
@@ -15869,6 +16233,7 @@ class SchemaParam {
 
 class SchemaFn {
     name: str
+    file: str
     line: int
     is_pub: bool
     type_params: list[str]
@@ -15882,6 +16247,7 @@ class SchemaFn {
 
     fn init(name: str, line: int, is_pub: bool) {
         this.name = name
+        this.file = ""
         this.line = line
         this.is_pub = is_pub
         let tp: list[str] = []
@@ -16160,7 +16526,6 @@ fn schema_json_primitive_type(t: SchemaType, known_defs: list[str]) -> str {
         if t.name == "float" { return "number" }
         if t.name == "bool" { return "boolean" }
         if t.name == "unit" or t.name == "none" { return "null" }
-        if not tool_str_contains(known_defs, t.name) { return "string" }
         return ""
     }
     if t.kind == "list" { return "array" }
@@ -16176,7 +16541,7 @@ fn schema_type_to_json(t: SchemaType, known_defs: list[str]) -> str {
         if t.name == "str" { return "{\"type\":\"string\"}" }
         if t.name == "unit" or t.name == "none" { return "{\"type\":\"null\"}" }
         if tool_str_contains(known_defs, t.name) { return "{\"$ref\":" + diag_json_quote("#/$defs/" + t.name) + "}" }
-        return "{\"type\":\"string\",\"x-wysna-type\":" + diag_json_quote(t.name) + "}"
+        return "{\"x-wysna-type\":" + diag_json_quote(t.name) + ",\"x-wysna-unrepresentable\":true}"
     }
     if t.kind == "optional" and len(t.args) == 1 {
         return "{\"anyOf\":[" + schema_type_to_json(t.args[0], known_defs) + ",{\"type\":\"null\"}]}"
@@ -16462,8 +16827,8 @@ fn schema_collect_decls(tokens: list[Token], out: SchemaDeclSet) -> unit {
             c.pos = c.pos + 1
             continue
         }
-        if k == "PUB" or k == "PUBLIC" or (k == "IDENT" and v == "pub") {
-            is_pub = true
+        if k == "PUB" or k == "PRIV" {
+            is_pub = k == "PUB"
             c.pos = c.pos + 1
             continue
         }
@@ -16478,12 +16843,15 @@ fn schema_collect_decls(tokens: list[Token], out: SchemaDeclSet) -> unit {
             continue
         }
         if k == "STRUCT" and c.pos + 1 < len(c.tokens) and c.tokens[c.pos + 1].kind == "IDENT" {
+            let declaration_file = c.tokens[c.pos].file
             let line_1 = c.tokens[c.pos].line
             c.pos = c.pos + 1
             let name = schema_cur_val(c)
             c.pos = c.pos + 1
             let tps = schema_skip_brackets(c)
             let st = SchemaStruct(name, line_1, len(tps) > 0)
+            st.file = declaration_file
+            st.is_pub = is_pub
             schema_skip_newlines(c)
             if schema_cur_kind(c) == "LBRACE" {
                 c.pos = c.pos + 1
@@ -16534,12 +16902,15 @@ fn schema_collect_decls(tokens: list[Token], out: SchemaDeclSet) -> unit {
             continue
         }
         if k == "ENUM" and c.pos + 1 < len(c.tokens) and c.tokens[c.pos + 1].kind == "IDENT" {
+            let declaration_file = c.tokens[c.pos].file
             let line_1 = c.tokens[c.pos].line
             c.pos = c.pos + 1
             let name = schema_cur_val(c)
             c.pos = c.pos + 1
             let tps = schema_skip_brackets(c)
             let en = SchemaEnum(name, line_1, len(tps) > 0)
+            en.file = declaration_file
+            en.is_pub = is_pub
             schema_skip_newlines(c)
             if schema_cur_kind(c) == "LBRACE" {
                 c.pos = c.pos + 1
@@ -16578,11 +16949,13 @@ fn schema_collect_decls(tokens: list[Token], out: SchemaDeclSet) -> unit {
                 is_extern = false
                 continue
             }
+            let declaration_file = c.tokens[c.pos].file
             let line_1 = c.tokens[c.pos].line
             c.pos = c.pos + 1
             let name = schema_cur_val(c)
             c.pos = c.pos + 1
             let f = SchemaFn(name, line_1, is_pub)
+            f.file = declaration_file
             f.type_params = schema_skip_brackets(c)
             if schema_cur_kind(c) == "LPAREN" {
                 c.pos = c.pos + 1
@@ -16738,7 +17111,7 @@ fn schema_is_read_only_cap(cap: str) -> bool {
     return cap == "arguments" or cap == "environment" or cap == "clock" or cap == "filesystem.read"
 }
 
-fn schema_tool_json(f: SchemaFn, lines: list[str], known_defs: list[str], graph: ToolGraph) -> str {
+fn schema_tool_json(f: SchemaFn, spelling: SchemaFn, lines: list[str], known_defs: list[str], graph: ToolGraph) -> str {
     let mut pnames: list[str] = []
     let mut pbounds: list[SchemaBound] = []
     for p in f.params {
@@ -16791,8 +17164,8 @@ fn schema_tool_json(f: SchemaFn, lines: list[str], known_defs: list[str], graph:
     let out_json = schema_inject_tail(out_base_j, schema_bound_json_tail(out_bound, out_prim_t, false))
 
     let mut sig_ps: list[str] = []
-    for p in f.params { sig_ps.append(p.name + ": " + schema_type_text(p.t)) }
-    let ret_sig = if f.has_ret { schema_type_text(f.ret) } else { "unit" }
+    for p in spelling.params { sig_ps.append(p.name + ": " + schema_type_text(p.t)) }
+    let ret_sig = if spelling.has_ret { schema_type_text(spelling.ret) } else { "unit" }
     let gen_prefix = if len(f.type_params) > 0 { "[" + join_strings(f.type_params, ", ") + "]" } else { "" }
     let signature = "fn " + f.name + gen_prefix + "(" + join_strings(sig_ps, ", ") + ") -> " + ret_sig
 
@@ -16917,7 +17290,7 @@ fn schema_is_prim_scalar(t: SchemaType) -> bool {
     return t.kind == "named" and (t.name == "int" or t.name == "float" or t.name == "bool" or t.name == "str")
 }
 
-fn schema_generate_codecs(structs: list[SchemaStruct], enums: list[SchemaEnum], known_defs: list[str]) -> str {
+fn schema_generate_codecs(structs: list[SchemaStruct], enums: list[SchemaEnum], known_defs: list[str], strict: bool) -> str {
     let mut blocks: list[str] = ["import \"std/json\""]
     for en in enums {
         if en.has_type_params { continue }
@@ -16971,6 +17344,12 @@ fn schema_generate_codecs(structs: list[SchemaStruct], enums: list[SchemaEnum], 
         let name = st.name
         let mut enc_lines: list[str] = ["    let mut _fields: dict[str, json.Value] = {}"]
         let mut dec_lines: list[str] = []
+        if strict {
+            let mut names: list[str] = []
+            for field in st.fields { names.append(diag_json_quote(field.name)) }
+            dec_lines.append("    let allowed_fields: list[str] = [" + join_strings(names, ", ") + "]")
+            dec_lines.append("    let _ = agent_members(raw_val, allowed_fields)?")
+        }
         let mut ctor_fields: list[str] = []
         let mut supported = true
         for f in st.fields {
@@ -17065,10 +17444,175 @@ fn schema_emit_usage_error(json_mode: bool, msg: str) -> unit {
     exit(2)
 }
 
+fn schema_definition_key(file: str, entry: str, name: str) -> str {
+    if file == entry { return name }
+    let parent = module_directory(entry)
+    let directories = slice(parent, 0, len(parent) - 1).split("/")
+    let destination = file.split("/")
+    let mut shared = 0
+    while shared < len(directories) and shared < len(destination) and directories[shared] == destination[shared] {
+        shared = shared + 1
+    }
+    let mut relative: list[str] = []
+    for i in shared..len(directories) { relative.append("..") }
+    for i in shared..len(destination) { relative.append(destination[i]) }
+    let path = if shared == 0 { file } else { join_strings(relative, "/") }
+    return tool_short_name(name) + "__" + slice(diag_sha256_hex(path), 0, 16)
+}
+
+class SchemaProjection {
+    keys: dict[str, str]
+    needed: dict[str, bool]
+    pending: list[str]
+    fn init(keys: dict[str, str]) {
+        this.keys = keys
+        let needed: dict[str, bool] = {}
+        let pending: list[str] = []
+        this.needed = needed
+        this.pending = pending
+    }
+}
+
+fn schema_register_type(projection: SchemaProjection, name: str) {
+    if name in projection.keys and not (name in projection.needed) {
+        projection.needed[name] = true
+        projection.pending.append(name)
+    }
+}
+
+fn schema_project_type(projection: SchemaProjection, type_: SchemaType) {
+    let original = type_.name
+    schema_register_type(projection, original)
+    type_.name = projection.keys.get(original) ?? original
+    for child in type_.args { schema_project_type(projection, child) }
+}
+
+fn schema_source_lines(file: str, entry: str, lines: list[str]) -> list[str] {
+    if file == entry { return lines }
+    let loaded = module_read_text_or_overlay(file)
+    return schema_split_lines(loaded[1])
+}
+
+struct SchemaAgentAdapter { id: str, version: int, source: str }
+
+fn schema_agent_identity(f: SchemaFn, graph: ToolGraph) -> list[str] {
+    if not f.is_pub or f.name == "main" or len(f.type_params) != 0 {
+        report_error(graph.entry_file, "W2013", f.line, 1, "Agent adapter requires a public, concrete @AgentTool function")
+    }
+    for node in graph.nodes {
+        if node.kind != "fn" or node.file != graph.entry_file or node.name != f.name { continue }
+        if node.is_async or len(node.capabilities) != 0 or "global.read" in node.effects or "global.write" in node.effects {
+            report_error(graph.entry_file, "W2013", f.line, 1, "Agent adapter requires a synchronous pure function")
+        }
+        for attribute in node.attributes {
+            if attribute.name != "AgentTool" { continue }
+            let mut id = ""
+            let mut version = 0
+            for argument in attribute.arguments {
+                if argument.name == "id" and argument.kind == "str" { id = argument.value }
+                if argument.name == "version" and argument.kind == "int" { version = int(argument.value) }
+            }
+            let mut valid = len(id) > 0 and len(id) <= 64
+            if valid { valid = is_alpha(ord(id[0])) }
+            for i in 0..len(id) {
+                let char = id[i]
+                if not is_alnum(ord(char)) and char != "_" and char != "." and char != "-" { valid = false }
+            }
+            if valid and version > 0 { return [id, str(version)] }
+        }
+    }
+    report_error(graph.entry_file, "W2013", f.line, 1, "@AgentTool requires a stable id and a positive integer version")
+    return []
+}
+
+fn schema_agent_import(file: str, original: str, alias: str) -> str {
+    return "from " + diag_json_quote(file) + " use " + original + (if original == alias { "" } else { " as " + alias })
+}
+
+fn schema_agent_adapter(f: SchemaFn, graph: ToolGraph, records: SchemaDeclSet, projection: SchemaProjection) -> SchemaAgentAdapter {
+    let identity = schema_agent_identity(f, graph)
+    let mut imports = [schema_agent_import(graph.entry_file, f.name, "agent_target")]
+    let mut structs: list[SchemaStruct] = []
+    let mut enums: list[SchemaEnum] = []
+    let mut known: list[str] = []
+    for item in records.structs {
+        if not item.is_pub or item.has_type_params or not (item.name in projection.needed) { continue }
+        let name = projection.keys[item.name]
+        imports.append(schema_agent_import(item.file, tool_short_name(item.name), name))
+        let st = SchemaStruct(name, item.line, false)
+        st.fields = item.fields
+        structs.append(st)
+        known.append(name)
+    }
+    for item in records.enums {
+        if not item.is_pub or item.has_type_params or not (item.name in projection.needed) { continue }
+        let mut unit_variants = true
+        for variant in item.variants { if len(variant.payloads) != 0 { unit_variants = false } }
+        if not unit_variants { continue }
+        let name = projection.keys[item.name]
+        imports.append(schema_agent_import(item.file, tool_short_name(item.name), name))
+        let en = SchemaEnum(name, item.line, false)
+        en.variants = item.variants
+        enums.append(en)
+        known.append(name)
+    }
+    let mut argument_names: list[str] = []
+    let mut argument_values: list[str] = []
+    let mut body: list[str] = []
+    for i in 0..len(f.params) {
+        let param = f.params[i]
+        let key = diag_json_quote(param.name)
+        let value = schema_decode_scalar("json.get_required(input, " + key + ")?", param.t, known)
+        if value == "" { report_error(graph.entry_file, "W2013", f.line, 1, "Tool parameter has no supported JSON codec: " + param.name) }
+        let name = "agent_arg_" + str(i)
+        body.append("    let " + name + " = " + value)
+        argument_names.append(key)
+        argument_values.append(name)
+    }
+    let is_result = f.ret.kind == "result" and len(f.ret.args) == 2
+    let outcome = if is_result { f.ret.args[0] } else { f.ret }
+    let success = if outcome.kind == "named" and outcome.name == "unit" { "json.null()" }
+        else { schema_encode_scalar("agent_value", outcome, known) }
+    if success == "" { report_error(graph.entry_file, "W2013", f.line, 1, "Tool result has no supported JSON codec") }
+    let call = "agent_target(" + join_strings(argument_values, ", ") + ")"
+    if is_result {
+        let failure = schema_encode_scalar("agent_error", f.ret.args[1], known)
+        if failure == "" { report_error(graph.entry_file, "W2013", f.line, 1, "Tool error has no supported JSON codec") }
+        body.append("    return Ok(match " + call + " {\n        Ok(agent_value) => agent_result(\"ok\", " + success + "),\n        Err(agent_error) => agent_result(\"error\", " + failure + "),\n    })")
+    } else {
+        body.append("    let agent_value = " + call)
+        body.append("    return Ok(agent_result(\"ok\", " + success + "))")
+    }
+    let helper_source = "\nfn agent_members(raw: json.Value, keys: list[str]) -> json.Value ! json.JsonError {\n    let fields = json.to_object(raw)?\n    for key in fields.keys() {\n        if not (key in keys) { return Err(json.error(0, \"Unknown field: \" + key)) }\n    }\n    return Ok(raw)\n}\n\n"
+    let result_source = "fn agent_result(status: str, value: json.Value) -> json.Value {\n    let fields: dict[str, json.Value] = {\n        \"schema_version\": json.string(\"wysna.agent-tool-result/1\"),\n        \"id\": json.string(" + diag_json_quote(identity[0]) + "),\n        \"version\": json.from_int(" + identity[1] + "),\n        \"status\": json.string(status),\n        \"value\": value,\n    }\n    return json.object(fields)\n}\n\n"
+    let invoke_source = "fn agent_invoke(raw: str) -> json.Value ! json.JsonError {\n    let names: list[str] = [" + join_strings(argument_names, ", ") + "]\n    let input = agent_members(json.parse_with_limits(raw, 65536, 32, 4096)?, names)?\n" + join_strings(body, "\n") + "\n}\n\n"
+    let encoding_failure = "{\"schema_version\":\"wysna.agent-tool-result/1\",\"id\":" + diag_json_quote(identity[0]) +
+        ",\"version\":" + identity[1] + ",\"status\":\"encoding_error\",\"value\":\"Tool result could not be encoded as JSON\"}"
+    let main_source = "let agent_arguments = args()\nlet agent_reply = if len(agent_arguments) == 2 {\n    agent_invoke(agent_arguments[1]) else error { agent_result(\"invalid_input\", json.string(error.message)) }\n} else { agent_result(\"invalid_input\", json.string(\"Supply one JSON argument\")) }\nprint(json.stringify_ordered(agent_reply) else { " + diag_json_quote(encoding_failure) + " })\n"
+    let codecs = schema_generate_codecs(structs, enums, known, true)
+    let source = join_strings(imports, "\n") + "\n\n" + codecs + helper_source + result_source + invoke_source + main_source
+    return SchemaAgentAdapter { id: identity[0], version: int(identity[1]), source: source }
+}
+
+fn schema_write_new(path: str, source: str) {
+    let target = tool_buf_from_str(path)
+    let handle = wysna_host_file_open(target, 3)
+    wysna_host_close(target)
+    if wysna_host_is_open(handle) != 1 {
+        report_error(path, "W5004", 1, 1, "cannot create agent adapter output")
+    }
+    let contents = tool_buf_from_str(source)
+    let written = wysna_host_file_write(handle, contents)
+    let closed = wysna_host_close(handle)
+    wysna_host_close(contents)
+    if written < 0 or closed < 0 { report_error(path, "W5004", 1, 1, "cannot write agent adapter output") }
+}
+
 fn tool_handle_schema(args: list[str], json_mode_in: bool) -> unit {
     let mut json_mode = json_mode_in
     let mut include_all = false
     let mut emit_codecs = false
+    let mut emit_tool = false
     let mut fn_filter = ""
     let mut has_fn_filter = false
     let mut out_path = ""
@@ -17085,6 +17629,9 @@ fn tool_handle_schema(args: list[str], json_mode_in: bool) -> unit {
             i = i + 2
         } elif a == "--all" {
             include_all = true
+            i = i + 1
+        } elif a == "--emit-tool" {
+            emit_tool = true
             i = i + 1
         } elif a == "--emit-codecs" {
             emit_codecs = true
@@ -17104,6 +17651,9 @@ fn tool_handle_schema(args: list[str], json_mode_in: bool) -> unit {
         }
     }
     if file == "" { schema_emit_usage_error(json_mode, "schema requires a source file path") }
+    if emit_tool and (not has_fn_filter or emit_codecs) {
+        schema_emit_usage_error(json_mode, "--emit-tool requires --function NAME and replaces --emit-codecs")
+    }
     let loaded = module_read_text_or_overlay(file)
     if loaded[0] != "1" {
         report_error(file, "W5003", 1, 1, "cannot read input file: " + file)
@@ -17111,7 +17661,8 @@ fn tool_handle_schema(args: list[str], json_mode_in: bool) -> unit {
     let src = loaded[1]
     let canonical = module_canonical(file)
     let checked = check_source(src, canonical)
-    mir_verify(mir_build(checked))
+    let module = mir_build(checked)
+    mir_verify(module)
     let graph = tool_build_graph(src, file)
 
     let tokens = tokenize(src, file)
@@ -17121,24 +17672,6 @@ fn tool_handle_schema(args: list[str], json_mode_in: bool) -> unit {
     let structs = decls.structs
     let enums = decls.enums
     let fns = decls.fns
-
-    let mut known_defs: list[str] = []
-    for st in structs { known_defs.append(st.name) }
-    for en in enums { known_defs.append(en.name) }
-
-    let mut defs_parts: list[str] = ["{"]
-    let mut def_cnt = 0
-    for st in structs {
-        if def_cnt > 0 { defs_parts.append(",") }
-        def_cnt = def_cnt + 1
-        defs_parts.append(diag_json_quote(st.name) + ":" + schema_struct_def_json(st, lines, known_defs))
-    }
-    for en in enums {
-        if def_cnt > 0 { defs_parts.append(",") }
-        def_cnt = def_cnt + 1
-        defs_parts.append(diag_json_quote(en.name) + ":" + schema_enum_def_json(en, lines, known_defs))
-    }
-    defs_parts.append("}")
 
     let mut selected: list[SchemaFn] = []
     if has_fn_filter {
@@ -17168,18 +17701,93 @@ fn tool_handle_schema(args: list[str], json_mode_in: bool) -> unit {
         }
     }
 
-    let mut tools_parts: list[str] = ["["]
-    for idx in 0..len(selected) {
-        if idx > 0 { tools_parts.append(",") }
-        tools_parts.append(schema_tool_json(selected[idx], lines, known_defs, graph))
+    let linked = SchemaDeclSet()
+    let expanded = module_tokens(src, canonical)
+    schema_collect_decls(expanded, linked)
+    let mut keys: dict[str, str] = {}
+    let mut structs_by_name: dict[str, int] = {}
+    let mut enums_by_name: dict[str, int] = {}
+    let mut entry_functions: dict[str, int] = {}
+    for i in 0..len(linked.structs) {
+        let st = linked.structs[i]
+        keys[st.name] = schema_definition_key(st.file, canonical, st.name)
+        structs_by_name[st.name] = i
     }
-    tools_parts.append("]")
+    for i in 0..len(linked.enums) {
+        let en = linked.enums[i]
+        keys[en.name] = schema_definition_key(en.file, canonical, en.name)
+        enums_by_name[en.name] = i
+    }
+    for i in 0..len(linked.fns) {
+        if linked.fns[i].file == canonical { entry_functions[linked.fns[i].name] = i }
+    }
+    let projection = SchemaProjection(keys)
+    for st in structs { schema_register_type(projection, st.name) }
+    for en in enums { schema_register_type(projection, en.name) }
+    let mut resolved_fns: list[SchemaFn] = []
+    for spelling in selected {
+        let index = entry_functions.get(spelling.name) else {
+            report_error(file, "W9999", spelling.line, 1, "checked schema declaration is missing: " + spelling.name)
+            -1
+        }
+        let f = linked.fns[index]
+        for param in f.params { schema_project_type(projection, param.t) }
+        schema_project_type(projection, f.ret)
+        resolved_fns.append(f)
+    }
+    let mut cursor = 0
+    while cursor < len(projection.pending) {
+        let name = projection.pending[cursor]
+        let st = structs_by_name.get(name) ?? -1
+        if st >= 0 {
+            for field in linked.structs[st].fields { schema_project_type(projection, field.t) }
+        } else {
+            let en = enums_by_name[name]
+            for variant in linked.enums[en].variants {
+                for payload in variant.payloads { schema_project_type(projection, payload) }
+            }
+        }
+        cursor = cursor + 1
+    }
+    let mut known_defs: list[str] = []
+    for name in projection.pending { known_defs.append(keys[name]) }
+    let mut defs_parts: list[str] = []
+    for name in projection.pending {
+        let st = structs_by_name.get(name) ?? -1
+        let prefix = diag_json_quote(keys[name]) + ":"
+        if st >= 0 {
+            let item = linked.structs[st]
+            defs_parts.append(prefix + schema_struct_def_json(item, schema_source_lines(item.file, canonical, lines), known_defs))
+        } else {
+            let item = linked.enums[enums_by_name[name]]
+            defs_parts.append(prefix + schema_enum_def_json(item, schema_source_lines(item.file, canonical, lines), known_defs))
+        }
+    }
+    let mut tools_parts: list[str] = []
+    for idx in 0..len(selected) {
+        tools_parts.append(schema_tool_json(resolved_fns[idx], selected[idx], lines, known_defs, graph))
+    }
+    let definitions = "{" + join_strings(defs_parts, ",") + "}"
+    let tools = "[" + join_strings(tools_parts, ",") + "]"
 
-    let codecs_src = if emit_codecs { schema_generate_codecs(structs, enums, known_defs) } else { "" }
+    let codecs_src = if emit_codecs { schema_generate_codecs(structs, enums, known_defs, false) } else { "" }
     let codecs_field = if emit_codecs { ",\"codecs_source\":" + diag_json_quote(codecs_src) } else { "" }
-    let payload_json = ("{\"schema_version\":\"wysna.schema/1\",\"compiler_version\":\"" + tool_compiler_version() + "\",\"$schema\":\"https://json-schema.org/draft/2020-12/schema\",\"$defs\":") + join_strings(defs_parts, "") + ",\"tools\":" + join_strings(tools_parts, "") + codecs_field + "}"
+    let mut adapter_field = ""
+    let mut adapter_source = ""
+    if emit_tool {
+        let adapter = schema_agent_adapter(resolved_fns[0], graph, linked, projection)
+        let no_capabilities: list[str] = []
+        let _initializer_guard = sandbox_enforce_and_header(module, canonical, "allow", no_capabilities)
+        let candidate = mir_build(check_source(adapter.source, canonical + ".adapter.wysna"))
+        let _ = sandbox_enforce_and_header(candidate, canonical, "allow", ["arguments", "stdio"])
+        adapter_source = adapter.source
+        adapter_field = ",\"agent_adapter\":{\"id\":" + diag_json_quote(adapter.id) +
+            ",\"version\":" + str(adapter.version) + ",\"source\":" + diag_json_quote(adapter.source) + "}"
+    }
+    let payload_json = ("{\"schema_version\":\"wysna.schema/1\",\"compiler_version\":\"" + tool_compiler_version() + "\",\"$schema\":\"https://json-schema.org/draft/2020-12/schema\",\"$defs\":") + definitions + ",\"tools\":" + tools + codecs_field + adapter_field + "}"
 
-    if out_path != "" {
+    if emit_tool and out_path != "" { schema_write_new(out_path, adapter_source) }
+    elif out_path != "" {
         let out_content = if emit_codecs and not json_mode { codecs_src } else { payload_json + "\n" }
         write_file(out_path, out_content) else err {
             report_error(out_path, "W5004", 1, 1, "cannot write schema output to: " + out_path)
@@ -17188,7 +17796,8 @@ fn tool_handle_schema(args: list[str], json_mode_in: bool) -> unit {
     if json_mode {
         diag_write_output(diag_tool_envelope_json("schema", "ok", 0, "[]", "result", payload_json, "[]"))
     } elif out_path == "" {
-        if emit_codecs { print(codecs_src) }
+        if emit_tool { print(adapter_source) }
+        elif emit_codecs { print(codecs_src) }
         else { print(payload_json) }
     }
     exit(0)
@@ -17754,67 +18363,6 @@ fn fix_pad_binary_keyword(src: str, sc: int, ec: int, kw: str) -> str {
     return prefix + kw + suffix
 }
 
-fn fix_is_inside_class_body(src: str, target_char: int) -> bool {
-    let mut brace_stack: list[bool] = []
-    let mut in_string = false
-    let mut escaped = false
-    let mut in_comment = false
-    let mut header_kw = ""
-    let mut i = 0
-    while i < target_char {
-        let c = ord(src[i])
-        if in_comment {
-            if c == 10 { in_comment = false }
-            i = i + 1
-            continue
-        }
-        if in_string {
-            if escaped { escaped = false }
-            elif c == 92 { escaped = true }
-            elif c == 34 { in_string = false }
-            i = i + 1
-            continue
-        }
-        if c == 35 {
-            in_comment = true
-            i = i + 1
-            continue
-        }
-        if c == 34 {
-            in_string = true
-            i = i + 1
-            continue
-        }
-        if fix_is_ident_char(c) {
-            let mut j = i
-            while j < target_char and fix_is_ident_char(ord(src[j])) {
-                j = j + 1
-            }
-            let w = slice(src, i, j)
-            if header_kw == "" and w != "pub" and w != "public" and w != "private" and w != "async" {
-                header_kw = w
-            } elif w == "fn" or w == "struct" or w == "enum" or w == "interface" or w == "class" {
-                header_kw = w
-            }
-            i = j
-            continue
-        }
-        if c == 123 {
-            brace_stack.append(header_kw == "class")
-            header_kw = ""
-        } elif c == 125 {
-            if len(brace_stack) > 0 { let _popped = brace_stack.pop() }
-            header_kw = ""
-        } elif c == 59 or c == 61 {
-            header_kw = ""
-        } elif c == 10 and header_kw != "class" and header_kw != "struct" and header_kw != "enum" and header_kw != "interface" {
-            header_kw = ""
-        }
-        i = i + 1
-    }
-    return len(brace_stack) > 0 and brace_stack[len(brace_stack) - 1]
-}
-
 fn fix_plan_syntax(code: str, src: str, start_byte: int, end_byte: int, msg: str) -> list[FixEdit] {
     let mut out: list[FixEdit] = []
     let sc = lsp_char_offset_from_utf8_byte(src, start_byte)
@@ -17943,14 +18491,12 @@ fn fix_plan_syntax(code: str, src: str, start_byte: int, end_byte: int, msg: str
         }
     }
 
-    if code == "W0006" and sc + 3 <= n and slice(src, sc, sc + 3) == "pub" {
-        let left_ok = sc == 0 or not fix_is_ident_char(ord(src[sc - 1]))
-        let right_ok = sc + 3 >= n or not fix_is_ident_char(ord(src[sc + 3]))
-        if left_ok and right_ok and fix_is_inside_class_body(src, sc) {
-            let b0 = diag_utf8_byte_at(src, sc)
-            let b1 = diag_utf8_byte_at(src, sc + 3)
-            out.append(FixEdit("W0006", "replace 'pub' with 'public' inside class", "machine", b0, b1, "public"))
-            return out
+    if code == "W0006" {
+        let old = if msg == "Use 'pub' in place of 'public'" { "public" }
+            elif msg == "Use 'priv' in place of 'private'" { "private" } else { "" }
+        if old != "" and sc + len(old) <= n and slice(src, sc, sc + len(old)) == old {
+            let replacement = if old == "public" { "pub" } else { "priv" }
+            out.append(FixEdit(code, msg, "machine", start_byte, diag_utf8_byte_at(src, sc + len(old)), replacement))
         }
     }
 
@@ -19606,6 +20152,7 @@ fn tool_handle_project(args: list[str], json_mode_in: bool) -> unit {
         lines.append("MANIFEST=" + proj_plan_encode(m.path))
         lines.append("MANIFEST_SHA=" + m.manifest_sha256)
         lines.append("LOCK_SHA=" + test_plan.lock_sha)
+        lines.append("WORKSPACE_REVISION=" + test_plan.revision)
         lines.append("PLAN_HASH=" + test_plan.hash)
         lines.append("PLAN_JSON=" + proj_plan_encode(test_plan.json))
         lines.append("LIST_ONLY=" + if list_only { "1" } else { "0" })
@@ -19712,6 +20259,10 @@ fn proj_lock_host_text(state: ProjectLockState, path: str, operation: str) -> st
 }
 
 fn proj_lock_paths(state: ProjectLockState, root: str, relative: str, source_only: bool) -> list[str] {
+    return proj_snapshot_paths(state, root, relative, source_only, not source_only)
+}
+
+fn proj_snapshot_paths(state: ProjectLockState, root: str, relative: str, source_only: bool, skip_generated: bool) -> list[str] {
     let directory = if relative == "" { root } else { root + "/" + relative }
     let entries = proj_lock_host_text(state, directory, "entries")
     let ignored: list[str] = [".git", ".wysna_cache", "__pycache__", ".pytest_cache", "build", "dist"]
@@ -19725,15 +20276,16 @@ fn proj_lock_paths(state: ProjectLockState, root: str, relative: str, source_onl
         let name = slice(entries, start, i)
         i = i + 1
         let path = if relative == "" { name } else { relative + "/" + name }
-        if not source_only and relative == "" and tool_str_contains(ignored, name) { continue }
+        if skip_generated and relative == "" and tool_str_contains(ignored, name) { continue }
 
         if kind == "d" {
-            for nested in proj_lock_paths(state, root, path, source_only) { result.append(nested) }
+            for nested in proj_snapshot_paths(state, root, path, source_only, skip_generated) { result.append(nested) }
         } elif source_only or (name != "wysna.lock" and name != "wysna.lock.tmp") {
             if kind == "l" {
                 state.fail("W5002", "project input '" + root + "/" + path + "' is a symlink")
             }
-            if kind == "f" and (not source_only or proj_str_ends_with(path, ".wysna")) {
+            let workspace_manifest = source_only and skip_generated and name == "wysna.toml"
+            if kind == "f" and (not source_only or workspace_manifest or proj_str_ends_with(path, ".wysna")) {
                 result.append(path)
             }
         }
@@ -19853,12 +20405,14 @@ class ProjectTestPlan {
     cases: list[ProjectTestCase]
     hashes: list[str]
     lock_sha: str
+    revision: str
     hash: str
     json: str
-    fn init(cases: list[ProjectTestCase], hashes: list[str], lock_sha: str, hash: str, json: str) {
+    fn init(cases: list[ProjectTestCase], hashes: list[str], lock_sha: str, revision: str, hash: str, json: str) {
         this.cases = cases
         this.hashes = hashes
         this.lock_sha = lock_sha
+        this.revision = revision
         this.hash = hash
         this.json = json
     }
@@ -19867,7 +20421,7 @@ class ProjectTestPlan {
 fn proj_empty_test_plan() -> ProjectTestPlan {
     let cases: list[ProjectTestCase] = []
     let hashes: list[str] = []
-    return ProjectTestPlan(cases, hashes, "", "", "")
+    return ProjectTestPlan(cases, hashes, "", "", "", "")
 }
 
 fn proj_plan_encode(value: str) -> str {
@@ -19891,6 +20445,36 @@ fn proj_test_exists(state: ProjectLockState, path: str) -> bool {
     wysna_host_close(second)
     if found < 0 { state.fail("W5004", "cannot inspect test input '" + path + "'") }
     return found == 1
+}
+
+fn proj_workspace_sha256(state: ProjectLockState, root: str) -> str {
+    let workspace_paths = tool_sort_strings(proj_snapshot_paths(state, root, "", true, true))
+    proj_lock_verify_collisions(state, workspace_paths)
+    let mut source_rows: list[str] = []
+    for path in workspace_paths {
+        let sha = proj_lock_host_text(state, root + "/" + path, "hash")
+        source_rows.append("[" + diag_json_quote(path) + "," + diag_json_quote(sha) + "]")
+    }
+    return diag_sha256_hex("[" + join_strings(source_rows, ",") + "]")
+}
+
+fn proj_sdk_fingerprint(state: ProjectLockState) -> str {
+    let engine = env("WYSNA_SELFHOST_COMPILER") else { args()[0] }
+    let mut sdk_rows: list[str] = [proj_lock_host_text(state, engine, "hash")]
+    let stdlib_root = lsp_stdlib_root_arg()
+    if stdlib_root != "" {
+        for path in tool_sort_strings(proj_lock_paths(state, stdlib_root, "", true)) {
+            sdk_rows.append(diag_json_quote(path) + ":" + proj_lock_host_text(state, stdlib_root + "/" + path, "hash"))
+        }
+    }
+    return diag_sha256_hex(join_strings(sdk_rows, "\n"))
+}
+
+fn proj_workspace_revision_parts(manifest_sha: str, lock_sha: str, sdk_sha: str, workspace_sha: str) -> list[str] {
+    let revision = "\"manifest_sha256\":" + diag_json_quote(manifest_sha) + ",\"lock_sha256\":" +
+        (if lock_sha == "" { "null" } else { diag_json_quote(lock_sha) }) + ",\"toolchain\":\"" + tool_compiler_version() +
+        "\",\"sdk_fingerprint\":" + diag_json_quote(sdk_sha) + ",\"workspace_sha256\":" + diag_json_quote(workspace_sha)
+    return [revision, diag_sha256_hex("{" + revision + "}")]
 }
 
 fn proj_test_plan(m: ProjectManifest, discover: bool, filter: str, has_filter: bool, case_id: str, json_mode: bool) -> ProjectTestPlan {
@@ -19934,12 +20518,16 @@ fn proj_test_plan(m: ProjectManifest, discover: bool, filter: str, has_filter: b
         rows.append("{\"id\":" + diag_json_quote("test:" + tc.name) + ",\"name\":" + diag_json_quote(tc.name) +
             ",\"entry\":" + diag_json_quote(tc.entry) + ",\"entry_sha256\":" + diag_json_quote(sha) + ",\"timeout_ms\":" + str(tc.timeout_ms) + "}")
     }
-    let snapshot = "\"manifest_sha256\":" + diag_json_quote(m.manifest_sha256) + ",\"lock_sha256\":" +
-        (if lock_sha == "" { "null" } else { diag_json_quote(lock_sha) }) + (",\"toolchain\":\"" + tool_compiler_version() + "\",\"cases\":[") + join_strings(rows, ",") + "]"
+    let workspace_sha = proj_workspace_sha256(state, m.root)
+    let sdk_sha = proj_sdk_fingerprint(state)
+    let rev_parts = proj_workspace_revision_parts(m.manifest_sha256, lock_sha, sdk_sha, workspace_sha)
+    let revision = rev_parts[0]
+    let revision_sha = rev_parts[1]
+    let snapshot = revision + ",\"workspace_revision\":" + diag_json_quote(revision_sha) + ",\"cases\":[" + join_strings(rows, ",") + "]"
     let hash = diag_sha256_hex("{" + snapshot + "}")
     let payload = "{\"schema_version\":\"wysna.project-test-plan/1\",\"project\":" + diag_json_quote(m.name) + "," + snapshot +
         ",\"selected\":" + str(len(selected)) + ",\"plan_hash\":" + diag_json_quote(hash) + "}"
-    return ProjectTestPlan(selected, hashes, lock_sha, hash, payload)
+    return ProjectTestPlan(selected, hashes, lock_sha, revision_sha, hash, payload)
 }
 
 fn proj_test_report_path(m: ProjectManifest, value: str, json_mode: bool) -> str {
@@ -19949,6 +20537,382 @@ fn proj_test_report_path(m: ProjectManifest, value: str, json_mode: bool) -> str
         proj_emit_error_and_exit("test", json_mode, "W5002", "test report path must not overwrite a source, manifest, or lockfile")
     }
     return path
+}
+# Checked multi-file workspace patch planning, atomic commit, and rollback for native SDK.
+
+fn wpatch_valid_rel_wysna(name: str) -> bool {
+    if name == "" or name[0] == "/" or name[len(name) - 1] == "/" { return false }
+    if len(name) <= 6 or not proj_str_ends_with(name, ".wysna") { return false }
+    for i in 0..len(name) {
+        if name[i] == "\\" { return false }
+    }
+    let mut seg = ""
+    for i in 0..len(name) + 1 {
+        if i == len(name) or name[i] == "/" {
+            if seg == "" or seg == "." or seg == ".." { return false }
+            seg = ""
+        } else {
+            seg = seg + name[i]
+        }
+    }
+    return true
+}
+
+fn wpatch_unified_diff(rel_path: str, old_text: str, new_text: str) -> str {
+    if old_text == new_text { return "" }
+    let old_lines = schema_split_lines(old_text)
+    let new_lines = schema_split_lines(new_text)
+    let mut prefix = 0
+    while prefix < len(old_lines) and prefix < len(new_lines) and old_lines[prefix] == new_lines[prefix] {
+        prefix = prefix + 1
+    }
+    let mut old_end = len(old_lines)
+    let mut new_end = len(new_lines)
+    while old_end > prefix and new_end > prefix and old_lines[old_end - 1] == new_lines[new_end - 1] {
+        old_end = old_end - 1
+        new_end = new_end - 1
+    }
+    let old_count = old_end - prefix
+    let new_count = new_end - prefix
+    let old_start = if old_count == 0 { prefix } else { prefix + 1 }
+    let new_start = if new_count == 0 { prefix } else { prefix + 1 }
+    let mut parts: list[str] = [
+        "--- a/" + rel_path + "\n",
+        "+++ b/" + rel_path + "\n",
+        "@@ -" + str(old_start) + "," + str(old_count) + " +" + str(new_start) + "," + str(new_count) + " @@\n",
+    ]
+    for i in prefix..old_end { parts.append("-" + old_lines[i] + "\n") }
+    for i in prefix..new_end { parts.append("+" + new_lines[i] + "\n") }
+    return join_strings(parts, "")
+}
+
+fn wpatch_live_revision(state: ProjectLockState, m: ProjectManifest, sdk_sha: str) -> str {
+    let lock_path = m.root + "/wysna.lock"
+    let lock_sha = if proj_test_exists(state, lock_path) { proj_lock_host_text(state, lock_path, "hash") } else { "" }
+    let ws_sha = proj_workspace_sha256(state, m.root)
+    let parts = proj_workspace_revision_parts(m.manifest_sha256, lock_sha, sdk_sha, ws_sha)
+    return parts[1]
+}
+
+fn wpatch_unlink_all(paths: list[str]) -> unit {
+    let empty_buf = tool_buf_from_str("")
+    for p in paths {
+        if p == "" { continue }
+        let p_buf = tool_buf_from_str(p)
+        let _rm = wysna_host_fs(p_buf, empty_buf, 3)
+        wysna_host_close(p_buf)
+    }
+    wysna_host_close(empty_buf)
+}
+
+fn wpatch_stage_temp_file(target_abs: str, stamp: str, idx: int, content: str) -> str {
+    let empty_buf = tool_buf_from_str("")
+    let mut tmp_path = ""
+    let mut fh = empty_buf
+    let mut opened = false
+    for attempt in 0..32 {
+        let candidate = target_abs + ".wysna_tmp_" + stamp + "_" + str(idx) + "_" + str(attempt)
+        let c_buf = tool_buf_from_str(candidate)
+        let handle = wysna_host_file_open(c_buf, 3)
+        wysna_host_close(c_buf)
+        if wysna_host_is_open(handle) == 1 {
+            tmp_path = candidate
+            fh = handle
+            opened = true
+            break
+        }
+    }
+    wysna_host_close(empty_buf)
+    if not opened { return "" }
+    let data_buf = tool_buf_from_str(content)
+    let wr = wysna_host_file_write(fh, data_buf)
+    let cl = wysna_host_close(fh)
+    wysna_host_close(data_buf)
+    if wr != 0 or cl != 0 {
+        wpatch_unlink_all([tmp_path])
+        return ""
+    }
+    return tmp_path
+}
+
+fn wpatch_rename_file(src_path: str, dst_path: str) -> bool {
+    let s_buf = tool_buf_from_str(src_path)
+    let d_buf = tool_buf_from_str(dst_path)
+    let mv = wysna_host_fs(s_buf, d_buf, 4)
+    wysna_host_close(s_buf)
+    wysna_host_close(d_buf)
+    return mv >= 0
+}
+
+fn proj_handle_workspace_patch(manifest_arg: str, edits_file: str, expected_hash: str, apply: bool, discover: bool, frozen: bool, json_mode: bool) -> unit {
+    if apply and expected_hash == "" {
+        proj_emit_error_and_exit("patch", json_mode, "W5002", "Applying workspace edits requires --expect-plan-hash from a successful preview")
+    }
+    let m = proj_load_manifest(manifest_arg)
+    if not m.ok {
+        proj_emit_error_and_exit("patch", json_mode, m.err_code, m.err_msg)
+    }
+    if frozen { proj_verify_lock(m, "patch", json_mode) }
+
+    let state = ProjectLockState("patch", json_mode, m.root)
+    let snap_paths = tool_sort_strings(proj_snapshot_paths(state, m.root, "", true, true))
+    proj_lock_verify_collisions(state, snap_paths)
+    let mut snap_hashes: list[str] = []
+    for p in snap_paths {
+        snap_hashes.append(proj_lock_host_text(state, m.root + "/" + p, "hash"))
+    }
+    let sdk_sha = proj_sdk_fingerprint(state)
+    let test_plan = proj_test_plan(m, discover, "", false, "", json_mode)
+    let live_start = wpatch_live_revision(state, m, sdk_sha)
+    if test_plan.revision != live_start {
+        proj_emit_error_and_exit("patch", json_mode, "W5005", "Workspace changed during edit planning")
+    }
+
+    let raw_edits = read_file(edits_file) else err {
+        proj_emit_error_and_exit("patch", json_mode, "W5003", "cannot read --edits file: " + edits_file)
+        ""
+    }
+    let parsed_edits = mcp_parse_json_strict(raw_edits)
+    if parsed_edits.kind != "array" or len(parsed_edits.items) == 0 {
+        proj_emit_error_and_exit("patch", json_mode, "W5002", "Workspace edits must be a nonempty array")
+    }
+
+    let mut seen_rel: list[str] = []
+    let mut edit_rels: list[str] = []
+    let mut edit_abs: list[str] = []
+    let mut edit_canon: list[str] = []
+    let mut edit_before: list[str] = []
+    let mut edit_after: list[str] = []
+    let mut edit_before_sha: list[str] = []
+    let mut edit_after_sha: list[str] = []
+
+    for item in parsed_edits.items {
+        if item.kind != "object" or len(item.keys) != 2 or not lsp_json_has(item, "path") or not lsp_json_has(item, "source") {
+            proj_emit_error_and_exit("patch", json_mode, "W5002", "Each workspace edit requires path and source")
+        }
+        let pv = lsp_json_get(item, "path")
+        let sv = lsp_json_get(item, "source")
+        if pv.kind != "str" or sv.kind != "str" {
+            proj_emit_error_and_exit("patch", json_mode, "W5002", "Workspace edit path and source must be strings")
+        }
+        let rel = pv.str_val
+        let after_src = sv.str_val
+        if not wpatch_valid_rel_wysna(rel) or tool_str_contains(seen_rel, rel) {
+            proj_emit_error_and_exit("patch", json_mode, "W5002", "Workspace edit must identify one existing project source: " + rel)
+        }
+        let mut snap_idx = -1
+        for k in 0..len(snap_paths) {
+            if snap_paths[k] == rel { snap_idx = k break }
+        }
+        if snap_idx < 0 {
+            proj_emit_error_and_exit("patch", json_mode, "W5002", "Workspace edit must identify one existing project source: " + rel)
+        }
+        seen_rel.append(rel)
+        let abs_p = m.root + "/" + rel
+        if module_canonical_resolved(abs_p) != abs_p {
+            proj_emit_error_and_exit("patch", json_mode, "W5002", "Workspace edit must use a direct project source path: " + rel)
+        }
+        let before_src = read_file(abs_p) else err {
+            proj_emit_error_and_exit("patch", json_mode, "W5003", "cannot read workspace source: " + abs_p)
+            ""
+        }
+        let b_sha = diag_sha256_hex(before_src)
+        if b_sha != snap_hashes[snap_idx] {
+            proj_emit_error_and_exit("patch", json_mode, "W5005", "Source changed during workspace planning: " + rel)
+        }
+        if before_src != after_src {
+            edit_rels.append(rel)
+            edit_abs.append(abs_p)
+            edit_canon.append(module_canonical(abs_p))
+            edit_before.append(before_src)
+            edit_after.append(after_src)
+            edit_before_sha.append(b_sha)
+            edit_after_sha.append(diag_sha256_hex(after_src))
+        }
+    }
+    if len(edit_rels) == 0 {
+        proj_emit_error_and_exit("patch", json_mode, "W5002", "Workspace edit contains no changes")
+    }
+
+    let mut entries: list[str] = []
+    for t in m.targets {
+        if not tool_str_contains(entries, t.entry) { entries.append(t.entry) }
+    }
+    for rel in edit_rels {
+        if not tool_str_contains(entries, rel) { entries.append(rel) }
+    }
+    for tc in test_plan.cases {
+        if not tool_str_contains(entries, tc.entry) { entries.append(tc.entry) }
+    }
+    let sorted_entries = tool_sort_strings(entries)
+
+    let mut dep_aliases: list[str] = []
+    let mut dep_roots: list[str] = []
+    for d in m.deps {
+        dep_aliases.append(d.alias)
+        dep_roots.append(d.source_root_abs)
+    }
+
+    let mut entry_inputs: list[list[str]] = []
+    for entry in sorted_entries {
+        let entry_abs = m.root + "/" + entry
+        let entry_canon = module_canonical(entry_abs)
+        let mut entry_src = ""
+        let mut edited_hit = -1
+        for k in 0..len(edit_canon) {
+            if edit_canon[k] == entry_canon { edited_hit = k break }
+        }
+        if edited_hit >= 0 {
+            entry_src = edit_after[edited_hit]
+        } else {
+            entry_src = read_file(entry_abs) else err {
+                proj_emit_error_and_exit("patch", json_mode, "W5003", "cannot read workspace entry: " + entry_abs)
+                ""
+            }
+        }
+        let loader = ModuleLoader()
+        loader.project_sources_root = m.source_root_abs
+        loader.dep_aliases = dep_aliases
+        loader.dep_roots = dep_roots
+        loader.ov_paths = edit_canon
+        loader.ov_texts = edit_after
+        module_expand(loader, entry_src, entry_canon, true)
+        loader.output.append(Token { kind: "EOF", val: "", line: 1, col: 1, file: module_normalize(entry_canon) })
+        let checked = check_program(loader.output, entry_canon, true)
+        for node in checked.nodes {
+            if node.kind == "unsupported" {
+                report_error_at("W2013", node.source, "Compiler native-core-v1 does not support expression " + node.text)
+            }
+        }
+        mir_verify(mir_build(checked))
+        entry_inputs.append(loader.paths)
+    }
+
+    let sorted_edit_rels = tool_sort_strings(edit_rels)
+    let mut changes_rows: list[str] = []
+    for srel in sorted_edit_rels {
+        let mut eidx = 0
+        for k in 0..len(edit_rels) {
+            if edit_rels[k] == srel { eidx = k break }
+        }
+        let diff = wpatch_unified_diff(srel, edit_before[eidx], edit_after[eidx])
+        changes_rows.append("{\"path\":" + diag_json_quote(srel) + ",\"before_sha256\":" + diag_json_quote(edit_before_sha[eidx]) +
+            ",\"after_sha256\":" + diag_json_quote(edit_after_sha[eidx]) + ",\"diff\":" + diag_json_quote(diff) + "}")
+    }
+
+    let mut after_ws_rows: list[str] = []
+    for k in 0..len(snap_paths) {
+        let p = snap_paths[k]
+        let mut f_sha = snap_hashes[k]
+        for ek in 0..len(edit_rels) {
+            if edit_rels[ek] == p { f_sha = edit_after_sha[ek] break }
+        }
+        after_ws_rows.append("[" + diag_json_quote(p) + "," + diag_json_quote(f_sha) + "]")
+    }
+    let after_ws_sha = diag_sha256_hex("[" + join_strings(after_ws_rows, ",") + "]")
+    let after_rev_parts = proj_workspace_revision_parts(m.manifest_sha256, test_plan.lock_sha, sdk_sha, after_ws_sha)
+    let after_rev = after_rev_parts[1]
+
+    let mut impact_rows: list[str] = []
+    let mut selected_ids: list[str] = []
+    for tc in test_plan.cases {
+        let tid = "test:" + tc.name
+        selected_ids.append(diag_json_quote(tid))
+        let mut entry_pos = -1
+        for k in 0..len(sorted_entries) {
+            if sorted_entries[k] == tc.entry { entry_pos = k break }
+        }
+        let mut causes: list[str] = []
+        if entry_pos >= 0 {
+            let paths_for_case = entry_inputs[entry_pos]
+            for srel in sorted_edit_rels {
+                let mut eidx = 0
+                for k in 0..len(edit_rels) {
+                    if edit_rels[k] == srel { eidx = k break }
+                }
+                if tool_str_contains(paths_for_case, edit_canon[eidx]) {
+                    causes.append(srel)
+                }
+            }
+        }
+        let imp_status = if len(causes) > 0 { "affected" } else { "uncertain" }
+        let mut cause_q: list[str] = []
+        for c in causes { cause_q.append(diag_json_quote(c)) }
+        impact_rows.append("{\"id\":" + diag_json_quote(tid) + ",\"entry\":" + diag_json_quote(tc.entry) +
+            ",\"impact_status\":" + diag_json_quote(imp_status) + ",\"sources\":[" + join_strings(cause_q, ",") + "]}")
+    }
+
+    let mut checked_q: list[str] = []
+    for e in sorted_entries { checked_q.append(diag_json_quote(e)) }
+    let payload_body = "{\"schema_version\":\"wysna.workspace-patch/1\"" +
+        ",\"workspace_revision_before\":" + diag_json_quote(test_plan.revision) +
+        ",\"workspace_revision_after\":" + diag_json_quote(after_rev) +
+        ",\"changes\":[" + join_strings(changes_rows, ",") + "]" +
+        ",\"checked\":[" + join_strings(checked_q, ",") + "]" +
+        ",\"tests\":[" + join_strings(impact_rows, ",") + "]" +
+        ",\"selected_test_ids\":[" + join_strings(selected_ids, ",") + "]}"
+    let plan_hash = diag_sha256_hex(payload_body)
+
+    let live_mid = wpatch_live_revision(state, m, sdk_sha)
+    if live_mid != test_plan.revision {
+        proj_emit_error_and_exit("patch", json_mode, "W5005", "Workspace changed during edit planning")
+    }
+    if expected_hash != "" and plan_hash != expected_hash {
+        proj_emit_error_and_exit("patch", json_mode, "W5005", "Workspace edit plan is stale")
+    }
+
+    if apply {
+        let stamp = str(unix_time())
+        let mut tmp_paths: list[str] = []
+        for k in 0..len(edit_abs) {
+            let staged = wpatch_stage_temp_file(edit_abs[k], stamp, k, edit_after[k])
+            if staged == "" {
+                wpatch_unlink_all(tmp_paths)
+                proj_emit_error_and_exit("patch", json_mode, "W5004", "failed staging workspace replacement: " + edit_rels[k])
+            }
+            tmp_paths.append(staged)
+        }
+        let live_commit = wpatch_live_revision(state, m, sdk_sha)
+        if live_commit != test_plan.revision {
+            wpatch_unlink_all(tmp_paths)
+            proj_emit_error_and_exit("patch", json_mode, "W5005", "Workspace changed during edit planning")
+        }
+        let mut committed: list[int] = []
+        let mut failed_idx = -1
+        for k in 0..len(edit_abs) {
+            if not wpatch_rename_file(tmp_paths[k], edit_abs[k]) {
+                failed_idx = k
+                break
+            }
+            committed.append(k)
+        }
+        if failed_idx >= 0 {
+            let mut leftover: list[str] = []
+            for k in failed_idx..len(tmp_paths) { leftover.append(tmp_paths[k]) }
+            wpatch_unlink_all(leftover)
+            let mut r_idx = len(committed) - 1
+            while r_idx >= 0 {
+                let c_idx = committed[r_idx]
+                let rb_tmp = wpatch_stage_temp_file(edit_abs[c_idx], stamp + "_rb", r_idx, edit_before[c_idx])
+                if rb_tmp != "" {
+                    let _ok = wpatch_rename_file(rb_tmp, edit_abs[c_idx])
+                    wpatch_unlink_all([rb_tmp])
+                }
+                r_idx = r_idx - 1
+            }
+            proj_emit_error_and_exit("patch", json_mode, "W5004", "failed committing workspace replacement: " + edit_rels[failed_idx])
+        }
+    }
+
+    let written_str = if apply { "true" } else { "false" }
+    let full_result = slice(payload_body, 0, len(payload_body) - 1) +
+        ",\"plan_hash\":" + diag_json_quote(plan_hash) + ",\"written\":" + written_str + "}"
+    if json_mode {
+        diag_write_output(diag_tool_envelope_json("patch", "ok", 0, "[]", "result", full_result, "[]"))
+    } else {
+        print(full_result)
+    }
+    exit(0)
 }
 # Manifest-level impact analysis (consumed by `wysna graph --manifest ... --rel impact`).
 
@@ -21421,8 +22385,8 @@ fn api_extract_module(src: str, file_path: str, module_id: str, package_id: str)
             is_extern = false
             continue
         }
-        if k == "PUB" {
-            is_pub = true
+        if k == "PUB" or k == "PRIV" {
+            is_pub = k == "PUB"
             c.pos = c.pos + 1
             continue
         }
@@ -21556,8 +22520,8 @@ fn api_extract_module(src: str, file_path: str, module_id: str, package_id: str)
                     let mk = schema_cur_kind(c)
                     let mv = schema_cur_val(c)
                     if mk == "NEWLINE" { c.pos = c.pos + 1 continue }
-                    if mk == "PUBLIC" or mk == "PUB" { member_public = true c.pos = c.pos + 1 continue }
-                    if mk == "PRIVATE" { member_public = false c.pos = c.pos + 1 continue }
+                    if mk == "PUB" { member_public = true c.pos = c.pos + 1 continue }
+                    if mk == "PRIV" { member_public = false c.pos = c.pos + 1 continue }
                     if mk == "IDENT" and mv == "async" { c.pos = c.pos + 1 continue }
                     if mk == "FN" and c.pos + 1 < len(c.tokens) and c.tokens[c.pos + 1].kind == "IDENT" {
                         let m = api_parse_fn_symbol(c, lines, owner, "method", module_id, package_id, true)
@@ -22139,7 +23103,6 @@ fn mcp_tool_graph(state: McpServerState, arguments: LspJson) -> list[str] {
     let rs = mcp_resolve_source(state, arguments)
     if rs[0] != "1" { return mcp_tool_err(rs[1]) }
     let target = rs[1]
-    let src_text = rs[2]
     let mut argv: list[str] = ["graph", target, "--output-format=json-v1"]
     let sym_v = lsp_json_get(arguments, "symbol")
     let sym = if sym_v.kind == "str" { sym_v.str_val } else { "" }
@@ -22156,14 +23119,6 @@ fn mcp_tool_graph(state: McpServerState, arguments: LspJson) -> list[str] {
     let sub = mcp_run_subcommand(state, argv)
     mcp_cleanup_source(rs)
     if sub[1] == "" { return mcp_tool_err("tool produced no JSON (exit " + sub[0] + ")") }
-    if sym != "" {
-        let parsed = lsp_parse_json(sub[1])
-        let res_obj = lsp_json_get(parsed, "result")
-        if res_obj.kind == "object" and lsp_json_has(res_obj, "found") and not lsp_json_bool(res_obj, "found", true) {
-            let diag = diag_record_json("W1001", "graph", "error", "Symbol '" + sym + "' not found in semantic graph", target, 1, 1, src_text)
-            return ["0", diag_tool_envelope_json("graph", "diagnostic_error", 1, "[" + diag + "]", "", "", "[]")]
-        }
-    }
     return ["0", sub[1]]
 }
 
@@ -22175,10 +23130,87 @@ fn mcp_tool_inspect(state: McpServerState, arguments: LspJson) -> list[str] {
         extra.append(sym_v.str_val)
     }
     if lsp_json_bool(arguments, "with_deps", false) { extra.append("--with-deps") }
+    if lsp_json_has(arguments, "max_bytes") and lsp_json_get(arguments, "max_bytes").kind != "null" {
+        let mb = lsp_json_get(arguments, "max_bytes")
+        if mb.kind != "int" or mb.int_val < 1 { return mcp_tool_err("'max_bytes' must be a positive integer") }
+        extra.append("--max-bytes")
+        extra.append(str(mb.int_val))
+    }
+    if lsp_json_has(arguments, "source_offset") and lsp_json_get(arguments, "source_offset").kind != "null" {
+        let so = lsp_json_get(arguments, "source_offset")
+        if so.kind != "int" or so.int_val < 0 { return mcp_tool_err("'source_offset' must be a non-negative integer") }
+        extra.append("--source-offset")
+        extra.append(str(so.int_val))
+    }
+    if lsp_json_has(arguments, "offset") and lsp_json_get(arguments, "offset").kind != "null" {
+        let off = lsp_json_get(arguments, "offset")
+        if off.kind != "int" or off.int_val < 0 { return mcp_tool_err("'offset' must be a non-negative integer") }
+        extra.append("--offset")
+        extra.append(str(off.int_val))
+    }
     return mcp_exec_simple_source_tool(state, "inspect", arguments, extra)
 }
 
+fn mcp_serialize_json_val(v: LspJson) -> str {
+    if v.kind == "null" { return "null" }
+    if v.kind == "bool" { return if v.bool_val { "true" } else { "false" } }
+    if v.kind == "int" { return str(v.int_val) }
+    if v.kind == "str" { return diag_json_quote(v.str_val) }
+    if v.kind == "array" {
+        let mut parts: list[str] = ["["]
+        for i in 0..len(v.items) {
+            if i > 0 { parts.append(",") }
+            parts.append(mcp_serialize_json_val(v.items[i]))
+        }
+        parts.append("]")
+        return join_strings(parts, "")
+    }
+    if v.kind == "object" {
+        let mut parts: list[str] = ["{"]
+        for i in 0..len(v.keys) {
+            if i > 0 { parts.append(",") }
+            parts.append(diag_json_quote(v.keys[i]) + ":" + mcp_serialize_json_val(v.vals[i]))
+        }
+        parts.append("}")
+        return join_strings(parts, "")
+    }
+    return "null"
+}
+
 fn mcp_tool_patch(state: McpServerState, arguments: LspJson) -> list[str] {
+    if lsp_json_has(arguments, "edits") or lsp_json_has(arguments, "manifest") {
+        let man_v = lsp_json_get(arguments, "manifest")
+        let edits_v = lsp_json_get(arguments, "edits")
+        if man_v.kind != "str" or man_v.str_val == "" or edits_v.kind != "array" {
+            return mcp_tool_err("workspace 'wysna_patch' requires 'manifest' and 'edits'")
+        }
+        if (lsp_json_has(arguments, "path") and lsp_json_get(arguments, "path").kind != "null") or
+           (lsp_json_has(arguments, "symbol") and lsp_json_get(arguments, "symbol").kind != "null") or
+           (lsp_json_has(arguments, "replacement") and lsp_json_get(arguments, "replacement").kind != "null") or
+           (lsp_json_has(arguments, "expect_graph_hash") and lsp_json_get(arguments, "expect_graph_hash").kind != "null") {
+            return mcp_tool_err("workspace 'wysna_patch' cannot combine single-symbol options with 'manifest'/'edits'")
+        }
+        let confined = mcp_confine_path(state.root, man_v.str_val)
+        if confined[0] != "1" { return mcp_tool_err(confined[1]) }
+        let tmp_edits = mcp_next_tmp(state, "wysna_mcp_edits", ".json")
+        write_file(tmp_edits, mcp_serialize_json_val(edits_v)) else _err {
+            return mcp_tool_err("failed writing workspace edits temp file")
+        }
+        let mut argv: list[str] = ["patch", "--manifest", confined[1], "--edits", tmp_edits, "--output-format=json-v1"]
+        let plan_v = lsp_json_get(arguments, "expect_plan_hash")
+        if plan_v.kind == "str" and plan_v.str_val != "" {
+            argv.append("--expect-plan-hash")
+            argv.append(plan_v.str_val)
+        }
+        if lsp_json_bool(arguments, "discover", false) { argv.append("--discover") }
+        if lsp_json_bool(arguments, "frozen", false) { argv.append("--frozen") }
+        if lsp_json_bool(arguments, "apply", false) { argv.append("--apply") }
+        let sub = mcp_run_subcommand(state, argv)
+        lsp_remove_file(tmp_edits)
+        if sub[1] == "" { return mcp_tool_err("tool produced no JSON (exit " + sub[0] + ")") }
+        return ["0", sub[1]]
+    }
+
     let path_v = lsp_json_get(arguments, "path")
     let sym_v = lsp_json_get(arguments, "symbol")
     let rep_v = lsp_json_get(arguments, "replacement")
@@ -22271,8 +23303,8 @@ fn mcp_tools_list_json() -> str {
     ts.append("{\"name\":\"wysna_api\",\"description\":\"Discover standard-library modules and public symbols.\",\"inputSchema\":{\"type\":\"object\",\"properties\":{\"module\":{\"type\":\"string\",\"description\":\"Optional module such as std/json.\"},\"manifest\":{\"type\":\"string\",\"description\":\"Optional path to a wysna.toml manifest inside the server root.\"}}}}")
     ts.append("{\"name\":\"wysna_capabilities\",\"description\":\"Installed commands, targets and their capability contracts.\",\"inputSchema\":{\"type\":\"object\",\"properties\":{}}}")
     ts.append("{\"name\":\"wysna_graph\",\"description\":\"Compile-time semantic relationship graph (interfaces, classes, usages, calls, blast radius).\",\"inputSchema\":{\"type\":\"object\",\"properties\":{" + src_or_path + ",\"manifest\":{\"type\":\"string\",\"description\":\"Project manifest for a symbol impact query.\"},\"symbol\":{\"type\":\"string\",\"description\":\"Optional symbol name or node ID filter.\"},\"relation\":{\"type\":\"string\",\"description\":\"Optional relation filter: implements|hierarchy|usages|callers|callees|impact.\"}}}}")
-    ts.append("{\"name\":\"wysna_inspect\",\"description\":\"Surgical, token-efficient symbol source slice, contract, effects, and dependency signatures.\",\"inputSchema\":{\"type\":\"object\",\"properties\":{" + src_or_path + ",\"symbol\":{\"type\":\"string\",\"description\":\"Symbol name to extract (omit for compact index).\"},\"with_deps\":{\"type\":\"boolean\",\"description\":\"Include signatures of referenced types and callees.\"}}}}")
-    ts.append("{\"name\":\"wysna_patch\",\"description\":\"Checked declaration-level patch guarded by graph hash and in-memory typecheck.\",\"inputSchema\":{\"type\":\"object\",\"properties\":{\"path\":{\"type\":\"string\",\"description\":\"Path to a .wysna file inside the server root.\"},\"symbol\":{\"type\":\"string\",\"description\":\"Target declaration name or Class.method.\"},\"replacement\":{\"type\":\"string\",\"description\":\"Replacement declaration Wysna code.\"},\"expect_graph_hash\":{\"type\":\"string\",\"description\":\"Optional optimistic lock graph hash.\"},\"apply\":{\"type\":\"boolean\",\"description\":\"Write patch to disk after verification (default false).\"}},\"required\":[\"path\",\"symbol\",\"replacement\"]}}")
+    ts.append("{\"name\":\"wysna_inspect\",\"description\":\"Surgical, token-efficient symbol source slice, contract, effects, call resolution, and dependency signatures.\",\"inputSchema\":{\"type\":\"object\",\"properties\":{" + src_or_path + ",\"symbol\":{\"type\":\"string\",\"description\":\"Symbol name to extract (omit for compact index).\"},\"with_deps\":{\"type\":\"boolean\",\"description\":\"Include signatures of referenced types and callees.\"},\"max_bytes\":{\"type\":\"integer\",\"minimum\":1,\"description\":\"Maximum UTF-8 byte budget for returned source/context.\"},\"source_offset\":{\"type\":\"integer\",\"minimum\":0,\"description\":\"UTF-8 byte offset within target symbol source.\"},\"offset\":{\"type\":\"integer\",\"minimum\":0,\"description\":\"Starting index offset when listing symbols.\"}}}}")
+    ts.append("{\"name\":\"wysna_patch\",\"description\":\"Checked declaration-level or multi-file workspace patch guarded by graph/plan hash and in-memory typecheck.\",\"inputSchema\":{\"type\":\"object\",\"properties\":{\"path\":{\"type\":\"string\",\"description\":\"Path to a .wysna file inside the server root (single-symbol mode).\"},\"symbol\":{\"type\":\"string\",\"description\":\"Target declaration name or Class.method (single-symbol mode).\"},\"replacement\":{\"type\":\"string\",\"description\":\"Replacement declaration Wysna code (single-symbol mode).\"},\"expect_graph_hash\":{\"type\":\"string\",\"description\":\"Optional optimistic lock graph hash (single-symbol mode).\"},\"manifest\":{\"type\":\"string\",\"description\":\"Path to wysna.toml inside server root (workspace mode).\"},\"edits\":{\"type\":\"array\",\"description\":\"Array of {path, source} objects to check and apply together (workspace mode).\"},\"expect_plan_hash\":{\"type\":\"string\",\"description\":\"Plan hash from preview (required with apply=true in workspace mode).\"},\"discover\":{\"type\":\"boolean\",\"description\":\"Discover tests under tests/ (workspace mode).\"},\"frozen\":{\"type\":\"boolean\",\"description\":\"Verify wysna.lock before planning/applying (workspace mode).\"},\"apply\":{\"type\":\"boolean\",\"description\":\"Write verified patch to disk (default false).\"}}}}")
     ts.append("{\"name\":\"wysna_skills\",\"description\":\"Version-matched concise coding and workflow guides embedded in Wysna.\",\"inputSchema\":{\"type\":\"object\",\"properties\":{\"topic\":{\"type\":\"string\",\"description\":\"overview, agent-loop, syntax, graph, patch, contracts, stdlib.\"}}}}")
     return "{\"tools\":[" + join_strings(ts, ",") + "]}"
 }

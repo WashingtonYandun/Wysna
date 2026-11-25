@@ -244,10 +244,12 @@ wysna project test --discover --case test:example --expect-plan-hash HASH --outp
 El hash debe corresponder a la misma selección y al mismo estado del lock. Si se
 usa `--frozen` al listar, también debe usarse al ejecutar. `--list` no compila ni
 ejecuta las entradas. Devuelve `wysna.project-test-plan/1` en `result`, con IDs,
-rutas relativas, SHA-256 de cada entrada y su timeout. El hash cubre los bytes del
-manifiesto y del lock, la versión del compilador y los casos seleccionados. No
-representa todos los imports ni inmoviliza el árbol durante una ejecución. Un
-hash obsoleto devuelve `W5005` y código 2 antes de iniciar los casos.
+rutas relativas, SHA-256 de cada entrada y su timeout. El hash cubre el manifiesto, el lock, la huella de la implementación del SDK,
+los casos seleccionados, los archivos `.wysna` y los manifiestos de las
+dependencias locales. El conjunto incluye los helpers de pruebas. `--list`
+identifica una revisión y el árbol puede seguir cambiando durante una ejecución. Un
+hash obsoleto devuelve `W5005` y código 2 antes de iniciar los casos. El
+reporte de ejecución incluye el mismo `workspace_revision` del plan.
 
 Los casos declarados conservan el orden del manifiesto. `--discover` añade, en
 orden de ruta, archivos `tests/**/test_*.wysna` y `tests/**/*_test.wysna`; no añade
@@ -281,3 +283,28 @@ eliminado después del caso. No es un sandbox: el programa mantiene el acceso al
 host que tenga el proceso. Seed y el SDK nativo admiten este flujo; el SDK no
 requiere Python. `wysna skills project-tests --output-format=json-v1` expone las
 instrucciones al agente desde la herramienta instalada.
+
+### Cambios coordinados con el mismo plan de pruebas
+
+En la CLI Seed, `wysna patch --manifest wysna.toml --edits changes.json --output-format=json-v1`
+previsualiza un lote de reemplazos. `changes.json` contiene un array de objetos
+con `path` relativo al proyecto y `source` con el texto completo de cada archivo
+`.wysna` existente. Usa `--discover` y `--frozen` si el plan de pruebas también
+los usa.
+
+La previsualización comprueba los destinos, pruebas y archivos editados en memoria.
+Devuelve diffs y hashes, los IDs de las pruebas seleccionadas y la revisión esperada
+tras aplicar el cambio. Una prueba que carga un archivo editado aparece como
+`affected`. Las demás se incluyen de forma conservadora como `uncertain`.
+
+Para aplicar el lote, usa los mismos argumentos con `--apply --expect-plan-hash HASH`.
+La CLI verifica la revisión bajo los locks de los archivos editados, prepara todos
+los reemplazos y revierte los ya publicados si falla un reemplazo posterior.
+Si un escritor externo impide recuperar el contenido, el error identifica la copia
+conservada. Los lectores externos y las terminaciones abruptas del proceso quedan
+fuera de esta garantía de reversión.
+
+Después de aplicar, ejecuta `wysna project test --engine=seed --list --output-format=json-v1`
+con la misma selección. `result.workspace_revision` debe coincidir con
+`workspace_revision_after` del parche. Ejecuta entonces las pruebas con el
+`--expect-plan-hash` de ese listado, conservando la selección y las opciones.

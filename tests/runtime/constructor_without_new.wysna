@@ -1,26 +1,26 @@
 class User {
-    public name: str
-    public age: int
+    pub name: str
+    pub age: int
 
     fn init(name: str, age: int) {
         this.name = name
         this.age = age
     }
 
-    public fn describe() -> str {
+    pub fn describe() -> str {
         return this.name + ":" + str(this.age)
     }
 }
 
 class Admin extends User {
-    public role: str
+    pub role: str
 
     fn init(name: str, age: int, role: str) {
         super.init(name, age)
         this.role = role
     }
 
-    public fn describe() -> str {
+    pub fn describe() -> str {
         return super.describe() + " [" + this.role + "]"
     }
 }

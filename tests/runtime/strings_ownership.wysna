@@ -19,7 +19,7 @@ fn exercise() -> unit {
 }
 exercise()
 class Message {
-    public text: str
+    pub text: str
     fn init(text: str) {
         this.text = text
     }

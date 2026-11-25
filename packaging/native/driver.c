@@ -82,7 +82,7 @@ static void sdk_help(void) {
          "       wysna inspect SOURCE [--symbol NAME] [--with-deps] [--output-format=json-v1]\n"
          "       wysna patch SOURCE --symbol NAME (--with CODE | --with-file PATH) [--expect-graph-hash HASH] [--apply] [--output-format=json-v1]\n"
          "       wysna explain (SOURCE | --code Wxxxx) [--function NAME] [--output-format=json-v1]\n"
-         "       wysna schema SOURCE [--all] [--function NAME] [--emit-codecs] [-o OUTPUT] [--output-format=json-v1]\n"
+         "       wysna schema SOURCE [--all] [--function NAME] [--emit-codecs|--emit-tool] [-o OUTPUT] [--output-format=json-v1]\n"
          "       wysna fix SOURCE [--apply] [--include-maybe] [--output-format=json-v1]\n"
          "       wysna skills [TOPIC] [--output-format=json-v1]\n"
          "       wysna capabilities [--output-format=json-v1]\n"
@@ -727,6 +727,7 @@ static int sdk_execute_project(SdkInvocation* invocation, const SdkOptions* opti
         else if (strncmp(line, "MANIFEST=", 9) == 0) test_plan.manifest = line + 9;
         else if (strncmp(line, "MANIFEST_SHA=", 13) == 0) test_plan.manifest_sha = line + 13;
         else if (strncmp(line, "LOCK_SHA=", 9) == 0) test_plan.lock_sha = line + 9;
+        else if (strncmp(line, "WORKSPACE_REVISION=", 19) == 0) test_plan.revision = line + 19;
         else if (strncmp(line, "PLAN_HASH=", 10) == 0) test_plan.hash = line + 10;
         else if (strncmp(line, "PLAN_JSON=", 10) == 0) test_plan.json = line + 10;
         else if (strncmp(line, "LIST_ONLY=", 10) == 0) test_plan.list_only = strcmp(line + 10, "1") == 0;

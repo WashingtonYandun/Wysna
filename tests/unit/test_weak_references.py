@@ -20,7 +20,7 @@ def run_weak_tests():
                'let value = upgrade(None)',
                'class Node {}\nlet value: Weak[int] = weak(Node())',
                'class Node {}\nlet value: Weak[Node, Node] = weak(Node())',
-               'class Node { public id: int }\nlet value = weak(Node())\nprint(value.id)',
+               'class Node { pub id: int }\nlet value = weak(Node())\nprint(value.id)',
                'struct Record { value: int }\nlet value = weak(Record { value: 1 })',
                'class Weak {}',
                'class Base {}\nclass Child extends Base {}\nlet value: Weak[Base] = weak(Child())']

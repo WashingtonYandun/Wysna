@@ -51,6 +51,7 @@ MODULE_ORDER = [
     "09_project_check_inproc.wysna",
     "09_project_lock.wysna",
     "09_project_tests.wysna",
+    "09_workspace_patch.wysna",
     "09_project_impact.wysna",
     "09_packages.wysna",
     "09_api.wysna",

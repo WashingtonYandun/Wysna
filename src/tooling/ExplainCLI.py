@@ -30,6 +30,8 @@ _CODE_DETAILS = {
               'import "missing.wysna"', 'import "std/json"'),
     'W1004': ('semantic', ['Using `break`/`continue` outside loop, or `this`/`super` outside a class method'],
               'fn f() { break }', 'for i in 0..3 { break }'),
+    'W1005': ('graph', ['Multiple declarations match the selector'],
+              'wysna graph main.wysna --symbol score', 'Pass a candidate ID from diagnostics to --symbol'),
     'W2001': ('typecheck', ['Expression, argument, or initializer type does not match annotation/expectation'],
               'let n: int = "42"', 'let n: int = 42'),
     'W2002': ('typecheck', ['Assigning to a non-place expression (literal, function call result)'],

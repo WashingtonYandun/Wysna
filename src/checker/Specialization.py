@@ -124,6 +124,11 @@ class Instantiator:
         finally:
             checker._active_type_subst = previous_subst
         fn_type = FunctionType(params=p_types, ret=ret_t, is_async=getattr(cloned_fn, "is_async", False))
+        fn_type.param_names = [p.name for p in template.ast_decl.params]
+        fn_type.decl_file = getattr(template.ast_decl, "source_file", None) or checker.file
+        fn_type.decl_line = template.ast_decl.line
+        fn_type.decl_col = template.ast_decl.col
+        fn_type.decl_name = template.name
         if ret_t == UnitType and not cloned_fn.is_async:
             if any(attribute.name == 'must_use' for attribute in cloned_fn.attributes):
                 raise TypeError('@must_use requires a non-unit result', file=checker.file,
@@ -224,6 +229,11 @@ class Instantiator:
             owner_checker.current_scope = previous_scope
 
         fn_type = FunctionType(params=p_types, ret=ret_t, is_async=getattr(cloned, "is_async", False))
+        fn_type.param_names = [p.name for p in template.ast_decl.params]
+        fn_type.decl_file = getattr(template.ast_decl, "source_file", None) or owner_checker.file
+        fn_type.decl_line = template.ast_decl.line
+        fn_type.decl_col = template.ast_decl.col
+        fn_type.decl_name = f"{template.owner_class}.{template.name}"
         info = ClassMethodInfo(fn_type=fn_type, is_public=template.is_public, owner_class=template.owner_class)
         owner_cls_type = owner_checker.global_scope.lookup_type(template.owner_class)
         if not isinstance(owner_cls_type, ClassType):

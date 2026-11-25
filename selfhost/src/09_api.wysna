@@ -332,8 +332,8 @@ fn api_extract_module(src: str, file_path: str, module_id: str, package_id: str)
             is_extern = false
             continue
         }
-        if k == "PUB" {
-            is_pub = true
+        if k == "PUB" or k == "PRIV" {
+            is_pub = k == "PUB"
             c.pos = c.pos + 1
             continue
         }
@@ -467,8 +467,8 @@ fn api_extract_module(src: str, file_path: str, module_id: str, package_id: str)
                     let mk = schema_cur_kind(c)
                     let mv = schema_cur_val(c)
                     if mk == "NEWLINE" { c.pos = c.pos + 1 continue }
-                    if mk == "PUBLIC" or mk == "PUB" { member_public = true c.pos = c.pos + 1 continue }
-                    if mk == "PRIVATE" { member_public = false c.pos = c.pos + 1 continue }
+                    if mk == "PUB" { member_public = true c.pos = c.pos + 1 continue }
+                    if mk == "PRIV" { member_public = false c.pos = c.pos + 1 continue }
                     if mk == "IDENT" and mv == "async" { c.pos = c.pos + 1 continue }
                     if mk == "FN" and c.pos + 1 < len(c.tokens) and c.tokens[c.pos + 1].kind == "IDENT" {
                         let m = api_parse_fn_symbol(c, lines, owner, "method", module_id, package_id, true)

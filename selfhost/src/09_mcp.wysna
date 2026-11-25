@@ -241,7 +241,6 @@ fn mcp_tool_graph(state: McpServerState, arguments: LspJson) -> list[str] {
     let rs = mcp_resolve_source(state, arguments)
     if rs[0] != "1" { return mcp_tool_err(rs[1]) }
     let target = rs[1]
-    let src_text = rs[2]
     let mut argv: list[str] = ["graph", target, "--output-format=json-v1"]
     let sym_v = lsp_json_get(arguments, "symbol")
     let sym = if sym_v.kind == "str" { sym_v.str_val } else { "" }
@@ -258,14 +257,6 @@ fn mcp_tool_graph(state: McpServerState, arguments: LspJson) -> list[str] {
     let sub = mcp_run_subcommand(state, argv)
     mcp_cleanup_source(rs)
     if sub[1] == "" { return mcp_tool_err("tool produced no JSON (exit " + sub[0] + ")") }
-    if sym != "" {
-        let parsed = lsp_parse_json(sub[1])
-        let res_obj = lsp_json_get(parsed, "result")
-        if res_obj.kind == "object" and lsp_json_has(res_obj, "found") and not lsp_json_bool(res_obj, "found", true) {
-            let diag = diag_record_json("W1001", "graph", "error", "Symbol '" + sym + "' not found in semantic graph", target, 1, 1, src_text)
-            return ["0", diag_tool_envelope_json("graph", "diagnostic_error", 1, "[" + diag + "]", "", "", "[]")]
-        }
-    }
     return ["0", sub[1]]
 }
 
@@ -277,10 +268,87 @@ fn mcp_tool_inspect(state: McpServerState, arguments: LspJson) -> list[str] {
         extra.append(sym_v.str_val)
     }
     if lsp_json_bool(arguments, "with_deps", false) { extra.append("--with-deps") }
+    if lsp_json_has(arguments, "max_bytes") and lsp_json_get(arguments, "max_bytes").kind != "null" {
+        let mb = lsp_json_get(arguments, "max_bytes")
+        if mb.kind != "int" or mb.int_val < 1 { return mcp_tool_err("'max_bytes' must be a positive integer") }
+        extra.append("--max-bytes")
+        extra.append(str(mb.int_val))
+    }
+    if lsp_json_has(arguments, "source_offset") and lsp_json_get(arguments, "source_offset").kind != "null" {
+        let so = lsp_json_get(arguments, "source_offset")
+        if so.kind != "int" or so.int_val < 0 { return mcp_tool_err("'source_offset' must be a non-negative integer") }
+        extra.append("--source-offset")
+        extra.append(str(so.int_val))
+    }
+    if lsp_json_has(arguments, "offset") and lsp_json_get(arguments, "offset").kind != "null" {
+        let off = lsp_json_get(arguments, "offset")
+        if off.kind != "int" or off.int_val < 0 { return mcp_tool_err("'offset' must be a non-negative integer") }
+        extra.append("--offset")
+        extra.append(str(off.int_val))
+    }
     return mcp_exec_simple_source_tool(state, "inspect", arguments, extra)
 }
 
+fn mcp_serialize_json_val(v: LspJson) -> str {
+    if v.kind == "null" { return "null" }
+    if v.kind == "bool" { return if v.bool_val { "true" } else { "false" } }
+    if v.kind == "int" { return str(v.int_val) }
+    if v.kind == "str" { return diag_json_quote(v.str_val) }
+    if v.kind == "array" {
+        let mut parts: list[str] = ["["]
+        for i in 0..len(v.items) {
+            if i > 0 { parts.append(",") }
+            parts.append(mcp_serialize_json_val(v.items[i]))
+        }
+        parts.append("]")
+        return join_strings(parts, "")
+    }
+    if v.kind == "object" {
+        let mut parts: list[str] = ["{"]
+        for i in 0..len(v.keys) {
+            if i > 0 { parts.append(",") }
+            parts.append(diag_json_quote(v.keys[i]) + ":" + mcp_serialize_json_val(v.vals[i]))
+        }
+        parts.append("}")
+        return join_strings(parts, "")
+    }
+    return "null"
+}
+
 fn mcp_tool_patch(state: McpServerState, arguments: LspJson) -> list[str] {
+    if lsp_json_has(arguments, "edits") or lsp_json_has(arguments, "manifest") {
+        let man_v = lsp_json_get(arguments, "manifest")
+        let edits_v = lsp_json_get(arguments, "edits")
+        if man_v.kind != "str" or man_v.str_val == "" or edits_v.kind != "array" {
+            return mcp_tool_err("workspace 'wysna_patch' requires 'manifest' and 'edits'")
+        }
+        if (lsp_json_has(arguments, "path") and lsp_json_get(arguments, "path").kind != "null") or
+           (lsp_json_has(arguments, "symbol") and lsp_json_get(arguments, "symbol").kind != "null") or
+           (lsp_json_has(arguments, "replacement") and lsp_json_get(arguments, "replacement").kind != "null") or
+           (lsp_json_has(arguments, "expect_graph_hash") and lsp_json_get(arguments, "expect_graph_hash").kind != "null") {
+            return mcp_tool_err("workspace 'wysna_patch' cannot combine single-symbol options with 'manifest'/'edits'")
+        }
+        let confined = mcp_confine_path(state.root, man_v.str_val)
+        if confined[0] != "1" { return mcp_tool_err(confined[1]) }
+        let tmp_edits = mcp_next_tmp(state, "wysna_mcp_edits", ".json")
+        write_file(tmp_edits, mcp_serialize_json_val(edits_v)) else _err {
+            return mcp_tool_err("failed writing workspace edits temp file")
+        }
+        let mut argv: list[str] = ["patch", "--manifest", confined[1], "--edits", tmp_edits, "--output-format=json-v1"]
+        let plan_v = lsp_json_get(arguments, "expect_plan_hash")
+        if plan_v.kind == "str" and plan_v.str_val != "" {
+            argv.append("--expect-plan-hash")
+            argv.append(plan_v.str_val)
+        }
+        if lsp_json_bool(arguments, "discover", false) { argv.append("--discover") }
+        if lsp_json_bool(arguments, "frozen", false) { argv.append("--frozen") }
+        if lsp_json_bool(arguments, "apply", false) { argv.append("--apply") }
+        let sub = mcp_run_subcommand(state, argv)
+        lsp_remove_file(tmp_edits)
+        if sub[1] == "" { return mcp_tool_err("tool produced no JSON (exit " + sub[0] + ")") }
+        return ["0", sub[1]]
+    }
+
     let path_v = lsp_json_get(arguments, "path")
     let sym_v = lsp_json_get(arguments, "symbol")
     let rep_v = lsp_json_get(arguments, "replacement")
@@ -373,8 +441,8 @@ fn mcp_tools_list_json() -> str {
     ts.append("{\"name\":\"wysna_api\",\"description\":\"Discover standard-library modules and public symbols.\",\"inputSchema\":{\"type\":\"object\",\"properties\":{\"module\":{\"type\":\"string\",\"description\":\"Optional module such as std/json.\"},\"manifest\":{\"type\":\"string\",\"description\":\"Optional path to a wysna.toml manifest inside the server root.\"}}}}")
     ts.append("{\"name\":\"wysna_capabilities\",\"description\":\"Installed commands, targets and their capability contracts.\",\"inputSchema\":{\"type\":\"object\",\"properties\":{}}}")
     ts.append("{\"name\":\"wysna_graph\",\"description\":\"Compile-time semantic relationship graph (interfaces, classes, usages, calls, blast radius).\",\"inputSchema\":{\"type\":\"object\",\"properties\":{" + src_or_path + ",\"manifest\":{\"type\":\"string\",\"description\":\"Project manifest for a symbol impact query.\"},\"symbol\":{\"type\":\"string\",\"description\":\"Optional symbol name or node ID filter.\"},\"relation\":{\"type\":\"string\",\"description\":\"Optional relation filter: implements|hierarchy|usages|callers|callees|impact.\"}}}}")
-    ts.append("{\"name\":\"wysna_inspect\",\"description\":\"Surgical, token-efficient symbol source slice, contract, effects, and dependency signatures.\",\"inputSchema\":{\"type\":\"object\",\"properties\":{" + src_or_path + ",\"symbol\":{\"type\":\"string\",\"description\":\"Symbol name to extract (omit for compact index).\"},\"with_deps\":{\"type\":\"boolean\",\"description\":\"Include signatures of referenced types and callees.\"}}}}")
-    ts.append("{\"name\":\"wysna_patch\",\"description\":\"Checked declaration-level patch guarded by graph hash and in-memory typecheck.\",\"inputSchema\":{\"type\":\"object\",\"properties\":{\"path\":{\"type\":\"string\",\"description\":\"Path to a .wysna file inside the server root.\"},\"symbol\":{\"type\":\"string\",\"description\":\"Target declaration name or Class.method.\"},\"replacement\":{\"type\":\"string\",\"description\":\"Replacement declaration Wysna code.\"},\"expect_graph_hash\":{\"type\":\"string\",\"description\":\"Optional optimistic lock graph hash.\"},\"apply\":{\"type\":\"boolean\",\"description\":\"Write patch to disk after verification (default false).\"}},\"required\":[\"path\",\"symbol\",\"replacement\"]}}")
+    ts.append("{\"name\":\"wysna_inspect\",\"description\":\"Surgical, token-efficient symbol source slice, contract, effects, call resolution, and dependency signatures.\",\"inputSchema\":{\"type\":\"object\",\"properties\":{" + src_or_path + ",\"symbol\":{\"type\":\"string\",\"description\":\"Symbol name to extract (omit for compact index).\"},\"with_deps\":{\"type\":\"boolean\",\"description\":\"Include signatures of referenced types and callees.\"},\"max_bytes\":{\"type\":\"integer\",\"minimum\":1,\"description\":\"Maximum UTF-8 byte budget for returned source/context.\"},\"source_offset\":{\"type\":\"integer\",\"minimum\":0,\"description\":\"UTF-8 byte offset within target symbol source.\"},\"offset\":{\"type\":\"integer\",\"minimum\":0,\"description\":\"Starting index offset when listing symbols.\"}}}}")
+    ts.append("{\"name\":\"wysna_patch\",\"description\":\"Checked declaration-level or multi-file workspace patch guarded by graph/plan hash and in-memory typecheck.\",\"inputSchema\":{\"type\":\"object\",\"properties\":{\"path\":{\"type\":\"string\",\"description\":\"Path to a .wysna file inside the server root (single-symbol mode).\"},\"symbol\":{\"type\":\"string\",\"description\":\"Target declaration name or Class.method (single-symbol mode).\"},\"replacement\":{\"type\":\"string\",\"description\":\"Replacement declaration Wysna code (single-symbol mode).\"},\"expect_graph_hash\":{\"type\":\"string\",\"description\":\"Optional optimistic lock graph hash (single-symbol mode).\"},\"manifest\":{\"type\":\"string\",\"description\":\"Path to wysna.toml inside server root (workspace mode).\"},\"edits\":{\"type\":\"array\",\"description\":\"Array of {path, source} objects to check and apply together (workspace mode).\"},\"expect_plan_hash\":{\"type\":\"string\",\"description\":\"Plan hash from preview (required with apply=true in workspace mode).\"},\"discover\":{\"type\":\"boolean\",\"description\":\"Discover tests under tests/ (workspace mode).\"},\"frozen\":{\"type\":\"boolean\",\"description\":\"Verify wysna.lock before planning/applying (workspace mode).\"},\"apply\":{\"type\":\"boolean\",\"description\":\"Write verified patch to disk (default false).\"}}}}")
     ts.append("{\"name\":\"wysna_skills\",\"description\":\"Version-matched concise coding and workflow guides embedded in Wysna.\",\"inputSchema\":{\"type\":\"object\",\"properties\":{\"topic\":{\"type\":\"string\",\"description\":\"overview, agent-loop, syntax, graph, patch, contracts, stdlib.\"}}}}")
     return "{\"tools\":[" + join_strings(ts, ",") + "]}"
 }

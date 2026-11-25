@@ -2,6 +2,7 @@ from tokens.TokenType import TokenType
 
 KEYWORDS = {
     "pub": TokenType.PUB,
+    "priv": TokenType.PRIV,
     "extern": TokenType.EXTERN,
     "async": TokenType.ASYNC,
     "await": TokenType.AWAIT,

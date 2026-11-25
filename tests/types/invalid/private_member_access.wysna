@@ -1,11 +1,11 @@
 class Vault {
-    private secret: int
+    priv secret: int
 
     fn init(s: int) {
         this.secret = s
     }
 
-    private fn pin() -> int {
+    priv fn pin() -> int {
         return this.secret
     }
 }

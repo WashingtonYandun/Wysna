@@ -18,6 +18,7 @@ if str(SRC) not in sys.path:
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
+from common.AgentContract import skill_topics
 from common.Platform import executable_name
 from common.Version import WYSNA_VERSION
 from main import ensure_selfhost_compiler_binary
@@ -153,7 +154,7 @@ class Phase5NativeAgentAutonomyTests(unittest.TestCase):
             self.assertEqual(sk_env["result"]["topic"], "overview")
             self.assertEqual(
                 sorted(sk_env["result"]["available_topics"]),
-                ["agent-loop", "contracts", "graph", "overview", "patch", "stdlib", "syntax"],
+                sorted(skill_topics()),
             )
 
             res_graph_sk = self._run_sdk(["skills", "graph", "--output-format=json-v1"], work, scratch)

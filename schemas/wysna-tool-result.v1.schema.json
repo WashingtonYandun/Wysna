@@ -1,0 +1,285 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://wysna.dev/schemas/wysna-tool-result.v1.schema.json",
+  "title": "Wysna Agent Tool Result Protocol v1",
+  "type": "object",
+  "required": [
+    "schema_version",
+    "command",
+    "status",
+    "invocation_id",
+    "tool_exit_code",
+    "process_exit_code",
+    "toolchain",
+    "target",
+    "diagnostics",
+    "artifacts"
+  ],
+  "properties": {
+    "schema_version": { "const": "wysna.tool-result/1" },
+    "command": { "type": "string", "minLength": 1 },
+    "status": {
+      "type": "string",
+      "enum": ["ok", "diagnostic_error", "usage_error", "toolchain_error", "runtime_error", "failed"]
+    },
+    "invocation_id": { "type": "string", "minLength": 1 },
+    "tool_exit_code": { "type": "integer", "minimum": 0 },
+    "process_exit_code": { "type": ["integer", "null"] },
+    "execution": { "type": ["object", "null"] },
+    "toolchain": {
+      "type": "object",
+      "required": ["compiler"],
+      "properties": {
+        "compiler": { "type": "string", "minLength": 1 }
+      }
+    },
+    "target": {
+      "type": "object",
+      "required": ["profile"],
+      "properties": {
+        "profile": { "type": "string" },
+        "triple": { "type": ["string", "null"] }
+      }
+    },
+    "diagnostics": {
+      "type": "array",
+      "items": { "$ref": "#/$defs/Diagnostic" }
+    },
+    "artifacts": {
+      "type": "array",
+      "items": { "type": "object" }
+    },
+    "telemetry": { "type": ["object", "null"] },
+    "result": {
+      "anyOf": [
+        { "$ref": "#/$defs/GraphResult" },
+        { "$ref": "#/$defs/InspectResult" },
+        { "$ref": "#/$defs/SinglePatchResult" },
+        { "$ref": "#/$defs/WorkspacePatchResult" },
+        { "type": "object" }
+      ]
+    }
+  },
+  "$defs": {
+    "SourceSpan": {
+      "type": "object",
+      "required": ["source_id", "source_sha256", "start_byte", "end_byte"],
+      "properties": {
+        "source_id": { "type": "string", "minLength": 1 },
+        "source_sha256": { "type": "string", "pattern": "^[0-9a-f]{64}$" },
+        "start_byte": { "type": "integer", "minimum": 0 },
+        "end_byte": { "type": "integer", "minimum": 0 }
+      }
+    },
+    "RelatedLocation": {
+      "type": "object",
+      "required": ["message", "line", "col", "span"],
+      "properties": {
+        "message": { "type": "string" },
+        "line": { "type": ["integer", "null"] },
+        "col": { "type": ["integer", "null"] },
+        "span": { "oneOf": [{ "$ref": "#/$defs/SourceSpan" }, { "type": "null" }] }
+      }
+    },
+    "ByteEdit": {
+      "type": "object",
+      "required": ["source_id", "source_sha256", "start_byte", "end_byte", "replacement"],
+      "properties": {
+        "source_id": { "type": "string" },
+        "source_sha256": { "type": "string", "pattern": "^[0-9a-f]{64}$" },
+        "start_byte": { "type": "integer", "minimum": 0 },
+        "end_byte": { "type": "integer", "minimum": 0 },
+        "replacement": { "type": "string" }
+      }
+    },
+    "Fix": {
+      "type": "object",
+      "required": ["description", "applicability", "edits"],
+      "properties": {
+        "description": { "type": "string" },
+        "applicability": { "type": "string", "enum": ["machine", "maybe", "manual"] },
+        "edits": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/ByteEdit" }
+        }
+      }
+    },
+    "TypeMismatchData": {
+      "type": "object",
+      "required": ["kind", "expected", "found"],
+      "properties": {
+        "kind": { "const": "type_mismatch" },
+        "context": { "type": "string" },
+        "expected": { "type": "string", "minLength": 1 },
+        "found": { "type": "string", "minLength": 1 },
+        "argument_index": { "type": "integer", "minimum": 1 },
+        "parameter_name": { "type": "string", "minLength": 1 },
+        "callee": { "type": "string", "minLength": 1 },
+        "conversion_hint": { "type": "string" },
+        "unwrap_hint": { "type": "string" },
+        "help": { "type": "string" }
+      }
+    },
+    "ArityMismatchData": {
+      "type": "object",
+      "required": ["kind", "expected_arity", "found_arity"],
+      "properties": {
+        "kind": { "const": "arity_mismatch" },
+        "expected_arity": { "type": "integer", "minimum": 0 },
+        "found_arity": { "type": "integer", "minimum": 0 },
+        "callee": { "type": "string", "minLength": 1 }
+      }
+    },
+    "NotCallableData": {
+      "type": "object",
+      "required": ["kind", "found"],
+      "properties": {
+        "kind": { "const": "not_callable" },
+        "found": { "type": "string", "minLength": 1 }
+      }
+    },
+    "AmbiguousSymbolData": {
+      "type": "object",
+      "required": ["kind", "symbol", "graph_hash", "candidates"],
+      "properties": {
+        "kind": { "const": "ambiguous_symbol" },
+        "symbol": { "type": "string" },
+        "graph_hash": { "type": "string", "pattern": "^graph:[0-9a-f]{16}$" },
+        "candidates": {
+          "type": "array",
+          "minItems": 2,
+          "items": {
+            "type": "object",
+            "required": ["id", "qualified_name", "kind", "file", "line", "col", "signature"],
+            "properties": {
+              "id": { "type": "string" },
+              "qualified_name": { "type": "string" },
+              "kind": { "type": "string" },
+              "file": { "type": "string" },
+              "line": { "type": "integer" },
+              "col": { "type": "integer" },
+              "signature": { "type": "string" }
+            }
+          }
+        }
+      }
+    },
+    "Diagnostic": {
+      "type": "object",
+      "required": ["code", "severity", "stage", "message", "primary_span", "related", "data", "fixes"],
+      "properties": {
+        "code": { "type": "string", "pattern": "^W[0-9]{4}$" },
+        "severity": { "type": "string", "enum": ["error", "warning"] },
+        "stage": { "type": "string", "minLength": 1 },
+        "message": { "type": "string", "minLength": 1 },
+        "primary_span": { "oneOf": [{ "$ref": "#/$defs/SourceSpan" }, { "type": "null" }] },
+        "related": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/RelatedLocation" }
+        },
+        "data": { "type": "object" },
+        "fixes": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/Fix" }
+        }
+      }
+    },
+    "UncertainCall": {
+      "type": "object",
+      "required": ["kind", "callee", "file", "line", "reason"],
+      "properties": {
+        "kind": {
+          "type": "string",
+          "enum": ["indirect_call", "virtual_dispatch", "extern_ffi", "unresolved_call"]
+        },
+        "callee": { "type": "string" },
+        "file": { "type": "string" },
+        "line": { "type": "integer", "minimum": 0 },
+        "reason": { "type": "string" }
+      }
+    },
+    "CallResolution": {
+      "type": "object",
+      "required": ["resolved_calls", "uncertain_calls", "complete"],
+      "properties": {
+        "resolved_calls": { "type": "array", "items": { "type": "string" } },
+        "uncertain_calls": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/UncertainCall" }
+        },
+        "complete": { "type": "boolean" }
+      }
+    },
+    "GraphResult": {
+      "type": "object",
+      "required": ["schema_version", "graph_hash"],
+      "properties": {
+        "schema_version": { "const": "wysna.graph/1" },
+        "graph_hash": { "type": "string", "pattern": "^graph:[0-9a-f]{16}$" },
+        "analysis_boundaries": { "type": "array", "items": { "type": "string" } }
+      }
+    },
+    "InspectBudget": {
+      "type": "object",
+      "required": ["max_bytes", "used_bytes", "truncated", "omitted_count"],
+      "properties": {
+        "max_bytes": { "type": ["integer", "null"], "minimum": 1 },
+        "used_bytes": { "type": "integer", "minimum": 0 },
+        "truncated": { "type": "boolean" },
+        "omitted_count": { "type": "integer", "minimum": 0 },
+        "source_offset": { "type": "integer", "minimum": 0 },
+        "source_total_bytes": { "type": "integer", "minimum": 0 },
+        "offset": { "type": "integer", "minimum": 0 },
+        "total_symbols": { "type": "integer", "minimum": 0 }
+      }
+    },
+    "InspectResult": {
+      "type": "object",
+      "required": ["schema_version", "graph_hash", "budget", "omitted", "analysis_boundaries"],
+      "properties": {
+        "schema_version": { "const": "wysna.inspect/1" },
+        "graph_hash": { "type": "string", "pattern": "^graph:[0-9a-f]{16}$" },
+        "budget": { "$ref": "#/$defs/InspectBudget" },
+        "omitted": { "type": "array", "items": { "type": "object" } },
+        "call_resolution": { "$ref": "#/$defs/CallResolution" },
+        "analysis_boundaries": { "type": "array", "items": { "type": "string" } }
+      }
+    },
+    "SinglePatchResult": {
+      "type": "object",
+      "required": ["schema_version", "symbol", "written", "graph_hash_before", "graph_hash_after"],
+      "properties": {
+        "schema_version": { "const": "wysna.patch/1" },
+        "symbol": { "type": "string" },
+        "written": { "type": "boolean" },
+        "graph_hash_before": { "type": "string" },
+        "graph_hash_after": { "type": "string" }
+      }
+    },
+    "WorkspacePatchResult": {
+      "type": "object",
+      "required": [
+        "schema_version",
+        "workspace_revision_before",
+        "workspace_revision_after",
+        "changes",
+        "checked",
+        "tests",
+        "selected_test_ids",
+        "plan_hash",
+        "written"
+      ],
+      "properties": {
+        "schema_version": { "const": "wysna.workspace-patch/1" },
+        "workspace_revision_before": { "type": "string" },
+        "workspace_revision_after": { "type": "string" },
+        "changes": { "type": "array", "items": { "type": "object" } },
+        "checked": { "type": "array", "items": { "type": "string" } },
+        "tests": { "type": "array", "items": { "type": "object" } },
+        "selected_test_ids": { "type": "array", "items": { "type": "string" } },
+        "plan_hash": { "type": "string", "pattern": "^[0-9a-f]{64}$" },
+        "written": { "type": "boolean" }
+      }
+    }
+  }
+}

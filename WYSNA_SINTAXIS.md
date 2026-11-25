@@ -521,21 +521,21 @@ Las clases se utilizan para modelar entidades con identidad compartida, estado m
 
 ```wysna
 class BankAccount {
-    private balance: int
-    public owner: str
+    priv balance: int
+    pub owner: str
 
     fn init(owner: str, initial_deposit: int) {
         this.owner = owner
         this.balance = initial_deposit
     }
 
-    public fn deposit(amount: int) -> unit {
+    pub fn deposit(amount: int) -> unit {
         if amount > 0 {
             this.balance += amount
         }
     }
 
-    public fn get_balance() -> int {
+    pub fn get_balance() -> int {
         return this.balance
     }
 }
@@ -555,13 +555,13 @@ interface Serializable {
 }
 
 class Config implements Serializable {
-    public path: str
+    pub path: str
 
     fn init(path: str) {
         this.path = path
     }
 
-    public fn serialize() -> str {
+    pub fn serialize() -> str {
         return "{\"path\": \"" + this.path + "\"}"
     }
 }

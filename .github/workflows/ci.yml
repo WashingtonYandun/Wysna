@@ -80,6 +80,7 @@ jobs:
         run: >-
           python tools/run_ci_parallel.py --mode pytest
           --group tests/unit/test_agent_project_tests.py,tests/unit/test_block1_dev_split_and_delegation.py,tests/unit/test_native_sandbox_and_lints.py,tests/unit/test_project_packages.py,tests/unit/test_ops_a01_workflow.py,tests/unit/test_v09_project_migration.py
+          --group tests/unit/test_agent_schema_linking.py,tests/unit/test_agent_tool_adapter.py,tests/unit/test_workspace_patch.py,tests/unit/test_agent_symbol_resolution.py,tests/unit/test_agent_protocol_schema.py,tests/unit/test_agent_bounded_context.py
           tests/unit/test_selfhost_diagnostics.py
           tests/unit/test_native_generic_error_unions.py
           tests/unit/test_host_contracts.py

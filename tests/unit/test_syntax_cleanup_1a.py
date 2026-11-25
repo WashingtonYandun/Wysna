@@ -61,7 +61,7 @@ class TestSyntaxCleanup1A(unittest.TestCase):
     def test_new_is_free_identifier_and_canonical_construction_works_across_4_engines(self):
         source = (
             "class Counter {\n"
-            "    public value: int\n"
+            "    pub value: int\n"
             "    fn init(v: int) { this.value = v }\n"
             "    fn new(delta: int) -> int { return this.value + delta }\n"
             "}\n"
@@ -103,7 +103,7 @@ class TestSyntaxCleanup1A(unittest.TestCase):
 
     def test_removed_new_keyword_rejected_with_migration_hint(self):
         source = (
-            "class Box { public v: int\nfn init(v: int) { this.v = v } }\n"
+            "class Box { pub v: int\nfn init(v: int) { this.v = v } }\n"
             "fn main() { let b = new Box(1); print(b.v) }\n"
         )
         self._assert_rejected_seed_and_selfhost(source, "W0006", "removed")

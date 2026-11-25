@@ -1,6 +1,6 @@
 class Node {
-    public next: Node?
-    public fn init() -> unit {
+    pub next: Node?
+    pub fn init() -> unit {
         this.next = None
     }
 }

@@ -1,9 +1,9 @@
 class A {
- public x: int
+ pub x: int
  fn init() { this.x = 1 }
 }
 class B extends A {
- public x: str
+ pub x: str
  fn init() { super.init() this.x = "wrong" }
 }
 let a: A = B()

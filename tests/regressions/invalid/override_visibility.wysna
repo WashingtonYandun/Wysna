@@ -1,10 +1,10 @@
 class A {
  fn init() {}
- public fn value() -> int { return 1 }
+ pub fn value() -> int { return 1 }
 }
 class B extends A {
  fn init() { super.init() }
- private fn value() -> int { return 2 }
+ priv fn value() -> int { return 2 }
 }
 let a: A = B()
 print(a.value())

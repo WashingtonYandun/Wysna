@@ -1,8 +1,8 @@
 class Node {
-    public id: int
-    public parent: Weak[Node]?
-    public child: Node?
-    public fn init(id: int) -> unit {
+    pub id: int
+    pub parent: Weak[Node]?
+    pub child: Node?
+    pub fn init(id: int) -> unit {
         this.id = id
         this.parent = None
         this.child = None
@@ -10,7 +10,7 @@ class Node {
 }
 
 class DefaultHandle {
-    public value: Weak[Node]
+    pub value: Weak[Node]
 }
 
 struct Handle {

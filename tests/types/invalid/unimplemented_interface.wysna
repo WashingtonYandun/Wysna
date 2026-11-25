@@ -3,7 +3,7 @@ interface Flyable {
 }
 
 class Penguin implements Flyable {
-    public name: str
+    pub name: str
 
     fn init(name: str) {
         this.name = name

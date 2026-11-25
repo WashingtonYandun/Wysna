@@ -10,9 +10,10 @@ import threading
 import time
 import xml.etree.ElementTree as ET
 
+from common.Paths import get_repo_root
 from common.Version import WYSNA_VERSION
 from project.Manifest import ManifestError, ProjectTest
-from project.Resolver import _portable_key
+from project.Resolver import _IGNORED_DIRECTORY_NAMES, _portable_key
 
 MAX_TEST_CASES = 4096
 MAX_CAPTURE_BYTES = 1_048_576
@@ -20,6 +21,58 @@ MAX_CAPTURE_BYTES = 1_048_576
 
 class TestPlanMismatch(ManifestError):
     """The requested selection snapshot no longer matches its declared inputs."""
+
+
+def _snapshot_digest(rows):
+    canonical = json.dumps(rows, ensure_ascii=False, separators=(',', ':'))
+    return hashlib.sha256(canonical.encode('utf-8')).hexdigest()
+
+
+def project_source_snapshot(root):
+    """Hash project sources, test helpers and dependency manifests conservatively."""
+    hashes = []
+    for directory, children, files in os.walk(root):
+        folder = Path(directory)
+        if folder == root:
+            children[:] = [name for name in children if name not in _IGNORED_DIRECTORY_NAMES]
+        for name in children + files:
+            path = folder / name
+            if path.is_symlink():
+                raise ManifestError(f"project source snapshot does not follow symbolic links: '{path}'")
+            if name in files and (path.suffix == '.wysna' or name == 'wysna.toml') and path.is_file():
+                hashes.append((path.relative_to(root).as_posix(), hashlib.sha256(path.read_bytes()).hexdigest()))
+    hashes.sort()
+    return hashes
+
+
+def _seed_sdk_fingerprint():
+    root = Path(get_repo_root())
+    rows = []
+    for name in ('main.py', 'wysna_entry.py'):
+        entry = root / name
+        if entry.is_file():
+            rows.append((name, hashlib.sha256(entry.read_bytes()).hexdigest()))
+    for folder, pattern in ((root / 'src', '*.py'), (root / 'runtime', '*.py'), (root / 'stdlib', '*.wysna')):
+        for path in sorted(folder.rglob(pattern)):
+            if path.is_file():
+                rows.append((path.relative_to(root).as_posix(), hashlib.sha256(path.read_bytes()).hexdigest()))
+    return _snapshot_digest(rows)
+
+
+def project_revision(resolver, sources=None):
+    manifest = resolver.manifest
+    lock = resolver.lock_path()
+    lock_sha = hashlib.sha256(lock.read_bytes()).hexdigest() if lock.is_file() else None
+    if sources is None:
+        sources = project_source_snapshot(manifest.root)
+    fields = {
+        'manifest_sha256': hashlib.sha256(manifest.path.read_bytes()).hexdigest(),
+        'lock_sha256': lock_sha,
+        'toolchain': WYSNA_VERSION,
+        'sdk_fingerprint': _seed_sdk_fingerprint(),
+        'workspace_sha256': _snapshot_digest(sources),
+    }
+    return {**fields, 'workspace_revision': _snapshot_digest(fields)}
 
 
 def build_test_plan(resolver, filter_text=None, discover=False, case_id=None):
@@ -52,19 +105,15 @@ def build_test_plan(resolver, filter_text=None, discover=False, case_id=None):
         raise ManifestError(f"test filter '{filter_text}' matched no cases")
     if len(cases) > MAX_TEST_CASES:
         raise ManifestError(f'test selection exceeds {MAX_TEST_CASES} cases')
-    lock = resolver.lock_path()
-    lock_sha = hashlib.sha256(lock.read_bytes()).hexdigest() if lock.is_file() else None
     entries = []
     for case in cases:
         entries.append({'id': 'test:' + case.name, 'name': case.name, 'entry': case.entry,
                         'entry_sha256': hashlib.sha256((manifest.root / case.entry).read_bytes()).hexdigest(),
                         'timeout_ms': case.timeout_ms})
-    snapshot = {'manifest_sha256': manifest.raw_sha256, 'lock_sha256': lock_sha,
-                'toolchain': WYSNA_VERSION, 'cases': entries}
-    canonical = json.dumps(snapshot, ensure_ascii=False, separators=(',', ':'))
+    snapshot = {**project_revision(resolver), 'cases': entries}
     plan = {'schema_version': 'wysna.project-test-plan/1', 'project': manifest.name,
             **snapshot, 'selected': len(cases),
-            'plan_hash': hashlib.sha256(canonical.encode('utf-8')).hexdigest()}
+            'plan_hash': _snapshot_digest(snapshot)}
     return cases, plan
 
 

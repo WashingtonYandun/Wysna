@@ -1,5 +1,5 @@
 class AndInit {
-    public ready: bool
+    pub ready: bool
 
     fn init() {
         true and (this.ready = true)
@@ -7,7 +7,7 @@ class AndInit {
 }
 
 class OrInit {
-    public ready: bool
+    pub ready: bool
 
     fn init() {
         false or (this.ready = true)
@@ -15,7 +15,7 @@ class OrInit {
 }
 
 class BranchInit {
-    public ready: bool
+    pub ready: bool
 
     fn init(flag: bool) {
         if flag {

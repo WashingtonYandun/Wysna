@@ -1,15 +1,15 @@
 # Benchmark 9: Class reference identity, shared mutation, and method calls
 
 class Account {
-    public balance: int
-    public ops: int
+    pub balance: int
+    pub ops: int
 
     fn init(initial: int) {
         this.balance = initial
         this.ops = 0
     }
 
-    public fn apply(delta: int) -> int {
+    pub fn apply(delta: int) -> int {
         this.balance = this.balance + delta
         this.ops = this.ops + 1
         return this.balance

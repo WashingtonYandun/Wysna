@@ -10,16 +10,16 @@ extern "C" fn wysna_host_last_error_domain() -> int
 pub struct FileError { operation: str, path: str, code: int, domain: int }
 
 pub class File {
-    private handle: opaque
-    private path: str
-    public fn init(path: str, mode: int) {
+    priv handle: opaque
+    priv path: str
+    pub fn init(path: str, mode: int) {
         let encoded = buffer.from_text(path)
         this.handle = wysna_host_file_open(encoded.borrow(), mode)
         encoded.close()
         this.path = path
     }
-    public fn is_open() -> bool { return wysna_host_is_open(this.handle) == 1 }
-    public fn read(count: int) -> buffer.Bytes ! FileError {
+    pub fn is_open() -> bool { return wysna_host_is_open(this.handle) == 1 }
+    pub fn read(count: int) -> buffer.Bytes ! FileError {
         let data = buffer.Bytes()
         if wysna_host_file_read(this.handle, data.borrow(), count) < 0 {
             let code = wysna_host_last_error()
@@ -29,12 +29,12 @@ pub class File {
         }
         return data
     }
-    public fn write(data: buffer.Bytes) -> unit ! FileError {
+    pub fn write(data: buffer.Bytes) -> unit ! FileError {
         if wysna_host_file_write(this.handle, data.borrow()) != 0 {
             return Err(FileError { operation: "write", path: this.path, code: wysna_host_last_error(), domain: wysna_host_last_error_domain() })
         }
     }
-    public fn close() -> int { return wysna_host_close(this.handle) }
+    pub fn close() -> int { return wysna_host_close(this.handle) }
 }
 
 # Modes: 0 read, 1 truncate/write, 2 append, 3 create exclusively (fail if present). EOF is an empty Bytes buffer.

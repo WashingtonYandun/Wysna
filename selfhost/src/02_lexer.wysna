@@ -5,6 +5,7 @@ fn line_terminates_statement(kind: str) -> bool {
 fn keyword_kind(word: str) -> str {
     if word == "as" { return "AS" }
     if word == "pub" { return "PUB" }
+    if word == "priv" { return "PRIV" }
     if word == "extern" { return "EXTERN" }
     if word == "fn" {
         return "FN"

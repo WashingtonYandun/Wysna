@@ -22,11 +22,11 @@
 The language defines the following reserved keywords:
 
 ```text
-DECLARATIONS (10):
-fn        let       mut       struct    enum      import    from      use       pub       extern
+DECLARATIONS (11):
+fn        let       mut       struct    enum      import    from      use       pub       priv      extern
 
-OBJECT-ORIENTED (8):
-class     interface extends   implements this      super     public    private
+OBJECT-ORIENTED (6):
+class     interface extends   implements this      super
 
 CONTROL FLOW (10):
 if        elif      else      for       while     in        match     return    break     continue
@@ -184,7 +184,7 @@ let next_tok = Token { ..tok, col: 14 }
 ```
 
 ### 4.6 Object-Oriented Programming (`class` & `interface`)
-Alongside value-type `struct` and `enum`, Wysna supports Java-style reference-type classes, single inheritance (`extends`), multiple interface contracts (`implements`), visibility modifiers (`public` / `private`), constructors (`fn init`), and runtime polymorphism:
+Alongside value-type `struct` and `enum`, Wysna supports Java-style reference-type classes, single inheritance (`extends`), multiple interface contracts (`implements`), visibility modifiers (`pub` / `priv`), constructors (`fn init`), and runtime polymorphism:
 
 ```wysna
 interface Describable {
@@ -192,36 +192,36 @@ interface Describable {
 }
 
 class Animal {
-    public name: str
-    private energy: int
+    pub name: str
+    priv energy: int
 
     fn init(name: str, energy: int) {
         this.name = name
         this.energy = energy
     }
 
-    public fn speak() -> str {
+    pub fn speak() -> str {
         return this.name + " makes a sound"
     }
 
-    public fn get_energy() -> int {
+    pub fn get_energy() -> int {
         return this.energy
     }
 }
 
 class Dog extends Animal implements Describable {
-    public breed: str
+    pub breed: str
 
     fn init(name: str, breed: str) {
         super.init(name, 100)
         this.breed = breed
     }
 
-    public fn speak() -> str {
+    pub fn speak() -> str {
         return this.name + " (" + this.breed + ") barks: Woof!"
     }
 
-    public fn describe() -> str {
+    pub fn describe() -> str {
         return this.speak()
     }
 }
@@ -723,6 +723,7 @@ pub import "std/path"
        - `W1002`: Duplicate declaration
        - `W1003`: Module resolution or circular import error
        - `W1004`: Invalid control-flow or lexical context (`break`/`continue`/`return`/`this`/`super`)
+       - `W1005`: Ambiguous symbol selector in semantic tooling
      - **`W2xxx` — Type System, Exhaustiveness & Error Channel Diagnostics:**
        - `W2001`: Type mismatch
        - `W2002`: Invalid assignment target
@@ -734,7 +735,7 @@ pub import "std/path"
        - `W2010`: Invalid dictionary key type
      - **`W3xxx` — Mutability, Ownership & OOP Encapsulation Diagnostics:**
        - `W3001`: Mutation of immutable value binding (`let` vs `let mut`)
-       - `W3002`: Invalid member access/mutation or `private` visibility violation
+       - `W3002`: Invalid member access/mutation or `priv` visibility violation
        - `W3003`: Invalid class inheritance or unimplemented `interface` contract
        - `W3004`: Constructor safety violation (uninitialized fields or invalid `super` invocation)
      - **`W4xxx` — Runtime Execution Diagnostics:**

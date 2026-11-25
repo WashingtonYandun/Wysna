@@ -556,6 +556,7 @@ def _run_tests(resolver, filter_text, report_path, frozen=False, *, json_mode=Fa
         report = {'schema_version': 'wysna.project-test-report/1', 'project': manifest.name,
                   'manifest': str(manifest.path), 'manifest_sha256': manifest.raw_sha256,
                   'toolchain': WYSNA_VERSION, 'lock_sha256': plan['lock_sha256'],
+                  'workspace_revision': plan['workspace_revision'],
                   'plan_hash': plan['plan_hash'], 'status': 'empty', 'duration_ms': 0.0,
                   'selected': 0, 'executed': 0, 'passed': 0, 'failed': 0, 'cases': []}
         return _finish_test_report(report, 2, report_path, junit_path, json_mode)
@@ -567,8 +568,6 @@ def _run_tests(resolver, filter_text, report_path, frozen=False, *, json_mode=Fa
     else:
         runner = [sys.executable, "-B", str(script)]
     records = []
-    lock_path = resolver.lock_path()
-    lock_hash = hashlib.sha256(lock_path.read_bytes()).hexdigest() if lock_path.is_file() else None
     overall_start = time.perf_counter()
     for case in tests:
         entry_bytes = (manifest.root / case.entry).read_bytes()
@@ -620,7 +619,8 @@ def _run_tests(resolver, filter_text, report_path, frozen=False, *, json_mode=Fa
         "manifest": str(manifest.path),
         "manifest_sha256": manifest.raw_sha256,
         "toolchain": WYSNA_VERSION,
-        "lock_sha256": lock_hash,
+        "lock_sha256": plan['lock_sha256'],
+        "workspace_revision": plan['workspace_revision'],
         "plan_hash": plan['plan_hash'],
         "status": "cancelled" if cancelled else "passed" if failed == 0 else "failed",
         "duration_ms": round((time.perf_counter() - overall_start) * 1000, 3),

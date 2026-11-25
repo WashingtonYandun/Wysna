@@ -84,7 +84,7 @@ def test_declaration_order_invariance():
     # Case 3: Class Service declared before struct Config
     src3 = """
     class Service {
-        public cfg: Config
+        pub cfg: Config
         fn init(c: Config) {
             self.cfg = c
         }
@@ -157,13 +157,13 @@ def test_container_and_compound_invariance():
     # 3. Source-level rejection of list subtyping:
     src_invalid = """
     class Animal {
-        public name: str
+        pub name: str
         fn init(name: str) {
             self.name = name
         }
     }
     class Dog extends Animal {
-        public breed: str
+        pub breed: str
         fn init(name: str, breed: str) {
             super.init(name)
             self.breed = breed

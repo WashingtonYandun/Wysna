@@ -1394,6 +1394,7 @@ fn tool_handle_project(args: list[str], json_mode_in: bool) -> unit {
         lines.append("MANIFEST=" + proj_plan_encode(m.path))
         lines.append("MANIFEST_SHA=" + m.manifest_sha256)
         lines.append("LOCK_SHA=" + test_plan.lock_sha)
+        lines.append("WORKSPACE_REVISION=" + test_plan.revision)
         lines.append("PLAN_HASH=" + test_plan.hash)
         lines.append("PLAN_JSON=" + proj_plan_encode(test_plan.json))
         lines.append("LIST_ONLY=" + if list_only { "1" } else { "0" })

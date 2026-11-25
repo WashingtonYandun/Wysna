@@ -10,8 +10,8 @@ fn boxed() -> unit ! str { value() }
 fn failed() -> unit ! str { failure() }
 fn recovered() -> unit ! str { value() else error { return Err(error) } }
 class Worker {
-    public fn run() -> unit ! str { value() }
-    public fn fail() -> unit ! str { failure() }
+    pub fn run() -> unit ! str { value() }
+    pub fn fail() -> unit ! str { failure() }
 }
 let callback = |number: int| -> unit ! str { number }
 let direct = |number: int| -> unit ! str => number

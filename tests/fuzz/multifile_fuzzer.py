@@ -95,27 +95,27 @@ pub fn make_str_err(code: int, msg: str) -> DomainErr[str] {
         "}",
         "",
         "pub class Scaler[T] implements Transformer[T] {",
-        "    public factor: int",
-        "    public fallback: T",
+        "    pub factor: int",
+        "    pub fallback: T",
         "    fn init(factor: int, fallback: T) {",
         "        this.factor = factor",
         "        this.fallback = fallback",
         "    }",
-        "    public fn apply(x: T) -> T {",
+        "    pub fn apply(x: T) -> T {",
         "        return x",
         "    }",
-        "    public fn pair_with[R](x: T, other: R) -> (T, R) {",
+        "    pub fn pair_with[R](x: T, other: R) -> (T, R) {",
         "        return (x, other)",
         "    }",
         "}",
         "",
         "pub class BoostedScaler[T] extends Scaler[T] {",
-        "    public bonus: int",
+        "    pub bonus: int",
         "    fn init(factor: int, fallback: T, bonus: int) {",
         "        super.init(factor, fallback)",
         "        this.bonus = bonus",
         "    }",
-        "    public fn apply(x: T) -> T {",
+        "    pub fn apply(x: T) -> T {",
         "        return x",
         "    }",
         "}",
@@ -425,7 +425,7 @@ def generate_multifile_negative(seed: int, kind: str | None = None) -> MultiFile
         files = {
             "vault.wysna": (
                 "pub class Vault {\n"
-                "    private secret: int\n"
+                "    priv secret: int\n"
                 "    fn init(s: int) { this.secret = s }\n"
                 "}\n"
             ),
@@ -455,14 +455,14 @@ def generate_multifile_negative(seed: int, kind: str | None = None) -> MultiFile
         files = {
             "base.wysna": (
                 "pub class Base[T] {\n"
-                "    public item: T\n"
+                "    pub item: T\n"
                 "    fn init(item: T) { this.item = item }\n"
                 "}\n"
             ),
             "main.wysna": (
                 'import "base.wysna" as b\n'
                 "class Sub extends b.Base[int] {\n"
-                "    public extra: int\n"
+                "    pub extra: int\n"
                 "    fn init(extra: int) { this.extra = extra }\n"
                 "}\n"
                 "fn main() { let _ = Sub(1) }\n"

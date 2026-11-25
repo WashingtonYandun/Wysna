@@ -209,7 +209,7 @@ def test_calls_and_assignments_are_not_linted(tmp_path):
 
 def test_cycle_warning_is_reported_by_default_in_json(tmp_path):
     path = tmp_path / "cycle.wysna"
-    path.write_text("class A { public b: B? }\nclass B { public a: A? }\nfn main() { print(1) }\n",
+    path.write_text("class A { pub b: B? }\nclass B { pub a: A? }\nfn main() { print(1) }\n",
                     encoding="utf-8")
 
     payload = json.loads(run_cli("check", "--output-format=json-v1", path).stdout)
@@ -903,14 +903,32 @@ def test_native_else_if_across_seed_and_selfhost(tmp_path):
     assert sh_run.stdout.strip() == "big pos zero neg a"
 
 
+def test_formatter_round_trips_canonical_visibility():
+    from formatter.Formatter import format_source
+
+    source = (
+        "priv struct Hidden { value: int }\n"
+        "pub class Visible {\n"
+        "    priv value: int\n"
+        "    pub fn init(value: int) { this.value = value }\n"
+        "}\n"
+    )
+    formatted = format_source(source)
+    assert "priv struct Hidden" in formatted
+    assert "pub class Visible" in formatted
+    assert "priv value: int" in formatted
+    assert "pub fn init" in formatted
+    assert format_source(formatted) == formatted
+
+
 def test_fix_mechanical_operators_and_class_pub_parity(tmp_path):
     from compiler.Bootstrap import ensure_selfhost_compiler_binary
 
     broken = (
         "class FlagBox {\n"
-        "    pub value: bool\n"
-        "    pub fn init(value: bool) { this.value = value }\n"
-        "    pub fn matches(other: bool, alt: bool) -> bool {\n"
+        "    private value: bool\n"
+        "    public fn init(value: bool) { this.value = value }\n"
+        "    public fn matches(other: bool, alt: bool) -> bool {\n"
         "        if (this.value && other) || !alt {\n"
         "            return true\n"
         "        }\n"

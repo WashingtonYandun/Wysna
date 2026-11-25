@@ -1,9 +1,9 @@
 class Counter {
-    public val: int
+    pub val: int
     fn init(start: int) {
         this.val = start
     }
-    public fn inc() -> unit {
+    pub fn inc() -> unit {
         this.val = this.val + 1
     }
 }
