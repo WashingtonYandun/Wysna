@@ -97,6 +97,7 @@ TOOLS = [
          "expect_plan_hash": {"type": "string", "description": "Plan hash from preview (required with apply=true in workspace mode)."},
          "discover": {"type": "boolean", "description": "Discover test files under tests/ (workspace mode)."},
          "frozen": {"type": "boolean", "description": "Verify wysna.lock before planning/applying (workspace mode)."},
+         "test": {"type": "boolean", "description": "Run tests on the staged workspace. Requires --allow-exec."},
          "apply": {"type": "boolean", "description": "Write verified patch to disk (default false)."}}}},
     {"name": "wysna_project_check",
      "description": "Static project-wide typecheck across wysna.toml targets and lockfile verification.",
@@ -381,9 +382,18 @@ class McpServer:
         return self._run_project_subcommand(argv)
 
     def tool_wysna_patch(self, arguments):
+        test = arguments.get("test", False)
+        if not isinstance(test, bool):
+            raise ToolError("'test' must be a boolean")
+        if test and not self.allow_exec:
+            from tooling.ToolResult import diagnostic_record
+
+            return tool_result("patch", "usage_error", 2, diagnostics=[diagnostic_record(
+                "W5002", "usage", "Tested patches require starting the MCP server with --allow-exec",
+            )])
         if "edits" in arguments or "manifest" in arguments:
             from pathlib import Path
-            from tooling.WorkspacePatch import plan_workspace_patch
+            from tooling.WorkspacePatch import plan_workspace_patch, workspace_patch_envelope
 
             manifest_raw = arguments.get("manifest")
             edits = arguments.get("edits")
@@ -400,6 +410,7 @@ class McpServer:
                     apply=bool(arguments.get("apply")),
                     discover=bool(arguments.get("discover")),
                     frozen=bool(arguments.get("frozen")),
+                    test=test,
                 )
             except WysnaError as error:
                 items = getattr(error, "diagnostics", None) or [error]
@@ -422,10 +433,10 @@ class McpServer:
                 return tool_result("patch", "diagnostic_error", 1, diagnostics=records)
             except ValueError as error:
                 raise ToolError(str(error)) from error
-            envelope = tool_result("patch", "ok", 0)
-            envelope["result"] = payload
-            return envelope
+            return workspace_patch_envelope(payload)
 
+        if test:
+            raise ToolError("'test' requires workspace 'manifest' and 'edits'")
         from tooling.AgentGraphCLI import patch_source
         raw_path = arguments.get("path")
         symbol = arguments.get("symbol")

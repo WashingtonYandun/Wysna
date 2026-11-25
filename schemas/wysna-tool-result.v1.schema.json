@@ -54,6 +54,11 @@
       "properties": {
         "architecture": { "$ref": "#/$defs/ArchitectureReport" }
       },
+      "if": {
+        "required": ["schema_version"],
+        "properties": { "schema_version": { "const": "wysna.workspace-patch/1" } }
+      },
+      "then": { "$ref": "#/$defs/WorkspacePatchResult" },
       "anyOf": [
         { "$ref": "#/$defs/GraphResult" },
         { "$ref": "#/$defs/InspectResult" },
@@ -444,8 +449,40 @@
         "diff": { "type": "string" }
       }
     },
+    "PatchTestVerification": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["plan_hash", "workspace_revision", "test_plan_hash", "status", "cases"],
+      "properties": {
+        "plan_hash": { "$ref": "#/$defs/Sha256" },
+        "workspace_revision": { "$ref": "#/$defs/Sha256" },
+        "test_plan_hash": { "$ref": "#/$defs/Sha256" },
+        "status": { "enum": ["passed", "failed", "empty", "cancelled"] },
+        "cases": { "type": "array", "items": { "$ref": "#/$defs/PatchTestCase" } }
+      }
+    },
+    "Sha256": { "type": "string", "pattern": "^[0-9a-f]{64}$" },
+    "PatchTestCase": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "status", "failure_kind", "exit_code", "duration_ms", "stdout_sha256", "stderr_sha256"],
+      "properties": {
+        "id": { "type": "string", "minLength": 1 },
+        "status": { "type": "string", "minLength": 1 },
+        "failure_kind": { "type": ["string", "null"] },
+        "exit_code": { "type": ["integer", "null"] },
+        "duration_ms": { "type": "number", "minimum": 0 },
+        "stdout_sha256": { "$ref": "#/$defs/Sha256" },
+        "stderr_sha256": { "$ref": "#/$defs/Sha256" },
+        "stderr": { "type": "string", "maxLength": 2048 }
+      }
+    },
     "WorkspacePatchResult": {
       "type": "object",
+      "dependentRequired": {
+        "test_inputs_sha256": ["test_verification"],
+        "test_verification": ["test_inputs_sha256"]
+      },
       "required": [
         "schema_version",
         "workspace_revision_before",
@@ -465,7 +502,9 @@
         "checked": { "type": "array", "items": { "type": "string" } },
         "tests": { "type": "array", "items": { "type": "object" } },
         "selected_test_ids": { "type": "array", "items": { "type": "string" } },
-        "plan_hash": { "type": "string", "pattern": "^[0-9a-f]{64}$" },
+        "test_inputs_sha256": { "$ref": "#/$defs/Sha256" },
+        "test_verification": { "$ref": "#/$defs/PatchTestVerification" },
+        "plan_hash": { "$ref": "#/$defs/Sha256" },
         "written": { "type": "boolean" }
       }
     }

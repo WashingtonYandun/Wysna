@@ -575,6 +575,12 @@ def _run_tests(resolver, filter_text, report_path, frozen=False, *, json_mode=Fa
                   'selected': 0, 'executed': 0, 'passed': 0, 'failed': 0, 'cases': []}
         return _finish_test_report(report, 2, report_path, junit_path, json_mode)
 
+    report, code = execute_project_tests(manifest, tests, plan, frozen, json_mode=json_mode)
+    return _finish_test_report(report, code, report_path, junit_path, json_mode)
+
+
+def execute_project_tests(manifest, tests, plan, frozen, *, json_mode):
+    """Execute a nonempty, resolved test plan using the normal project workers."""
     script = Path(get_repo_root()) / "main.py"
     installed_entry = script.parent / "wysna_entry.py"
     if installed_entry.is_file() and (script.parent / "installation.json").is_file():
@@ -644,7 +650,7 @@ def _run_tests(resolver, filter_text, report_path, frozen=False, *, json_mode=Fa
         "failed": failed,
         "cases": records,
     }
-    return _finish_test_report(report, 130 if cancelled else 1 if failed else 0, report_path, junit_path, json_mode)
+    return report, 130 if cancelled else 1 if failed else 0
 
 
 def run_project_command(argv):

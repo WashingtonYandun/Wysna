@@ -1344,7 +1344,7 @@ fn tool_skills_topic_content(topic: str) -> str {
     if topic == "contracts" { return "# Contracts, Schemas, Quotas & Trace Replay\n- Pre/postconditions: `fn f(x: int) -> int requires x > 0 ensures result >= 0 { ... }` (runtime `[W4005]`).\n- Tool Schema export: `wysna schema --emit-codecs --output-format=json-v1 <file.wysna>`.\n- Invoke a typed `@AgentTool(id: \"ops.lookup\", version: 1)`: `wysna schema <file.wysna> --function NAME --emit-tool -o adapter.wysna`.\n- Deterministic quotas: `--max-steps=<N>`, `--max-heap-mb=<N>` (fail-stop `[W4004]`).\n- Offline effect cassettes: `--record-trace <path>`, `--replay-trace <path>`.\n- Solo los errores recuperables usan `T ! E`; W4001–W4005 son traps, sin recuperación mediante `else err`.\n- JSON Schema exporta solo restricciones representables; los contratos generales requieren validación ejecutable.\n- Cuotas y replay cubren el runtime y efectos instrumentados; FFI y binarios nativos necesitan aislamiento del sistema operativo." }
     if topic == "graph" { return "# Semantic Relationship Graph (`wysna graph`)\n- `wysna graph <file> --output-format=json-v1`: full nodes, edges, `graph_hash`, `call_resolution`, and `analysis_boundaries`.\n- `--symbol <name> --rel implements`: find all classes implementing an interface (or vice-versa).\n- `--symbol <name> --rel usages`: find every class, function, field, and param using the type.\n- `--symbol <name> --rel callers|callees`: traverse the resolved call graph and inspect `uncertain_calls` (`indirect_call`, `virtual_dispatch`, `extern_ffi`).\n- `--symbol <name> --rel impact`: compute transitive blast radius before refactoring.\n- `wysna graph --manifest wysna.toml --role Controller --output-format=json-v1`: list typed architecture roles in the selected target." }
     if topic == "overview" { return "# Wysna v0.9.5 — Agent-First Native Language & Toolchain\n- Default workflow uses checked static inspection before execution.\n- Memory model: Atomic ARC + Copy-on-Write (`Weak[C]` breaks strong cycles); workers require closed callbacks and privately owned value graphs; classes and opaque handles cannot cross worker boundaries.\n- Error channel: Recoverable typed values `T ! E`; runtime traps terminate execution. Unwrap with `?` or `else err { fallback }`.\n- Core agent loop: `wysna skills` -> `wysna graph` -> `wysna inspect` -> `wysna patch` -> `wysna fix` -> `wysna check`.\n- Topics available: overview, agent-loop, syntax, graph, patch, project-tests, contracts, stdlib." }
-    if topic == "patch" { return "# Checked Semantic Patching (`wysna patch`)\n- Dry-run check in memory (default): validates syntax, types, interface contracts, and configured project architecture rules before disk writes.\n- Optimistic locking: pass `--expect-graph-hash graph:...`; stale hashes fail with `[W5005]`.\n- Target classes, interfaces, structs, enums, functions, or `ClassName.method`.\n- Coordinated workspace edits (Seed & Native SDK): preview with `wysna patch --manifest wysna.toml --edits changes.json --output-format=json-v1`. Apply using `--apply --expect-plan-hash HASH`." }
+    if topic == "patch" { return "# Checked Semantic Patching (`wysna patch`)\n- Dry-run check in memory (default): validates syntax, types, interface contracts, and configured project architecture rules before disk writes.\n- Optimistic locking: pass `--expect-graph-hash graph:...`; stale hashes fail with `[W5005]`.\n- Target classes, interfaces, structs, enums, functions, or `ClassName.method`.\n- Coordinated workspace edits (Seed & Native SDK): preview with `wysna patch --manifest wysna.toml --edits changes.json --output-format=json-v1`. Apply using `--apply --expect-plan-hash HASH`.\n- Para probar el candidato aislado, agrega `--test --output-format=json-v1`. Lee `result.test_verification` y `result.tests`. Aplica con `--test --apply --expect-plan-hash HASH`; las pruebas se ejecutan de nuevo antes de escribir. En MCP usa `test: true` con el servidor iniciado mediante `--allow-exec`." }
     if topic == "project-tests" { return "# Pruebas de proyecto para agentes\n1. Lista sin ejecutar: `wysna project test --discover --list --frozen --output-format=json-v1`.\n2. Usa los IDs exactos de result.cases: `--case test:example`; --filter conserva selección por subcadena.\n3. Ejecuta con `--expect-plan-hash <result.plan_hash> --output-format=json-v1 --report-json tests.json --report-junit tests.xml`.\n4. Lee result.cases[].failure_kind, diagnostics y los hashes de stdout/stderr; no interpretes texto de terminal.\n5. W5005 indica plan obsoleto: vuelve a listar. Una suite vacía devuelve 2; una cancelación devuelve 130.\n6. std/test ofrece igualdad genérica, tolerancia flotante, opcionales y fixture_directory(); los fixtures se eliminan después del caso.\nEl hash cubre manifiesto, lock, versión y entradas seleccionadas, no todos los imports. El SDK native-core-v1 ejecuta estos comandos sin Python.\n7. Dependencias: `wysna packages pack --manifest dependency/wysna.toml -o dependency.tar`; adquiere con `packages fetch --manifest wysna.toml --archive dependency.tar --sha256 <pin> --cache <cache>`, agrega con `packages add alias --path vendor/<pin>` y ejecuta `project lock`.\n8. Restaura con `packages restore --cache <cache>` y verifica con `project test --frozen`; todas las operaciones admiten `--output-format=json-v1`, sin hooks ni registro remoto.\n" }
     if topic == "stdlib" { return "# Standard Library (18 Modules)\n- Data & Text: `std/math`, `std/text`, `std/bytes`, `std/regex`, `std/collections`, `std/json`, `std/csv` (`parse`, `parse_records`, `stringify`), `std/parse`.\n- Systems & I/O: `std/fs`, `std/files`, `std/buffer`, `std/env`, `std/path`, `std/process`, `std/time`.\n- Network, Concurrency & Security: `std/http`, `std/async`, `std/algorithms` (`parallel_map`), `std/crypto`." }
     if topic == "syntax" { return "# Wysna Canonical Syntax Quick Reference\n- Bindings: `let x = 1` (immutable), `let mut y = 2` (mutable).\n- Functions: `fn add(a: int, b: int) -> int { return a + b }` (`pub` and `priv` at module scope and inside classes).\n- Control flow & logic: `if c { ... } elif d { ... } else { ... }` (`else if` also accepted); boolean operators are `and`, `or`, `not` (never `&&`, `||`, `!`).\n- Cooperative Async: `async fn fetch_id() -> int { ... }`, `let v = await task`.\n- Optionals & Errors: `T?`, `T ! E`, unwrap `?`, recover `expr else err { fallback }`.\n- OOP & Contracts: `interface Drawable { fn draw() -> str }`, `class Rect implements Drawable { pub fn draw() -> str { ... } }`.\n- Lambdas: `|n: int| => n * n` (capture outer variables by immutable snapshot by design; return updated values for mutable state; classes cannot cross worker boundaries).\n- Canonical forms: `Class(...)`, `None`, `_ =>`, parenthesized tuple patterns.\n- Match patterns: alternatives `1 | 2`, Int64 ranges `0..=10`, nested `Point { x, .. }`; W6003 reports unreachable arms.\n- Static attributes on top-level functions: `@deprecated(\"message\")` (W6004), `@must_use` (W6005); custom typed metadata: `struct ReviewTag { name: str }`, `@ReviewTag(name: \"lookup\")`; literal str/bool/int fields, no macros or evaluation.\n- Ranges & Loops: `for i in 0..10 { ... }`, inclusive `0..=10`.\n- Non-exhaustive match W2003 includes data.uncovered_pattern_families for checked repairs." }
@@ -14499,6 +14499,7 @@ fn tool_handle_patch(args: list[str], json_mode: bool) -> unit {
     let mut manifest = ""
     let mut edits_file = ""
     let mut expect_plan_hash = ""
+    let mut test = false
     let mut discover = false
     let mut frozen = false
     let mut apply = false
@@ -14537,6 +14538,9 @@ fn tool_handle_patch(args: list[str], json_mode: bool) -> unit {
         } elif a == "--frozen" {
             frozen = true
             i = i + 1
+        } elif a == "--test" {
+            test = true
+            i = i + 1
         } elif a == "--apply" {
             apply = true
             i = i + 1
@@ -14551,10 +14555,10 @@ fn tool_handle_patch(args: list[str], json_mode: bool) -> unit {
         if manifest == "" or file != "" or symbol != "" or has_with or with_file != "" or expect_hash != "" {
             report_error("<cli>", "W5002", 1, 1, "workspace patch requires --manifest and --edits without single-source options")
         }
-        proj_handle_workspace_patch(manifest, edits_file, expect_plan_hash, apply, discover, frozen, json_mode)
+        proj_handle_workspace_patch(manifest, edits_file, expect_plan_hash, apply, discover, frozen, test, json_mode)
         return
     }
-    if file == "" or symbol == "" or manifest != "" or expect_plan_hash != "" or discover or frozen {
+    if file == "" or symbol == "" or manifest != "" or expect_plan_hash != "" or discover or frozen or test {
         report_error("<cli>", "W5002", 1, 1, "patch requires a file path and --symbol")
     }
     if with_file != "" {
@@ -21771,7 +21775,135 @@ fn wpatch_rename_file(src_path: str, dst_path: str) -> bool {
     return mv >= 0
 }
 
-fn proj_handle_workspace_patch(manifest_arg: str, edits_file: str, expected_hash: str, apply: bool, discover: bool, frozen: bool, json_mode: bool) -> unit {
+fn wpatch_test_paths(state: ProjectLockState, root: str) -> list[str] {
+    let mut paths = proj_snapshot_paths(state, root, "", false, true)
+    if proj_test_exists(state, root + "/wysna.lock") { paths.append("wysna.lock") }
+    return tool_sort_strings(paths)
+}
+
+fn wpatch_test_inputs_sha(state: ProjectLockState, root: str, paths: list[str]) -> str {
+    let mut rows: list[str] = []
+    for path in paths {
+        let absolute = root + "/" + path
+        if module_canonical_resolved(absolute) != absolute {
+            state.fail("W5005", "Workspace test input changed during staging: " + path)
+        }
+        let digest = proj_lock_host_text(state, absolute, "hash")
+        rows.append("[" + diag_json_quote(path) + "," + diag_json_quote(digest) + "]")
+    }
+    return diag_sha256_hex("[" + join_strings(rows, ",") + "]")
+}
+
+fn wpatch_copy_test_input(source: str, destination: str) -> bool {
+    if module_canonical_resolved(source) != source { return false }
+    let source_buf = tool_buf_from_str(source)
+    let destination_buf = tool_buf_from_str(destination)
+    let input = wysna_host_file_open(source_buf, 0)
+    let output = wysna_host_file_open(destination_buf, 3)
+    wysna_host_close(source_buf)
+    wysna_host_close(destination_buf)
+    let chunk = wysna_host_buffer_new()
+    let mut ok = wysna_host_is_open(input) == 1 and wysna_host_is_open(output) == 1
+    while ok {
+        let count = wysna_host_file_read(input, chunk, 1048576)
+        if count == 0 { break }
+        ok = count > 0 and wysna_host_file_write(output, chunk) == 0
+    }
+    wysna_host_close(chunk)
+    let closed_input = wysna_host_close(input)
+    let closed_output = wysna_host_close(output)
+    return ok and closed_input == 0 and closed_output == 0
+}
+
+struct PatchTestVerification { code: int, evidence: str }
+
+fn wpatch_verify_candidate_tests(state: ProjectLockState, m: ProjectManifest, paths: list[str], inputs_sha: str,
+                                  edit_rels: list[str], edit_actions: list[str], edit_after: list[str],
+                                  sdk_sha: str, revision: str, plan_hash: str, discover: bool, frozen: bool,
+                                  expected_count: int) -> PatchTestVerification {
+    let driver = env("WYSNA_SDK_DRIVER") else { "" }
+    let stage_env = env("WYSNA_PATCH_TEST_STAGE") else { "" }
+    let staging = if stage_env == "" { "" } else { module_canonical_resolved(stage_env) }
+    if driver == "" or staging == "" {
+        state.fail("W5002", "Tested patches require the wysna native SDK driver")
+    }
+    let candidate = staging + "/candidate"
+    if proj_path_exists(candidate) or not wpatch_ensure_parents(staging, "candidate/file") {
+        state.fail("W5004", "Cannot create a private patch test workspace")
+    }
+    for path in paths {
+        if not wpatch_ensure_parents(candidate, path) or not wpatch_copy_test_input(m.root + "/" + path, candidate + "/" + path) {
+            state.fail("W5004", "Cannot stage workspace test input: " + path)
+        }
+    }
+    if wpatch_test_inputs_sha(state, candidate, paths) != inputs_sha {
+        state.fail("W5005", "Workspace test snapshot changed during staging")
+    }
+    for index in 0..len(edit_rels) {
+        let relative = edit_rels[index]
+        let path = candidate + "/" + relative
+        if edit_actions[index] != "create" and not wpatch_remove(path) {
+            state.fail("W5004", "Cannot remove staged source: " + relative)
+        }
+        if edit_actions[index] != "delete" and
+           (not wpatch_ensure_parents(candidate, relative) or not proj_scaffold_write(path, edit_after[index])[1]) {
+            state.fail("W5004", "Cannot stage candidate source: " + relative)
+        }
+    }
+    let candidate_manifest = candidate + "/" + tool_basename(m.path)
+    let staged_manifest = proj_load_manifest(candidate_manifest)
+    if not staged_manifest.ok { state.fail(staged_manifest.err_code, staged_manifest.err_msg) }
+    if wpatch_live_revision(state, staged_manifest, sdk_sha) != revision {
+        state.fail("W5005", "Staged workspace differs from the checked patch")
+    }
+
+    let report_path = staging + "/test-result.json"
+    let mut argv: list[str] = ["project", "test", "--manifest", candidate_manifest, "--output-format=json-v1", "--diag-out", report_path]
+    if discover { argv.append("--discover") }
+    if frozen { argv.append("--frozen") }
+    let exe_buf = lsp_buf_from_str(driver)
+    let args_buf = lsp_pack_argv_buf(argv)
+    let rc = wysna_host_process_run(exe_buf, args_buf, 600000)
+    wysna_host_close(exe_buf)
+    wysna_host_close(args_buf)
+    let raw = read_file(report_path) else err { "" }
+    let envelope = mcp_parse_json_strict(raw)
+    let report = lsp_json_get(envelope, "result")
+    let status = lsp_json_str(report, "status", "")
+    let case_reports = lsp_json_get(report, "cases")
+    if lsp_json_str(report, "workspace_revision", "") != revision or case_reports.kind != "array" or
+       lsp_json_int(report, "selected", -1) != expected_count {
+        state.fail("W5001", "Project tests did not return a report for the checked candidate")
+    }
+    if not ((rc == 0 and status == "passed" and len(case_reports.items) == expected_count and expected_count > 0) or
+            (rc == 1 and status == "failed") or (rc == 2 and status == "empty") or (rc == 130 and status == "cancelled")) {
+        state.fail("W5001", "Project test runner did not complete verification")
+    }
+    if wpatch_live_revision(state, staged_manifest, sdk_sha) != revision {
+        state.fail("W5005", "Tests changed the staged source revision")
+    }
+
+    let mut rows: list[str] = []
+    let fields: list[str] = ["id", "status", "failure_kind", "exit_code", "duration_ms", "stdout_sha256", "stderr_sha256"]
+    for record in case_reports.items {
+        let mut parts: list[str] = []
+        for field in fields {
+            parts.append(diag_json_quote(field) + ":" + mcp_serialize_json_val(lsp_json_get(record, field)))
+        }
+        if lsp_json_str(record, "status", "") != "passed" {
+            let stderr = lsp_json_str(record, "stderr", "")
+            let excerpt = if len(stderr) > 2048 { slice(stderr, 0, 2048) } else { stderr }
+            parts.append("\"stderr\":" + diag_json_quote(excerpt))
+        }
+        rows.append("{" + join_strings(parts, ",") + "}")
+    }
+    let evidence = "{\"plan_hash\":" + diag_json_quote(plan_hash) + ",\"workspace_revision\":" + diag_json_quote(revision) +
+        ",\"test_plan_hash\":" + diag_json_quote(lsp_json_str(report, "plan_hash", "")) +
+        ",\"status\":" + diag_json_quote(status) + ",\"cases\":[" + join_strings(rows, ",") + "]}"
+    return PatchTestVerification { code: rc, evidence: evidence }
+}
+
+fn proj_handle_workspace_patch(manifest_arg: str, edits_file: str, expected_hash: str, apply: bool, discover: bool, frozen: bool, test: bool, json_mode: bool) -> unit {
     if apply and expected_hash == "" {
         proj_emit_error_and_exit("patch", json_mode, "W5002", "Applying workspace edits requires --expect-plan-hash from a successful preview")
     }
@@ -21955,7 +22087,21 @@ fn proj_handle_workspace_patch(manifest_arg: str, edits_file: str, expected_hash
             entries.append(edit_rels[ek])
         }
     }
-    for tc in test_plan.cases {
+    let mut patch_cases = test_plan.cases
+    if test and discover {
+        for ek in 0..len(edit_rels) {
+            let path = edit_rels[ek]
+            let filename = tool_basename(path)
+            if edit_actions[ek] == "create" and (len(path) > 6 and slice(path, 0, 6) == "tests/") and
+               ((len(filename) >= 5 and slice(filename, 0, 5) == "test_") or proj_str_ends_with(filename, "_test.wysna")) {
+                let tc = ProjectTestCase()
+                tc.name = "auto:" + path
+                tc.entry = path
+                patch_cases.append(tc)
+            }
+        }
+    }
+    for tc in patch_cases {
         if not tool_str_contains(entries, tc.entry) { entries.append(tc.entry) }
     }
     let sorted_entries = tool_sort_strings(entries)
@@ -22074,7 +22220,7 @@ fn proj_handle_workspace_patch(manifest_arg: str, edits_file: str, expected_hash
 
     let mut impact_rows: list[str] = []
     let mut selected_ids: list[str] = []
-    for tc in test_plan.cases {
+    for tc in patch_cases {
         let tid = "test:" + tc.name
         selected_ids.append(diag_json_quote(tid))
         let mut entry_pos = -1
@@ -22103,13 +22249,16 @@ fn proj_handle_workspace_patch(manifest_arg: str, edits_file: str, expected_hash
 
     let mut checked_q: list[str] = []
     for e in sorted_entries { checked_q.append(diag_json_quote(e)) }
+    let test_paths: list[str] = if test { wpatch_test_paths(state, m.root) } else { [] }
+    let test_inputs_sha = if test { wpatch_test_inputs_sha(state, m.root, test_paths) } else { "" }
     let payload_body = "{\"schema_version\":\"wysna.workspace-patch/1\"" +
         ",\"workspace_revision_before\":" + diag_json_quote(test_plan.revision) +
         ",\"workspace_revision_after\":" + diag_json_quote(after_rev) +
         ",\"changes\":[" + join_strings(changes_rows, ",") + "]" +
         ",\"checked\":[" + join_strings(checked_q, ",") + "]" +
         ",\"tests\":[" + join_strings(impact_rows, ",") + "]" +
-        ",\"selected_test_ids\":[" + join_strings(selected_ids, ",") + "]}"
+        ",\"selected_test_ids\":[" + join_strings(selected_ids, ",") + "]" +
+        (if test { ",\"test_inputs_sha256\":" + diag_json_quote(test_inputs_sha) } else { "" }) + "}"
     let plan_hash = diag_sha256_hex(payload_body)
 
     let live_mid = wpatch_live_revision(state, m, sdk_sha)
@@ -22120,7 +22269,20 @@ fn proj_handle_workspace_patch(manifest_arg: str, edits_file: str, expected_hash
         proj_emit_error_and_exit("patch", json_mode, "W5005", "Workspace edit plan is stale")
     }
 
-    if apply {
+    let mut test_code = 0
+    let mut evidence = ""
+    if test {
+        let verification = wpatch_verify_candidate_tests(state, m, test_paths, test_inputs_sha,
+            edit_rels, edit_actions, edit_after, sdk_sha, after_rev, plan_hash, discover, frozen, len(patch_cases))
+        test_code = verification.code
+        evidence = ",\"test_verification\":" + verification.evidence
+        if wpatch_live_revision(state, m, sdk_sha) != test_plan.revision or
+           wpatch_test_inputs_sha(state, m.root, wpatch_test_paths(state, m.root)) != test_inputs_sha {
+            state.fail("W5005", "Workspace test inputs changed during verification")
+        }
+    }
+
+    if apply and test_code == 0 {
         let stamp = str(unix_time())
         let mut tmp_paths: list[str] = []
         let mut backups: list[str] = []
@@ -22206,15 +22368,16 @@ fn proj_handle_workspace_patch(manifest_arg: str, edits_file: str, expected_hash
         wpatch_unlink_all(backups)
     }
 
-    let written_str = if apply { "true" } else { "false" }
+    let written_str = if apply and test_code == 0 { "true" } else { "false" }
     let full_result = slice(payload_body, 0, len(payload_body) - 1) +
-        ",\"plan_hash\":" + diag_json_quote(plan_hash) + ",\"written\":" + written_str + "}"
+        ",\"plan_hash\":" + diag_json_quote(plan_hash) + ",\"written\":" + written_str + evidence + "}"
     if json_mode {
-        diag_write_output(diag_tool_envelope_json("patch", "ok", 0, "[]", "result", full_result, "[]"))
+        let status = if test_code == 0 { "ok" } elif test_code == 2 { "usage_error" } else { "runtime_error" }
+        diag_write_output(diag_tool_envelope_json("patch", status, test_code, "[]", "result", full_result, "[]"))
     } else {
         print(full_result)
     }
-    exit(0)
+    exit(test_code)
 }
 # Manifest-level impact analysis (consumed by `wysna graph --manifest ... --rel impact`).
 
@@ -24306,6 +24469,21 @@ fn mcp_run_subcommand(state: McpServerState, tool_argv: list[str]) -> list[str] 
     return [str(rc), raw]
 }
 
+fn mcp_run_sdk_subcommand(state: McpServerState, tool_argv: list[str]) -> list[str] {
+    let output = mcp_next_tmp(state, "wysna_mcp_sdk", ".json")
+    let mut argv = tool_argv
+    argv.append("--diag-out")
+    argv.append(output)
+    let exe_buf = lsp_buf_from_str(state.sdk_driver)
+    let args_buf = lsp_pack_argv_buf(argv)
+    let rc = wysna_host_process_run(exe_buf, args_buf, 300000)
+    wysna_host_close(exe_buf)
+    wysna_host_close(args_buf)
+    let raw = read_file(output) else err { "" }
+    lsp_remove_file(output)
+    return [str(rc), raw]
+}
+
 fn mcp_resolve_source(state: McpServerState, arguments: LspJson) -> list[str] {
     let has_path = lsp_json_has(arguments, "path") and lsp_json_get(arguments, "path").kind != "null"
     let has_source = lsp_json_has(arguments, "source") and lsp_json_get(arguments, "source").kind != "null"
@@ -24563,18 +24741,9 @@ fn mcp_tool_project_test(state: McpServerState, arguments: LspJson) -> list[str]
         let d_json = diag_record_json("W5002", "usage", "error", "project test requires the wysna native SDK driver", "<mcp>", 1, 1, "")
         return ["0", diag_tool_envelope_json("project.test", "usage_error", 2, "[" + d_json + "]", "", "", "[]")]
     }
-    let out_tmp = mcp_next_tmp(state, "wysna_mcp_ptest", ".json")
-    base_argv.append("--diag-out")
-    base_argv.append(out_tmp)
-    let exe_buf = lsp_buf_from_str(state.sdk_driver)
-    let args_buf = lsp_pack_argv_buf(base_argv)
-    let rc = wysna_host_process_run(exe_buf, args_buf, 300000)
-    wysna_host_close(exe_buf)
-    wysna_host_close(args_buf)
-    let raw = read_file(out_tmp) else err { "" }
-    lsp_remove_file(out_tmp)
-    if raw == "" { return mcp_tool_err("project test produced no JSON report (exit " + str(rc) + ")") }
-    return ["0", raw]
+    let sub = mcp_run_sdk_subcommand(state, base_argv)
+    if sub[1] == "" { return mcp_tool_err("project test produced no JSON report (exit " + sub[0] + ")") }
+    return ["0", sub[1]]
 }
 
 fn mcp_serialize_json_val(v: LspJson) -> str {
@@ -24604,6 +24773,16 @@ fn mcp_serialize_json_val(v: LspJson) -> str {
 }
 
 fn mcp_tool_patch(state: McpServerState, arguments: LspJson) -> list[str] {
+    if lsp_json_has(arguments, "test") and lsp_json_get(arguments, "test").kind != "bool" {
+        return mcp_tool_err("'test' must be a boolean")
+    }
+    let test = lsp_json_bool(arguments, "test", false)
+    if test and (not state.allow_exec or state.sdk_driver == "") {
+        let msg = if not state.allow_exec { "Tested patches require starting the MCP server with --allow-exec" }
+            else { "Tested patches require the wysna native SDK driver" }
+        let diagnostic = diag_record_json("W5002", "usage", "error", msg, "<mcp>", 1, 1, "")
+        return ["0", diag_tool_envelope_json("patch", "usage_error", 2, "[" + diagnostic + "]", "", "", "[]")]
+    }
     if lsp_json_has(arguments, "edits") or lsp_json_has(arguments, "manifest") {
         let man_v = lsp_json_get(arguments, "manifest")
         let edits_v = lsp_json_get(arguments, "edits")
@@ -24631,12 +24810,14 @@ fn mcp_tool_patch(state: McpServerState, arguments: LspJson) -> list[str] {
         if lsp_json_bool(arguments, "discover", false) { argv.append("--discover") }
         if lsp_json_bool(arguments, "frozen", false) { argv.append("--frozen") }
         if lsp_json_bool(arguments, "apply", false) { argv.append("--apply") }
-        let sub = mcp_run_subcommand(state, argv)
+        if test { argv.append("--test") }
+        let sub = if test { mcp_run_sdk_subcommand(state, argv) } else { mcp_run_subcommand(state, argv) }
         lsp_remove_file(tmp_edits)
         if sub[1] == "" { return mcp_tool_err("tool produced no JSON (exit " + sub[0] + ")") }
         return ["0", sub[1]]
     }
 
+    if test { return mcp_tool_err("'test' requires workspace 'manifest' and 'edits'") }
     let path_v = lsp_json_get(arguments, "path")
     let sym_v = lsp_json_get(arguments, "symbol")
     let rep_v = lsp_json_get(arguments, "replacement")
@@ -24730,7 +24911,7 @@ fn mcp_tools_list_json() -> str {
     ts.append("{\"name\":\"wysna_capabilities\",\"description\":\"Installed commands, targets and their capability contracts.\",\"inputSchema\":{\"type\":\"object\",\"properties\":{}}}")
     ts.append("{\"name\":\"wysna_graph\",\"description\":\"Compile-time semantic relationship graph (interfaces, classes, usages, calls, blast radius).\",\"inputSchema\":{\"type\":\"object\",\"properties\":{" + src_or_path + ",\"manifest\":{\"type\":\"string\",\"description\":\"Project manifest for an impact or architecture role query.\"},\"role\":{\"type\":\"string\",\"description\":\"Configured architecture role.\"},\"target\":{\"type\":\"string\",\"description\":\"Optional project target for the role query.\"},\"symbol\":{\"type\":\"string\",\"description\":\"Optional symbol name or node ID filter.\"},\"relation\":{\"type\":\"string\",\"description\":\"Optional relation filter: implements|hierarchy|usages|callers|callees|impact.\"}}}}")
     ts.append("{\"name\":\"wysna_inspect\",\"description\":\"Surgical, token-efficient symbol source slice (single or batch), contract, effects, call resolution, and dependency signatures.\",\"inputSchema\":{\"type\":\"object\",\"properties\":{" + src_or_path + ",\"symbol\":{\"type\":\"string\",\"description\":\"Symbol name to extract (omit for compact index).\"},\"symbols\":{\"type\":\"array\",\"items\":{\"type\":\"string\"},\"description\":\"Batch list of symbols to extract under one shared max_bytes budget.\"},\"with_deps\":{\"type\":\"boolean\",\"description\":\"Include signatures of referenced types and callees.\"},\"max_bytes\":{\"type\":\"integer\",\"minimum\":1,\"description\":\"Maximum UTF-8 byte budget for returned source/context.\"},\"source_offset\":{\"type\":\"integer\",\"minimum\":0,\"description\":\"UTF-8 byte offset within target symbol source.\"},\"offset\":{\"type\":\"integer\",\"minimum\":0,\"description\":\"Starting index offset when listing symbols.\"}}}}")
-    ts.append("{\"name\":\"wysna_patch\",\"description\":\"Checked declaration-level or multi-file workspace patch (source, symbol, hunks, create, delete) guarded by graph/plan hash and in-memory typecheck.\",\"inputSchema\":{\"type\":\"object\",\"properties\":{\"path\":{\"type\":\"string\",\"description\":\"Path to a .wysna file inside the server root (single-symbol mode).\"},\"symbol\":{\"type\":\"string\",\"description\":\"Target declaration name or Class.method (single-symbol mode).\"},\"replacement\":{\"type\":\"string\",\"description\":\"Replacement declaration Wysna code (single-symbol mode).\"},\"expect_graph_hash\":{\"type\":\"string\",\"description\":\"Optional optimistic lock graph hash (single-symbol mode).\"},\"manifest\":{\"type\":\"string\",\"description\":\"Path to wysna.toml inside server root (workspace mode).\"},\"edits\":{\"type\":\"array\",\"description\":\"Array of workspace edit objects ({path, source|symbol+replacement|hunks|create+source|delete}) to check and apply together.\"},\"expect_plan_hash\":{\"type\":\"string\",\"description\":\"Plan hash from preview (required with apply=true in workspace mode).\"},\"discover\":{\"type\":\"boolean\",\"description\":\"Discover tests under tests/ (workspace mode).\"},\"frozen\":{\"type\":\"boolean\",\"description\":\"Verify wysna.lock before planning/applying (workspace mode).\"},\"apply\":{\"type\":\"boolean\",\"description\":\"Write verified patch to disk (default false).\"}}}}")
+    ts.append("{\"name\":\"wysna_patch\",\"description\":\"Checked declaration-level or multi-file workspace patch (source, symbol, hunks, create, delete) guarded by graph/plan hash and in-memory typecheck.\",\"inputSchema\":{\"type\":\"object\",\"properties\":{\"path\":{\"type\":\"string\",\"description\":\"Path to a .wysna file inside the server root (single-symbol mode).\"},\"symbol\":{\"type\":\"string\",\"description\":\"Target declaration name or Class.method (single-symbol mode).\"},\"replacement\":{\"type\":\"string\",\"description\":\"Replacement declaration Wysna code (single-symbol mode).\"},\"expect_graph_hash\":{\"type\":\"string\",\"description\":\"Optional optimistic lock graph hash (single-symbol mode).\"},\"manifest\":{\"type\":\"string\",\"description\":\"Path to wysna.toml inside server root (workspace mode).\"},\"edits\":{\"type\":\"array\",\"description\":\"Array of workspace edit objects ({path, source|symbol+replacement|hunks|create+source|delete}) to check and apply together.\"},\"expect_plan_hash\":{\"type\":\"string\",\"description\":\"Plan hash from preview (required with apply=true in workspace mode).\"},\"discover\":{\"type\":\"boolean\",\"description\":\"Discover tests under tests/ (workspace mode).\"},\"frozen\":{\"type\":\"boolean\",\"description\":\"Verify wysna.lock before planning/applying (workspace mode).\"},\"test\":{\"type\":\"boolean\",\"description\":\"Run tests on the staged workspace. Requires --allow-exec.\"},\"apply\":{\"type\":\"boolean\",\"description\":\"Write verified patch to disk (default false).\"}}}}")
     ts.append("{\"name\":\"wysna_project_check\",\"description\":\"Static project-wide typecheck across wysna.toml targets and lockfile verification.\",\"inputSchema\":{\"type\":\"object\",\"properties\":{\"manifest\":{\"type\":\"string\",\"description\":\"Path to wysna.toml inside server root.\"},\"target\":{\"type\":\"string\",\"description\":\"Optional target name from wysna.toml.\"},\"frozen\":{\"type\":\"boolean\",\"description\":\"Verify wysna.lock before checking.\"}},\"required\":[\"manifest\"]}}")
     ts.append("{\"name\":\"wysna_project_test\",\"description\":\"List test plans deterministically (list=true) or execute project tests when MCP server was started with --allow-exec.\",\"inputSchema\":{\"type\":\"object\",\"properties\":{\"manifest\":{\"type\":\"string\",\"description\":\"Path to wysna.toml inside server root.\"},\"list\":{\"type\":\"boolean\",\"description\":\"Return static test plan and plan_hash without executing code.\"},\"discover\":{\"type\":\"boolean\",\"description\":\"Discover test files under tests/.\"},\"frozen\":{\"type\":\"boolean\",\"description\":\"Verify wysna.lock before listing or running tests.\"},\"filter\":{\"type\":\"string\",\"description\":\"Substring filter on test ID/name.\"},\"case\":{\"type\":\"string\",\"description\":\"Run only the specified test case ID.\"},\"expect_plan_hash\":{\"type\":\"string\",\"description\":\"Verify test selection against a previously listed plan_hash.\"}},\"required\":[\"manifest\"]}}")
     ts.append("{\"name\":\"wysna_skills\",\"description\":\"Version-matched concise coding and workflow guides embedded in Wysna.\",\"inputSchema\":{\"type\":\"object\",\"properties\":{\"topic\":{\"type\":\"string\",\"description\":\"overview, agent-loop, syntax, graph, patch, contracts, stdlib.\"}}}}")

@@ -245,7 +245,135 @@ fn wpatch_rename_file(src_path: str, dst_path: str) -> bool {
     return mv >= 0
 }
 
-fn proj_handle_workspace_patch(manifest_arg: str, edits_file: str, expected_hash: str, apply: bool, discover: bool, frozen: bool, json_mode: bool) -> unit {
+fn wpatch_test_paths(state: ProjectLockState, root: str) -> list[str] {
+    let mut paths = proj_snapshot_paths(state, root, "", false, true)
+    if proj_test_exists(state, root + "/wysna.lock") { paths.append("wysna.lock") }
+    return tool_sort_strings(paths)
+}
+
+fn wpatch_test_inputs_sha(state: ProjectLockState, root: str, paths: list[str]) -> str {
+    let mut rows: list[str] = []
+    for path in paths {
+        let absolute = root + "/" + path
+        if module_canonical_resolved(absolute) != absolute {
+            state.fail("W5005", "Workspace test input changed during staging: " + path)
+        }
+        let digest = proj_lock_host_text(state, absolute, "hash")
+        rows.append("[" + diag_json_quote(path) + "," + diag_json_quote(digest) + "]")
+    }
+    return diag_sha256_hex("[" + join_strings(rows, ",") + "]")
+}
+
+fn wpatch_copy_test_input(source: str, destination: str) -> bool {
+    if module_canonical_resolved(source) != source { return false }
+    let source_buf = tool_buf_from_str(source)
+    let destination_buf = tool_buf_from_str(destination)
+    let input = wysna_host_file_open(source_buf, 0)
+    let output = wysna_host_file_open(destination_buf, 3)
+    wysna_host_close(source_buf)
+    wysna_host_close(destination_buf)
+    let chunk = wysna_host_buffer_new()
+    let mut ok = wysna_host_is_open(input) == 1 and wysna_host_is_open(output) == 1
+    while ok {
+        let count = wysna_host_file_read(input, chunk, 1048576)
+        if count == 0 { break }
+        ok = count > 0 and wysna_host_file_write(output, chunk) == 0
+    }
+    wysna_host_close(chunk)
+    let closed_input = wysna_host_close(input)
+    let closed_output = wysna_host_close(output)
+    return ok and closed_input == 0 and closed_output == 0
+}
+
+struct PatchTestVerification { code: int, evidence: str }
+
+fn wpatch_verify_candidate_tests(state: ProjectLockState, m: ProjectManifest, paths: list[str], inputs_sha: str,
+                                  edit_rels: list[str], edit_actions: list[str], edit_after: list[str],
+                                  sdk_sha: str, revision: str, plan_hash: str, discover: bool, frozen: bool,
+                                  expected_count: int) -> PatchTestVerification {
+    let driver = env("WYSNA_SDK_DRIVER") else { "" }
+    let stage_env = env("WYSNA_PATCH_TEST_STAGE") else { "" }
+    let staging = if stage_env == "" { "" } else { module_canonical_resolved(stage_env) }
+    if driver == "" or staging == "" {
+        state.fail("W5002", "Tested patches require the wysna native SDK driver")
+    }
+    let candidate = staging + "/candidate"
+    if proj_path_exists(candidate) or not wpatch_ensure_parents(staging, "candidate/file") {
+        state.fail("W5004", "Cannot create a private patch test workspace")
+    }
+    for path in paths {
+        if not wpatch_ensure_parents(candidate, path) or not wpatch_copy_test_input(m.root + "/" + path, candidate + "/" + path) {
+            state.fail("W5004", "Cannot stage workspace test input: " + path)
+        }
+    }
+    if wpatch_test_inputs_sha(state, candidate, paths) != inputs_sha {
+        state.fail("W5005", "Workspace test snapshot changed during staging")
+    }
+    for index in 0..len(edit_rels) {
+        let relative = edit_rels[index]
+        let path = candidate + "/" + relative
+        if edit_actions[index] != "create" and not wpatch_remove(path) {
+            state.fail("W5004", "Cannot remove staged source: " + relative)
+        }
+        if edit_actions[index] != "delete" and
+           (not wpatch_ensure_parents(candidate, relative) or not proj_scaffold_write(path, edit_after[index])[1]) {
+            state.fail("W5004", "Cannot stage candidate source: " + relative)
+        }
+    }
+    let candidate_manifest = candidate + "/" + tool_basename(m.path)
+    let staged_manifest = proj_load_manifest(candidate_manifest)
+    if not staged_manifest.ok { state.fail(staged_manifest.err_code, staged_manifest.err_msg) }
+    if wpatch_live_revision(state, staged_manifest, sdk_sha) != revision {
+        state.fail("W5005", "Staged workspace differs from the checked patch")
+    }
+
+    let report_path = staging + "/test-result.json"
+    let mut argv: list[str] = ["project", "test", "--manifest", candidate_manifest, "--output-format=json-v1", "--diag-out", report_path]
+    if discover { argv.append("--discover") }
+    if frozen { argv.append("--frozen") }
+    let exe_buf = lsp_buf_from_str(driver)
+    let args_buf = lsp_pack_argv_buf(argv)
+    let rc = wysna_host_process_run(exe_buf, args_buf, 600000)
+    wysna_host_close(exe_buf)
+    wysna_host_close(args_buf)
+    let raw = read_file(report_path) else err { "" }
+    let envelope = mcp_parse_json_strict(raw)
+    let report = lsp_json_get(envelope, "result")
+    let status = lsp_json_str(report, "status", "")
+    let case_reports = lsp_json_get(report, "cases")
+    if lsp_json_str(report, "workspace_revision", "") != revision or case_reports.kind != "array" or
+       lsp_json_int(report, "selected", -1) != expected_count {
+        state.fail("W5001", "Project tests did not return a report for the checked candidate")
+    }
+    if not ((rc == 0 and status == "passed" and len(case_reports.items) == expected_count and expected_count > 0) or
+            (rc == 1 and status == "failed") or (rc == 2 and status == "empty") or (rc == 130 and status == "cancelled")) {
+        state.fail("W5001", "Project test runner did not complete verification")
+    }
+    if wpatch_live_revision(state, staged_manifest, sdk_sha) != revision {
+        state.fail("W5005", "Tests changed the staged source revision")
+    }
+
+    let mut rows: list[str] = []
+    let fields: list[str] = ["id", "status", "failure_kind", "exit_code", "duration_ms", "stdout_sha256", "stderr_sha256"]
+    for record in case_reports.items {
+        let mut parts: list[str] = []
+        for field in fields {
+            parts.append(diag_json_quote(field) + ":" + mcp_serialize_json_val(lsp_json_get(record, field)))
+        }
+        if lsp_json_str(record, "status", "") != "passed" {
+            let stderr = lsp_json_str(record, "stderr", "")
+            let excerpt = if len(stderr) > 2048 { slice(stderr, 0, 2048) } else { stderr }
+            parts.append("\"stderr\":" + diag_json_quote(excerpt))
+        }
+        rows.append("{" + join_strings(parts, ",") + "}")
+    }
+    let evidence = "{\"plan_hash\":" + diag_json_quote(plan_hash) + ",\"workspace_revision\":" + diag_json_quote(revision) +
+        ",\"test_plan_hash\":" + diag_json_quote(lsp_json_str(report, "plan_hash", "")) +
+        ",\"status\":" + diag_json_quote(status) + ",\"cases\":[" + join_strings(rows, ",") + "]}"
+    return PatchTestVerification { code: rc, evidence: evidence }
+}
+
+fn proj_handle_workspace_patch(manifest_arg: str, edits_file: str, expected_hash: str, apply: bool, discover: bool, frozen: bool, test: bool, json_mode: bool) -> unit {
     if apply and expected_hash == "" {
         proj_emit_error_and_exit("patch", json_mode, "W5002", "Applying workspace edits requires --expect-plan-hash from a successful preview")
     }
@@ -429,7 +557,21 @@ fn proj_handle_workspace_patch(manifest_arg: str, edits_file: str, expected_hash
             entries.append(edit_rels[ek])
         }
     }
-    for tc in test_plan.cases {
+    let mut patch_cases = test_plan.cases
+    if test and discover {
+        for ek in 0..len(edit_rels) {
+            let path = edit_rels[ek]
+            let filename = tool_basename(path)
+            if edit_actions[ek] == "create" and (len(path) > 6 and slice(path, 0, 6) == "tests/") and
+               ((len(filename) >= 5 and slice(filename, 0, 5) == "test_") or proj_str_ends_with(filename, "_test.wysna")) {
+                let tc = ProjectTestCase()
+                tc.name = "auto:" + path
+                tc.entry = path
+                patch_cases.append(tc)
+            }
+        }
+    }
+    for tc in patch_cases {
         if not tool_str_contains(entries, tc.entry) { entries.append(tc.entry) }
     }
     let sorted_entries = tool_sort_strings(entries)
@@ -548,7 +690,7 @@ fn proj_handle_workspace_patch(manifest_arg: str, edits_file: str, expected_hash
 
     let mut impact_rows: list[str] = []
     let mut selected_ids: list[str] = []
-    for tc in test_plan.cases {
+    for tc in patch_cases {
         let tid = "test:" + tc.name
         selected_ids.append(diag_json_quote(tid))
         let mut entry_pos = -1
@@ -577,13 +719,16 @@ fn proj_handle_workspace_patch(manifest_arg: str, edits_file: str, expected_hash
 
     let mut checked_q: list[str] = []
     for e in sorted_entries { checked_q.append(diag_json_quote(e)) }
+    let test_paths: list[str] = if test { wpatch_test_paths(state, m.root) } else { [] }
+    let test_inputs_sha = if test { wpatch_test_inputs_sha(state, m.root, test_paths) } else { "" }
     let payload_body = "{\"schema_version\":\"wysna.workspace-patch/1\"" +
         ",\"workspace_revision_before\":" + diag_json_quote(test_plan.revision) +
         ",\"workspace_revision_after\":" + diag_json_quote(after_rev) +
         ",\"changes\":[" + join_strings(changes_rows, ",") + "]" +
         ",\"checked\":[" + join_strings(checked_q, ",") + "]" +
         ",\"tests\":[" + join_strings(impact_rows, ",") + "]" +
-        ",\"selected_test_ids\":[" + join_strings(selected_ids, ",") + "]}"
+        ",\"selected_test_ids\":[" + join_strings(selected_ids, ",") + "]" +
+        (if test { ",\"test_inputs_sha256\":" + diag_json_quote(test_inputs_sha) } else { "" }) + "}"
     let plan_hash = diag_sha256_hex(payload_body)
 
     let live_mid = wpatch_live_revision(state, m, sdk_sha)
@@ -594,7 +739,20 @@ fn proj_handle_workspace_patch(manifest_arg: str, edits_file: str, expected_hash
         proj_emit_error_and_exit("patch", json_mode, "W5005", "Workspace edit plan is stale")
     }
 
-    if apply {
+    let mut test_code = 0
+    let mut evidence = ""
+    if test {
+        let verification = wpatch_verify_candidate_tests(state, m, test_paths, test_inputs_sha,
+            edit_rels, edit_actions, edit_after, sdk_sha, after_rev, plan_hash, discover, frozen, len(patch_cases))
+        test_code = verification.code
+        evidence = ",\"test_verification\":" + verification.evidence
+        if wpatch_live_revision(state, m, sdk_sha) != test_plan.revision or
+           wpatch_test_inputs_sha(state, m.root, wpatch_test_paths(state, m.root)) != test_inputs_sha {
+            state.fail("W5005", "Workspace test inputs changed during verification")
+        }
+    }
+
+    if apply and test_code == 0 {
         let stamp = str(unix_time())
         let mut tmp_paths: list[str] = []
         let mut backups: list[str] = []
@@ -680,13 +838,14 @@ fn proj_handle_workspace_patch(manifest_arg: str, edits_file: str, expected_hash
         wpatch_unlink_all(backups)
     }
 
-    let written_str = if apply { "true" } else { "false" }
+    let written_str = if apply and test_code == 0 { "true" } else { "false" }
     let full_result = slice(payload_body, 0, len(payload_body) - 1) +
-        ",\"plan_hash\":" + diag_json_quote(plan_hash) + ",\"written\":" + written_str + "}"
+        ",\"plan_hash\":" + diag_json_quote(plan_hash) + ",\"written\":" + written_str + evidence + "}"
     if json_mode {
-        diag_write_output(diag_tool_envelope_json("patch", "ok", 0, "[]", "result", full_result, "[]"))
+        let status = if test_code == 0 { "ok" } elif test_code == 2 { "usage_error" } else { "runtime_error" }
+        diag_write_output(diag_tool_envelope_json("patch", status, test_code, "[]", "result", full_result, "[]"))
     } else {
         print(full_result)
     }
-    exit(0)
+    exit(test_code)
 }

@@ -133,6 +133,21 @@ fn mcp_run_subcommand(state: McpServerState, tool_argv: list[str]) -> list[str] 
     return [str(rc), raw]
 }
 
+fn mcp_run_sdk_subcommand(state: McpServerState, tool_argv: list[str]) -> list[str] {
+    let output = mcp_next_tmp(state, "wysna_mcp_sdk", ".json")
+    let mut argv = tool_argv
+    argv.append("--diag-out")
+    argv.append(output)
+    let exe_buf = lsp_buf_from_str(state.sdk_driver)
+    let args_buf = lsp_pack_argv_buf(argv)
+    let rc = wysna_host_process_run(exe_buf, args_buf, 300000)
+    wysna_host_close(exe_buf)
+    wysna_host_close(args_buf)
+    let raw = read_file(output) else err { "" }
+    lsp_remove_file(output)
+    return [str(rc), raw]
+}
+
 fn mcp_resolve_source(state: McpServerState, arguments: LspJson) -> list[str] {
     let has_path = lsp_json_has(arguments, "path") and lsp_json_get(arguments, "path").kind != "null"
     let has_source = lsp_json_has(arguments, "source") and lsp_json_get(arguments, "source").kind != "null"
@@ -390,18 +405,9 @@ fn mcp_tool_project_test(state: McpServerState, arguments: LspJson) -> list[str]
         let d_json = diag_record_json("W5002", "usage", "error", "project test requires the wysna native SDK driver", "<mcp>", 1, 1, "")
         return ["0", diag_tool_envelope_json("project.test", "usage_error", 2, "[" + d_json + "]", "", "", "[]")]
     }
-    let out_tmp = mcp_next_tmp(state, "wysna_mcp_ptest", ".json")
-    base_argv.append("--diag-out")
-    base_argv.append(out_tmp)
-    let exe_buf = lsp_buf_from_str(state.sdk_driver)
-    let args_buf = lsp_pack_argv_buf(base_argv)
-    let rc = wysna_host_process_run(exe_buf, args_buf, 300000)
-    wysna_host_close(exe_buf)
-    wysna_host_close(args_buf)
-    let raw = read_file(out_tmp) else err { "" }
-    lsp_remove_file(out_tmp)
-    if raw == "" { return mcp_tool_err("project test produced no JSON report (exit " + str(rc) + ")") }
-    return ["0", raw]
+    let sub = mcp_run_sdk_subcommand(state, base_argv)
+    if sub[1] == "" { return mcp_tool_err("project test produced no JSON report (exit " + sub[0] + ")") }
+    return ["0", sub[1]]
 }
 
 fn mcp_serialize_json_val(v: LspJson) -> str {
@@ -431,6 +437,16 @@ fn mcp_serialize_json_val(v: LspJson) -> str {
 }
 
 fn mcp_tool_patch(state: McpServerState, arguments: LspJson) -> list[str] {
+    if lsp_json_has(arguments, "test") and lsp_json_get(arguments, "test").kind != "bool" {
+        return mcp_tool_err("'test' must be a boolean")
+    }
+    let test = lsp_json_bool(arguments, "test", false)
+    if test and (not state.allow_exec or state.sdk_driver == "") {
+        let msg = if not state.allow_exec { "Tested patches require starting the MCP server with --allow-exec" }
+            else { "Tested patches require the wysna native SDK driver" }
+        let diagnostic = diag_record_json("W5002", "usage", "error", msg, "<mcp>", 1, 1, "")
+        return ["0", diag_tool_envelope_json("patch", "usage_error", 2, "[" + diagnostic + "]", "", "", "[]")]
+    }
     if lsp_json_has(arguments, "edits") or lsp_json_has(arguments, "manifest") {
         let man_v = lsp_json_get(arguments, "manifest")
         let edits_v = lsp_json_get(arguments, "edits")
@@ -458,12 +474,14 @@ fn mcp_tool_patch(state: McpServerState, arguments: LspJson) -> list[str] {
         if lsp_json_bool(arguments, "discover", false) { argv.append("--discover") }
         if lsp_json_bool(arguments, "frozen", false) { argv.append("--frozen") }
         if lsp_json_bool(arguments, "apply", false) { argv.append("--apply") }
-        let sub = mcp_run_subcommand(state, argv)
+        if test { argv.append("--test") }
+        let sub = if test { mcp_run_sdk_subcommand(state, argv) } else { mcp_run_subcommand(state, argv) }
         lsp_remove_file(tmp_edits)
         if sub[1] == "" { return mcp_tool_err("tool produced no JSON (exit " + sub[0] + ")") }
         return ["0", sub[1]]
     }
 
+    if test { return mcp_tool_err("'test' requires workspace 'manifest' and 'edits'") }
     let path_v = lsp_json_get(arguments, "path")
     let sym_v = lsp_json_get(arguments, "symbol")
     let rep_v = lsp_json_get(arguments, "replacement")
@@ -557,7 +575,7 @@ fn mcp_tools_list_json() -> str {
     ts.append("{\"name\":\"wysna_capabilities\",\"description\":\"Installed commands, targets and their capability contracts.\",\"inputSchema\":{\"type\":\"object\",\"properties\":{}}}")
     ts.append("{\"name\":\"wysna_graph\",\"description\":\"Compile-time semantic relationship graph (interfaces, classes, usages, calls, blast radius).\",\"inputSchema\":{\"type\":\"object\",\"properties\":{" + src_or_path + ",\"manifest\":{\"type\":\"string\",\"description\":\"Project manifest for an impact or architecture role query.\"},\"role\":{\"type\":\"string\",\"description\":\"Configured architecture role.\"},\"target\":{\"type\":\"string\",\"description\":\"Optional project target for the role query.\"},\"symbol\":{\"type\":\"string\",\"description\":\"Optional symbol name or node ID filter.\"},\"relation\":{\"type\":\"string\",\"description\":\"Optional relation filter: implements|hierarchy|usages|callers|callees|impact.\"}}}}")
     ts.append("{\"name\":\"wysna_inspect\",\"description\":\"Surgical, token-efficient symbol source slice (single or batch), contract, effects, call resolution, and dependency signatures.\",\"inputSchema\":{\"type\":\"object\",\"properties\":{" + src_or_path + ",\"symbol\":{\"type\":\"string\",\"description\":\"Symbol name to extract (omit for compact index).\"},\"symbols\":{\"type\":\"array\",\"items\":{\"type\":\"string\"},\"description\":\"Batch list of symbols to extract under one shared max_bytes budget.\"},\"with_deps\":{\"type\":\"boolean\",\"description\":\"Include signatures of referenced types and callees.\"},\"max_bytes\":{\"type\":\"integer\",\"minimum\":1,\"description\":\"Maximum UTF-8 byte budget for returned source/context.\"},\"source_offset\":{\"type\":\"integer\",\"minimum\":0,\"description\":\"UTF-8 byte offset within target symbol source.\"},\"offset\":{\"type\":\"integer\",\"minimum\":0,\"description\":\"Starting index offset when listing symbols.\"}}}}")
-    ts.append("{\"name\":\"wysna_patch\",\"description\":\"Checked declaration-level or multi-file workspace patch (source, symbol, hunks, create, delete) guarded by graph/plan hash and in-memory typecheck.\",\"inputSchema\":{\"type\":\"object\",\"properties\":{\"path\":{\"type\":\"string\",\"description\":\"Path to a .wysna file inside the server root (single-symbol mode).\"},\"symbol\":{\"type\":\"string\",\"description\":\"Target declaration name or Class.method (single-symbol mode).\"},\"replacement\":{\"type\":\"string\",\"description\":\"Replacement declaration Wysna code (single-symbol mode).\"},\"expect_graph_hash\":{\"type\":\"string\",\"description\":\"Optional optimistic lock graph hash (single-symbol mode).\"},\"manifest\":{\"type\":\"string\",\"description\":\"Path to wysna.toml inside server root (workspace mode).\"},\"edits\":{\"type\":\"array\",\"description\":\"Array of workspace edit objects ({path, source|symbol+replacement|hunks|create+source|delete}) to check and apply together.\"},\"expect_plan_hash\":{\"type\":\"string\",\"description\":\"Plan hash from preview (required with apply=true in workspace mode).\"},\"discover\":{\"type\":\"boolean\",\"description\":\"Discover tests under tests/ (workspace mode).\"},\"frozen\":{\"type\":\"boolean\",\"description\":\"Verify wysna.lock before planning/applying (workspace mode).\"},\"apply\":{\"type\":\"boolean\",\"description\":\"Write verified patch to disk (default false).\"}}}}")
+    ts.append("{\"name\":\"wysna_patch\",\"description\":\"Checked declaration-level or multi-file workspace patch (source, symbol, hunks, create, delete) guarded by graph/plan hash and in-memory typecheck.\",\"inputSchema\":{\"type\":\"object\",\"properties\":{\"path\":{\"type\":\"string\",\"description\":\"Path to a .wysna file inside the server root (single-symbol mode).\"},\"symbol\":{\"type\":\"string\",\"description\":\"Target declaration name or Class.method (single-symbol mode).\"},\"replacement\":{\"type\":\"string\",\"description\":\"Replacement declaration Wysna code (single-symbol mode).\"},\"expect_graph_hash\":{\"type\":\"string\",\"description\":\"Optional optimistic lock graph hash (single-symbol mode).\"},\"manifest\":{\"type\":\"string\",\"description\":\"Path to wysna.toml inside server root (workspace mode).\"},\"edits\":{\"type\":\"array\",\"description\":\"Array of workspace edit objects ({path, source|symbol+replacement|hunks|create+source|delete}) to check and apply together.\"},\"expect_plan_hash\":{\"type\":\"string\",\"description\":\"Plan hash from preview (required with apply=true in workspace mode).\"},\"discover\":{\"type\":\"boolean\",\"description\":\"Discover tests under tests/ (workspace mode).\"},\"frozen\":{\"type\":\"boolean\",\"description\":\"Verify wysna.lock before planning/applying (workspace mode).\"},\"test\":{\"type\":\"boolean\",\"description\":\"Run tests on the staged workspace. Requires --allow-exec.\"},\"apply\":{\"type\":\"boolean\",\"description\":\"Write verified patch to disk (default false).\"}}}}")
     ts.append("{\"name\":\"wysna_project_check\",\"description\":\"Static project-wide typecheck across wysna.toml targets and lockfile verification.\",\"inputSchema\":{\"type\":\"object\",\"properties\":{\"manifest\":{\"type\":\"string\",\"description\":\"Path to wysna.toml inside server root.\"},\"target\":{\"type\":\"string\",\"description\":\"Optional target name from wysna.toml.\"},\"frozen\":{\"type\":\"boolean\",\"description\":\"Verify wysna.lock before checking.\"}},\"required\":[\"manifest\"]}}")
     ts.append("{\"name\":\"wysna_project_test\",\"description\":\"List test plans deterministically (list=true) or execute project tests when MCP server was started with --allow-exec.\",\"inputSchema\":{\"type\":\"object\",\"properties\":{\"manifest\":{\"type\":\"string\",\"description\":\"Path to wysna.toml inside server root.\"},\"list\":{\"type\":\"boolean\",\"description\":\"Return static test plan and plan_hash without executing code.\"},\"discover\":{\"type\":\"boolean\",\"description\":\"Discover test files under tests/.\"},\"frozen\":{\"type\":\"boolean\",\"description\":\"Verify wysna.lock before listing or running tests.\"},\"filter\":{\"type\":\"string\",\"description\":\"Substring filter on test ID/name.\"},\"case\":{\"type\":\"string\",\"description\":\"Run only the specified test case ID.\"},\"expect_plan_hash\":{\"type\":\"string\",\"description\":\"Verify test selection against a previously listed plan_hash.\"}},\"required\":[\"manifest\"]}}")
     ts.append("{\"name\":\"wysna_skills\",\"description\":\"Version-matched concise coding and workflow guides embedded in Wysna.\",\"inputSchema\":{\"type\":\"object\",\"properties\":{\"topic\":{\"type\":\"string\",\"description\":\"overview, agent-loop, syntax, graph, patch, contracts, stdlib.\"}}}}")

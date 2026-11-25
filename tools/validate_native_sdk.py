@@ -550,6 +550,55 @@ def validate(sdk, report, strict_source=False, compiler_source=None, application
         stale = run('project-test-stale-plan', ['project', 'test', *test_options,
                     '--expect-plan-hash', '0' * 64], expected=2)
         require(json.loads(stale.stdout)['diagnostics'][0]['code'] == 'W5005', stale.stdout)
+        patch_manifest = proj_dir / 'wysna.toml'
+        edit_path = work / 'workspace-edits.json'
+        changed_source = proj_dir / 'src/logic.wysna'
+        original = changed_source.read_bytes()
+        edits = [{'path': 'src/logic.wysna', 'source': 'pub fn greet(who: str) -> str { "broken " + who }\n'}]
+        edit_path.write_text(json.dumps(edits), encoding='utf-8')
+        patch_options = ['patch', '--manifest', patch_manifest, '--edits', edit_path,
+                         '--test', '--discover', '--output-format=json-v1']
+        failed = run('patch-test-failure', patch_options, expected=1)
+        failed_patch = json.loads(failed.stdout)['result']
+        require(failed_patch['test_verification']['status'] == 'failed' and not failed_patch['written'], failed_patch)
+        blocked = run('patch-test-blocks-apply', [*patch_options, '--apply', '--expect-plan-hash',
+                      failed_patch['plan_hash']], expected=1)
+        require(not json.loads(blocked.stdout)['result']['written'] and changed_source.read_bytes() == original,
+                'Behavioral regression changed the original project')
+
+        edits[0]['source'] = original.decode('utf-8') + 'pub fn version() -> int { 1 }\n'
+        edits.append({'path': 'tests/test_candidate.wysna', 'create': True,
+                      'source': 'let input = read_file("fixture.txt") else err { exit(8) }\n'
+                                'write_file("candidate-only.txt", input) else err { exit(9) }\n'})
+        (proj_dir / 'fixture.txt').write_bytes(b'build fixture\n')
+        edit_path.write_text(json.dumps(edits), encoding='utf-8')
+        checked = run('patch-test-preview', patch_options)
+        checked_patch = json.loads(checked.stdout)['result']
+        verification = checked_patch['test_verification']
+        require(verification['status'] == 'passed' and not checked_patch['written'] and
+                verification['plan_hash'] == checked_patch['plan_hash'] and
+                verification['workspace_revision'] == checked_patch['workspace_revision_after'] and
+                'test:auto:tests/test_candidate.wysna' in {case['id'] for case in verification['cases']}, checked_patch)
+        request = {
+            'jsonrpc': '2.0', 'id': 1, 'method': 'tools/call',
+            'params': {'name': 'wysna_patch', 'arguments': {
+                'manifest': 'wysna.toml', 'edits': edits, 'test': True, 'discover': True,
+                'apply': True, 'expect_plan_hash': checked_patch['plan_hash'],
+            }},
+        }
+        mcp_options = ['mcp', '--root', proj_dir]
+        request_bytes = json.dumps(request).encode('utf-8') + b'\n'
+        denied = run('patch-test-mcp-denied', mcp_options, stdin=request_bytes)
+        denial = json.loads(json.loads(denied.stdout)['result']['content'][0]['text'])
+        require(denial['status'] == 'usage_error' and denial['diagnostics'][0]['code'] == 'W5002' and
+                changed_source.read_bytes() == original, denial)
+
+        applied = run('patch-test-mcp-apply', [*mcp_options, '--allow-exec'], stdin=request_bytes)
+        result = json.loads(json.loads(applied.stdout)['result']['content'][0]['text'])['result']
+        require(result['written'] and result['test_verification']['status'] == 'passed' and
+                changed_source.read_bytes() == edits[0]['source'].encode('utf-8') and
+                not (proj_dir / 'candidate-only.txt').exists(), result)
+
         fixture_entry.write_text('let invalid: int = "bad"\n', encoding='utf-8')
         invalid = run('project-test-compile-diagnostic', ['project', 'test', *test_options,
                       '--case', 'test:auto:tests/test_fixture.wysna'], expected=1)

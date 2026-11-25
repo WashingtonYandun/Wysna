@@ -89,7 +89,8 @@ static void sdk_help(void) {
          "       wysna api [MODULE] [--manifest PATH] [--output-format=json-v1]\n"
          "       wysna project <new|lock|check|build|run|test> [--manifest PATH] [--target NAME] [--profile dev|release|size] [-o OUTPUT] [--filter NAME] [-- ARGUMENTS]\n"
          "       wysna packages <subcommand> [options]\n"
-         "       wysna mcp [--root DIR]\n"
+         "       wysna patch --manifest FILE --edits FILE [--test] [--apply --expect-plan-hash HASH]\n"
+         "       wysna mcp [--root DIR] [--allow-exec]\n"
          "       wysna lsp\n"
          "Build and run accept --include-dir DIR, --link FILE, --library-dir DIR and --library NAME.\n"
          "Build accepts --target=wasi for a standalone WASI preview 1 command.\n"
@@ -908,11 +909,24 @@ static int sdk_execute(SdkInvocation* invocation, const SdkOptions* options, int
         return sdk_error("W5001", "Cannot start the native stdio server", target_exe);
 #endif
     }
+    if (strcmp(options->command, "patch") == 0) {
+        for (int i = 2; i < argc; i++) {
+            if (strcmp(argv[i], "--test") != 0) continue;
+            char driver_raw[SDK_PATH_CAP], driver_abs[SDK_PATH_CAP];
+            if (!sdk_executable(driver_raw) || !sdk_absolute(driver_abs, driver_raw, 1) ||
+                !sdk_temp(invocation->workspace, NULL) ||
+                !sdk_environment("WYSNA_PATCH_TEST_STAGE", invocation->workspace) ||
+                !sdk_environment("WYSNA_SDK_DRIVER", driver_abs)) {
+                return sdk_error("W5001", "Cannot initialize a private patch test workspace", NULL);
+            }
+            break;
+        }
+    }
     if (sdk_is_agent_passthrough(options->command) ||
         (strcmp(options->command, "check") == 0 && sdk_has_json_v1(argc, argv)) ||
         strcmp(options->command, "fmt") == 0) {
         const char* target_exe = strcmp(options->command, "packages") == 0 ? invocation->project_engine : invocation->engine;
-        if (strcmp(target_exe, invocation->engine) != 0) {
+        if (strcmp(target_exe, invocation->engine) != 0 || strcmp(options->command, "patch") == 0) {
             (void)sdk_environment("WYSNA_SELFHOST_COMPILER", invocation->engine);
         }
         const char* engine_arguments[SDK_ARGUMENT_LIMIT + 3];
