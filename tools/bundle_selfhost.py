@@ -47,6 +47,7 @@ MODULE_ORDER = [
     "09_lsp.wysna",
     "09_schema.wysna",
     "09_fix.wysna",
+    "09_project_architecture_manifest.wysna",
     "09_project.wysna",
     "09_architecture.wysna",
     "09_project_check_inproc.wysna",

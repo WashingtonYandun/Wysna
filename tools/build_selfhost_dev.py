@@ -50,6 +50,7 @@ UNIT_SOURCES = {
     ],
     "project": [
         *_COMMON_HEAD,
+        "selfhost/src/09_project_architecture_manifest.wysna",
         "selfhost/src/09_project.wysna",
         "selfhost/src/09_project_lock.wysna",
         "selfhost/src/09_project_tests.wysna",

@@ -19313,6 +19313,156 @@ fn tool_handle_fix(args: list[str], json_mode_in: bool) -> unit {
     if still_failing { exit(1) }
     exit(0)
 }
+# Shared architecture manifest grammar for the full compiler and the project dev unit.
+
+class ProjectArchitectureRule {
+    id: str
+    from_role: str
+    relations: list[str]
+    deny_roles: list[str]
+    severity: str
+    keys: list[str]
+
+    fn init() {
+        this.id = ""
+        this.from_role = ""
+        this.relations = []
+        this.deny_roles = []
+        this.severity = ""
+        this.keys = []
+    }
+}
+
+class ProjectArchitecture {
+    enabled: bool
+    schema_path: str
+    schema_name: str
+    roles: list[str]
+    rules: list[ProjectArchitectureRule]
+    keys: list[str]
+
+    fn init() {
+        this.enabled = false
+        this.schema_path = ""
+        this.schema_name = ""
+        this.roles = []
+        this.rules = []
+        this.keys = []
+    }
+}
+
+fn proj_architecture_strings(raw_value: str) -> list[str] {
+    let value = lsp_trim(raw_value)
+    let n = len(value)
+    if n < 2 or value[0] != "[" or value[n - 1] != "]" { return [] }
+    let mut items: list[str] = []
+    let mut start = 1
+    let mut quote = ""
+    let mut escaped = false
+    for i in 1..n {
+        let ch = value[i]
+        if quote != "" {
+            if escaped { escaped = false }
+            elif quote == "\"" and ch == "\\" { escaped = true }
+            elif ch == quote { quote = "" }
+        } elif ch == "\"" or ch == "'" { quote = ch }
+        elif ch == "," or i == n - 1 {
+            let field = lsp_trim(slice(value, start, i))
+            if field == "" and i == n - 1 { break }
+            let item = proj_parse_toml_string(field)
+            if item[0] != "1" or tool_str_contains(items, item[1]) { return [] }
+            items.append(item[1])
+            start = i + 1
+        }
+    }
+    if quote != "" { return [] }
+    return items
+}
+
+fn proj_architecture_identifier(name: str) -> bool {
+    if name == "" { return false }
+    for i in 0..len(name) {
+        let ch = ord(name[i])
+        let letter = (ch >= 65 and ch <= 90) or (ch >= 97 and ch <= 122) or ch == 95
+        if not letter and not (i > 0 and ch >= 48 and ch <= 57) { return false }
+    }
+    return true
+}
+
+fn proj_architecture_key(policy: ProjectArchitecture, key: str, value: str) -> bool {
+    if tool_str_contains(policy.keys, key) { return false }
+    policy.keys.append(key)
+    if key == "roles" {
+        policy.roles = proj_architecture_strings(value)
+        return len(policy.roles) > 0
+    }
+    if key == "role_attribute" {
+        let parsed = proj_parse_toml_string(value)
+        if parsed[0] != "1" { return false }
+        let identity = parsed[1]
+        for i in 0..len(identity) - 1 {
+            if slice(identity, i, i + 2) == "::" {
+                let path = slice(identity, 0, i)
+                let name = slice(identity, i + 2, len(identity))
+                let relative = proj_safe_rel_path(path, "architecture.role_attribute")
+                if relative[0] != "1" or not proj_str_ends_with(path, ".wysna") or not proj_architecture_identifier(name) { return false }
+                policy.schema_path = path
+                policy.schema_name = name
+                return true
+            }
+        }
+    }
+    return false
+}
+
+fn proj_architecture_rule_key(rule: ProjectArchitectureRule, key: str, value: str) -> bool {
+    if tool_str_contains(rule.keys, key) { return false }
+    rule.keys.append(key)
+    if key == "relations" {
+        rule.relations = proj_architecture_strings(value)
+        return len(rule.relations) > 0
+    }
+    if key == "deny_roles" {
+        rule.deny_roles = proj_architecture_strings(value)
+        return len(rule.deny_roles) > 0
+    }
+    let parsed = proj_parse_toml_string(value)
+    if parsed[0] != "1" { return false }
+    if key == "id" { rule.id = parsed[1] }
+    elif key == "from_role" { rule.from_role = parsed[1] }
+    elif key == "severity" { rule.severity = parsed[1] }
+    else { return false }
+    return true
+}
+
+fn proj_architecture_error(policy: ProjectArchitecture) -> str {
+    if not policy.enabled and len(policy.rules) == 0 { return "" }
+    if policy.schema_path == "" or len(policy.roles) == 0 or len(policy.rules) == 0 {
+        return "architecture requires role_attribute, roles, and at least one rule"
+    }
+    for role in policy.roles {
+        if not proj_architecture_identifier(role) { return "architecture roles must be identifiers" }
+    }
+    let mut ids: list[str] = []
+    for rule in policy.rules {
+        if not proj_valid_name(rule.id) or tool_str_contains(ids, rule.id) {
+            return "architecture rule id must be a unique lowercase name"
+        }
+        ids.append(rule.id)
+        if not tool_str_contains(policy.roles, rule.from_role) or len(rule.deny_roles) == 0 {
+            return "architecture rule requires known from_role and deny_roles"
+        }
+        for denied in rule.deny_roles {
+            if not tool_str_contains(policy.roles, denied) { return "architecture rule refers to an unknown role" }
+        }
+        if len(rule.relations) == 0 { return "architecture rule requires relations" }
+        for relation in rule.relations {
+            if relation != "calls" and relation != "uses_type" { return "architecture relations must contain only calls or uses_type" }
+        }
+        if rule.severity != "error" { return "architecture severity must be 'error'" }
+    }
+    return ""
+}
 # Native strict parser, validator, and runner/planner for wysna.toml manifest version 1.
 
 class ProjectPreopen {
@@ -19380,42 +19530,6 @@ class ProjectTestCase {
         this.has_name = false
         this.has_entry = false
         this.has_timeout_ms = false
-    }
-}
-
-class ProjectArchitectureRule {
-    id: str
-    from_role: str
-    relations: list[str]
-    deny_roles: list[str]
-    severity: str
-    keys: list[str]
-
-    fn init() {
-        this.id = ""
-        this.from_role = ""
-        this.relations = []
-        this.deny_roles = []
-        this.severity = ""
-        this.keys = []
-    }
-}
-
-class ProjectArchitecture {
-    enabled: bool
-    schema_path: str
-    schema_name: str
-    roles: list[str]
-    rules: list[ProjectArchitectureRule]
-    keys: list[str]
-
-    fn init() {
-        this.enabled = false
-        this.schema_path = ""
-        this.schema_name = ""
-        this.roles = []
-        this.rules = []
-        this.keys = []
     }
 }
 
@@ -19957,119 +20071,6 @@ fn proj_parse_inline_preopens(raw_val: str, root_canon: str, target_label: str) 
         out.append(pacc)
     }
     return out
-}
-
-fn proj_architecture_strings(raw_value: str) -> list[str] {
-    let value = lsp_trim(raw_value)
-    let n = len(value)
-    if n < 2 or value[0] != "[" or value[n - 1] != "]" { return [] }
-    let mut items: list[str] = []
-    let mut start = 1
-    let mut quote = ""
-    let mut escaped = false
-    for i in 1..n {
-        let ch = value[i]
-        if quote != "" {
-            if escaped { escaped = false }
-            elif quote == "\"" and ch == "\\" { escaped = true }
-            elif ch == quote { quote = "" }
-        } elif ch == "\"" or ch == "'" { quote = ch }
-        elif ch == "," or i == n - 1 {
-            let field = lsp_trim(slice(value, start, i))
-            if field == "" and i == n - 1 { break }
-            let item = proj_parse_toml_string(field)
-            if item[0] != "1" or tool_str_contains(items, item[1]) { return [] }
-            items.append(item[1])
-            start = i + 1
-        }
-    }
-    if quote != "" { return [] }
-    return items
-}
-
-fn proj_architecture_identifier(name: str) -> bool {
-    if name == "" { return false }
-    for i in 0..len(name) {
-        let ch = ord(name[i])
-        let letter = (ch >= 65 and ch <= 90) or (ch >= 97 and ch <= 122) or ch == 95
-        if not letter and not (i > 0 and ch >= 48 and ch <= 57) { return false }
-    }
-    return true
-}
-
-fn proj_architecture_key(policy: ProjectArchitecture, key: str, value: str) -> bool {
-    if tool_str_contains(policy.keys, key) { return false }
-    policy.keys.append(key)
-    if key == "roles" {
-        policy.roles = proj_architecture_strings(value)
-        return len(policy.roles) > 0
-    }
-    if key == "role_attribute" {
-        let parsed = proj_parse_toml_string(value)
-        if parsed[0] != "1" { return false }
-        let identity = parsed[1]
-        for i in 0..len(identity) - 1 {
-            if slice(identity, i, i + 2) == "::" {
-                let path = slice(identity, 0, i)
-                let name = slice(identity, i + 2, len(identity))
-                let relative = proj_safe_rel_path(path, "architecture.role_attribute")
-                if relative[0] != "1" or not proj_str_ends_with(path, ".wysna") or not proj_architecture_identifier(name) { return false }
-                policy.schema_path = path
-                policy.schema_name = name
-                return true
-            }
-        }
-    }
-    return false
-}
-
-fn proj_architecture_rule_key(rule: ProjectArchitectureRule, key: str, value: str) -> bool {
-    if tool_str_contains(rule.keys, key) { return false }
-    rule.keys.append(key)
-    if key == "relations" {
-        rule.relations = proj_architecture_strings(value)
-        return len(rule.relations) > 0
-    }
-    if key == "deny_roles" {
-        rule.deny_roles = proj_architecture_strings(value)
-        return len(rule.deny_roles) > 0
-    }
-    let parsed = proj_parse_toml_string(value)
-    if parsed[0] != "1" { return false }
-    if key == "id" { rule.id = parsed[1] }
-    elif key == "from_role" { rule.from_role = parsed[1] }
-    elif key == "severity" { rule.severity = parsed[1] }
-    else { return false }
-    return true
-}
-
-fn proj_architecture_error(policy: ProjectArchitecture) -> str {
-    if not policy.enabled and len(policy.rules) == 0 { return "" }
-    if policy.schema_path == "" or len(policy.roles) == 0 or len(policy.rules) == 0 {
-        return "architecture requires role_attribute, roles, and at least one rule"
-    }
-    for role in policy.roles {
-        if not proj_architecture_identifier(role) { return "architecture roles must be identifiers" }
-    }
-    let mut ids: list[str] = []
-    for rule in policy.rules {
-        if not proj_valid_name(rule.id) or tool_str_contains(ids, rule.id) {
-            return "architecture rule id must be a unique lowercase name"
-        }
-        ids.append(rule.id)
-        if not tool_str_contains(policy.roles, rule.from_role) or len(rule.deny_roles) == 0 {
-            return "architecture rule requires known from_role and deny_roles"
-        }
-        for denied in rule.deny_roles {
-            if not tool_str_contains(policy.roles, denied) { return "architecture rule refers to an unknown role" }
-        }
-        if len(rule.relations) == 0 { return "architecture rule requires relations" }
-        for relation in rule.relations {
-            if relation != "calls" and relation != "uses_type" { return "architecture relations must contain only calls or uses_type" }
-        }
-        if rule.severity != "error" { return "architecture severity must be 'error'" }
-    }
-    return ""
 }
 
 fn proj_parse_manifest_at(abs_manifest_path: str, visit_stack: list[str]) -> ProjectManifest {
@@ -24178,6 +24179,7 @@ class McpServerState {
     self_exe: str
     stdlib_root: str
     tmp_dir: str
+    tmp_nonce: str
     allow_exec: bool
     sdk_driver: str
     seq: int
@@ -24189,6 +24191,11 @@ class McpServerState {
         this.self_exe = self_exe
         this.stdlib_root = stdlib_root
         this.tmp_dir = tmp_dir
+        this.tmp_nonce = diag_uuid4()
+        if this.tmp_nonce == "native" {
+            eprint("wysna mcp: cannot allocate an isolated session")
+            exit(2)
+        }
         this.allow_exec = allow_exec
         this.sdk_driver = sdk_driver
         this.seq = 0
@@ -24276,7 +24283,7 @@ fn mcp_tool_err(msg: str) -> list[str] {
 
 fn mcp_next_tmp(state: McpServerState, prefix: str, ext: str) -> str {
     state.seq = state.seq + 1
-    return state.tmp_dir + "/" + prefix + "_" + str(unix_time()) + "_" + str(state.seq) + ext
+    return state.tmp_dir + "/" + prefix + "_" + state.tmp_nonce + "_" + str(state.seq) + ext
 }
 
 fn mcp_run_subcommand(state: McpServerState, tool_argv: list[str]) -> list[str] {

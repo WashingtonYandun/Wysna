@@ -1,4 +1,5 @@
 """Verify MCP wysna_project_check and opt-in wysna_project_test across Seed and Selfhost."""
+from concurrent.futures import ThreadPoolExecutor
 import json
 from pathlib import Path
 import subprocess
@@ -91,3 +92,23 @@ def test_seed_mcp_executes_project_test_with_allow_exec(tmp_path):
     assert not failed and executed['status'] == 'ok', executed
     assert executed['result']['passed'] == 1
     assert executed['result']['cases'][0]['stdout'].splitlines() == ['mcp-exec-pass']
+
+
+def test_concurrent_selfhost_servers_keep_diagnostics_in_their_session(tmp_path):
+    cli = [ensure_selfhost_compiler_binary(str(ROOT))]
+    roots = []
+    for index in range(6):
+        root = tmp_path / str(index)
+        root.mkdir()
+        (root / 'main.wysna').write_text(f'let value_{index}: int = "wrong"\n', encoding='utf-8')
+        roots.append(root)
+
+    def check(root):
+        failed, payload = _call_mcp(cli, root, 'wysna_check', {'path': 'main.wysna'})
+        assert not failed, payload
+        diagnostic, = payload['diagnostics']
+        assert diagnostic['code'] == 'W2001'
+        assert Path(diagnostic['primary_span']['source_id']).resolve() == (root / 'main.wysna').resolve()
+
+    with ThreadPoolExecutor(max_workers=len(roots)) as executor:
+        list(executor.map(check, roots))

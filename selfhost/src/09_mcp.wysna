@@ -6,6 +6,7 @@ class McpServerState {
     self_exe: str
     stdlib_root: str
     tmp_dir: str
+    tmp_nonce: str
     allow_exec: bool
     sdk_driver: str
     seq: int
@@ -17,6 +18,11 @@ class McpServerState {
         this.self_exe = self_exe
         this.stdlib_root = stdlib_root
         this.tmp_dir = tmp_dir
+        this.tmp_nonce = diag_uuid4()
+        if this.tmp_nonce == "native" {
+            eprint("wysna mcp: cannot allocate an isolated session")
+            exit(2)
+        }
         this.allow_exec = allow_exec
         this.sdk_driver = sdk_driver
         this.seq = 0
@@ -104,7 +110,7 @@ fn mcp_tool_err(msg: str) -> list[str] {
 
 fn mcp_next_tmp(state: McpServerState, prefix: str, ext: str) -> str {
     state.seq = state.seq + 1
-    return state.tmp_dir + "/" + prefix + "_" + str(unix_time()) + "_" + str(state.seq) + ext
+    return state.tmp_dir + "/" + prefix + "_" + state.tmp_nonce + "_" + str(state.seq) + ext
 }
 
 fn mcp_run_subcommand(state: McpServerState, tool_argv: list[str]) -> list[str] {
