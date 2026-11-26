@@ -1,0 +1,37 @@
+name: PR Branch Policy
+
+on:
+  pull_request:
+    branches: [develop, main]
+    types: [opened, synchronize, reopened, edited]
+
+jobs:
+  branch-policy:
+    name: Validate GitFlow branch convention
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Check head branch against target branch policy
+        env:
+          BASE_REF: ${{ github.base_ref }}
+          HEAD_REF: ${{ github.head_ref }}
+        run: |
+          set -euo pipefail
+          if [ "$BASE_REF" = "main" ]; then
+            case "$HEAD_REF" in
+              develop|release/*|hotfix/*|ci/*)
+                echo "OK: $HEAD_REF -> main is allowed."
+                ;;
+              *)
+                echo "::error::PRs to main must come from develop, release/*, hotfix/*, or ci/*. Got '$HEAD_REF'. Target develop for features/fixes."
+                exit 1
+                ;;
+            esac
+          elif [ "$BASE_REF" = "develop" ]; then
+            if [[ "$HEAD_REF" =~ ^(feat|feature|fix|perf|refactor|docs|ci|chore|breaking|hotfix)/[a-zA-Z0-9._-]+$ ]] || [ "$HEAD_REF" = "main" ]; then
+              echo "OK: $HEAD_REF -> develop matches branch naming convention."
+            else
+              echo "::error::Branch '$HEAD_REF' targeting develop must start with feat/, feature/, fix/, perf/, refactor/, docs/, ci/, chore/, breaking/, or hotfix/."
+              exit 1
+            fi
+          fi

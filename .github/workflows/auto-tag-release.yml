@@ -1,0 +1,51 @@
+name: Auto-Tag Release on Main
+
+on:
+  workflow_run:
+    workflows: ["Wysna Compiler Integration Gates"]
+    branches: [main]
+    types: [completed]
+
+permissions:
+  actions: write
+  contents: write
+
+jobs:
+  tag-release:
+    name: Tag release version after main CI passes
+    if: github.event.workflow_run.conclusion == 'success'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.workflow_run.head_sha }}
+          fetch-depth: 0
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Create missing release tag and trigger release publication
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          HEAD_SHA: ${{ github.event.workflow_run.head_sha }}
+        run: |
+          set -euo pipefail
+          version="$(PYTHONPATH=src python3 -c 'from common.Version import WYSNA_VERSION; print(WYSNA_VERSION)')"
+          tag="v${version}"
+          if git rev-parse -q --verify "refs/tags/${tag}" >/dev/null; then
+            echo "Tag ${tag} already exists; skipping auto-tag."
+            exit 0
+          fi
+          notes="docs/release-notes/${tag}.md"
+          if [ ! -f "$notes" ]; then
+            echo "No release notes template at ${notes}; skipping auto-tag for unreleased snapshot ${version}."
+            exit 0
+          fi
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git tag -a "$tag" "$HEAD_SHA" -m "Release ${tag}"
+          git push origin "$tag"
+          gh workflow run publish-release.yml --repo "$GITHUB_REPOSITORY" --ref main -f tag="$tag"
+          echo "Created tag ${tag} at ${HEAD_SHA} and dispatched publish-release.yml."
