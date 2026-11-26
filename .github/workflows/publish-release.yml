@@ -4,6 +4,11 @@ on:
   push:
     tags:
       - "v*.*.*"
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Existing vX.Y.Z tag on main to publish"
+        required: true
 
 permissions: {}
 
@@ -24,7 +29,7 @@ jobs:
       - name: Check out the exact release tag
         uses: actions/checkout@v4
         with:
-          ref: ${{ github.sha }}
+          ref: ${{ github.event.inputs.tag || github.sha }}
           fetch-depth: 0
 
       - uses: actions/setup-python@v5
@@ -35,14 +40,16 @@ jobs:
         id: source-ci
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          INPUT_TAG: ${{ github.event.inputs.tag || '' }}
         run: |
           set -euo pipefail
-          tag="${GITHUB_REF_NAME}"
+          tag="${INPUT_TAG:-$GITHUB_REF_NAME}"
           if [[ ! "$tag" =~ ^v([0-9]+\.[0-9]+\.[0-9]+)$ ]]; then
             echo "Release tag must match vX.Y.Z: $tag" >&2
             exit 1
           fi
           version="${BASH_REMATCH[1]}"
+          head_sha="$(git rev-parse "${tag}^{commit}")"
           declared_version="$(PYTHONPATH=src python3 -c 'from common.Version import WYSNA_VERSION; print(WYSNA_VERSION)')"
           if [ "$declared_version" != "$version" ]; then
             echo "Tag version $version does not match WYSNA_VERSION ($declared_version)" >&2
@@ -54,18 +61,19 @@ jobs:
             exit 1
           fi
           git fetch --no-tags origin main
-          git merge-base --is-ancestor "$GITHUB_SHA" origin/main
-          run_id=$(gh api "repos/${GITHUB_REPOSITORY}/actions/workflows/ci.yml/runs?head_sha=${GITHUB_SHA}&per_page=100" \
+          git merge-base --is-ancestor "$head_sha" origin/main
+          run_id=$(gh api "repos/${GITHUB_REPOSITORY}/actions/workflows/ci.yml/runs?head_sha=${head_sha}&per_page=100" \
             --jq '[.workflow_runs[] | select(.event == "push" and .head_branch == "main" and .status == "completed" and .conclusion == "success")][0].id // empty')
           if [ -z "$run_id" ]; then
-            echo "No successful main CI run exists for tagged source $GITHUB_SHA" >&2
+            echo "No successful main CI run exists for tagged source $head_sha" >&2
             exit 1
           fi
           echo "tag=$tag" >> "$GITHUB_OUTPUT"
           echo "version=$version" >> "$GITHUB_OUTPUT"
+          echo "head_sha=$head_sha" >> "$GITHUB_OUTPUT"
           echo "release_notes=$release_notes" >> "$GITHUB_OUTPUT"
           echo "run_id=$run_id" >> "$GITHUB_OUTPUT"
-          echo "Source commit $GITHUB_SHA passed main CI run $run_id for $tag"
+          echo "Source commit $head_sha passed main CI run $run_id for $tag"
 
       - name: Download the accepted Windows installer artifacts
         uses: actions/download-artifact@v4
@@ -107,7 +115,7 @@ jobs:
         run: |
           python3 tools/prepare_release_assets.py \
             --version "${{ steps.source-ci.outputs.version }}" \
-            --source-commit "$GITHUB_SHA" \
+            --source-commit "${{ steps.source-ci.outputs.head_sha }}" \
             --ci-run-id "${{ steps.source-ci.outputs.run_id }}" \
             --windows-artifact artifacts/windows \
             --macos-artifact artifacts/macos \
@@ -121,12 +129,13 @@ jobs:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           TAG: ${{ steps.source-ci.outputs.tag }}
           VERSION: ${{ steps.source-ci.outputs.version }}
+          HEAD_SHA: ${{ steps.source-ci.outputs.head_sha }}
         run: |
           set -euo pipefail
           gh release create "$TAG" dist/release-assets/* \
             --title "Wysna ${VERSION}" \
             --notes-file dist/release-notes.md \
-            --target "$GITHUB_SHA" \
+            --target "$HEAD_SHA" \
             --verify-tag
           gh release view "$TAG" --json isDraft,isPrerelease,tagName,assets | python3 -c '
           import json, os, sys
@@ -145,3 +154,30 @@ jobs:
           assert len(assets) >= 19, f"Expected >= 19 verified assets, got {len(assets)}"
           print(f"Published stable Wysna {ver} with {len(assets)} verified assets")
           '
+
+      - name: Notify Wysna Handbook (repository_dispatch & Vercel Deploy Hook)
+        continue-on-error: true
+        env:
+          TAG: ${{ steps.source-ci.outputs.tag }}
+          VERSION: ${{ steps.source-ci.outputs.version }}
+          HANDBOOK_DISPATCH_TOKEN: ${{ secrets.HANDBOOK_DISPATCH_TOKEN }}
+          VERCEL_DEPLOY_HOOK_URL: ${{ secrets.VERCEL_DEPLOY_HOOK_URL }}
+        run: |
+          set -euo pipefail
+          notified=0
+          if [ -n "$HANDBOOK_DISPATCH_TOKEN" ]; then
+            GH_TOKEN="$HANDBOOK_DISPATCH_TOKEN" gh api repos/WashingtonYandun/wysna-handbook/dispatches \
+              -f event_type=wysna-release \
+              -f "client_payload[tag]=${TAG}" \
+              -f "client_payload[version]=${VERSION}"
+            echo "Dispatched wysna-release to WashingtonYandun/wysna-handbook for ${TAG}."
+            notified=1
+          fi
+          if [ -n "$VERCEL_DEPLOY_HOOK_URL" ]; then
+            curl -fsS -X POST "$VERCEL_DEPLOY_HOOK_URL" >/dev/null
+            echo "Triggered Vercel Deploy Hook for ${TAG}."
+            notified=1
+          fi
+          if [ "$notified" -eq 0 ]; then
+            echo "Info: Neither HANDBOOK_DISPATCH_TOKEN nor VERCEL_DEPLOY_HOOK_URL is configured; skipping website trigger."
+          fi
