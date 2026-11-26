@@ -39,6 +39,7 @@ MODULE_ORDER = [
     "08_mir_patterns.wysna",
     "08_mir_functions.wysna",
     "08_mir_lowering.wysna",
+    "08_mir_optimize.wysna",
     "08_mir_verifier.wysna",
     "08_c99_literals.wysna",
     "08_mir_c99.wysna",
