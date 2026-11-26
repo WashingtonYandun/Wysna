@@ -251,7 +251,7 @@ def apply_release_plan(
     examples_dir = root / "examples"
     if examples_dir.is_dir():
         main_entry = root / "src/main.py"
-        lock_env = {**os.environ, "PYTHONPATH": str(root / "src")}
+        lock_env = {**os.environ, "PYTHONPATH": f"{root}{os.pathsep}{root / 'src'}"}
         for toml_path in sorted(examples_dir.glob("**/wysna.toml")):
             text = toml_path.read_text(encoding="utf-8")
             updated = re.sub(r'(language\s*=\s*")[^"]+(")', rf'\g<1>{lang_version}\g<2>', text, count=1)
