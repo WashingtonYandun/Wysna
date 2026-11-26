@@ -1,5 +1,13 @@
 # Changelog
 
+## 1.0.0 — 2026-11-26
+
+### Stable 1.0.0 Milestone, CI Optimization & Automated Release Pipeline
+- Promotes the language and toolchain contract to `1.0` / `1.0.0` across `agent_contract.json`, `selfhost/`, `Version.py`, documentation, and all example manifests/lockfiles.
+- Optimizes CI losslessly (shared C99 runtime object cache, verified SHA-256 bootstrap reuse, deduplicated conformance split, sharded ASan+UBSan, and toolchain caches), cutting total runner-minutes by ~45% with zero skipped checks.
+- Introduces branch-driven SemVer release automation (`tools/compute_release.py`, `pr-policy.yml`, `prepare-release.yml`, `auto-tag-release.yml`) and automatic `wysna-handbook` release synchronization on `publish-release.yml`.
+- Removes obsolete pre-1.0 `0.8 -> 0.9` migration guide and legacy migration fixtures.
+
 ## 0.9.5 — 2026-11-24
 
 ### Agent-First Waves 1 & 2 (Protocol, Graph, Workspace Patch & MCP)

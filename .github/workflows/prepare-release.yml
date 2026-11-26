@@ -1,0 +1,105 @@
+name: Prepare Release PR
+
+on:
+  push:
+    branches: [develop]
+  workflow_dispatch:
+    inputs:
+      version_override:
+        description: "Optional explicit SemVer target (e.g., 1.0.0)"
+        required: false
+        default: ""
+      dry_run:
+        description: "Compute release plan without opening or updating PR"
+        type: boolean
+        required: false
+        default: false
+
+permissions:
+  contents: write
+  pull-requests: write
+
+concurrency:
+  group: prepare-release-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  prepare-release:
+    name: Compute SemVer and open Release PR
+    if: "!contains(github.event.head_commit.message, '[skip ci]') && !startsWith(github.event.head_commit.message, 'chore(release):')"
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          ref: develop
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Collect merged PRs since latest version tag and compute SemVer plan
+        id: plan
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          VERSION_OVERRIDE: ${{ github.event.inputs.version_override || '' }}
+          DRY_RUN: ${{ github.event.inputs.dry_run || 'false' }}
+        run: |
+          set -euo pipefail
+          last_tag=$(git tag -l 'v*.*.*' --sort=-v:refname | head -n 1 || true)
+          if [ -n "$last_tag" ]; then
+            last_date=$(git log -1 --format=%cI "$last_tag")
+          else
+            last_date="1970-01-01T00:00:00Z"
+          fi
+          gh api --paginate "repos/${GITHUB_REPOSITORY}/pulls?state=closed&base=develop&sort=updated&direction=desc&per_page=100" \
+            --jq ".[] | select(.merged_at != null and .merged_at > \"$last_date\") | {number: .number, title: .title, head_ref: .head.ref, labels: .labels}" \
+            | jq -s '.' > /tmp/merged_prs.json
+          args=(--prs-json /tmp/merged_prs.json)
+          if [ -n "$VERSION_OVERRIDE" ]; then
+            args+=(--version-override "$VERSION_OVERRIDE")
+          fi
+          if [ "$DRY_RUN" != "true" ]; then
+            args+=(--apply)
+          fi
+          python3 tools/compute_release.py "${args[@]}" > /tmp/release_plan.json
+          cat /tmp/release_plan.json
+          should=$(python3 -c "import json; print(str(json.load(open('/tmp/release_plan.json'))['should_release']).lower())")
+          next_ver=$(python3 -c "import json; print(json.load(open('/tmp/release_plan.json'))['next_version'])")
+          tag=$(python3 -c "import json; print(json.load(open('/tmp/release_plan.json'))['tag'])")
+          bump=$(python3 -c "import json; print(json.load(open('/tmp/release_plan.json'))['bump'])")
+          echo "should_release=$should" >> "$GITHUB_OUTPUT"
+          echo "next_version=$next_ver" >> "$GITHUB_OUTPUT"
+          echo "tag=$tag" >> "$GITHUB_OUTPUT"
+          echo "bump=$bump" >> "$GITHUB_OUTPUT"
+
+      - name: Push release branch and open/update Release PR to main
+        if: steps.plan.outputs.should_release == 'true' && (github.event.inputs.dry_run || 'false') != 'true'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          NEXT_VERSION: ${{ steps.plan.outputs.next_version }}
+          TAG: ${{ steps.plan.outputs.tag }}
+          BUMP: ${{ steps.plan.outputs.bump }}
+        run: |
+          set -euo pipefail
+          branch="release/${TAG}"
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git checkout -B "$branch"
+          git add -A
+          if git diff --cached --quiet; then
+            echo "No release diff to commit."
+            exit 0
+          fi
+          git commit -m "chore(release): prepare ${TAG} (${BUMP})"
+          git push --force-with-lease origin "HEAD:refs/heads/${branch}"
+          existing_pr=$(gh pr list --repo "$GITHUB_REPOSITORY" --base main --head "$branch" --state open --json number --jq '.[0].number // empty')
+          body=$(printf '%s\n\n%s' \
+            "Automated SemVer release preparation for **Wysna ${NEXT_VERSION}** (\`${BUMP}\` bump from branches merged to \`develop\`)." \
+            "Merging this PR into \`main\` will run full CI and automatically tag \`${TAG}\`, build installers, publish GitHub Release assets, and notify \`wysna-handbook\`.")
+          if [ -n "$existing_pr" ]; then
+            gh pr edit "$existing_pr" --repo "$GITHUB_REPOSITORY" --title "release: ${TAG}" --body "$body"
+          else
+            gh pr create --repo "$GITHUB_REPOSITORY" --base main --head "$branch" --title "release: ${TAG}" --body "$body"
+          fi

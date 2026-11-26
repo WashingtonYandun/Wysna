@@ -23,7 +23,7 @@ Choose a distribution on [GitHub Releases](https://github.com/WashingtonYandun/W
 
 Verify the download against `SHA256SUMS`, unpack the archive, and add its `bin` directory to your `PATH` (on Windows, you can also run `open-terminal.cmd`). Confirm the install with `wysna --version`.
 
-The examples in this README target **Wysna 0.9.5**.
+The examples in this README target **Wysna 1.0.0**.
 
 <a id="first-project"></a>
 
