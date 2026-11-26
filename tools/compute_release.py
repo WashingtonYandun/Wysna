@@ -223,7 +223,7 @@ def apply_release_plan(
     if sync_bundle:
         bundler = root / "tools/bundle_selfhost.py"
         if bundler.is_file():
-            subprocess.run([sys.executable, str(bundler)], cwd=root, check=True)
+            subprocess.run([sys.executable, str(bundler)], cwd=root, stdout=sys.stderr, check=True)
             touched.extend([
                 "selfhost/src/01_agent_contract.wysna",
                 "selfhost/compiler.wysna",
