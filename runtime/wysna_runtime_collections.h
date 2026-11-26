@@ -145,7 +145,8 @@ WYSNA_RT_FN WVal wysna_make_dict(int32_t count, const WVal* keys, const WVal* va
             if (reindexed) {
                 wysna_dict_index_entry_hashed(d, index, full_hash);
             } else {
-                d->buckets[slot] = wysna_dict_pack_bucket(index, full_hash);
+                d->buckets[slot] = index;
+                wysna_dict_tags(d)[slot] = wysna_dict_ctrl_tag(full_hash);
             }
         }
     }
