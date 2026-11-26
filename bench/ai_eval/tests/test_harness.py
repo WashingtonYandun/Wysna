@@ -332,3 +332,12 @@ def test_token_density_and_self_healing_audit(tmp_path):
     assert healing["auto_repaired_without_llm"] is True
     assert healing["llm_repair_turns_required"] == 0
 
+
+def test_system_prompt_matches_v1_grammar():
+    from bench.ai_eval.harness import SYSTEM_PROMPT
+
+    assert "use `public`/`private`" not in SYSTEM_PROMPT
+    assert "`pub` and `priv`" in SYSTEM_PROMPT
+    for token in ("`u8`", "`None`", "`_ =>`", "`Name { field: new_val, ..base }`"):
+        assert token in SYSTEM_PROMPT, token
+
