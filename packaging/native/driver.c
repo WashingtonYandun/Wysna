@@ -367,28 +367,39 @@ static const char* sdk_env(SdkInvocation* invocation, const char* name) {
     invocation->owned[invocation->owned_count++] = value;
     return value;
 }
+static int sdk_resolve_global_cache(char* output) {
+    char* cache = sdk_environment_value("WYSNA_CACHE_HOME");
+    if (cache && cache[0]) {
+        int ok = sdk_absolute(output, cache, 0);
+        free(cache);
+        return ok;
+    }
+    free(cache);
+#ifdef _WIN32
+    char* home = sdk_environment_value("LOCALAPPDATA");
+    int ok = home && home[0] && sdk_join(output, home, "Wysna/zig-0.15.2");
+    free(home);
+    return ok;
+#else
+    char* home = sdk_environment_value("XDG_CACHE_HOME");
+    if (home && home[0]) {
+        int ok = sdk_join(output, home, "wysna/zig-0.15.2");
+        free(home);
+        return ok;
+    }
+    free(home);
+    home = sdk_environment_value("HOME");
+    int ok = home && home[0] && sdk_join(output, home, ".cache/wysna/zig-0.15.2");
+    free(home);
+    return ok;
+#endif
+}
 static int sdk_prepare_cache(SdkInvocation* invocation) {
     const char* local = sdk_env(invocation, "ZIG_LOCAL_CACHE_DIR");
     const char* global = sdk_env(invocation, "ZIG_GLOBAL_CACHE_DIR");
     invocation->previous_local_cache = local;
     invocation->previous_global_cache = global;
-    const char* cache = sdk_env(invocation, "WYSNA_CACHE_HOME");
-    if (cache && cache[0]) {
-        if (!sdk_absolute(invocation->global_cache, cache, 0)) return 0;
-    } else {
-#ifdef _WIN32
-        const char* home = sdk_env(invocation, "LOCALAPPDATA");
-        if (!home || !home[0]) return 0;
-        if (!sdk_join(invocation->global_cache, home, "Wysna/zig-0.15.2")) return 0;
-#else
-        const char* home = sdk_env(invocation, "XDG_CACHE_HOME");
-        if (home && home[0]) { if (!sdk_join(invocation->global_cache, home, "wysna/zig-0.15.2")) return 0; }
-        else {
-            home = sdk_env(invocation, "HOME"); if (!home || !home[0]) return 0;
-            if (!sdk_join(invocation->global_cache, home, ".cache/wysna/zig-0.15.2")) return 0;
-        }
-#endif
-    }
+    if (!sdk_resolve_global_cache(invocation->global_cache)) return 0;
     return sdk_join(invocation->scratch, invocation->workspace, "zig-cache") &&
         sdk_environment("ZIG_LOCAL_CACHE_DIR", invocation->scratch) &&
         sdk_environment("ZIG_GLOBAL_CACHE_DIR", invocation->global_cache);

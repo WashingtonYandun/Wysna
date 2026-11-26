@@ -432,3 +432,181 @@ def test_native_report_utf8_replacement_matches_seed(tmp_path):
     result = subprocess.run([str(binary)], capture_output=True, timeout=10)
     assert result.returncode == 0 and result.stderr == b''
     assert json.loads(result.stdout) == [data.decode('utf-8', errors='replace') for data in sequences]
+
+
+def _native_run_cached(sdk, root: Path, cache_dir: Path, scratch: Path, *args: str, extra_env=None):
+    env = sdk._clean_env(scratch)
+    env['WYSNA_CACHE_HOME'] = str(cache_dir)
+    if extra_env:
+        env.update(extra_env)
+    return subprocess.run(
+        [str(sdk.driver_bin), *args],
+        cwd=root,
+        env=env,
+        capture_output=True,
+        text=True,
+        timeout=45.0,
+    )
+
+
+@pytest.mark.skipif(os.name == 'nt', reason='POSIX test compiler shim; real Windows SDK acceptance covers execution')
+def test_native_test_cache_tier1_hit_executes_fresh_and_stays_hygienic(native_sdk, tmp_path):
+    root = project(tmp_path, 'import "std/environment" as env\nprint(env.get("WYSNA_TEST_PROBE") ?? "unset")\n')
+    cache_dir = tmp_path / 'cache_home'
+    scratch = tmp_path / 'scratch_tmp'
+    cache_dir.mkdir()
+    scratch.mkdir()
+
+    before_entries = sorted(p.name for p in root.iterdir())
+    first = _native_run_cached(
+        native_sdk, root, cache_dir, scratch,
+        'project', 'test', '--output-format=json-v1',
+        extra_env={'WYSNA_TEST_PROBE': 'first-run'},
+    )
+    assert first.returncode == 0 and first.stderr == '', first.stderr + first.stdout
+    first_payload = json.loads(first.stdout)
+    first_case = first_payload['result']['cases'][0]
+    assert first_case['stdout'] == 'first-run\n'
+
+    v1_dir = cache_dir / 'project-test-cache/v1'
+    bins = list((v1_dir / 'bin').iterdir())
+    refs = list((v1_dir / 'rev').iterdir())
+    assert len(bins) == 1 and len(refs) == 1
+    assert refs[0].read_text(encoding='utf-8') == bins[0].name
+
+    second = _native_run_cached(
+        native_sdk, root, cache_dir, scratch,
+        'project', 'test', '--output-format=json-v1',
+        extra_env={'WYSNA_TEST_PROBE': 'second-run'},
+    )
+    assert second.returncode == 0 and second.stderr == '', second.stderr + second.stdout
+    second_payload = json.loads(second.stdout)
+    second_case = second_payload['result']['cases'][0]
+    assert second_case['stdout'] == 'second-run\n'
+    assert second_case['compile_ms'] < first_case['compile_ms']
+    assert sorted(p.name for p in root.iterdir()) == before_entries
+    assert list(scratch.iterdir()) == []
+
+
+@pytest.mark.skipif(os.name == 'nt', reason='POSIX test compiler shim; real Windows SDK acceptance covers execution')
+def test_native_test_cache_invalidates_on_imported_source_edit(native_sdk, tmp_path):
+    root = project(tmp_path, 'import "helper.wysna" as helper\nprint(helper.value())\n')
+    helper = root / 'src/helper.wysna'
+    helper.write_text('pub fn value() -> int { 11 }\n', encoding='utf-8')
+    cache_dir = tmp_path / 'cache_home'
+    scratch = tmp_path / 'scratch_tmp'
+    cache_dir.mkdir()
+    scratch.mkdir()
+
+    one = json.loads(_native_run_cached(native_sdk, root, cache_dir, scratch,
+                                        'project', 'test', '--output-format=json-v1').stdout)
+    assert one['result']['cases'][0]['stdout'] == '11\n'
+
+    helper.write_text('pub fn value() -> int { 29 }\n', encoding='utf-8')
+    two = json.loads(_native_run_cached(native_sdk, root, cache_dir, scratch,
+                                        'project', 'test', '--output-format=json-v1').stdout)
+    assert two['result']['cases'][0]['stdout'] == '29\n'
+    assert one['result']['workspace_revision'] != two['result']['workspace_revision']
+
+
+@pytest.mark.skipif(os.name == 'nt', reason='POSIX test compiler shim; real Windows SDK acceptance covers execution')
+def test_native_test_cache_tier2_hit_on_unrelated_source_edit(native_sdk, tmp_path):
+    root = project(tmp_path, 'print(7)\n')
+    unrelated = root / 'src/unrelated.wysna'
+    unrelated.write_text('pub fn unused() -> int { 1 }\n', encoding='utf-8')
+    cache_dir = tmp_path / 'cache_home'
+    scratch = tmp_path / 'scratch_tmp'
+    cache_dir.mkdir()
+    scratch.mkdir()
+
+    one = json.loads(_native_run_cached(native_sdk, root, cache_dir, scratch,
+                                        'project', 'test', '--output-format=json-v1').stdout)
+    assert one['result']['cases'][0]['stdout'] == '7\n'
+    v1_dir = cache_dir / 'project-test-cache/v1'
+    assert len(list((v1_dir / 'bin').iterdir())) == 1
+    assert len(list((v1_dir / 'rev').iterdir())) == 1
+
+    unrelated.write_text('pub fn unused() -> int { 2 }\n', encoding='utf-8')
+    two = json.loads(_native_run_cached(native_sdk, root, cache_dir, scratch,
+                                        'project', 'test', '--output-format=json-v1').stdout)
+    assert two['result']['workspace_revision'] != one['result']['workspace_revision']
+    assert two['result']['cases'][0]['stdout'] == '7\n'
+    assert len(list((v1_dir / 'bin').iterdir())) == 1
+    assert len(list((v1_dir / 'rev').iterdir())) == 2
+
+
+@pytest.mark.skipif(os.name == 'nt', reason='POSIX test compiler shim; real Windows SDK acceptance covers execution')
+def test_native_test_cache_skips_compile_errors_and_respects_disable_flag(native_sdk, tmp_path):
+    root = project(tmp_path, 'let bad: int = "oops"\n')
+    cache_dir = tmp_path / 'cache_home'
+    scratch = tmp_path / 'scratch_tmp'
+    cache_dir.mkdir()
+    scratch.mkdir()
+
+    failed = _native_run_cached(native_sdk, root, cache_dir, scratch,
+                                'project', 'test', '--output-format=json-v1')
+    assert failed.returncode == 1
+    v1_dir = cache_dir / 'project-test-cache/v1'
+    assert list((v1_dir / 'bin').iterdir()) == []
+    assert list((v1_dir / 'rev').iterdir()) == []
+
+    disabled_parent = tmp_path / 'disabled'
+    disabled_parent.mkdir()
+    root2 = project(disabled_parent, 'print("ok")\n')
+    cache_disabled = tmp_path / 'cache_disabled'
+    cache_disabled.mkdir()
+    bypassed = _native_run_cached(
+        native_sdk, root2, cache_disabled, scratch,
+        'project', 'test', '--output-format=json-v1',
+        extra_env={'WYSNA_DISABLE_TEST_CACHE': '1'},
+    )
+    assert bypassed.returncode == 0
+    assert not (cache_disabled / 'project-test-cache').exists()
+
+
+@pytest.mark.skipif(os.name == 'nt', reason='POSIX test compiler shim; real Windows SDK acceptance covers execution')
+def test_native_patch_preview_apply_hits_tier1_cache(native_sdk, tmp_path):
+    root = project(tmp_path, 'import "main.wysna" as app\nprint(app.greeting())\n')
+    (root / 'src/main.wysna').write_text('pub fn greeting() -> str { "old" }\n', encoding='utf-8')
+    (root / 'tests/example.wysna').write_text(
+        'import "main.wysna" as app\nif app.greeting() != "new" { exit(1) }\nprint("ok")\n',
+        encoding='utf-8',
+    )
+    edits_path = root / 'edits.json'
+    edits_path.write_text(json.dumps([
+        {'path': 'src/main.wysna', 'source': 'pub fn greeting() -> str { "new" }\n'},
+    ]), encoding='utf-8')
+    cache_dir = tmp_path / 'cache_home'
+    scratch = tmp_path / 'scratch_tmp'
+    cache_dir.mkdir()
+    scratch.mkdir()
+
+    preview_res = _native_run_cached(
+        native_sdk, root, cache_dir, scratch,
+        'patch', '--manifest', 'wysna.toml', '--edits', str(edits_path),
+        '--test', '--output-format=json-v1',
+    )
+    assert preview_res.returncode == 0, preview_res.stderr + preview_res.stdout
+    preview = json.loads(preview_res.stdout)['result']
+    assert preview['written'] is False
+    assert preview['test_verification']['cases'][0]['status'] == 'passed'
+    preview_timing = preview['test_timing_ms']['cases'][0]
+    v1_dir = cache_dir / 'project-test-cache/v1'
+    assert len(list((v1_dir / 'bin').iterdir())) == 1
+    assert len(list((v1_dir / 'rev').iterdir())) == 1
+
+    apply_res = _native_run_cached(
+        native_sdk, root, cache_dir, scratch,
+        'patch', '--manifest', 'wysna.toml', '--edits', str(edits_path),
+        '--test', '--apply', '--expect-plan-hash', preview['plan_hash'],
+        '--output-format=json-v1',
+    )
+    assert apply_res.returncode == 0, apply_res.stderr + apply_res.stdout
+    applied = json.loads(apply_res.stdout)['result']
+    assert applied['written'] is True
+    assert applied['test_verification']['cases'][0]['status'] == 'passed'
+    apply_timing = applied['test_timing_ms']['cases'][0]
+    assert len(list((v1_dir / 'bin').iterdir())) == 1
+    assert len(list((v1_dir / 'rev').iterdir())) == 1
+    assert apply_timing['compile_ms'] < preview_timing['compile_ms']
+    assert apply_timing['compile_ms'] <= 50
