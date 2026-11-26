@@ -715,8 +715,6 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: "3.11"
-          cache: pip
-          cache-dependency-path: pyproject.toml
       - uses: actions/download-artifact@v4
         with:
           name: wysna-bootstrap-windows-latest-clang
@@ -798,8 +796,6 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: "3.11"
-          cache: pip
-          cache-dependency-path: pyproject.toml
       - uses: actions/download-artifact@v4
         with:
           name: wysna-wheel
@@ -859,8 +855,6 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: "3.11"
-          cache: pip
-          cache-dependency-path: pyproject.toml
       - uses: actions/download-artifact@v4
         with:
           name: wysna-wheel
@@ -1088,8 +1082,6 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: "3.11"
-          cache: pip
-          cache-dependency-path: pyproject.toml
       - uses: actions/download-artifact@v4
         with:
           name: native-sdk-ubuntu-latest
