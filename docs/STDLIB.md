@@ -102,7 +102,7 @@ Wysna distributes modules under `std/` imported via canonical paths such as `imp
 - `std/time`: host wall-clock, monotonic timer, sleep, and ISO-8601 calendar math.
   - `time.unix_seconds() -> int`, `now_ms() -> int`, `monotonic_ms() -> int`, `elapsed_ms(start) -> int`, `sleep(ms) -> unit`, `from_unix_ms(ms) -> DateTime`, `to_unix_ms(dt) -> int`, `format_iso8601(dt) -> str`, `parse_iso8601(text) -> DateTime ! ParseError`.
 - `std/async`: structured concurrent tasks (`Task[T]`), background OS-thread execution, timers, and polling combinators.
-  - [Grupos de CPU](TASK_GROUPS.md): `run_group`, `group_cancelled` y `cancel_group`.
+  - [CPU task groups](WORKER_SAFETY.md#cpu-task-groups): `run_group`, `group_cancelled`, and `cancel_group`.
   - `async.ready`, `failed`, `sleep_ms(ms) -> Task[int]`, and `spawn` (parameterized `Task[T]` constructors taking `T`, `Error`, or `fn() -> T`): create immediate, timer, or real background OS-thread tasks (`pthread` / `CreateThread` / Python pool).
   - `async.poll_events(timeout_ms) -> int`, `is_ready(task) -> bool`, `wait(task) -> T ! str`, `all(tasks) -> list[T] ! str`, `race(tasks) -> T ! str`: multiplex, await, and race tasks safely with automatic result hydration and exit cleanup.
 - `std/process`: bounded child-process execution.

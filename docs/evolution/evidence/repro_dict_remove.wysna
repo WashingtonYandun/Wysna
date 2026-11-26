@@ -1,3 +1,0 @@
-let mut dict_val = {"a": 1, "b": 2}
-dict_val.remove("a")
-print(dict_val)

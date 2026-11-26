@@ -1,2 +1,0 @@
-[W5006] docs/evolution/evidence/prog_a_cli.wysna - Capability policy cannot allow untrusted foreign declarations; the interpreter may bind them before execution
-  = help: Remove the external declarations or run without a policy.

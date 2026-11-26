@@ -1,7 +1,0 @@
-=== Seed check ===
-[W3002] /Users/washingtonyandun/Documents/ChatGPT/w_lang_compiler/docs/evolution/evidence/repro_str_methods.wysna:2:17 - Cannot access property 'trim' on type 'str'
-   |
- 2 | let clean = text.trim()
-   |                 ^
-=== Compiler check ===
-[W3002] /Users/washingtonyandun/Documents/ChatGPT/w_lang_compiler/docs/evolution/evidence/repro_str_methods.wysna:2:18 - unknown string method: trim

@@ -10,7 +10,7 @@ Medición del 24 de noviembre de 2026 en Apple M3 con macOS 26.6.2 ARM64. Se com
 - **Compilador con un literal de 4.096 elementos.** `check` bajó de 151,85 a 128,00 ms y `emit-c` bajó de 177,05 a 149,73 ms. Ambos SDK emitieron los mismos 287.667 bytes de C para esa entrada.
 - **Arranque del CLI mínimo.** La mediana quedó en 1,72 y 1,70 ms. El binario pasó de 90.376 a 90.392 bytes.
 
-Las cifras se limitan a estos programas y a este entorno. Las muestras completas, el p95, los tamaños, los SHA y los contadores de memoria están en [results-macos-arm64.json](results-macos-arm64.json).
+Las cifras se limitan a estos programas y a este entorno. Genera las muestras completas, el p95, los tamaños, los SHA y los contadores de memoria localmente con `python3 bench/native_hotpaths/run.py`.
 
 ## Reproducción
 

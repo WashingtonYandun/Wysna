@@ -15,14 +15,15 @@ recommended installation, supported workflows, experiments and security limits.
 - [Effect and capability reports](EFFECTS.md): read-only `wysna explain`, model, trust, schema, and limits.
 - [Engine support](ENGINE_PARITY_MATRIX.md): tested fixture coverage across Wysna Seed and Wysna Compiler.
 - [Known limits](KNOWN_LIMITS.md): supported boundaries and deferred language decisions.
-- [Full language capabilities & debt audit](FULL_LANGUAGE_CAPABILITIES_AND_DEBT_AUDIT.md): comprehensive end-to-end feature inventory, architectural limits, and technical debt analysis.
 
 ## Tooling and distribution
 
 - [AI agent workflow](AI_AGENT_GUIDE.md): deterministic project workflow, target discovery, and diagnostics.
+- [Architecture contracts](ARCHITECTURE_CONTRACTS.md): typed role attributes, dependency rules, and static verification.
 - [Projects](PROJECTS.md): manifests, local dependencies, lockfiles, targets, and user tests.
 - [Seed distribution](SEED_DISTRIBUTION.md): relocatable Seed installation with private CPython and Zig.
 - [Native SDK](NATIVE_SDK.md): Python-free native compiler SDK, commands, and provenance.
+- [Isolated Linux SDK](ISOLATED_SDK.md): read-only Docker runner and resource limits for agent execution.
 - [Experimental LLVM](LLVM_EXPERIMENTAL.md): opt-in Seed LLVM backend and qualification.
 - [Seed LLVM SDK](LLVM_SDK.md): relocatable Seed installation with pinned LLVM tools.
 - [Service foundations](SERVICE_FOUNDATIONS.md): bounded loopback service contracts and limits.
@@ -31,3 +32,4 @@ recommended installation, supported workflows, experiments and security limits.
 
 - [C interoperability](FFI_VALIDATION.md): scalar ABI, opaque handles, and SQLite pilot.
 - [Standard library](STDLIB.md): packages and their current contracts.
+- [Worker safety and task groups](WORKER_SAFETY.md): transfer boundaries (`W2014`/`W2015`), CPU task groups, and HTTP groups.

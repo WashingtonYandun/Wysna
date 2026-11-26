@@ -1,6 +1,0 @@
-let text = "  Wysna Lang  "
-let clean = text.trim()
-let parts = clean.split(" ")
-let upper = clean.to_upper()
-let has = clean.starts_with("Wys")
-print(clean, parts, upper, has)

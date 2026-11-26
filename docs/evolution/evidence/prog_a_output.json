@@ -1,1 +1,0 @@
-{"alert_count":2,"alerts":[{"id":102,"latency_ms":180,"service":"billing-worker"},{"id":103,"latency_ms":240,"service":"search-index"}],"region":"us-east-1","total_alert_latency_ms":420}

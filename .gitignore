@@ -28,6 +28,11 @@ coverage/
 
 # Local benchmark output
 /bench/BASELINE.md
+bench/cross_language/results*.json
+bench/cross_language/report*.html
+bench/cross_language/encoding*.json
+bench/native_hotpaths/results-*.json
+bench/ai_eval/results/
 
 # Test and local scratch files
 tests/runtime/temp_file.txt
@@ -38,3 +43,4 @@ audit/
 docs/adr/
 docs/history/
 docs/evidence/
+docs/evolution/

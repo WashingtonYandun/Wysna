@@ -1,7 +1,0 @@
-=== Seed check ===
-[W3002] /Users/washingtonyandun/Documents/ChatGPT/w_lang_compiler/docs/evolution/evidence/repro_dict_remove.wysna:2:9 - Cannot access property 'remove' on type 'dict[str, int]'
-   |
- 2 | dict_val.remove("a")
-   |         ^
-=== Compiler check ===
-[W3002] /Users/washingtonyandun/Documents/ChatGPT/w_lang_compiler/docs/evolution/evidence/repro_dict_remove.wysna:2:10 - unknown collection method
