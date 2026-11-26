@@ -1201,4 +1201,4 @@ fn mir_emit_c(module: MirModule) -> str {
     return join_strings(parts, "")
 }
 
-fn compile_source(checked: CheckedProgram) -> str { return mir_emit_c(mir_build(checked)) }
+fn compile_source(checked: CheckedProgram) -> str { return mir_emit_c(mir_build_optimized(checked)) }
