@@ -754,7 +754,7 @@ fn mir_build(program: CheckedProgram) -> MirModule {
     }
     mir_finish(context, "wysna_program", source, "")
     let raw_module = MirModule { file: program.file, functions: context.functions, globals: context.globals, records: context.records, virtual_slots: context.virtual_slots, externs: context.externs, types: context.types, source: source }
-    return mir_optimize_local_read_clones(mir_optimize_parameter_reads(raw_module))
+    return mir_optimize_module(mir_optimize_local_read_clones(mir_optimize_parameter_reads(raw_module)))
 }
 
 fn mir_module_json(module: MirModule) -> str {
