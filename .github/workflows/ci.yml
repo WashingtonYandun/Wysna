@@ -990,12 +990,22 @@ jobs:
           cp -R examples/wysofia-ops dist/native/wysofia-ops
           cp -R examples/automation dist/native/automation
           cp -R examples/agent-worker dist/native/agent-worker
+      - name: Build Windows Native SDK GUI installer
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $compiler = "${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe"
+          if (!(Test-Path $compiler)) { throw "Inno Setup 6 is required on Windows native-sdk-build" }
+          $manifest = Get-Content dist/native/wysna-native/native-sdk.json | ConvertFrom-Json
+          & $compiler /Q "/DBundleDir=$((Resolve-Path dist/native/wysna-native).Path)" "/DWysnaVersion=$($manifest.version)" "/DOutputBaseName=wysna-native-setup" "/DOutputDir=$((Resolve-Path dist/native).Path)" packaging/windows/wysna_native.iss
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
       - uses: actions/upload-artifact@v4
         with:
           name: native-sdk-${{ matrix.os }}
           path: |
             dist/native/*.tar.gz
             dist/native/*.zip
+            dist/native/*.exe
             dist/native/validate_native_sdk.py
             dist/native/validate_launch_projects.py
             dist/native/validate_native_wasi.py
@@ -1057,6 +1067,22 @@ jobs:
           python native-artifact/validate_native_sdk.py --sdk installed/wysna-native --archive "$archive" --application native-artifact/wysofia-ops --language-fixtures native-artifact/language_combinations --strict-source --compiler-source native-artifact/compiler.wysna --report native-install-report.json
       - name: Qualify the three launch projects and offline package restore
         run: python native-artifact/validate_launch_projects.py --sdk installed/wysna-native --examples native-artifact --report launch-acceptance-report.json
+      - name: Validate Windows Native SDK GUI installer silent install and uninstall
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $setup = (Resolve-Path native-artifact/wysna-native-setup.exe).Path
+          $target = Join-Path $env:RUNNER_TEMP "wysna-native-gui-check"
+          if (Test-Path $target) { Remove-Item $target -Recurse -Force }
+          $proc = Start-Process -FilePath $setup -ArgumentList "/VERYSILENT","/SUPPRESSMSGBOXES","/NORESTART","/TASKS=`"`"","/DIR=$target" -Wait -PassThru
+          if ($proc.ExitCode -ne 0) { throw "Silent install exited with $($proc.ExitCode)" }
+          $exe = Join-Path $target "bin\wysna.exe"
+          $ver = & $exe --version
+          if ($LASTEXITCODE -ne 0 -or ($ver -notmatch "Wysna")) { throw "Installed GUI binary check failed: $ver" }
+          $unins = Join-Path $target "unins000.exe"
+          $uproc = Start-Process -FilePath $unins -ArgumentList "/VERYSILENT","/SUPPRESSMSGBOXES","/NORESTART" -Wait -PassThru
+          if ($uproc.ExitCode -ne 0) { throw "Silent uninstall exited with $($uproc.ExitCode)" }
+          if (Test-Path $exe) { throw "Uninstall left $exe behind" }
       - name: Install the pinned WASI acceptance runner
         if: runner.os == 'Linux'
         run: python -m pip install --retries 10 --timeout 30 wasmtime==50.0.1

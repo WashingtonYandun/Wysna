@@ -16,12 +16,32 @@ Wysna is statically typed and compiles to native executables through C99. It tar
 
 ## Installation
 
-Choose a distribution on [GitHub Releases](https://github.com/WashingtonYandun/Wysna/releases). Both are available for Windows x64, macOS arm64, and Linux x64.
+Install the **Native SDK** (self-hosted compiler, bundled Zig C toolchain, `project`, `test`, `mcp`, and `lsp` — zero Python required) in one command with automatic SHA-256 verification and `PATH` setup:
 
-- **[Native SDK](docs/NATIVE_SDK.md).** Compiles and tests native applications, manages local packages, and exposes the AI agent tooling. Bundles Selfhost, Zig, and the standard library, with no Python dependency.
-- **[Seed](docs/SEED_DISTRIBUTION.md).** Provides the reference interpreter, interactive REPL, WASI execution, and browser targets, with a bundled private Python runtime.
+**Windows (PowerShell):**
 
-Verify the download against `SHA256SUMS`, unpack the archive, and add its `bin` directory to your `PATH` (on Windows, you can also run `open-terminal.cmd`). Confirm the install with `wysna --version`.
+```powershell
+irm https://wysna.wysofia.com/install.ps1 | iex
+```
+
+**macOS (Apple Silicon) & Linux (x64):**
+
+```sh
+curl -fsSL https://wysna.wysofia.com/install.sh | sh
+```
+
+**Windows (Scoop) or Graphical Installers:**
+
+```powershell
+scoop install https://wysna.wysofia.com/scoop/wysna.json
+```
+
+Or download standalone graphical installers (`.exe`, `.pkg`, `.deb`, `.rpm`) and offline archives from [wysna.wysofia.com/download](https://wysna.wysofia.com/download/) or [GitHub Releases](https://github.com/WashingtonYandun/Wysna/releases).
+
+- **[Native SDK](docs/NATIVE_SDK.md):** Default distribution above; builds and tests native apps, manages local packages, and exposes AI agent tooling without Python.
+- **[Seed](docs/SEED_DISTRIBUTION.md):** Reference interpreter, interactive REPL, WASI, and browser targets with a bundled private Python runtime (`irm ... | iex` with `$env:WYSNA_DIST="seed"`, or `.exe` / `.pkg` / `.deb` / `.rpm`).
+
+Confirm installation in any new terminal with `wysna --version`.
 
 The examples in this README target **Wysna 1.0.0**.
 

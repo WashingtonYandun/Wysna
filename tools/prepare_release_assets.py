@@ -192,7 +192,17 @@ def stage_native_sdks(root: Path, source: str, version: str, output: Path) -> di
             raise ValueError(f"{platform}: archive does not match installed SDK acceptance")
         name = f"wysna-{version}-native-{platform}.{extension}"
         shutil.copyfile(archive, output / name)
-        staged[platform] = {"name": name, "sha256": checksum, "bytes": archive.stat().st_size}
+        entry: dict[str, object] = {"name": name, "sha256": checksum, "bytes": archive.stat().st_size}
+        setup_exe = root / f"native-sdk-{runner}" / "wysna-native-setup.exe"
+        if platform == "x86_64-windows" and setup_exe.is_file() and not setup_exe.is_symlink():
+            setup_name = f"wysna-{version}-native-{platform}-setup.exe"
+            shutil.copyfile(setup_exe, output / setup_name)
+            entry["installer"] = {
+                "name": setup_name,
+                "sha256": digest(setup_exe),
+                "bytes": setup_exe.stat().st_size,
+            }
+        staged[platform] = entry
     return staged
 
 

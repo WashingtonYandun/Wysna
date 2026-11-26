@@ -10595,7 +10595,11 @@ fn mir_build(program: CheckedProgram) -> MirModule {
     }
     mir_finish(context, "wysna_program", source, "")
     let raw_module = MirModule { file: program.file, functions: context.functions, globals: context.globals, records: context.records, virtual_slots: context.virtual_slots, externs: context.externs, types: context.types, source: source }
-    return mir_optimize_module(mir_optimize_local_read_clones(mir_optimize_parameter_reads(raw_module)))
+    return mir_optimize_local_read_clones(mir_optimize_parameter_reads(raw_module))
+}
+
+fn mir_build_optimized(program: CheckedProgram) -> MirModule {
+    return mir_optimize_module(mir_build(program))
 }
 
 fn mir_module_json(module: MirModule) -> str {
@@ -12754,7 +12758,7 @@ fn mir_emit_c(module: MirModule) -> str {
     return join_strings(parts, "")
 }
 
-fn compile_source(checked: CheckedProgram) -> str { return mir_emit_c(mir_build(checked)) }
+fn compile_source(checked: CheckedProgram) -> str { return mir_emit_c(mir_build_optimized(checked)) }
 # Native SDK non-blocking lints (W6001 discarded pure expressions, W6002 ARC reference cycles)
 # and capability sandbox policy enforcement (W5006 + C99 WYSNA_DENY_CAP_* guards).
 
@@ -25772,7 +25776,7 @@ fn run_compiler() -> unit ! IoError {
         let in_file = positional[0]
         let source = read_file(in_file)?
         let checked = check_source(source, in_file)
-        let module = mir_build(checked)
+        let module = if mode_flag == "--check-mir" { mir_build(checked) } else { mir_build_optimized(checked) }
         if mode_flag == "--check-mir" {
             mir_verify(module)
             let warnings = lint_collect_warnings(checked, source, in_file)
