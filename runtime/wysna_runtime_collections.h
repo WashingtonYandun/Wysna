@@ -145,7 +145,7 @@ WYSNA_RT_FN WVal wysna_make_dict(int32_t count, const WVal* keys, const WVal* va
             if (reindexed) {
                 wysna_dict_index_entry_hashed(d, index, full_hash);
             } else {
-                d->buckets[slot] = index;
+                d->buckets[slot] = wysna_dict_pack_bucket(index, full_hash);
             }
         }
     }
@@ -215,10 +215,22 @@ WYSNA_RT_FN WVal wysna_make_struct_static(const char* name, int32_t count, const
                      !wysna_runtime_context.multi_threaded &&
                      wysna_runtime_context.max_heap_bytes == 0)) {
             pooled_cap = true;
-            if (wysna_runtime_context.struct_pool_len > 0) {
-                st = wysna_runtime_context.struct_pool[--wysna_runtime_context.struct_pool_len];
+            if (wysna_runtime_context.struct_freelist) {
+                st = wysna_runtime_context.struct_freelist;
+                wysna_runtime_context.struct_freelist = (WStructBuf*)(uintptr_t)st->keys;
             } else {
-                st = (WStructBuf*)wysna_alloc_safe(vals_offset + sizeof(WVal) * 4u);
+                WStructSlab* slab = wysna_runtime_context.struct_slabs;
+                size_t header_size = ((sizeof(WStructSlab) + sizeof(WVal) - 1) / sizeof(WVal)) * sizeof(WVal);
+                size_t slot_stride = vals_offset + sizeof(WVal) * 4u;
+                if (!slab || slab->used >= slab->cap) {
+                    slab = (WStructSlab*)malloc(header_size + slot_stride * (size_t)WYSNA_STRUCT_SLAB_CAP);
+                    if (!slab) wysna_runtime_fail_unlocated("W4003", "Out of memory");
+                    slab->next = wysna_runtime_context.struct_slabs;
+                    slab->used = 0;
+                    slab->cap = WYSNA_STRUCT_SLAB_CAP;
+                    wysna_runtime_context.struct_slabs = slab;
+                }
+                st = (WStructBuf*)((char*)slab + header_size + slot_stride * (size_t)(slab->used++));
             }
         }
 #endif
@@ -237,7 +249,7 @@ WYSNA_RT_FN WVal wysna_make_struct_static(const char* name, int32_t count, const
     st->vals = (WVal*)((char*)st + vals_offset);
     wysna_mem_on_alloc();
     for (int32_t i = 0; i < count; i++) {
-        st->vals[i] = wysna_clone(vals[i]);
+        st->vals[i] = wysna_is_immediate(vals[i]) ? vals[i] : wysna_clone_heap(vals[i]);
     }
     return wysna_make_hi_ptr(WVAL_HI_STRUCT, st);
 }

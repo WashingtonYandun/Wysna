@@ -482,8 +482,8 @@ static inline WVal wysna_json_read_object(WysnaJsonCtx* ctx) {
     d->keys = (WVal*)wysna_alloc_safe(sizeof(WVal) * (size_t)d->cap);
     d->vals = (WVal*)wysna_alloc_safe(sizeof(WVal) * (size_t)d->cap);
     d->bucket_count = 16;
-    d->buckets = (int32_t*)wysna_alloc_safe(sizeof(int32_t) * (size_t)d->bucket_count);
-    memset(d->buckets, -1, sizeof(int32_t) * (size_t)d->bucket_count);
+    d->buckets = (uint64_t*)wysna_alloc_safe(sizeof(uint64_t) * (size_t)d->bucket_count);
+    memset(d->buckets, -1, sizeof(uint64_t) * (size_t)d->bucket_count);
     wysna_mem_on_alloc();
     WVal dict_val = wysna_make_hi_ptr(WVAL_HI_DICT, d);
 
