@@ -53,9 +53,9 @@ jobs:
           else
             last_date="1970-01-01T00:00:00Z"
           fi
-          gh api --paginate "repos/${GITHUB_REPOSITORY}/pulls?state=closed&sort=updated&direction=desc&per_page=100" \
-            --jq "[.[] | select(.merged_at != null and .merged_at > \"$last_date\") | {number: .number, title: .title, head_ref: .head.ref, labels: .labels}]" \
-            > /tmp/merged_prs.json
+          gh api --paginate "repos/${GITHUB_REPOSITORY}/pulls?state=closed&base=develop&sort=updated&direction=desc&per_page=100" \
+            --jq ".[] | select(.merged_at != null and .merged_at > \"$last_date\") | {number: .number, title: .title, head_ref: .head.ref, labels: .labels}" \
+            | jq -s '.' > /tmp/merged_prs.json
           args=(--prs-json /tmp/merged_prs.json)
           if [ -n "$VERSION_OVERRIDE" ]; then
             args+=(--version-override "$VERSION_OVERRIDE")
