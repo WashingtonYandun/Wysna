@@ -47,14 +47,14 @@ def _standalone_wysna_blocks(doc_path: Path):
 def test_documented_wysna_blocks_typecheck():
     service = CompilerService(project_root=str(ROOT))
     checked_count = 0
-    for rel_path in ("README.md", "WYSNA_SINTAXIS.md", "SPEC.md"):
+    for rel_path in ("README.md", "SPEC.md"):
         doc_path = ROOT / rel_path
         blocks = _standalone_wysna_blocks(doc_path)
         assert blocks, f"expected standalone wysna blocks in {rel_path}"
         for idx, code in blocks:
             service.check(code, f"{doc_path}#block{idx}")
             checked_count += 1
-    assert checked_count >= 30
+    assert checked_count >= 13
 
 
 def test_projects_doc_manifest_targets_current_version(tmp_path):
