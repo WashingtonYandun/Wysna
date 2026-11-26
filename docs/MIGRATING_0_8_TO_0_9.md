@@ -1,13 +1,10 @@
-# Migración de Wysna 0.8 a 0.9
+# Migrating from Wysna 0.8 to 0.9
 
-La actualización es explícita: el compilador 0.9 no modifica automáticamente un
-manifiesto ni un lock de 0.8. Conserva una copia de tu proyecto y verifica que
-`wysna --version` indique `0.9.0` antes de regenerar artefactos.
+Upgrading is explicit: the 0.9 compiler never silently rewrites an 0.8 manifest or lockfile. Keep a backup of your project and verify that `wysna --version` reports `0.9.x` before regenerating artifacts.
 
-## 1. Actualizar manifiestos y dependencias
+## 1. Update manifests and dependencies
 
-En cada `wysna.toml` del proyecto y sus dependencias locales, cambia únicamente
-las versiones de lenguaje y toolchain; la versión de tu paquete es independiente:
+In every `wysna.toml` across your project and local dependencies, update the language and compiler version fields while keeping your package's own `version`:
 
 ```toml
 [package]
@@ -18,9 +15,7 @@ compiler = "0.9.0"
 stdlib = "bundled"
 ```
 
-Un manifiesto 0.8 se rechaza con `W5002` y exit 2. Actualizarlo deja obsoleto el
-lock anterior: `--frozen` también lo rechaza con `W5002`, sin sobrescribirlo.
-Regenera y verifica deliberadamente:
+An 0.8 manifest is rejected with `W5002` and exit code `2`. Updating `wysna.toml` invalidates the older lockfile: `--frozen` also rejects it with `W5002` without overwriting it. Regenerate and verify explicitly:
 
 ```bash
 wysna project lock --manifest wysna.toml
@@ -29,29 +24,21 @@ wysna project test --manifest wysna.toml --frozen --output-format=json-v1
 wysna project run --manifest wysna.toml --frozen
 ```
 
-Si usas paquetes USTAR fijados por SHA-256, migra primero sus fuentes/manifiestos,
-vuelve a ejecutar `packages pack`, adquiere el archivo con su nuevo pin y actualiza
-la dependencia antes de `project lock`. No reutilices el SHA de un archivo modificado.
-`packages` sigue siendo exclusivamente nativo, sin hooks ni resolución remota.
+If you use SHA-256-pinned USTAR packages, migrate their sources and manifests first, re-run `packages pack`, fetch the archive with its new hash, and update the dependency pin before running `project lock`. Never reuse a hash from a modified archive. `packages` remains strictly offline and native, with no lifecycle hooks or remote resolution.
 
-## 2. Usar la sintaxis canónica
+## 2. Use canonical syntax
 
-- `new Counter(...)` pasa a `Counter(...)`.
-- El opcional vacío se escribe `None`; `none` se rechaza.
-- Los comodines de `match` se escriben `_ =>`; `* =>` y `else =>` se rechazan.
-- Los patrones de tupla requieren paréntesis: `(left, right) =>`.
-- Las capturas de closures son snapshots inmutables. Devuelve un valor actualizado
-  cuando necesites transformar estado. Una clase puede mantener estado mutable
-  dentro de un hilo; eso no concede seguridad para compartirla entre workers.
+- `new Counter(...)` becomes `Counter(...)`.
+- Empty optionals are written `None`; lowercase `none` is rejected.
+- `match` wildcards use `_ =>`; `* =>` and `else =>` are rejected.
+- Tuple patterns require parentheses: `(left, right) =>`.
+- Closure captures are immutable value snapshots. Return an updated value when transforming state; a class may hold mutable state within one thread, which does not make it safe to share across workers.
 
-El código que ya usaba las formas canónicas conserva su semántica. W2003 mantiene
-su código y añade `data.uncovered_pattern_families` para reparar matches incompletos.
-Los consumidores JSON deben admitir los campos de metadatos añadidos a símbolos.
+Code already using canonical syntax preserves its semantics. `W2003` keeps its code and adds `data.uncovered_pattern_families` to help fix incomplete matches. JSON consumers should accept symbol metadata fields added in 0.9.
 
-## 3. Anotaciones y herramientas
+## 3. Annotations and tooling
 
-`@deprecated("mensaje")` y `@must_use` producen advertencias W6004/W6005. Los
-esquemas propios son structs no genéricos aplicados a funciones de nivel superior:
+`@deprecated("message")` and `@must_use` emit `W6004`/`W6005` warnings. Custom attribute schemas are non-generic structs applied to top-level declarations:
 
 ```wysna
 struct AgentTool { name: str, read_only: bool }
@@ -60,19 +47,10 @@ struct AgentTool { name: str, read_only: bool }
 pub fn lookup(id: int) -> int { id }
 ```
 
-Solo se aceptan campos nombrados con literales `str`, `bool` o Int64, sin campos
-ausentes ni extra. Los metadatos no ejecutan código, no conceden permisos y no
-convierten callbacks en funciones seguras. `api`, `inspect` y `schema` exponen
-`attributes: [{name, arguments}]`.
+Only named fields with `str`, `bool`, or Int64 literals are accepted, with no missing or extra fields. Metadata does not execute code, grant capabilities, or make callbacks worker-safe. `api`, `inspect`, and `schema` expose `attributes: [{name, arguments}]`.
 
-Los comandos `project`, `packages`, `mcp`, `lsp` y `schema` usan el SDK nativo.
-Seed conserva WASI/Browser y los oráculos del lenguaje. El SDK nativo indica W2013
-cuando un destino requiere Seed; no se introduce soporte móvil implícito.
+`project`, `packages`, `mcp`, `lsp`, and `schema` run in the native SDK. Seed preserves WASI/Browser targets and language oracles; the native SDK reports `W2013` when a target requires Seed and adds no implicit mobile support.
 
-## Prueba de migración
+## Migration verification
 
-`tests/fixtures/language_combinations/migration_v08` conserva un manifiesto y un lock generados
-por el SDK 0.8 y probados con `project test --frozen`. La regresión de 0.9 verifica
-en Seed y nativo el rechazo sin mutaciones y la regeneración del lock con entradas
-LF y CRLF. La aceptación instalada del SDK ejecuta obligatoriamente el proyecto
-migrado en los tres OS con Zig empaquetado. No se usan modelos ni servicios de IA para medirlo.
+`tests/fixtures/language_combinations/migration_v08` retains a manifest and lockfile generated by the 0.8 SDK and verified with `project test --frozen`. The 0.9 regression suite checks non-mutating rejection on both Seed and native engines, plus lockfile regeneration across LF and CRLF entries. Native SDK acceptance runs the migrated project on all three desktop OSes with bundled Zig. No LLM services are involved in validation.
