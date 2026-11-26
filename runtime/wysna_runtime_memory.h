@@ -226,13 +226,13 @@ static inline void wysna_dispose_enum(WEnumBuf* en) {
 static inline void wysna_dispose_struct(WStructBuf* st) {
     wysna_rc_store(&st->refcount, -1);
 #if !defined(WYSNA_HAS_ASAN)
-    if (W_LIKELY(st->vtable == (const WClassVTable*)(uintptr_t)1 &&
-                 wysna_runtime_context.quotas_initialized &&
-                 !wysna_runtime_context.multi_threaded &&
-                 wysna_runtime_context.max_heap_bytes == 0 &&
-                 wysna_runtime_context.struct_pool_len < 32)) {
+    if (W_LIKELY(st->vtable == (const WClassVTable*)(uintptr_t)1)) {
+        bool mt = wysna_runtime_context.multi_threaded;
+        if (mt) wysna_spinlock_acquire(&wysna_runtime_context.runtime_lock);
         st->refcount = 0;
-        wysna_runtime_context.struct_pool[wysna_runtime_context.struct_pool_len++] = st;
+        st->keys = (const char**)wysna_runtime_context.struct_freelist;
+        wysna_runtime_context.struct_freelist = st;
+        if (mt) wysna_spinlock_release(&wysna_runtime_context.runtime_lock);
         wysna_mem_on_free();
         return;
     }
@@ -906,29 +906,33 @@ WYSNA_RT_FN int32_t wysna_dict_probe(WDictBuf* dict, WVal key, uint64_t* out_has
     bool sso_str = key_hi == WVAL_HI_SSO_SHORT || key_hi == WVAL_HI_SSO_6;
     WTag key_tag = inline_integer ? W_INT : (sso_str ? W_STR : wysna_tag(key));
     uint32_t kh = (key_tag == W_STR) ? (uint32_t)full_hash : 0;
+    uint32_t tag = wysna_dict_hash_tag(full_hash);
     uint32_t slot = (uint32_t)full_hash & mask;
-    while (dict->buckets[slot] >= 0) {
-        int32_t index = dict->buckets[slot];
-        WVal candidate = dict->keys[index];
-        if (candidate.bits == key.bits && !wysna_is_double(key)) return index;
-        if (!sso_str && !(inline_integer && wysna_hi(candidate) == WVAL_HI_INT) &&
-            wysna_tag(candidate) == key_tag) {
-            if (key_tag == W_INT) {
-                if (wysna_as_int(candidate) == wysna_as_int(key)) return index;
-            } else if (key_tag == W_STR) {
-                WStringBuf* co = wysna_str_owner(candidate);
-                uint32_t ch = co ? wysna_rc_load_u32(&co->hash_cache) : 0;
-                if (ch == 0 || kh == 0 || ch == kh) {
-                    char sb_c[7], sb_k[7];
-                    size_t lc = 0, lk = 0;
-                    const char* dc = wysna_str_bytes(candidate, sb_c, &lc);
-                    const char* dk = wysna_str_bytes(key, sb_k, &lk);
-                    if (lc == lk && (dc == dk || memcmp(dc, dk, lc) == 0)) return index;
+    while (dict->buckets[slot] != WYSNA_DICT_BUCKET_EMPTY) {
+        uint64_t entry = dict->buckets[slot];
+        if (W_LIKELY(wysna_dict_bucket_tag(entry) == tag)) {
+            int32_t index = wysna_dict_bucket_index(entry);
+            WVal candidate = dict->keys[index];
+            if (candidate.bits == key.bits && !wysna_is_double(key)) return index;
+            if (!sso_str && !(inline_integer && wysna_hi(candidate) == WVAL_HI_INT) &&
+                wysna_tag(candidate) == key_tag) {
+                if (key_tag == W_INT) {
+                    if (wysna_as_int(candidate) == wysna_as_int(key)) return index;
+                } else if (key_tag == W_STR) {
+                    WStringBuf* co = wysna_str_owner(candidate);
+                    uint32_t ch = co ? wysna_rc_load_u32(&co->hash_cache) : 0;
+                    if (ch == 0 || kh == 0 || ch == kh) {
+                        char sb_c[7], sb_k[7];
+                        size_t lc = 0, lk = 0;
+                        const char* dc = wysna_str_bytes(candidate, sb_c, &lc);
+                        const char* dk = wysna_str_bytes(key, sb_k, &lk);
+                        if (lc == lk && (dc == dk || memcmp(dc, dk, lc) == 0)) return index;
+                    }
+                } else if (key_tag == W_BOOL) {
+                    if (candidate.bits == key.bits) return index;
+                } else if (wysna_eq(candidate, key)) {
+                    return index;
                 }
-            } else if (key_tag == W_BOOL) {
-                if (candidate.bits == key.bits) return index;
-            } else if (wysna_eq(candidate, key)) {
-                return index;
             }
         }
         slot = (slot + 1) & mask;
@@ -943,8 +947,8 @@ WYSNA_RT_FN int32_t wysna_dict_find(WDictBuf* dict, WVal key) {
 WYSNA_RT_FN void wysna_dict_index_entry_hashed(WDictBuf* dict, int32_t index, uint64_t full_hash) {
     uint32_t mask = (uint32_t)dict->bucket_count - 1;
     uint32_t slot = (uint32_t)full_hash & mask;
-    while (dict->buckets[slot] >= 0) slot = (slot + 1) & mask;
-    dict->buckets[slot] = index;
+    while (dict->buckets[slot] != WYSNA_DICT_BUCKET_EMPTY) slot = (slot + 1) & mask;
+    dict->buckets[slot] = wysna_dict_pack_bucket(index, full_hash);
 }
 WYSNA_RT_FN void wysna_dict_index_entry(WDictBuf* dict, int32_t index) {
     wysna_dict_index_entry_hashed(dict, index, wysna_key_hash_inline(dict->keys[index]));
@@ -952,8 +956,8 @@ WYSNA_RT_FN void wysna_dict_index_entry(WDictBuf* dict, int32_t index) {
 WYSNA_RT_FN void wysna_dict_reindex(WDictBuf* dict, int32_t capacity) {
     free(dict->buckets);
     dict->bucket_count = capacity;
-    dict->buckets = (int32_t*)wysna_alloc_safe(sizeof(int32_t) * (size_t)capacity);
-    memset(dict->buckets, -1, sizeof(int32_t) * (size_t)capacity);
+    dict->buckets = (uint64_t*)wysna_alloc_safe(sizeof(uint64_t) * (size_t)capacity);
+    memset(dict->buckets, -1, sizeof(uint64_t) * (size_t)capacity);
     for (int32_t i = 0; i < dict->len; i++) wysna_dict_index_entry(dict, i);
 }
 WYSNA_RT_FN void wysna_dict_insert_owned(WDictBuf* d, WVal owned_key, WVal owned_val) {
@@ -985,7 +989,7 @@ WYSNA_RT_FN void wysna_dict_insert_owned(WDictBuf* d, WVal owned_key, WVal owned
     if (reindexed) {
         wysna_dict_index_entry_hashed(d, idx, full_hash);
     } else {
-        d->buckets[slot] = idx;
+        d->buckets[slot] = wysna_dict_pack_bucket(idx, full_hash);
     }
 }
 
@@ -1002,15 +1006,15 @@ WYSNA_RT_FN void wysna_dict_detach(WVal* v) {
     new_b->keys = (WVal*)wysna_alloc_safe(sizeof(WVal) * new_b->cap);
     new_b->vals = (WVal*)wysna_alloc_safe(sizeof(WVal) * new_b->cap);
     new_b->bucket_count = old_b->bucket_count;
-    new_b->buckets = (int32_t*)wysna_alloc_safe(sizeof(int32_t) * (size_t)new_b->bucket_count);
-    memcpy(new_b->buckets, old_b->buckets, sizeof(int32_t) * (size_t)new_b->bucket_count);
+    new_b->buckets = (uint64_t*)wysna_alloc_safe(sizeof(uint64_t) * (size_t)new_b->bucket_count);
+    memcpy(new_b->buckets, old_b->buckets, sizeof(uint64_t) * (size_t)new_b->bucket_count);
     wysna_mem_on_alloc();
 
     /* B02: CoW detach telemetry */
     wysna_cow_add(&wysna_g_cow_detach_dict, 1);
     wysna_cow_add(&wysna_g_cow_copied_slots, ((int64_t)old_b->len * 2));
-    wysna_cow_add(&wysna_g_cow_copied_bytes, (int64_t)(sizeof(WVal) * old_b->len * 2 + sizeof(int32_t) * old_b->bucket_count));
-    wysna_cow_add(&wysna_g_cow_allocated_bytes, (int64_t)(sizeof(WDictBuf) + (sizeof(WVal) * new_b->cap * 2) + sizeof(int32_t) * new_b->bucket_count));
+    wysna_cow_add(&wysna_g_cow_copied_bytes, (int64_t)(sizeof(WVal) * old_b->len * 2 + sizeof(uint64_t) * old_b->bucket_count));
+    wysna_cow_add(&wysna_g_cow_allocated_bytes, (int64_t)(sizeof(WDictBuf) + (sizeof(WVal) * new_b->cap * 2) + sizeof(uint64_t) * new_b->bucket_count));
     wysna_cow_add(&wysna_g_cow_alloc_count, 4);
 
     for (int32_t i = 0; i < old_b->len; i++) {

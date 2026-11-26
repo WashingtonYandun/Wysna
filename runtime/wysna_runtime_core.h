@@ -50,9 +50,28 @@ typedef struct {
     int32_t cap;
     WVal* keys;
     WVal* vals;
-    int32_t* buckets;
+    uint64_t* buckets;
     int32_t bucket_count;
 } WDictBuf;
+
+#define WYSNA_DICT_BUCKET_EMPTY UINT64_MAX
+#define WYSNA_STRUCT_SLAB_CAP 512
+
+static inline uint32_t wysna_dict_hash_tag(uint64_t full_hash) {
+    return (uint32_t)(full_hash >> 32);
+}
+
+static inline uint64_t wysna_dict_pack_bucket(int32_t idx, uint64_t full_hash) {
+    return ((uint64_t)wysna_dict_hash_tag(full_hash) << 32) | (uint32_t)idx;
+}
+
+static inline int32_t wysna_dict_bucket_index(uint64_t entry) {
+    return (int32_t)(uint32_t)entry;
+}
+
+static inline uint32_t wysna_dict_bucket_tag(uint64_t entry) {
+    return (uint32_t)(entry >> 32);
+}
 
 typedef struct {
     int32_t refcount;
@@ -182,6 +201,12 @@ typedef struct WStringLiteral {
  * for each runtime instance. The compatibility macros keep the runtime ABI and
  * the existing internal call sites stable while state moves behind the context.
  */
+typedef struct WStructSlab {
+    struct WStructSlab* next;
+    int32_t used;
+    int32_t cap;
+} WStructSlab;
+
 typedef struct WysnaRuntimeContext {
     WStringLiteral* string_literals;
 #ifdef W_STRING_METRICS
@@ -223,8 +248,8 @@ typedef struct WysnaRuntimeContext {
     int32_t box_pool_len;
     WEnumBuf* enum_pool[16];
     int32_t enum_pool_len;
-    WStructBuf* struct_pool[32];
-    int32_t struct_pool_len;
+    WStructSlab* struct_slabs;
+    WStructBuf* struct_freelist;
 } WysnaRuntimeContext;
 
 WYSNA_RT_FN int64_t wysna_collect_cycles(void);
@@ -741,11 +766,12 @@ WYSNA_RT_FN void wysna_runtime_cleanup_impl(bool verify_live_objects) {
         wysna_runtime_context.enum_pool[i] = NULL;
     }
     wysna_runtime_context.enum_pool_len = 0;
-    for (int32_t i = 0; i < wysna_runtime_context.struct_pool_len; i++) {
-        free(wysna_runtime_context.struct_pool[i]);
-        wysna_runtime_context.struct_pool[i] = NULL;
+    while (wysna_runtime_context.struct_slabs) {
+        WStructSlab* next_slab = wysna_runtime_context.struct_slabs->next;
+        free(wysna_runtime_context.struct_slabs);
+        wysna_runtime_context.struct_slabs = next_slab;
     }
-    wysna_runtime_context.struct_pool_len = 0;
+    wysna_runtime_context.struct_freelist = NULL;
     const char* stats_env = getenv("WYSNA_MEM_STATS");
     if (stats_env && strcmp(stats_env, "1") == 0) {
         fprintf(stderr, "[WYSNA_MEM_STATS] alloc=%" PRId64 " free=%" PRId64 " retain=%" PRId64 " release=%" PRId64 " live=%" PRId64 "\n",
