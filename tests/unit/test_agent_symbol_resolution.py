@@ -76,6 +76,8 @@ def test_agent_queries_require_identity_and_use_verified_call_targets(toolchain,
     ]:
         selected = by_file[path]
         assert expected_signature in selected['signature']
+        code, context = run(toolchain, 'inspect', str(path), '--span', json.dumps(selected['span']), '--max-bytes', '96')
+        assert code == 0 and expected_signature in context['result']['source'], context
         code, payload = run(toolchain, 'graph', str(entry), '--symbol', selected['id'], '--rel', 'callers')
         assert code == 0, payload
         assert [(edge['from'], edge['to']) for edge in payload['result']['edges']] == [(caller, selected['id'])]

@@ -382,11 +382,13 @@ fn tool_require_symbol(graph: ToolGraph, query: str, command: str, json_mode: bo
         for index in matches {
             let node = graph.nodes[index]
             ids.append(node.id)
+            let src = if node.file == graph.entry_file { graph.entry_source } else { diag_read_snippet_source(node.file) }
+            let span = diag_primary_span_json(node.file, node.line, node.col, src)
             by_id[node.id] = "{\"id\":" + diag_json_quote(node.id) +
                 ",\"qualified_name\":" + diag_json_quote(node.qualified_name) +
                 ",\"kind\":" + diag_json_quote(node.kind) + ",\"file\":" + diag_json_quote(node.file) +
                 ",\"line\":" + str(node.line) + ",\"col\":" + str(node.col) +
-                ",\"signature\":" + diag_json_quote(node.signature) + "}"
+                ",\"signature\":" + diag_json_quote(node.signature) + ",\"span\":" + span + "}"
         }
         let mut rows: list[str] = []
         let ordered = tool_sort_strings(ids)
@@ -961,34 +963,26 @@ fn tool_boundaries_for_nodes_json(nodes: list[ToolGraphNode]) -> str {
 }
 
 fn tool_utf8_slice_budget(text: str, start_byte: int, has_budget: bool, max_bytes: int) -> list[str] {
-    let total_bytes = len(bytes(text))
-    let mut byte_pos = 0
-    let mut char_start = len(text)
-    let mut clamped_start = total_bytes
-    for i in 0..len(text) {
-        if byte_pos >= start_byte {
-            char_start = i
-            clamped_start = byte_pos
-            break
-        }
-        byte_pos = byte_pos + len(bytes(text[i]))
+    let raw = bytes(text)
+    let total = len(raw)
+    let mut first = if start_byte < total { start_byte } else { total }
+    while first < total and raw[first] >= 128 and raw[first] < 192 { first = first + 1 }
+    let mut last = if has_budget and max_bytes < total - first { first + max_bytes } else { total }
+    while last < total and raw[last] >= 128 and raw[last] < 192 { last = last - 1 }
+    if first == 0 and last == total { return [text, "0", str(total), str(total)] }
+    if has_budget {
+        let snippet = tool_utf8_bytes_to_str(slice(raw, first, last))
+        return [snippet, str(first), str(last - first), str(total)]
     }
-    if not has_budget {
-        let sliced = slice(text, char_start, len(text))
-        return [sliced, str(clamped_start), str(total_bytes - clamped_start), str(total_bytes)]
+    let mut char_start = 0
+    for i in 0..first {
+        if raw[i] < 128 or raw[i] >= 192 { char_start = char_start + 1 }
     }
-    let mut used = 0
     let mut char_end = char_start
-    let mut j = char_start
-    while j < len(text) {
-        let w = len(bytes(text[j]))
-        if used + w > max_bytes { break }
-        used = used + w
-        j = j + 1
-        char_end = j
+    for i in first..last {
+        if raw[i] < 128 or raw[i] >= 192 { char_end = char_end + 1 }
     }
-    let sliced = slice(text, char_start, char_end)
-    return [sliced, str(clamped_start), str(used), str(total_bytes)]
+    return [slice(text, char_start, char_end), str(first), str(last - first), str(total)]
 }
 
 fn tool_node_json(n: ToolGraphNode) -> str {
@@ -1393,8 +1387,75 @@ fn tool_inspect_split_csv(raw_csv: str) -> list[str] {
     return dst
 }
 
+fn tool_inspect_span_error(code: str, message: str, json_mode: bool) -> unit {
+    let exit_code = if code == "W5005" { 1 } elif code == "W5004" { 3 } else { 2 }
+    let status = if exit_code == 1 { "diagnostic_error" } elif exit_code == 3 { "toolchain_error" } else { "usage_error" }
+    if json_mode {
+        let record = diag_record_json(code, "inspect", "error", message, "", 0, 0, "")
+        diag_write_output(diag_tool_envelope_json("inspect", status, exit_code, "[" + record + "]", "", "", "[]"))
+    } else {
+        eprint("[" + code + "] " + message)
+    }
+    exit(exit_code)
+}
+
+fn tool_inspect_span(file: str, span_text: str, budget: int, json_mode: bool) -> unit {
+    let span = mcp_parse_json_strict(span_text)
+    let source_id = lsp_json_str(span, "source_id", "")
+    let digest = lsp_json_str(span, "source_sha256", "")
+    if source_id == "" or len(digest) != 64 {
+        tool_inspect_span_error("W5002", "Expected a diagnostic span with source_id and source_sha256", json_mode)
+    }
+    for idx in 0..len(digest) {
+        if not proj_str_contains_substr("0123456789abcdef", digest[idx]) {
+            tool_inspect_span_error("W5002", "Invalid diagnostic source hash", json_mode)
+        }
+    }
+    let resolved = module_canonical_resolved(file)
+    if resolved == "" {
+        tool_inspect_span_error("W5004", "Cannot read " + file, json_mode)
+    }
+    if module_canonical_resolved(source_id) != resolved {
+        tool_inspect_span_error("W5002", "Diagnostic span belongs to a different file", json_mode)
+    }
+    let src = read_file(resolved) else err {
+        tool_inspect_span_error("W5004", "Cannot read UTF-8 source: " + file, json_mode)
+        ""
+    }
+    if diag_sha256_hex(src) != digest {
+        tool_inspect_span_error("W5005", "Diagnostic span is stale", json_mode)
+    }
+    let raw = bytes(src)
+    let start = lsp_json_int(span, "start_byte", -1)
+    let end = lsp_json_int(span, "end_byte", -1)
+    let valid = start >= 0 and end >= start and end <= len(raw) and
+        (start == len(raw) or raw[start] < 128 or raw[start] >= 192) and
+        (end == len(raw) or raw[end] < 128 or raw[end] >= 192)
+    if not valid {
+        tool_inspect_span_error("W5002", "Diagnostic span must delimit a valid UTF-8 byte range", json_mode)
+    }
+    let spare = budget - (end - start)
+    let prefix = if spare < 0 { 0 } elif spare < budget / 4 { spare } else { budget / 4 }
+    let anchor = if prefix > start { 0 } else { start - prefix }
+    let sliced = tool_utf8_slice_budget(src, anchor, true, budget)
+    if json_mode {
+        let context_start = lsp_parse_int(sliced[1], 0)
+        let used = lsp_parse_int(sliced[2], 0)
+        let target = "{\"source_id\":" + diag_json_quote(source_id) + ",\"source_sha256\":" + diag_json_quote(digest) +
+            ",\"start_byte\":" + str(start) + ",\"end_byte\":" + str(end) + "}"
+        let result = "{\"schema_version\":\"wysna.inspect-span/1\",\"span\":" + target +
+            ",\"source\":" + diag_json_quote(sliced[0]) + ",\"context_start_byte\":" + str(context_start) +
+            ",\"context_end_byte\":" + str(context_start + used) +
+            ",\"budget\":{\"max_bytes\":" + str(budget) + ",\"used_bytes\":" + str(used) + "}}"
+        diag_write_output(diag_tool_envelope_json("inspect", "ok", 0, "[]", "result", result, "[]"))
+    } else {
+        print(sliced[0])
+    }
+}
+
 fn tool_handle_inspect(args: list[str], json_mode: bool) -> unit {
     let mut file = ""
+    let mut span: str? = None
     let mut sym_args: list[str] = []
     let mut csv_syms: list[str] = []
     let mut has_symbols_flag = false
@@ -1412,6 +1473,9 @@ fn tool_handle_inspect(args: list[str], json_mode: bool) -> unit {
             i = i + 2
         } elif (a == "--symbol" or a == "-s") and i + 1 < len(args) {
             sym_args.append(args[i + 1])
+            i = i + 2
+        } elif a == "--span" and i + 1 < len(args) {
+            span = args[i + 1]
             i = i + 2
         } elif a == "--symbols" and i + 1 < len(args) {
             has_symbols_flag = true
@@ -1462,6 +1526,13 @@ fn tool_handle_inspect(args: list[str], json_mode: bool) -> unit {
         } else {
             report_error("<cli>", "W5002", 1, 1, "unknown option for inspect: " + a)
         }
+    }
+    if span != None {
+        if file == "" or has_symbols_flag or len(sym_args) > 0 or with_deps or source_offset != 0 or index_offset != 0 {
+            tool_inspect_span_error("W5002", "--span requires a file and cannot be combined with symbol inspection options", json_mode)
+        }
+        tool_inspect_span(file, span ?? "", if has_max_bytes { max_bytes } else { 1024 }, json_mode)
+        return
     }
     if has_symbols_flag and len(sym_args) > 0 {
         report_error("<cli>", "W5002", 1, 1, "inspect cannot combine --symbol and --symbols")

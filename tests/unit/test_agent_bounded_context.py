@@ -222,3 +222,34 @@ def test_inspect_exact_parity_and_batch_symbols(toolchain, tmp_path):
             js.Draft202012Validator(schema_doc).validate(payload)
     except ImportError:
         pass
+
+
+def test_inspect_diagnostic_span_reads_type_invalid_source_with_utf8_budget(toolchain, tmp_path):
+    path = tmp_path / 'context.wysna'
+    raw = ('# earlier á🦙\r\n'
+           'fn combine(left: int, right: int) -> int { left + right }\r\n'
+           'combine(1)\r\n').encode('utf-8')
+    path.write_bytes(raw)
+    code, checked = _run_cli(toolchain, 'check', str(path))
+    assert code == 1, checked
+    diagnostic = next(item for item in checked['diagnostics'] if item['code'] == 'W2005')
+    anchor = diagnostic['related'][0]['span']
+    code, inspected = _run_cli(toolchain, 'inspect', str(path), '--span', json.dumps(anchor), '--max-bytes', '48')
+    assert code == 0, inspected
+    result = inspected['result']
+    assert result['schema_version'] == 'wysna.inspect-span/1' and result['span'] == anchor
+    assert 'combine(left: int' in result['source']
+    assert result['source'].encode() == raw[result['context_start_byte']:result['context_end_byte']]
+    assert result['budget']['used_bytes'] <= 48
+
+    reply = _call_mcp(toolchain, tmp_path, 'wysna_inspect', {'path': path.name, 'span': anchor, 'max_bytes': 48})
+    assert reply['result'] == result
+
+    middle = raw.index('🦙'.encode()) + 1
+    invalid = dict(anchor, start_byte=middle, end_byte=middle)
+    code, malformed = _run_cli(toolchain, 'inspect', str(path), '--span', json.dumps(invalid))
+    assert code == 2 and malformed['diagnostics'][0]['code'] == 'W5002'
+
+    path.write_bytes(raw + b'\r\n')
+    code, stale = _run_cli(toolchain, 'inspect', str(path), '--span', json.dumps(anchor))
+    assert code == 1 and stale['diagnostics'][0]['code'] == 'W5005'

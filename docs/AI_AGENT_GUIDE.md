@@ -120,6 +120,28 @@ and file permissions. External editors that write directly without using Wysna t
 not hold the cooperative lock; optimistic revision verification still rejects stale snapshots
 detected before replacement.
 
+### Consultar el contexto de un diagnóstico
+
+Pasa el objeto `diagnostics[].primary_span` o `related[].span` directamente a
+`wysna inspect ARCHIVO --span 'JSON' --max-bytes 1024 --output-format=json-v1`.
+En MCP usa `wysna_inspect` con `path`, `span` y `max_bytes`. El resultado
+`wysna.inspect-span/1` incluye el rango original y los límites en bytes del
+fragmento devuelto. La consulta funciona sobre código con errores de tipos y
+rechaza un hash de fuente obsoleto con `W5005`.
+
+- En `W1005`, cada candidato incluye su ID y el rango de su declaración cuando
+  la fuente está disponible. Usa el ID para consultas semánticas y el rango
+  para leer el contexto sin resolver el nombre ambiguo.
+- En `W2001` y `W2005`, consulta el rango de la declaración en `related` para
+  ver la firma y usa `data` para identificar el tipo o argumento incorrecto.
+- En `W6102` con `unclassified_target`, la ubicación relacionada señala la
+  clase que requiere un rol. Para llamadas indirectas, consulta el sitio
+  primario y la frontera indicada en `data.boundary`.
+
+Tras preparar los cambios, usa un parche multiarchivo con `--test`. En
+código que aún tiene errores de tipos, especifica el cambio con `source`
+o `hunks` para enviar la revisión corregida.
+
 ### Probar el candidato antes de aplicar
 
 ```sh
@@ -133,6 +155,8 @@ datos de prueba y dependencias locales. Ejecutan toda la selección declarada
 y, con `--discover`, incluyen los casos descubiertos en `tests/`, incluso los
 creados por el candidato. `result.tests` indica qué cambios alcanza cada caso.
 Si el alcance no se puede demostrar, el caso queda como `uncertain` y se ejecuta.
+`result.test_timing_ms` separa la preparación del candidato del tiempo
+del ejecutor. El SDK nativo incluye `compile_ms` y `run_ms` por caso.
 
 `result.test_verification` vincula el estado, las duraciones, los motivos de
 fallo y los hashes de salida al plan y a la revisión del candidato. Una suite
