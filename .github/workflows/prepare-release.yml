@@ -95,9 +95,9 @@ jobs:
           git commit -m "chore(release): prepare ${TAG} (${BUMP})"
           git push --force-with-lease origin "HEAD:refs/heads/${branch}"
           existing_pr=$(gh pr list --repo "$GITHUB_REPOSITORY" --base main --head "$branch" --state open --json number --jq '.[0].number // empty')
-          body="Automated SemVer release preparation for **Wysna ${NEXT_VERSION}** (\`${BUMP}\` bump from branches merged to \`develop\`).
-
-Merging this PR into \`main\` will run full CI and automatically tag \`${TAG}\`, build installers, publish GitHub Release assets, and notify \`wysna-handbook\`."
+          body=$(printf '%s\n\n%s' \
+            "Automated SemVer release preparation for **Wysna ${NEXT_VERSION}** (\`${BUMP}\` bump from branches merged to \`develop\`)." \
+            "Merging this PR into \`main\` will run full CI and automatically tag \`${TAG}\`, build installers, publish GitHub Release assets, and notify \`wysna-handbook\`.")
           if [ -n "$existing_pr" ]; then
             gh pr edit "$existing_pr" --repo "$GITHUB_REPOSITORY" --title "release: ${TAG}" --body "$body"
           else

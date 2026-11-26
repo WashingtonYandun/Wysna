@@ -30,7 +30,7 @@
 - Añade `@deprecated("mensaje")` y `@must_use` en funciones superiores, con advertencias `W6004`/`W6005` en CLI JSON y LSP. Los esquemas `struct` permiten anotaciones propias como metadatos tipados, sin ejecutar código durante la compilación.
 - Expone los atributos en `api`, `inspect` y `schema`; W2003 informa familias pendientes de patrones como datos JSON. Corrige calificación de patrones genéricos y bindings de patrones que ocultan globals.
 - Centraliza versión, comandos y guías de agentes; aísla diagnósticos por hilo y elimina intrínsecos basados en números de línea.
-- [Documenta y verifica la migración 0.8 → 0.9](docs/MIGRATING_0_8_TO_0_9.md), con rechazo de locks obsoletos y regeneración explícita.
+- Rechazo explícito de locks obsoletos y regeneración controlada de `wysna.lock`.
 
 ## 0.8.0 — 2026-11-20
 
