@@ -27,6 +27,39 @@ env:
   PYTHONIOENCODING: "utf-8"
 
 jobs:
+  bootstrap:
+    name: Verified selfhost bootstrap (${{ matrix.os }}, ${{ matrix.cc }})
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 15
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - {os: ubuntu-latest, cc: clang}
+          - {os: ubuntu-latest, cc: gcc}
+          - {os: macos-latest, cc: clang}
+          - {os: windows-latest, cc: clang}
+    env:
+      CC: ${{ matrix.cc }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - uses: actions/cache@v4
+        with:
+          path: .wysna_cache/bootstrap
+          key: bootstrap-v1-${{ runner.os }}-${{ runner.arch }}-${{ matrix.cc }}-${{ hashFiles('selfhost/**', 'runtime/**', 'src/lexer/**', 'src/parser/**', 'src/node/**', 'src/checker/**', 'src/compiler/**', 'src/codegen/**', 'src/common/**', 'src/error/**', 'src/hir/**', 'src/mir/**', 'src/tokens/**', 'tools/bundle_selfhost.py', 'tools/generate_agent_contract.py') }}
+      - name: Build or verify SHA256 fixed-point bootstrap compiler
+        run: |
+          python -c "import sys, tarfile; sys.path.insert(0, 'src'); from compiler.Bootstrap import ensure_selfhost_compiler_binary; print(ensure_selfhost_compiler_binary('.')); tf = tarfile.open('bootstrap.tar', 'w'); tf.add('.wysna_cache/bootstrap', arcname='bootstrap'); tf.close()"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: wysna-bootstrap-${{ matrix.os }}-${{ matrix.cc }}
+          path: bootstrap.tar
+          compression-level: 0
+          if-no-files-found: error
+
   product-contracts:
     name: Product contracts (${{ matrix.os }})
     runs-on: ${{ matrix.os }}
@@ -42,6 +75,8 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: "3.11"
+          cache: pip
+          cache-dependency-path: pyproject.toml
       - name: Install test runner
         run: python -m pip install pytest==8.4.2
       - name: Verify interactive, project and diagnostic contracts
@@ -61,6 +96,7 @@ jobs:
 
   native-diagnostics:
     name: Native diagnostics (${{ matrix.os }})
+    needs: bootstrap
     runs-on: ${{ matrix.os }}
     timeout-minutes: 30
     strategy:
@@ -69,11 +105,33 @@ jobs:
         os: [ubuntu-latest, macos-latest, windows-latest]
     env:
       CC: clang
+      WYSNA_CACHE_HOME: ${{ github.workspace }}/.wysna_cache
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
         with:
           python-version: "3.11"
+          cache: pip
+          cache-dependency-path: pyproject.toml
+      - uses: actions/download-artifact@v4
+        with:
+          name: wysna-bootstrap-${{ matrix.os }}-clang
+          path: .
+      - name: Restore verified bootstrap cache
+        run: |
+          python -c "import pathlib, tarfile; p = pathlib.Path('.wysna_cache'); p.mkdir(parents=True, exist_ok=True); tf = tarfile.open('bootstrap.tar'); tf.extractall(p); tf.close(); pathlib.Path('bootstrap.tar').unlink()"
+          if [ "${{ runner.os }}" != "Windows" ]; then chmod +x .wysna_cache/bootstrap/*/stage* .wysna_cache/bootstrap/*/bootstrap; fi
+      - uses: actions/cache@v4
+        with:
+          path: |
+            .wysna_cache/runtime-obj
+            .wysna_cache/project-test-cache
+            .wysna_cache/b
+            .wysna_cache/p
+            .wysna_cache/z
+          key: native-diag-v1-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('packaging/native/**', 'runtime/**', 'stdlib/**') }}
+          restore-keys: |
+            native-diag-v1-${{ runner.os }}-${{ runner.arch }}-
       - name: Install test runner
         run: python -m pip install pytest==8.4.2
       - name: Verify native diagnostics and agent project tests
@@ -115,6 +173,8 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: "3.11"
+          cache: pip
+          cache-dependency-path: pyproject.toml
       - uses: actions/download-artifact@v4
         with:
           name: wysna-wheel
@@ -149,6 +209,8 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: "3.11"
+          cache: pip
+          cache-dependency-path: pyproject.toml
       - name: Build the versioned wheel and standalone consumer validator
         run: |
           python -m pip install build==1.6.1 setuptools==84.0.0 wheel==0.48.0
@@ -204,6 +266,7 @@ jobs:
 
   compiler-contracts:
     name: Compiler contracts (${{ matrix.os }}, ${{ matrix.cc }})
+    needs: bootstrap
     runs-on: ${{ matrix.os }}
     timeout-minutes: 30
     strategy:
@@ -223,6 +286,18 @@ jobs:
           python-version: "3.11"
           cache: pip
           cache-dependency-path: pyproject.toml
+      - uses: actions/download-artifact@v4
+        with:
+          name: wysna-bootstrap-${{ matrix.os }}-${{ matrix.cc }}
+          path: .
+      - name: Restore verified bootstrap and runtime object cache
+        run: |
+          python -c "import pathlib, tarfile; p = pathlib.Path('.wysna_cache'); p.mkdir(parents=True, exist_ok=True); tf = tarfile.open('bootstrap.tar'); tf.extractall(p); tf.close(); pathlib.Path('bootstrap.tar').unlink()"
+          chmod +x .wysna_cache/bootstrap/*/stage* .wysna_cache/bootstrap/*/bootstrap
+      - uses: actions/cache@v4
+        with:
+          path: .wysna_cache/runtime-obj
+          key: runtime-obj-v1-${{ runner.os }}-${{ runner.arch }}-${{ matrix.cc }}-${{ hashFiles('runtime/**') }}
       - name: Install libcurl development files on Linux
         if: runner.os == 'Linux'
         run: sudo apt-get update && sudo apt-get install -y libcurl4-openssl-dev
@@ -278,6 +353,7 @@ jobs:
 
   runtime-conformance:
     name: Full runtime conformance (${{ matrix.os }}, ${{ matrix.cc }})
+    needs: bootstrap
     runs-on: ${{ matrix.os }}
     timeout-minutes: 35
     strategy:
@@ -290,6 +366,8 @@ jobs:
     env:
       CC: ${{ matrix.cc }}
       WYSNA_CI_ARTIFACTS: ${{ github.workspace }}/.wysna_cache/ci-artifacts
+      WYSNA_REUSE_BOOTSTRAP: "1"
+      WYSNA_CI_SPLIT_CONFORMANCE: "1"
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
@@ -297,6 +375,18 @@ jobs:
           python-version: "3.11"
           cache: pip
           cache-dependency-path: pyproject.toml
+      - uses: actions/download-artifact@v4
+        with:
+          name: wysna-bootstrap-${{ matrix.os }}-${{ matrix.cc }}
+          path: .
+      - name: Restore verified bootstrap and runtime object cache
+        run: |
+          python -c "import pathlib, tarfile; p = pathlib.Path('.wysna_cache'); p.mkdir(parents=True, exist_ok=True); tf = tarfile.open('bootstrap.tar'); tf.extractall(p); tf.close(); pathlib.Path('bootstrap.tar').unlink()"
+          chmod +x .wysna_cache/bootstrap/*/stage* .wysna_cache/bootstrap/*/bootstrap
+      - uses: actions/cache@v4
+        with:
+          path: .wysna_cache/runtime-obj
+          key: runtime-obj-v1-${{ runner.os }}-${{ runner.arch }}-${{ matrix.cc }}-${{ hashFiles('runtime/**') }}
       - name: Install libcurl development files on Linux
         if: runner.os == 'Linux'
         run: sudo apt-get update && sudo apt-get install -y libcurl4-openssl-dev
@@ -331,6 +421,7 @@ jobs:
 
   integration-conformance:
     name: Integration conformance (${{ matrix.os }}, ${{ matrix.cc }})
+    needs: bootstrap
     runs-on: ${{ matrix.os }}
     timeout-minutes: 30
     strategy:
@@ -350,9 +441,21 @@ jobs:
           python-version: "3.11"
           cache: pip
           cache-dependency-path: pyproject.toml
-      - name: Install libcurl development files on Linux
+      - uses: actions/download-artifact@v4
+        with:
+          name: wysna-bootstrap-${{ matrix.os }}-${{ matrix.cc }}
+          path: .
+      - name: Restore verified bootstrap and runtime object cache
+        run: |
+          python -c "import pathlib, tarfile; p = pathlib.Path('.wysna_cache'); p.mkdir(parents=True, exist_ok=True); tf = tarfile.open('bootstrap.tar'); tf.extractall(p); tf.close(); pathlib.Path('bootstrap.tar').unlink()"
+          chmod +x .wysna_cache/bootstrap/*/stage* .wysna_cache/bootstrap/*/bootstrap
+      - uses: actions/cache@v4
+        with:
+          path: .wysna_cache/runtime-obj
+          key: runtime-obj-v1-${{ runner.os }}-${{ runner.arch }}-${{ matrix.cc }}-${{ hashFiles('runtime/**') }}
+      - name: Install libcurl and SQLite development files on Linux
         if: runner.os == 'Linux'
-        run: sudo apt-get update && sudo apt-get install -y libcurl4-openssl-dev
+        run: sudo apt-get update && sudo apt-get install -y libcurl4-openssl-dev libsqlite3-dev
       - name: Install libcurl development files on macOS
         if: runner.os == 'macOS'
         run: |
@@ -367,9 +470,6 @@ jobs:
           ./wysna test --differential 20 2>&1 | tee .wysna_cache/ci-artifacts/differential.log
           ./wysna test --fuzz 100 2>&1 | tee .wysna_cache/ci-artifacts/fuzz.log
           python3 -m unittest tests.unit.test_fuzz_a01_combinations
-      - name: Install SQLite development headers on Linux
-        if: runner.os == 'Linux'
-        run: sudo apt-get update && sudo apt-get install -y libsqlite3-dev
       - name: Verify the loopback service and SQLite worker pilot
         run: python3 -m tests.unit.test_service_pilot
       - name: Verify service load measurement contracts
@@ -506,13 +606,15 @@ jobs:
         run: python3 examples/shared-browser-app/tests/browser_smoke.py "$RUNNER_TEMP/wysna-shared-app"
 
   sanitizers:
-    name: Memory safety (${{ matrix.os }})
+    name: Memory safety (${{ matrix.os }}, ${{ matrix.shard }})
+    needs: bootstrap
     runs-on: ${{ matrix.os }}
     timeout-minutes: 60
     strategy:
       fail-fast: false
       matrix:
         os: [ubuntu-latest, macos-latest]
+        shard: [corpus, units]
     env:
       CC: clang
       WYSNA_CI_ARTIFACTS: ${{ github.workspace }}/.wysna_cache/ci-artifacts
@@ -523,6 +625,18 @@ jobs:
           python-version: "3.11"
           cache: pip
           cache-dependency-path: pyproject.toml
+      - uses: actions/download-artifact@v4
+        with:
+          name: wysna-bootstrap-${{ matrix.os }}-clang
+          path: .
+      - name: Restore verified bootstrap and sanitized runtime object cache
+        run: |
+          python -c "import pathlib, tarfile; p = pathlib.Path('.wysna_cache'); p.mkdir(parents=True, exist_ok=True); tf = tarfile.open('bootstrap.tar'); tf.extractall(p); tf.close(); pathlib.Path('bootstrap.tar').unlink()"
+          chmod +x .wysna_cache/bootstrap/*/stage* .wysna_cache/bootstrap/*/bootstrap
+      - uses: actions/cache@v4
+        with:
+          path: .wysna_cache/runtime-obj
+          key: runtime-obj-asan-v1-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('runtime/**') }}
       - name: Install libcurl development files on Linux
         if: runner.os == 'Linux'
         run: sudo apt-get update && sudo apt-get install -y libcurl4-openssl-dev
@@ -534,20 +648,23 @@ jobs:
       - name: Install the optional HTTP test adapter
         run: python -m pip install --retries 10 --timeout 30 'pycurl>=7.48,<8'
       - name: Verify the full acyclic runtime and example corpus with ASan and UBSan
+        if: matrix.shard == 'corpus'
         # Linux also enables LSan; Darwin does not support leak detection.
-        run: python3 tools/ci_conformance.py --sanitize
+        run: python3 tools/ci_conformance.py --sanitize --jobs=3
       - name: Verify worker graph ownership with ASan and UBSan
+        if: matrix.shard == 'units'
         run: |
           clang -std=c99 -O1 -g -pthread -I. -fsanitize=address,undefined -fno-omit-frame-pointer tests/runtime/worker_transfer.c -o worker-transfer-asan
           WYSNA_MEM_CHECK=1 ./worker-transfer-asan
           WYSNA_MEM_CHECK=1 WYSNA_PARALLEL_THREADS=4 ./worker-transfer-asan task-group
       - name: Verify worker graph races with ThreadSanitizer on macOS
-        if: runner.os == 'macOS'
+        if: matrix.shard == 'units' && runner.os == 'macOS'
         run: |
           clang -std=c99 -O1 -g -pthread -I. -fsanitize=thread tests/runtime/worker_transfer.c -o worker-transfer-tsan
           WYSNA_MEM_CHECK=1 ./worker-transfer-tsan
           WYSNA_MEM_CHECK=1 WYSNA_PARALLEL_THREADS=4 ./worker-transfer-tsan task-group
       - name: Verify targeted ownership, telemetry and isolated strong-cycle evidence
+        if: matrix.shard == 'units'
         run: |
           WYSNA_SANITIZE=1 python3 tools/run_ci_parallel.py --mode module --jobs 2 \
             tests.unit.test_audit_completion \
@@ -569,20 +686,21 @@ jobs:
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: memory-coverage-${{ matrix.os }}
+          name: memory-coverage-${{ matrix.os }}-${{ matrix.shard }}
           path: .wysna_cache/ci-artifacts/*.json
           if-no-files-found: ignore
       - name: Preserve failing sanitizer reproductions
         if: failure()
         uses: actions/upload-artifact@v4
         with:
-          name: memory-failures-${{ matrix.os }}
+          name: memory-failures-${{ matrix.os }}-${{ matrix.shard }}
           path: |
             .wysna_cache/ci-artifacts/
             .wysna_cache/compiler*.c
 
   windows-toolchain:
     name: Windows CLI and native C99 smoke
+    needs: bootstrap
     runs-on: windows-latest
     timeout-minutes: 15
     defaults:
@@ -597,6 +715,16 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: "3.11"
+          cache: pip
+          cache-dependency-path: pyproject.toml
+      - uses: actions/download-artifact@v4
+        with:
+          name: wysna-bootstrap-windows-latest-clang
+          path: .
+      - name: Restore verified bootstrap cache
+        run: |
+          python -c "import pathlib, tarfile; p = pathlib.Path('.wysna_cache'); p.mkdir(parents=True, exist_ok=True); tf = tarfile.open('bootstrap.tar'); tf.extractall(p); tf.close(); pathlib.Path('bootstrap.tar').unlink()"
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
       - name: Check sources and build with portable host adapters
         run: |
           python -m tests.unit.test_distribution_contract
@@ -670,6 +798,8 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: "3.11"
+          cache: pip
+          cache-dependency-path: pyproject.toml
       - uses: actions/download-artifact@v4
         with:
           name: wysna-wheel
@@ -729,6 +859,8 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: "3.11"
+          cache: pip
+          cache-dependency-path: pyproject.toml
       - uses: actions/download-artifact@v4
         with:
           name: wysna-wheel
@@ -790,7 +922,13 @@ jobs:
           python-version: "3.11"
           cache: pip
           cache-dependency-path: pyproject.toml
+      - id: wasi-sdk-cache
+        uses: actions/cache@v4
+        with:
+          path: ${{ runner.temp }}/wasi-sdk-34.0-x86_64-linux
+          key: wasi-sdk-34.0-x86_64-linux-b761e3a0
       - name: Download and verify wasi-sdk 34
+        if: steps.wasi-sdk-cache.outputs.cache-hit != 'true'
         run: |
           archive="$RUNNER_TEMP/wasi-sdk-34.0-x86_64-linux.tar.gz"
           curl --fail --location --silent --show-error \
@@ -798,7 +936,8 @@ jobs:
             --output "$archive"
           echo "b761e3a0721dbae9c09a0059e5fdb2bf917d1b4a8a7b430fb3b5aafb0984b2c4  $archive" | sha256sum --check
           tar -xzf "$archive" -C "$RUNNER_TEMP"
-          echo "WASI_SDK_PATH=$RUNNER_TEMP/wasi-sdk-34.0-x86_64-linux" >> "$GITHUB_ENV"
+      - name: Configure wasi-sdk path
+        run: echo "WASI_SDK_PATH=$RUNNER_TEMP/wasi-sdk-34.0-x86_64-linux" >> "$GITHUB_ENV"
       - name: Install the pinned Wasmtime runner
         run: python -m pip install --retries 10 --timeout 30 wasmtime==50.0.1
       - name: Build, inspect, compare and execute the WASI command fixture
@@ -806,6 +945,7 @@ jobs:
 
   native-sdk-build:
     name: Build native SDK (${{ matrix.os }})
+    needs: bootstrap
     runs-on: ${{ matrix.os }}
     timeout-minutes: 40
     strategy:
@@ -814,15 +954,34 @@ jobs:
         os: [ubuntu-latest, macos-latest, windows-latest]
     env:
       CC: clang
+      WYSNA_CACHE_HOME: ${{ github.workspace }}/.wysna_cache
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
         with:
           python-version: "3.11"
+      - uses: actions/download-artifact@v4
+        with:
+          name: wysna-bootstrap-${{ matrix.os }}-clang
+          path: .
+      - name: Restore verified bootstrap cache
+        run: |
+          python -c "import pathlib, tarfile; p = pathlib.Path('.wysna_cache'); p.mkdir(parents=True, exist_ok=True); tf = tarfile.open('bootstrap.tar'); tf.extractall(p); tf.close(); pathlib.Path('bootstrap.tar').unlink()"
+          if [ "${{ runner.os }}" != "Windows" ]; then chmod +x .wysna_cache/bootstrap/*/stage* .wysna_cache/bootstrap/*/bootstrap; fi
       - uses: actions/cache@v4
         with:
           path: .wysna_cache/native-downloads
           key: native-components-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('packaging/native/components.json') }}
+      - uses: actions/cache@v4
+        with:
+          path: |
+            .wysna_cache/runtime-obj
+            .wysna_cache/b
+            .wysna_cache/p
+            .wysna_cache/z
+          key: native-sdk-zig-v1-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('packaging/native/**', 'runtime/**', 'stdlib/**') }}
+          restore-keys: |
+            native-sdk-zig-v1-${{ runner.os }}-${{ runner.arch }}-
       - name: Verify native packaging contracts
         run: python -m tests.unit.test_native_sdk
       - name: Build verified native compiler and pinned offline SDK
@@ -929,6 +1088,8 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: "3.11"
+          cache: pip
+          cache-dependency-path: pyproject.toml
       - uses: actions/download-artifact@v4
         with:
           name: native-sdk-ubuntu-latest

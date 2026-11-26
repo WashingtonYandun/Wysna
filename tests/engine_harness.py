@@ -18,6 +18,7 @@ if str(ROOT) not in sys.path:
 
 from common.Platform import compiler_command, executable_name
 from error.Error import DIAGNOSTIC_CODES
+from tests.runtime_object import ensure_runtime_object, needs_header_runtime
 ENGINES = ('interpreter', 'ast', 'hir', 'selfhost')
 PROFILES = json.loads((ROOT / 'tests/engine_profiles.json').read_text())
 EXPANSION_DIRS = {'regressions', 'functions', 'ffi', 'stdlib', 'generic_oop'}
@@ -157,8 +158,17 @@ def run_engine(engine, source, label, selfhost_bin, directory, sanitize=False, r
     flags = ['-std=c99', '-O1', '-g', '-I' + str(ROOT)]
     if sanitize and os.name != 'nt':
         flags += ['-fsanitize=address,undefined', '-fno-omit-frame-pointer']
-    compile_command = (compiler_command() + flags + list(extra_compile_flags)
-                       + [str(c_path), '-o', str(binary)] + list(extra_link_flags))
+    base_cmd = compiler_command()
+    rt_bundle = None
+    if not extra_compile_flags and not needs_header_runtime(c_path):
+        rt_bundle = ensure_runtime_object(ROOT, base_cmd, flags)
+    if rt_bundle is not None:
+        rt_obj, rt_defines, rt_link = rt_bundle
+        extra_links = list(extra_link_flags)
+        tail_links = [flag for flag in rt_link if flag not in extra_links]
+        compile_command = base_cmd + flags + rt_defines + [str(c_path), str(rt_obj), '-o', str(binary)] + extra_links + tail_links
+    else:
+        compile_command = base_cmd + flags + list(extra_compile_flags) + [str(c_path), '-o', str(binary)] + list(extra_link_flags)
     compiled = execute(compile_command, directory, 'compile', 120)
     if compiled['returncode'] != 0:
         return EngineResult(engine, stderr=compiled['stderr'], exit_code=compiled['returncode'],

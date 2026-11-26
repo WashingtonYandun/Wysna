@@ -132,7 +132,12 @@ def test_ci_workflow_contracts():
         assert 'pip install -e' not in job
         assert 'actions/upload-artifact@v4' in job
     assert 'tools/run_ci_parallel.py --mode module' in contracts
+    bootstrap = jobs['bootstrap']
+    bootstrap_rows = re.findall(r'- \{os: ([\w-]+), cc: ([\w-]+)\}', bootstrap)
+    assert {os_name + ',' + compiler for os_name, compiler in bootstrap_rows} == MATRIX | {'windows-latest,clang'}
+    assert 'ensure_selfhost_compiler_binary' in bootstrap
     assert 'tools/run_ci_parallel.py --mode module --jobs 2' in jobs['sanitizers']
+    assert 'shard: [corpus, units]' in jobs['sanitizers']
     modules = re.findall(r'\btests\.unit\.(\w+)\b', contracts)
     assert sorted(modules) == sorted(CONTRACT_MODULES), modules
     assert not re.search(r'python3 -m tests\.unit\.test_ci_harness', conformance)
@@ -148,7 +153,9 @@ def test_ci_workflow_contracts():
         assert command in integration, command
     full_suite = './wysna test 2>&1 | tee .wysna_cache/ci-artifacts/conformance.log'
     assert full_suite in runtime and full_suite not in integration
-    assert '    needs:' not in runtime and '    needs:' not in integration
+    for dependent in (contracts, runtime, integration, jobs['sanitizers'], native_diagnostics, native_build, jobs['windows-toolchain']):
+        assert re.search(r'^    needs: bootstrap$', dependent, re.MULTILINE), 'Jobs must depend strictly on bootstrap, not each other'
+    assert 'WYSNA_REUSE_BOOTSTRAP: "1"' in runtime and 'WYSNA_CI_SPLIT_CONFORMANCE: "1"' in runtime
     assert 'actions/checkout' not in conformance
     assert 'runs-on: ubuntu-latest' in conformance
     assert 'timeout-minutes: 5' in conformance
