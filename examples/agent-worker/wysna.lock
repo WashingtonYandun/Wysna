@@ -1,11 +1,11 @@
 {
   "aliases": [],
-  "compiler_version": "1.0.0",
+  "compiler_version": "1.1.0",
   "dependencies": [],
-  "language_version": "1.0",
+  "language_version": "1.1",
   "lock_version": 1,
   "root": {
-    "manifest_sha256": "96074a50a3f07b696c60eb3c88b241378b0fba30aa7926e2f52005c90be7638c",
+    "manifest_sha256": "9608176c6184ea3aeca1885c70a50fc3d7f26d607a80e83e428a0bc85535cec2",
     "name": "agent-worker",
     "version": "0.1.0"
   },

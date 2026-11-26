@@ -43,7 +43,7 @@ Or download standalone graphical installers (`.exe`, `.pkg`, `.deb`, `.rpm`) and
 
 Confirm installation in any new terminal with `wysna --version`.
 
-The examples in this README target **Wysna 1.0.0**.
+The examples in this README target **Wysna 1.1.0**.
 
 <a id="first-project"></a>
 
