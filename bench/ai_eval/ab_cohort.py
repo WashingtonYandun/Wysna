@@ -540,6 +540,144 @@ def build_import_style_ab_tasks() -> List[CohortTask]:
     return tasks
 
 
+def build_agent_first_v1_tasks() -> List[CohortTask]:
+    """Return Wysna v1.0 Agent-First tasks exercising pub/priv classes, u8, compound match, and Struct spreads."""
+    return [
+        CohortTask(
+            task=Task(
+                id="AF-V1-CLASS-PUBPRIV-01",
+                domain="cli_scripting",
+                title="Byte Accumulator Class with pub/priv Members and u8",
+                status="supported",
+                instruction=(
+                    "Fix `accumulator.wysna` so the `ByteAccumulator` class uses canonical v1.0 "
+                    "`priv` and `pub` visibility modifiers (not `public`/`private`), accepts a "
+                    "`u8` sample into `add(value: u8)`, and keeps `total() -> int` working without "
+                    "modifying `main.wysna`."
+                ),
+                entrypoint="main.wysna",
+                fixtures={
+                    "accumulator.wysna": (
+                        "pub class ByteAccumulator {\n"
+                        "    private running: int\n\n"
+                        "    fn init(initial: int) {\n"
+                        "        this.running = initial\n"
+                        "    }\n\n"
+                        "    public fn add(value: int) -> unit {\n"
+                        "        this.running = this.running + value\n"
+                        "    }\n\n"
+                        "    public fn total() -> int {\n"
+                        "        return this.running\n"
+                        "    }\n"
+                        "}\n"
+                    ),
+                    "main.wysna": (
+                        "import \"accumulator.wysna\" as acc\n"
+                        "fn main() -> unit {\n"
+                        "    let c = acc.ByteAccumulator(10)\n"
+                        "    let byte_val = u8(25) ?? u8(0) ?? 0\n"
+                        "    let sample: u8 = byte_val\n"
+                        "    c.add(sample)\n"
+                        "    print(f\"total={c.total()}\")\n"
+                        "}\n"
+                        "main()\n"
+                    ),
+                },
+                test_cases=[
+                    TaskTestCase(name="byte_accumulator_total", args=[], expected_stdout="total=35\n", expected_exit=0),
+                ],
+            ),
+            family="syntax_type_repair",
+            allowed_edit_files=("accumulator.wysna",),
+        ),
+        CohortTask(
+            task=Task(
+                id="AF-V1-MATCH-EXHAUSTIVE-02",
+                domain="cli_scripting",
+                title="Compound Match Ranges, Wildcard, and Typed Error Channel",
+                status="supported",
+                instruction=(
+                    "Complete `classify_port(raw: str) -> str ! ParseError` in `main.wysna` using "
+                    "`parse.parse_int(raw)?` and a compound `match` statement with range/alternative "
+                    "patterns (`0..=1023 => \"system\"`, `1024..=49151 => \"registered\"`, `_ => \"ephemeral\"`). "
+                    "Read the port argument from `args()[1]` and print `band=<band>` (or `invalid` on exit code 2)."
+                ),
+                entrypoint="main.wysna",
+                fixtures={
+                    "main.wysna": (
+                        "import \"std/parse\" as parse\n\n"
+                        "fn classify_port(raw: str) -> str ! parse.ParseError {\n"
+                        "    let port = parse.parse_int(raw)?\n"
+                        "    if port < 0 {\n"
+                        "        return \"invalid\"\n"
+                        "    }\n"
+                        "    return \"todo\"\n"
+                        "}\n\n"
+                        "fn main() -> unit {\n"
+                        "    let argv = args()\n"
+                        "    let res = classify_port(argv[1]) else err {\n"
+                        "        eprint(\"invalid\")\n"
+                        "        exit(2)\n"
+                        "        return\n"
+                        "    }\n"
+                        "    print(f\"band={res}\")\n"
+                        "}\n"
+                        "main()\n"
+                    ),
+                },
+                test_cases=[
+                    TaskTestCase(name="system_port", args=["443"], expected_stdout="band=system\n", expected_exit=0),
+                    TaskTestCase(name="registered_port", args=["8080"], expected_stdout="band=registered\n", expected_exit=0),
+                    TaskTestCase(name="ephemeral_port", args=["60000"], expected_stdout="band=ephemeral\n", expected_exit=0),
+                ],
+            ),
+            family="add_capability",
+            allowed_edit_files=("main.wysna",),
+        ),
+        CohortTask(
+            task=Task(
+                id="AF-V1-STRUCT-SPREAD-03",
+                domain="cli_scripting",
+                title="Immutable Config Override via Struct Spread",
+                status="supported",
+                instruction=(
+                    "Update `with_timeout(base: Config, timeout_ms: int) -> Config` in `config.wysna` "
+                    "using v1.0 struct spread syntax `Config { timeout_ms: timeout_ms, ..base }` so all "
+                    "other fields from `base` are preserved without touching `main.wysna`."
+                ),
+                entrypoint="main.wysna",
+                fixtures={
+                    "config.wysna": (
+                        "pub struct Config { host: str, port: int, timeout_ms: int, tls: bool }\n\n"
+                        "pub fn with_timeout(base: Config, timeout_ms: int) -> Config {\n"
+                        "    return base\n"
+                        "}\n"
+                    ),
+                    "main.wysna": (
+                        "import \"config.wysna\" as cfg\n"
+                        "fn main() -> unit {\n"
+                        "    let base = cfg.Config { host: \"api.wysofia.com\", port: 443, timeout_ms: 1000, tls: true }\n"
+                        "    let tuned = cfg.with_timeout(base, 2500)\n"
+                        "    print(f\"{tuned.host}:{tuned.port} timeout={tuned.timeout_ms} tls={tuned.tls}\")\n"
+                        "}\n"
+                        "main()\n"
+                    ),
+                },
+                test_cases=[
+                    TaskTestCase(
+                        name="config_spread_override",
+                        args=[],
+                        expected_stdout="api.wysofia.com:443 timeout=2500 tls=true\n",
+                        expected_exit=0,
+                    ),
+                ],
+            ),
+            family="authoring",
+            allowed_edit_files=("config.wysna",),
+        ),
+    ]
+
+
 def _collect_semantic_context(harness: EvaluationHarness, task: Task) -> Tuple[str, int]:
     """Collect read-only Condition B semantic graph & explanation telemetry inside an isolated temp copy."""
     if not task.fixtures:
@@ -954,7 +1092,7 @@ def main() -> int:
     parser.add_argument("--output", type=str, default=None)
     parser.add_argument("--checkpoint", type=Path, default=None)
     parser.add_argument("--interactive-tools", action="store_true")
-    parser.add_argument("--suite", choices=["default", "import-style", "all"], default="default")
+    parser.add_argument("--suite", choices=["default", "import-style", "agent-first-v1", "all"], default="default")
     args = parser.parse_args()
     if args.repetitions < 1 or args.max_repair_cycles < 0:
         parser.error("repetitions must be positive and repair cycles non-negative")
@@ -966,8 +1104,10 @@ def main() -> int:
         tasks = _build_default_cohort_tasks()
     elif args.suite == "import-style":
         tasks = build_import_style_ab_tasks()
+    elif args.suite == "agent-first-v1":
+        tasks = build_agent_first_v1_tasks()
     else:
-        tasks = _build_default_cohort_tasks() + build_import_style_ab_tasks()
+        tasks = _build_default_cohort_tasks() + build_import_style_ab_tasks() + build_agent_first_v1_tasks()
 
     if args.provider == "mock":
         model_name = args.model or "mock-deterministic"
