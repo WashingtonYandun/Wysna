@@ -1,8 +1,5 @@
 # Wheels and checkout validation use the same source bytes on every host.
 *.py text eol=lf
-# The legacy lock pins the manifest bytes across checkout platforms.
-tests/fixtures/language_combinations/migration_v08/wysna.toml text eol=lf
-tests/fixtures/language_combinations/migration_v08/wysna.lock text eol=lf
 selfhost/compiler.wysna text eol=lf linguist-generated=true
 LICENSE text eol=lf
 NOTICE text eol=lf

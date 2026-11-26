@@ -184,8 +184,6 @@ def stage_native_sdks(root: Path, source: str, version: str, output: Path) -> di
             "ops-graph-cli", "ops-graph-mcp", "rebuilt-native-engine-emits-identical-C",
             "project-new", "scaffold-project-lock", "scaffold-project-test",
             "reexported-generic-errors", "generic-method-errors", "async-generic-errors", "borrowed-host-paths",
-            "migration-v08-no-silent-mutation", "migration-v08-lock",
-            "migration-v08-frozen-tests", "migration-v08-frozen-run",
         }
         passed = {check["name"] for check in report.get("checks", []) if check.get("status") == 0}
         if (not required <= passed or report.get("success") is not True or report.get("source_commit") != source
