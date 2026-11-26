@@ -2,7 +2,9 @@ import concurrent.futures
 import glob
 import hashlib
 import io
+import json
 import os
+import shlex
 import subprocess
 import sys
 import tempfile
@@ -529,6 +531,15 @@ def _run_suite_in_repo(repo_root: str) -> None:
 
     compile_workers = min(4, max(1, os.cpu_count() or 2))
     cc_cmd = os.environ.get("CC", "cc")
+    base_cc_flags = ["-std=c99", f"-I{repo_root}"] + extra_cc_flags
+    from tests.runtime_object import ensure_runtime_object, needs_header_runtime
+    rt_bundle = ensure_runtime_object(repo_root, shlex.split(cc_cmd), base_cc_flags)
+
+    def _build_c99_cmd(c_path: str, bin_path: str) -> list[str]:
+        if rt_bundle is not None and not needs_header_runtime(c_path):
+            rt_obj, rt_defines, rt_link = rt_bundle
+            return [cc_cmd] + base_cc_flags + rt_defines + [c_path, str(rt_obj), "-o", bin_path] + rt_link
+        return [cc_cmd] + base_cc_flags + [c_path, "-o", bin_path]
 
     with tempfile.TemporaryDirectory() as tmpdir:
         seed_jobs = []
@@ -555,7 +566,7 @@ def _run_suite_in_repo(repo_root: str) -> None:
         def _build_seed_binary(job):
             f, c_path, bin_path, expected = job
             try:
-                comp = subprocess.run([cc_cmd, "-std=c99", f"-I{repo_root}"] + extra_cc_flags + [c_path, "-o", bin_path], timeout=120, capture_output=True, text=True)
+                comp = subprocess.run(_build_c99_cmd(c_path, bin_path), timeout=120, capture_output=True, text=True)
                 assert comp.returncode == 0, comp.stderr
                 return f, (bin_path, expected), None
             except Exception as exc:
@@ -590,13 +601,19 @@ def _run_suite_in_repo(repo_root: str) -> None:
         # 8. Self-Hosting Bootstrap Fixed-Point (Wysna Seed -> Wysna Compiler Stage 1 -> Wysna Compiler Stage 2)
         compiler_src_path = os.path.join(repo_root, "selfhost", "compiler.wysna")
         try:
-            from compiler.Bootstrap import bootstrap_compiler, publish_bootstrap_cache
-            artifacts = bootstrap_compiler(repo_root, os.path.join(tmpdir, "bootstrap"))
-            stage2_command = [str(artifacts.compiler), "--stdlib-root", str(Path(repo_root) / "stdlib")]
-            h0, h1, h2 = artifacts.hashes
+            from compiler.Bootstrap import bootstrap_compiler, ensure_selfhost_compiler_binary, publish_bootstrap_cache
+            if os.environ.get("WYSNA_REUSE_BOOTSTRAP") == "1":
+                cached_compiler = Path(ensure_selfhost_compiler_binary(repo_root))
+                manifest = json.loads((cached_compiler.parent / "bootstrap.json").read_text(encoding="utf-8"))
+                h0, h1, h2 = manifest["native_c_sha256"]
+                stage2_command = [str(cached_compiler), "--stdlib-root", str(Path(repo_root) / "stdlib")]
+            else:
+                artifacts = bootstrap_compiler(repo_root, os.path.join(tmpdir, "bootstrap"))
+                stage2_command = [str(artifacts.compiler), "--stdlib-root", str(Path(repo_root) / "stdlib")]
+                h0, h1, h2 = artifacts.hashes
+                publish_bootstrap_cache(repo_root, artifacts)
             assert h0 == h1 == h2, f"Native MIR hash mismatch: {h0} vs {h1} vs {h2}"
             bootstrap_ok = True
-            publish_bootstrap_cache(repo_root, artifacts)
 
             # 9. Verify Wysna Compiler Stage 2 Native Compiler on Core Runtime Conformance Programs
             selfhost_targets = [f for f in c99_targets if not unsupported_reason("tests/runtime/" + f, "selfhost")]
@@ -609,7 +626,7 @@ def _run_suite_in_repo(repo_root: str) -> None:
                 selfhost_c_path = os.path.join(tmpdir, "selfhost_" + f[:-6] + ".c")
                 selfhost_bin_path = os.path.join(tmpdir, "selfhost_" + f[:-6])
                 subprocess.run(stage2_command + [path, selfhost_c_path], check=True, timeout=120, capture_output=True, cwd=repo_root)
-                subprocess.run([cc_cmd, "-std=c99", f"-I{repo_root}"] + extra_cc_flags + [selfhost_c_path, "-o", selfhost_bin_path], check=True, timeout=120, capture_output=True)
+                subprocess.run(_build_c99_cmd(selfhost_c_path, selfhost_bin_path), check=True, timeout=120, capture_output=True)
                 return f, selfhost_bin_path, expected
 
             if compile_workers > 1 and len(selfhost_targets) > 1:
@@ -624,6 +641,7 @@ def _run_suite_in_repo(repo_root: str) -> None:
                 selfhost_runtime_passed += 1
 
             # 10. Verify Showcase Examples (examples/*.wysna) on Wysna Seed Interpreter, Wysna Seed C99, and Wysna Compiler Stage-2 Native
+            example_specs = []
             for f in example_files:
                 ex_path = os.path.join(examples_dir, f)
                 ex_stem = f[:-6]
@@ -638,11 +656,23 @@ def _run_suite_in_repo(repo_root: str) -> None:
                 ex_buf = io.StringIO()
                 Interpreter(stdout=ex_buf, file=ex_path).interpret(ex_ast)
                 assert ex_buf.getvalue() == ex_expected, f"Interpreter mismatch on {f}"
+                example_specs.append((f, ex_path, ex_expected))
 
+            def _compile_example(spec):
+                f, ex_path, ex_expected = spec
                 ex_c_path = os.path.join(tmpdir, "ex_" + f[:-6] + ".c")
                 ex_bin_path = os.path.join(tmpdir, "ex_" + f[:-6])
                 subprocess.run(stage2_command + [ex_path, ex_c_path], check=True, timeout=120, capture_output=True, cwd=repo_root)
-                subprocess.run([os.environ.get("CC", "cc"), "-std=c99", f"-I{repo_root}", ex_c_path, "-o", ex_bin_path], check=True, timeout=120, capture_output=True)
+                subprocess.run(_build_c99_cmd(ex_c_path, ex_bin_path), check=True, timeout=120, capture_output=True)
+                return f, ex_bin_path, ex_expected
+
+            if compile_workers > 1 and len(example_specs) > 1:
+                with concurrent.futures.ThreadPoolExecutor(max_workers=compile_workers) as pool:
+                    compiled_examples = list(pool.map(_compile_example, example_specs))
+            else:
+                compiled_examples = [_compile_example(spec) for spec in example_specs]
+
+            for f, ex_bin_path, ex_expected in compiled_examples:
                 ex_res = subprocess.run([ex_bin_path], timeout=30, capture_output=True, text=True, cwd=repo_root)
                 assert ex_res.returncode == 0, ex_res.stderr
                 assert ex_res.stdout == ex_expected, f"Wysna Compiler native mismatch on {f}"
@@ -682,7 +712,7 @@ def _run_suite_in_repo(repo_root: str) -> None:
         def _build_hir_binary(job):
             f, c_path, bin_path, expected = job
             try:
-                comp = subprocess.run([cc_cmd, "-std=c99", f"-I{repo_root}"] + extra_cc_flags + [c_path, "-o", bin_path], timeout=120, capture_output=True, text=True)
+                comp = subprocess.run(_build_c99_cmd(c_path, bin_path), timeout=120, capture_output=True, text=True)
                 assert comp.returncode == 0, comp.stderr
                 return f, (bin_path, expected), None
             except Exception as exc:
@@ -721,9 +751,7 @@ def _run_suite_in_repo(repo_root: str) -> None:
     temp_file = os.path.join(runtime_dir, "temp_file.txt")
     # 11. Copy-on-Write Telemetry & Path-Copying Asymptotics (B02)
     cow_telemetry_ok = run_cow_telemetry_suite()
-    session_ok = run_session_tests()
-    service_ok = run_compiler_service_tests()
-    toolchain_ok = run_native_toolchain_tests()
+    split_conformance = os.environ.get("WYSNA_CI_SPLIT_CONFORMANCE") == "1"
     resolved_hir_ok = run_resolved_hir_tests()
     generic_c03_ok = run_c03_generic_tests()
     adt_c04_ok = run_c04_adt_tests()
@@ -734,22 +762,36 @@ def _run_suite_in_repo(repo_root: str) -> None:
     fuzz_d04_ok = run_d04_fuzz_tests()
     from tests.unit.test_d05_telemetry_benchmarks import run_all as run_d05_telemetry_tests
     telemetry_d05_ok = run_d05_telemetry_tests()
-    from tests.unit.test_expansion_contracts import run_expansion_tests
-    expansion_ok = run_expansion_tests()
-    from tests.unit.test_audit_remediation import run_audit_tests
-    audit_ok = run_audit_tests()
-    from tests.unit.test_mir import run_mir_tests
-    mir_ok = run_mir_tests()
     from tests.unit.test_audit_completion import run_completion_tests
     completion_ok = run_completion_tests()
     from tests.unit.test_audit_readiness import run_readiness_tests
     readiness_ok = run_readiness_tests()
-    from tests.unit.test_audit_findings import run_findings_tests
-    from tests.unit.test_standard_toolkit import run_toolkit_tests
     from tests.unit.test_foundations import run_foundations_tests
     foundations_ok = run_foundations_tests()
-    findings_ok = run_findings_tests()
-    toolkit_ok = run_toolkit_tests() and foundations_ok
+    if split_conformance:
+        # In CI, compiler-contracts executes these 8 unit modules across the same (os, cc) matrix.
+        session_ok = True
+        service_ok = True
+        toolchain_ok = True
+        expansion_ok = True
+        audit_ok = True
+        mir_ok = True
+        findings_ok = True
+        toolkit_ok = foundations_ok
+    else:
+        session_ok = run_session_tests()
+        service_ok = run_compiler_service_tests()
+        toolchain_ok = run_native_toolchain_tests()
+        from tests.unit.test_expansion_contracts import run_expansion_tests
+        expansion_ok = run_expansion_tests()
+        from tests.unit.test_audit_remediation import run_audit_tests
+        audit_ok = run_audit_tests()
+        from tests.unit.test_mir import run_mir_tests
+        mir_ok = run_mir_tests()
+        from tests.unit.test_audit_findings import run_findings_tests
+        from tests.unit.test_standard_toolkit import run_toolkit_tests
+        findings_ok = run_findings_tests()
+        toolkit_ok = run_toolkit_tests() and foundations_ok
 
     if os.path.exists(temp_file):
         try:

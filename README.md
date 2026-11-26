@@ -23,7 +23,7 @@ Choose a distribution on [GitHub Releases](https://github.com/WashingtonYandun/W
 
 Verify the download against `SHA256SUMS`, unpack the archive, and add its `bin` directory to your `PATH` (on Windows, you can also run `open-terminal.cmd`). Confirm the install with `wysna --version`.
 
-The examples in this README target **Wysna 0.9.5**. If upgrading from 0.9.0, keep `package.language = "0.9"`, pin `toolchain.compiler = "0.9.5"`, and run `wysna project lock` before using `--frozen`. For earlier projects, see the [0.8 to 0.9 migration guide](docs/MIGRATING_0_8_TO_0_9.md).
+The examples in this README target **Wysna 0.9.5**.
 
 <a id="first-project"></a>
 

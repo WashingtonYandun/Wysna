@@ -1,5 +1,0 @@
-import "std/test"
-
-fn main() -> unit {
-    test.expect_equal_int(1 + 1, 2, "addition")
-}
