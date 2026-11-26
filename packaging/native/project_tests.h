@@ -122,50 +122,325 @@ static int sdk_plan_decode(char* text) {
     text[write] = 0; return 1;
 }
 
+typedef struct {
+    int enabled;
+    int allow_tier1;
+    char bin_dir[SDK_PATH_CAP];
+    char rev_dir[SDK_PATH_CAP];
+    char runtime_sha[65];
+} SdkTestCache;
+
+static void sdk_test_hash_str(WysnaSha256Context* context, const char* value) {
+    const char* text = value ? value : "";
+    wysna_sha256_update(context, (const uint8_t*)text, strlen(text) + 1);
+}
+
+static int sdk_test_hash_file(WysnaSha256Context* context, const char* path) {
+    FILE* file = sdk_test_open(path, "rb");
+    if (!file) return 0;
+    uint8_t buffer[8192];
+    size_t read_len = 0;
+    while ((read_len = fread(buffer, 1, sizeof(buffer), file)) != 0) {
+        wysna_sha256_update(context, buffer, read_len);
+    }
+    int ok = !ferror(file);
+    fclose(file);
+    return ok;
+}
+
+static void sdk_test_hash_final_hex(WysnaSha256Context* context, char output[65]) {
+    uint8_t digest[32];
+    const char* digits = "0123456789abcdef";
+    wysna_sha256_final(context, digest);
+    for (int index = 0; index < 32; index++) {
+        output[index * 2] = digits[digest[index] >> 4];
+        output[index * 2 + 1] = digits[digest[index] & 15];
+    }
+    output[64] = 0;
+}
+
+static int sdk_test_path_within_root(const char* path, const char* root) {
+    if (!path || !root || !root[0]) return 0;
+    size_t root_len = strlen(root);
+    while (root_len > 1 && (root[root_len - 1] == '/' || root[root_len - 1] == '\\')) root_len--;
+    if (strncmp(path, root, root_len) != 0) return 0;
+    char boundary = path[root_len];
+    return boundary == '\0' || boundary == '/' || boundary == '\\';
+}
+
+static const char* sdk_test_relative_to_root(const char* path, const char* root) {
+    if (!path || !root || !root[0]) return path ? path : "";
+    size_t root_len = strlen(root);
+    while (root_len > 1 && (root[root_len - 1] == '/' || root[root_len - 1] == '\\')) root_len--;
+    if (strncmp(path, root, root_len) != 0) return path;
+    if (path[root_len] == '\0') return "";
+    if (path[root_len] == '/' || path[root_len] == '\\') return path + root_len + 1;
+    return path;
+}
+
+static int sdk_test_is_hex64(const char* value, size_t length) {
+    if (!value || length < 64) return 0;
+    for (size_t index = 0; index < 64; index++) {
+        char ch = value[index];
+        if (!((ch >= '0' && ch <= '9') || (ch >= 'a' && ch <= 'f'))) return 0;
+    }
+    for (size_t index = 64; index < length; index++) {
+        if (value[index] != '\n' && value[index] != '\r') return 0;
+    }
+    return 1;
+}
+
+static void sdk_test_cache_init(SdkTestCache* cache, const SdkInvocation* invocation,
+                                const SdkOptions* options, const SdkProjectTestPlan* plan) {
+    memset(cache, 0, sizeof(*cache));
+    char* disabled = sdk_environment_value("WYSNA_DISABLE_TEST_CACHE");
+    int is_disabled = disabled && strcmp(disabled, "1") == 0;
+    free(disabled);
+    if (is_disabled) return;
+    if (options->wasi || options->link_count > 0 || options->include_count > 0 ||
+        options->library_dir_count > 0 || options->library_count > 0) return;
+    char base[SDK_PATH_CAP], cache_root[SDK_PATH_CAP];
+    if (!sdk_resolve_global_cache(base) || !sdk_join(cache_root, base, "project-test-cache/v1") ||
+        !sdk_join(cache->bin_dir, cache_root, "bin") || !sdk_join(cache->rev_dir, cache_root, "rev") ||
+        !sdk_mkdir_p(cache->bin_dir) || !sdk_mkdir_p(cache->rev_dir)) {
+        memset(cache, 0, sizeof(*cache));
+        return;
+    }
+
+    const char* profile = options->profile ? options->profile : "release";
+    const char* archive_rel = "lib/libwysna_runtime_release.a";
+    if (strcmp(profile, "dev") == 0) archive_rel = "lib/libwysna_runtime_dev.a";
+    else if (strcmp(profile, "size") == 0) archive_rel = "lib/libwysna_runtime_size.a";
+
+    WysnaSha256Context context;
+    wysna_sha256_init(&context);
+    sdk_test_hash_str(&context, WYSNA_NATIVE_VERSION);
+    sdk_test_hash_str(&context, WYSNA_NATIVE_TARGET);
+    sdk_test_hash_str(&context, profile);
+
+    char asset_path[SDK_PATH_CAP];
+    if (sdk_join(asset_path, invocation->root, archive_rel) && sdk_is_file(asset_path)) {
+        sdk_test_hash_str(&context, "archive:1");
+        if (!sdk_test_hash_file(&context, asset_path)) { memset(cache, 0, sizeof(*cache)); return; }
+    } else {
+        sdk_test_hash_str(&context, "archive:0");
+    }
+    if (sdk_join(asset_path, invocation->root, "runtime/wysna_runtime.h") && sdk_is_file(asset_path)) {
+        sdk_test_hash_str(&context, "header:1");
+        if (!sdk_test_hash_file(&context, asset_path)) { memset(cache, 0, sizeof(*cache)); return; }
+    } else {
+        sdk_test_hash_str(&context, "header:0");
+    }
+    if (sdk_join(asset_path, invocation->root, "native-sdk.json") && sdk_is_file(asset_path)) {
+        sdk_test_hash_str(&context, "meta:1");
+        if (!sdk_test_hash_file(&context, asset_path)) { memset(cache, 0, sizeof(*cache)); return; }
+    } else {
+        sdk_test_hash_str(&context, "meta:0");
+    }
+    sdk_test_hash_final_hex(&context, cache->runtime_sha);
+
+    cache->enabled = 1;
+    if (plan->revision && plan->revision[0] && plan->root && plan->root[0] &&
+        (!options->project_src_root || !options->project_src_root[0] ||
+         sdk_test_path_within_root(options->project_src_root, plan->root))) {
+        int deps_confined = 1;
+        for (int index = 0; index < options->dep_count; index++) {
+            if (!sdk_test_path_within_root(options->dep_roots[index], plan->root)) {
+                deps_confined = 0;
+                break;
+            }
+        }
+        cache->allow_tier1 = deps_confined;
+    }
+}
+
+static void sdk_test_cache_rev_key(const SdkTestCache* cache, const SdkOptions* options,
+                                   const SdkProjectTestPlan* plan, const SdkProjectTest* record,
+                                   char output[65]) {
+    WysnaSha256Context context;
+    wysna_sha256_init(&context);
+    sdk_test_hash_str(&context, "wysna-project-test-rev/1");
+    sdk_test_hash_str(&context, plan->revision);
+    sdk_test_hash_str(&context, sdk_test_relative_to_root(record->entry, plan->root));
+    sdk_test_hash_str(&context, record->sha);
+    sdk_test_hash_str(&context, options->profile ? options->profile : "release");
+    sdk_test_hash_str(&context, options->sandbox ? "1" : "0");
+    sdk_test_hash_str(&context, options->allow_caps);
+    sdk_test_hash_str(&context, options->deny_caps);
+    sdk_test_hash_str(&context, cache->runtime_sha);
+    sdk_test_hash_str(&context, sdk_test_relative_to_root(options->project_src_root, plan->root));
+    for (int index = 0; index < options->dep_count; index++) {
+        sdk_test_hash_str(&context, options->dep_aliases[index]);
+        sdk_test_hash_str(&context, sdk_test_relative_to_root(options->dep_roots[index], plan->root));
+    }
+    sdk_test_hash_final_hex(&context, output);
+}
+
+static int sdk_test_cache_c99_key(const SdkTestCache* cache, const SdkOptions* options,
+                                  const char* generated_path, char output[65]) {
+    WysnaSha256Context context;
+    wysna_sha256_init(&context);
+    sdk_test_hash_str(&context, "wysna-project-test-bin/1");
+    sdk_test_hash_str(&context, options->profile ? options->profile : "release");
+    sdk_test_hash_str(&context, options->sandbox ? "1" : "0");
+    sdk_test_hash_str(&context, options->allow_caps);
+    sdk_test_hash_str(&context, options->deny_caps);
+    sdk_test_hash_str(&context, cache->runtime_sha);
+    if (!sdk_test_hash_file(&context, generated_path)) return 0;
+    sdk_test_hash_final_hex(&context, output);
+    return 1;
+}
+
+static int sdk_test_cache_bin_path(const SdkTestCache* cache, const char* c99_key, char output[SDK_PATH_CAP]) {
+    char filename[80];
+#ifdef _WIN32
+    snprintf(filename, sizeof(filename), "%s.exe", c99_key);
+#else
+    snprintf(filename, sizeof(filename), "%s", c99_key);
+#endif
+    return sdk_join(output, cache->bin_dir, filename);
+}
+
+static int sdk_test_cache_lookup_rev(const SdkTestCache* cache, const char* rev_key, char bin_path[SDK_PATH_CAP]) {
+    char ref_name[72], ref_path[SDK_PATH_CAP];
+    snprintf(ref_name, sizeof(ref_name), "%s.ref", rev_key);
+    if (!sdk_join(ref_path, cache->rev_dir, ref_name)) return 0;
+    FILE* file = sdk_test_open(ref_path, "rb");
+    if (!file) return 0;
+    char content[68];
+    size_t read_len = fread(content, 1, sizeof(content) - 1, file);
+    int eof_ok = !ferror(file) && fgetc(file) == EOF;
+    fclose(file);
+    content[read_len] = 0;
+    if (!eof_ok || !sdk_test_is_hex64(content, read_len)) return 0;
+    content[64] = 0;
+    return sdk_test_cache_bin_path(cache, content, bin_path) && sdk_is_file(bin_path);
+}
+
+static void sdk_test_cache_store_rev(const SdkTestCache* cache, const char* rev_key, const char* c99_key) {
+    char ref_name[72], ref_path[SDK_PATH_CAP], tmp_dir[SDK_PATH_CAP], staged[SDK_PATH_CAP];
+    snprintf(ref_name, sizeof(ref_name), "%s.ref", rev_key);
+    if (!sdk_join(ref_path, cache->rev_dir, ref_name)) return;
+    if (!sdk_temp(tmp_dir, cache->rev_dir)) return;
+    if (sdk_join(staged, tmp_dir, "ref")) {
+        FILE* file = sdk_test_open(staged, "wb");
+        if (file) {
+            size_t wrote = fwrite(c99_key, 1, 64, file);
+            int ok = wrote == 64 && !ferror(file);
+            if (fclose(file)) ok = 0;
+            if (ok) (void)sdk_publish(staged, ref_path);
+        }
+    }
+    (void)sdk_remove_tree(tmp_dir);
+}
+
+static int sdk_test_cache_store_bin(const SdkTestCache* cache, const char* c99_key,
+                                    const char* source_product, char bin_path[SDK_PATH_CAP]) {
+    if (!sdk_test_cache_bin_path(cache, c99_key, bin_path)) return 0;
+    if (sdk_is_file(bin_path)) return 1;
+    char tmp_dir[SDK_PATH_CAP], staged[SDK_PATH_CAP];
+    if (!sdk_temp(tmp_dir, cache->bin_dir)) return 0;
+    int stored = 0;
+    if (sdk_join(staged, tmp_dir, "bin")) {
+        FILE* src = sdk_test_open(source_product, "rb");
+        FILE* dst = src ? sdk_test_open(staged, "wb") : NULL;
+        int ok = src && dst;
+        uint8_t buffer[16384];
+        size_t read_len = 0;
+        while (ok && (read_len = fread(buffer, 1, sizeof(buffer), src)) != 0) {
+            if (fwrite(buffer, 1, read_len, dst) != read_len) ok = 0;
+        }
+        if (src && ferror(src)) ok = 0;
+        if (dst && ferror(dst)) ok = 0;
+        if (src) fclose(src);
+        if (dst && fclose(dst)) ok = 0;
+#ifndef _WIN32
+        if (ok && chmod(staged, 0755) != 0) ok = 0;
+#endif
+        if (ok) {
+            if (sdk_is_file(bin_path) || sdk_publish(staged, bin_path) || sdk_is_file(bin_path)) {
+                stored = sdk_is_file(bin_path);
+            }
+        }
+    }
+    (void)sdk_remove_tree(tmp_dir);
+    return stored;
+}
+
 static void sdk_project_test_case(SdkInvocation* invocation, const SdkOptions* options,
-                                  const char* root, SdkProjectTest* result) {
+                                  const SdkProjectTestPlan* plan, const SdkTestCache* cache,
+                                  SdkProjectTest* result) {
     result->status = "failed"; result->failure_kind = "infrastructure_error";
     int64_t started = wysna_host_monotonic_ms_internal();
     char out_path[SDK_PATH_CAP], err_path[SDK_PATH_CAP], diag_path[SDK_PATH_CAP];
-    char fixture[SDK_PATH_CAP], cwd[SDK_PATH_CAP];
+    char fixture[SDK_PATH_CAP], cwd[SDK_PATH_CAP], exec_path[SDK_PATH_CAP], cached_bin[SDK_PATH_CAP];
+    char rev_key[65], c99_key[65];
     char* previous_fixture = NULL;
-    int changed_directory = 0, fixture_set = 0;
+    int changed_directory = 0, fixture_set = 0, have_rev_key = 0;
+    exec_path[0] = 0;
     if (!sdk_temp(invocation->workspace, NULL) || !sdk_join(out_path, invocation->workspace, "compiler.out") ||
         !sdk_join(err_path, invocation->workspace, "compiler.err") || !sdk_join(diag_path, invocation->workspace, "diagnostics.json") ||
         !sdk_join(fixture, invocation->workspace, "fixture") || !sdk_mkdir_p(fixture)) goto cleanup;
     SdkOptions compile = *options;
     compile.test_diagnostics = 1;
     compile.test_deadline = started + result->timeout;
-    SdkStdioCapture capture;
-    if (!sdk_stdio_capture(&capture, out_path, err_path)) goto cleanup;
     int64_t compile_started = wysna_host_monotonic_ms_internal();
-    int rc = sdk_compile_source(invocation, &compile, "--emit-c-mir", result->entry, 1);
-    if (!rc) rc = sdk_build(invocation, &compile);
-    result->compile_duration = wysna_host_monotonic_ms_internal() - compile_started;
-    sdk_stdio_restore(&capture);
-    if (rc == 124 || (rc != 130 && wysna_host_monotonic_ms_internal() >= compile.test_deadline)) {
-        result->status = "timed_out"; result->failure_kind = "timed_out";
-        goto cleanup;
-    }
-    if (rc) {
-        result->status = rc == 130 ? "cancelled" : "failed";
-        result->failure_kind = rc == 130 ? "cancelled" : "compile_error";
-        result->has_exit = 1; result->exit_code = rc;
-        (void)sdk_test_read(out_path, &result->out, &result->out_len);
-        (void)sdk_test_read(err_path, &result->err, &result->err_len);
-        size_t diagnostic_size = 0;
-        if (sdk_test_read(diag_path, &result->diagnostics, &diagnostic_size) != 1 || diagnostic_size < 2 ||
-            result->diagnostics[0] != '[' || result->diagnostics[diagnostic_size - 1] != ']') {
-            free(result->diagnostics); result->diagnostics = NULL;
+    if (cache && cache->enabled && cache->allow_tier1) {
+        sdk_test_cache_rev_key(cache, options, plan, result, rev_key);
+        have_rev_key = 1;
+        if (sdk_test_cache_lookup_rev(cache, rev_key, cached_bin)) {
+            if (sdk_copy(exec_path, cached_bin)) {
+                result->compile_duration = wysna_host_monotonic_ms_internal() - compile_started;
+            }
         }
-        goto cleanup;
     }
-    if (!sdk_absolute(cwd, ".", 1) || !sdk_test_chdir(root)) goto cleanup;
+    if (!exec_path[0]) {
+        SdkStdioCapture capture;
+        if (!sdk_stdio_capture(&capture, out_path, err_path)) goto cleanup;
+        int rc = sdk_compile_source(invocation, &compile, "--emit-c-mir", result->entry, 1);
+        if (!rc) {
+            int have_c99_key = cache && cache->enabled && sdk_test_cache_c99_key(cache, options, invocation->generated, c99_key);
+            if (have_c99_key && sdk_test_cache_bin_path(cache, c99_key, cached_bin) && sdk_is_file(cached_bin) &&
+                sdk_copy(exec_path, cached_bin)) {
+                if (have_rev_key) sdk_test_cache_store_rev(cache, rev_key, c99_key);
+            } else {
+                rc = sdk_build(invocation, &compile);
+                if (!rc) {
+                    if (have_c99_key && sdk_test_cache_store_bin(cache, c99_key, invocation->product, cached_bin) &&
+                        sdk_copy(exec_path, cached_bin)) {
+                        if (have_rev_key) sdk_test_cache_store_rev(cache, rev_key, c99_key);
+                    } else if (!sdk_copy(exec_path, invocation->product)) {
+                        rc = 1;
+                    }
+                }
+            }
+        }
+        result->compile_duration = wysna_host_monotonic_ms_internal() - compile_started;
+        sdk_stdio_restore(&capture);
+        if (rc == 124 || (rc != 130 && wysna_host_monotonic_ms_internal() >= compile.test_deadline)) {
+            result->status = "timed_out"; result->failure_kind = "timed_out";
+            goto cleanup;
+        }
+        if (rc) {
+            result->status = rc == 130 ? "cancelled" : "failed";
+            result->failure_kind = rc == 130 ? "cancelled" : "compile_error";
+            result->has_exit = 1; result->exit_code = rc;
+            (void)sdk_test_read(out_path, &result->out, &result->out_len);
+            (void)sdk_test_read(err_path, &result->err, &result->err_len);
+            size_t diagnostic_size = 0;
+            if (sdk_test_read(diag_path, &result->diagnostics, &diagnostic_size) != 1 || diagnostic_size < 2 ||
+                result->diagnostics[0] != '[' || result->diagnostics[diagnostic_size - 1] != ']') {
+                free(result->diagnostics); result->diagnostics = NULL;
+            }
+            goto cleanup;
+        }
+    }
+    if (!exec_path[0] || !sdk_absolute(cwd, ".", 1) || !sdk_test_chdir(plan->root)) goto cleanup;
     changed_directory = 1;
     previous_fixture = sdk_environment_value("WYSNA_TEST_TMPDIR");
     if (!sdk_environment("WYSNA_TEST_TMPDIR", fixture)) goto cleanup;
     fixture_set = 1;
-    void* command = sdk_buffer(invocation->product, strlen(invocation->product));
+    void* command = sdk_buffer(exec_path, strlen(exec_path));
     void* arguments = wysna_host_buffer_new();
     void* out = wysna_host_buffer_new();
     void* err = wysna_host_buffer_new();
@@ -330,11 +605,13 @@ static int sdk_run_project_tests(SdkInvocation* invocation, const SdkOptions* op
         return code;
     }
     int64_t started = wysna_host_monotonic_ms_internal();
+    SdkTestCache cache;
+    sdk_test_cache_init(&cache, invocation, options, plan);
     int failed = 0, completed = 0;
     for (int index = 0; index < plan->count; index++) {
         SdkProjectTest* record = &plan->cases[index];
         if (options->timeout_set && options->timeout > 0) record->timeout = options->timeout;
-        sdk_project_test_case(invocation, options, plan->root, record);
+        sdk_project_test_case(invocation, options, plan, &cache, record);
         completed++;
         if (record->failure_kind) failed++;
         if (!options->project_json_v1) {
