@@ -1,5 +1,15 @@
 # Changelog
 
+## 0.10.0 — 2026-11-26
+
+### Features
+- feat(release): add branch-driven SemVer automation, GitFlow policy, and handbook notifications (#205)
+
+### Fixes & Performance
+- fix(release): keep compute_release --apply stdout pure JSON (#208)
+- fix(ci): aggregate paginated PR JSON in prepare-release (#207)
+- fix(ci): repair prepare-release workflow YAML and sync main into develop (#206)
+
 ## 0.9.5 — 2026-11-24
 
 ### Agent-First Waves 1 & 2 (Protocol, Graph, Workspace Patch & MCP)
