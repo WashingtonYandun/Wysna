@@ -15,11 +15,11 @@ recommended installation, supported workflows, experiments and security limits.
 - [Effect and capability reports](EFFECTS.md): read-only `wysna explain`, model, trust, schema, and limits.
 - [Engine support](ENGINE_PARITY_MATRIX.md): tested fixture coverage across Wysna Seed and Wysna Compiler.
 - [Known limits](KNOWN_LIMITS.md): supported boundaries and deferred language decisions.
-- [Full language capabilities & debt audit](FULL_LANGUAGE_CAPABILITIES_AND_DEBT_AUDIT.md): comprehensive end-to-end feature inventory, architectural limits, and technical debt analysis.
 
 ## Tooling and distribution
 
 - [AI agent workflow](AI_AGENT_GUIDE.md): deterministic project workflow, target discovery, and diagnostics.
+- [Architecture contracts](ARCHITECTURE_CONTRACTS.md): typed role attributes, dependency rules, and static verification.
 - [Projects](PROJECTS.md): manifests, local dependencies, lockfiles, targets, and user tests.
 - [Seed distribution](SEED_DISTRIBUTION.md): relocatable Seed installation with private CPython and Zig.
 - [Native SDK](NATIVE_SDK.md): Python-free native compiler SDK, commands, and provenance.

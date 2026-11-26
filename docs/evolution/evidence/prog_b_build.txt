@@ -1,3 +1,0 @@
-[Wysna Compiler Error]
-[W2004] /Users/washingtonyandun/Documents/ChatGPT/w_lang_compiler/docs/evolution/evidence/prog_b_api.wysna:35:16 - incompatible types: expected 'list[__wysna_module_6__Value] ! str', found 'list[any]'
-

@@ -1,6 +1,6 @@
 # Comparativo de ejecución y compilación
 
-Este directorio contiene los programas, el runner, las muestras y el [informe HTML](report.html). Descarga el HTML o abre la copia del repositorio con tu navegador. Las tablas se pueden leer sin red.
+Este directorio contiene los programas, el runner y el generador de reportes (`render.py`). Para generar resultados locales (`results-local.json`, `encoding-local.json` y `report-local.html`) sin red una vez descargados los paquetes, sigue las instrucciones de reproducción abajo.
 
 ## Medición del 24 de noviembre de 2026
 
@@ -13,7 +13,7 @@ Apple M3, macOS ARM64. Se registraron 1.050 procesos y se pasaron 56 comprobacio
 - **Rollback grande.** 9,07 → 9,43 ms. Go y Rust registraron 5,11 y 4,13 ms.
 - **Java.** 24,43 ms de arranque de JVM, 67,76 ms en JSON grande y 41,98 ms en rollback grande.
 
-Los archivos [results.json](results.json) y [encoding.json](encoding.json) contienen las muestras y las revisiones exactas.
+Los scripts `run.py`, `encode.py` y `render.py` reproducen los archivos `results-local.json`, `encoding-local.json` y `report-local.html` localmente.
 
 ## Reproducción
 

@@ -1,5 +1,0 @@
-id,service,latency_ms
-101,auth-gateway,45
-102,billing-worker,180
-103,search-index,240
-104,edge-proxy,12
