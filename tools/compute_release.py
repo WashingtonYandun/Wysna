@@ -5,6 +5,7 @@ from __future__ import annotations
 import argparse
 from datetime import date
 import json
+import os
 from pathlib import Path
 import re
 import subprocess
@@ -246,6 +247,28 @@ def apply_release_plan(
         if updated != text:
             projects_doc.write_text(updated, encoding="utf-8")
             touched.append("docs/PROJECTS.md")
+
+    examples_dir = root / "examples"
+    if examples_dir.is_dir():
+        main_entry = root / "src/main.py"
+        lock_env = {**os.environ, "PYTHONPATH": str(root / "src")}
+        for toml_path in sorted(examples_dir.glob("**/wysna.toml")):
+            text = toml_path.read_text(encoding="utf-8")
+            updated = re.sub(r'(language\s*=\s*")[^"]+(")', rf'\g<1>{lang_version}\g<2>', text, count=1)
+            updated = re.sub(r'(compiler\s*=\s*")[^"]+(")', rf'\g<1>{next_version}\g<2>', updated, count=1)
+            if updated != text:
+                toml_path.write_text(updated, encoding="utf-8")
+                touched.append(toml_path.relative_to(root).as_posix())
+            lock_path = toml_path.parent / "wysna.lock"
+            if sync_bundle and lock_path.is_file() and main_entry.is_file():
+                subprocess.run(
+                    [sys.executable, str(main_entry), "project", "lock", "--manifest", str(toml_path)],
+                    cwd=root,
+                    env=lock_env,
+                    stdout=sys.stderr,
+                    check=True,
+                )
+                touched.append(lock_path.relative_to(root).as_posix())
 
     readme = root / "README.md"
     if readme.is_file():
