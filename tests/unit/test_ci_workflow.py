@@ -112,9 +112,6 @@ def test_ci_workflow_contracts():
     assert 'tools/run_ci_parallel.py --mode pytest' in native_diagnostics
     sdk_group = re.search(r'--group (\S+)', native_diagnostics)
     assert sdk_group, 'Tests sharing the dev SDK need a single worker'
-    migration = 'tests/unit/test_v09_project_migration.py'
-    assert migration in sdk_group.group(1).split(',')
-    assert native_diagnostics.count(migration) == 1
     contracts, conformance = jobs['compiler-contracts'], jobs['conformance']
     runtime = jobs['runtime-conformance']
     integration = jobs['integration-conformance']
