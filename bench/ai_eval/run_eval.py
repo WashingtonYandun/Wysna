@@ -22,12 +22,15 @@ from bench.ai_eval.checkpoint import load_checkpoint, save_checkpoint, run_confi
 from bench.ai_eval.acceptance import evaluate_acceptance
 
 
-def _checkpoint_config(args, model_name: str, tasks_file: Path) -> dict:
+def _checkpoint_config(args, model_name: str, tasks_file: Path, wysna_bin: str | None = None) -> dict:
+    params = {"task_filter": args.task, "max_repair_cycles": args.max_repair_cycles,
+              "temperature": 0.2, "max_tokens": 8192 if args.provider == "openai" else 4096}
+    if wysna_bin:
+        params["wysna_bin"] = wysna_bin
     return run_config(
         Path(REPO_ROOT), provider=args.provider, model=model_name, base_url=args.base_url,
         corpus=json.loads(tasks_file.read_text(encoding="utf-8")),
-        parameters={"task_filter": args.task, "max_repair_cycles": args.max_repair_cycles,
-                    "temperature": 0.2, "max_tokens": 8192 if args.provider == "openai" else 4096},
+        parameters=params,
         output_paths=(args.checkpoint, args.output),
     )
 
@@ -103,8 +106,18 @@ def main() -> int:
                         help="Maximum diagnostic repair submissions per task")
     parser.add_argument("--base-url", type=str, default="http://localhost:1234/v1", help="OpenAI-compatible base URL")
     parser.add_argument("--api-key", type=str, default=None, help="API key for provider")
+    parser.add_argument("--wysna-bin", type=str, default=None,
+                        help="Path to a native wysna SDK binary to evaluate instead of Python Seed main.py")
 
     args = parser.parse_args()
+    compiler_cmd = None
+    resolved_bin = None
+    if args.wysna_bin:
+        bin_path = Path(args.wysna_bin).resolve()
+        if not bin_path.is_file():
+            parser.error(f"--wysna-bin not found: {args.wysna_bin}")
+        resolved_bin = str(bin_path)
+        compiler_cmd = [resolved_bin]
 
     # Load tasks
     tasks_file = Path(args.tasks_file).resolve()
@@ -141,14 +154,14 @@ def main() -> int:
         if not args.task or task.id == args.task or args.task in task.domain
     ]
     completed_results = []
-    checkpoint_config = _checkpoint_config(args, model_name, tasks_file)
+    checkpoint_config = _checkpoint_config(args, model_name, tasks_file, resolved_bin)
     if args.checkpoint:
         selected_ids = {task.id for task in selected_tasks}
         completed_results = load_checkpoint(args.checkpoint, checkpoint_config, selected_ids)
         save_checkpoint(args.checkpoint, checkpoint_config, completed_results)
         print(f"Checkpoint: {len(completed_results)}/{len(selected_tasks)} tasks already complete")
 
-    harness = EvaluationHarness(repo_root=REPO_ROOT, max_repair_cycles=args.max_repair_cycles)
+    harness = EvaluationHarness(repo_root=REPO_ROOT, compiler_cmd=compiler_cmd, max_repair_cycles=args.max_repair_cycles)
     print(f"=== Starting Wysna AI Benchmark ({len(tasks)} tasks loaded) ===")
     print(f"Provider: {args.provider} | Model: {model_name}")
 
