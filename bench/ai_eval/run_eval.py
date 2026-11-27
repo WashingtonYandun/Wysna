@@ -2,7 +2,7 @@
 """CLI runner for Wysna AI Authoring and Repair Benchmark.
 
 Usage:
-  python3 bench/ai_eval/run_eval.py [--provider=mock|gemini|openai] [--model=...] [--task=TASK-01] [--output=results.json]
+  python3 bench/ai_eval/run_eval.py [--provider=mock|gemini|anthropic|openai] [--model=...] [--task=TASK-01] [--output=results.json]
 """
 
 import argparse
@@ -17,14 +17,15 @@ sys.path[:0] = [REPO_ROOT, os.path.join(REPO_ROOT, "src")]
 
 from bench.ai_eval.harness import EvaluationHarness
 from bench.ai_eval.models import Task
-from bench.ai_eval.providers import GeminiProvider, MockProvider, OpenAICompatibleProvider
+from bench.ai_eval.providers import AnthropicProvider, GeminiProvider, MockProvider, OpenAICompatibleProvider
 from bench.ai_eval.checkpoint import load_checkpoint, save_checkpoint, run_config
 from bench.ai_eval.acceptance import evaluate_acceptance
 
 
 def _checkpoint_config(args, model_name: str, tasks_file: Path, wysna_bin: str | None = None) -> dict:
     params = {"task_filter": args.task, "max_repair_cycles": args.max_repair_cycles,
-              "temperature": 0.2, "max_tokens": 8192 if args.provider == "openai" else 4096}
+              "temperature": None if args.provider == "anthropic" else 0.2,
+              "max_tokens": 8192 if args.provider == "openai" else 4096}
     if wysna_bin:
         params["wysna_bin"] = wysna_bin
     return run_config(
@@ -87,7 +88,7 @@ def main() -> int:
     parser = argparse.ArgumentParser(description="Wysna AI Authoring and Repair Benchmark Harness")
     parser.add_argument(
         "--provider",
-        choices=["mock", "gemini", "openai"],
+        choices=["mock", "gemini", "anthropic", "openai"],
         default="mock",
         help="LLM provider (default: mock for dry-run/CI)",
     )
@@ -133,6 +134,9 @@ def main() -> int:
     elif args.provider == "gemini":
         model_name = args.model or "gemini-flash-lite-latest"
         provider = GeminiProvider(api_key=args.api_key, model=model_name)
+    elif args.provider == "anthropic":
+        model_name = args.model or "claude-haiku-5-5"
+        provider = AnthropicProvider(api_key=args.api_key, model=model_name)
     elif args.provider == "openai":
         model_name = args.model or "local-model"
         provider = OpenAICompatibleProvider(
