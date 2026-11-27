@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """Build an offline native SDK; Python is a build dependency, never a packaged runtime."""
 import argparse
+import concurrent.futures
 import json
 import os
 from pathlib import Path
@@ -22,6 +23,7 @@ from common.AgentContract import native_sdk_commands
 from common.Platform import WINDOWS_NATIVE_STACK_BYTES, native_stack_link_args
 from compiler.Bootstrap import bootstrap_fingerprint, ensure_selfhost_compiler_binary
 from tools.package_components import download, extract, sha256
+from tools.split_c_tu import split_c_translation_unit
 
 COMPONENTS = json.loads((ROOT / "packaging/native/components.json").read_text(encoding="utf-8"))
 COMMANDS = native_sdk_commands()
@@ -124,33 +126,51 @@ def assemble(output, cache, *, source_commit=None):
         stack_flags = native_stack_link_args(base)
         base += stack_flags
         release_archive = stage / "lib" / "libwysna_runtime_release.a"
-        for source, target in [(ROOT / "packaging/native/driver.c", stage / ("bin/wysna" + suffix)),
-                               (compiler.parent / "compiler2.c", stage / ("libexec/wysna-compiler" + suffix))]:
-            defines = ['-DWYSNA_NATIVE_TARGET="' + component["target"] + '"',
-                       '-DWYSNA_NATIVE_VERSION="' + WYSNA_VERSION + '"'] if source.name == "driver.c" else []
-            print("Compiling SDK component: " + target.name, file=sys.stderr, flush=True)
-            if stack_flags and source.name == "driver.c":
-                defines.append('-DWYSNA_NATIVE_STACK_LINK_ARGUMENT="' + stack_flags[0] + '"')
-            extra_compile = []
-            extra_link = []
-            if source.name != "driver.c":
-                extra_compile = ["-DWYSNA_RUNTIME_LINKED", "-ffunction-sections", "-fdata-sections"]
-                if host.endswith("-linux"):
-                    extra_compile += ["-pthread", "-DWYSNA_LINK_PTHREAD"]
-                extra_link = [str(release_archive)]
-                if host.endswith("-macos"):
-                    extra_link.append("-Wl,-dead_strip")
-                elif host.endswith("-linux"):
-                    extra_link.append("-Wl,--gc-sections")
-            # Optimizing the generated selfhost translation unit with Zig can
-            # exceed the macOS package build budget. Keep the runtime archive
-            # optimized independently of the compiler frontend and driver.
-            optimization = "-O0" if source.name != "driver.c" and host.endswith("-macos") else "-O2"
-            built = subprocess.run(base + [optimization] + defines + extra_compile + [str(source)] + extra_link
-                                   + ["-lc", "-lm", "-o", str(target)],
-                                   capture_output=True, text=True, timeout=SDK_COMPONENT_BUILD_TIMEOUT_SECONDS, env=environment)
-            if built.returncode:
-                raise RuntimeError("Native SDK compilation failed for " + source.name + ":\n" + built.stderr)
+        driver_target = stage / ("bin/wysna" + suffix)
+        driver_defines = [
+            '-DWYSNA_NATIVE_TARGET="' + component["target"] + '"',
+            '-DWYSNA_NATIVE_VERSION="' + WYSNA_VERSION + '"',
+        ]
+        if stack_flags:
+            driver_defines.append('-DWYSNA_NATIVE_STACK_LINK_ARGUMENT="' + stack_flags[0] + '"')
+        print("Compiling SDK component: " + driver_target.name, file=sys.stderr, flush=True)
+        built_driver = subprocess.run(
+            base + ["-O2"] + driver_defines + [str(ROOT / "packaging/native/driver.c"), "-lc", "-lm", "-o", str(driver_target)],
+            capture_output=True, text=True, timeout=SDK_COMPONENT_BUILD_TIMEOUT_SECONDS, env=environment)
+        if built_driver.returncode:
+            raise RuntimeError("Native SDK compilation failed for driver.c:\n" + built_driver.stderr)
+
+        compiler_target = stage / ("libexec/wysna-compiler" + suffix)
+        compiler_units_dir = directory / "compiler-units"
+        chunk_count = min(8, max(4, os.cpu_count() or 4))
+        _, unit_sources = split_c_translation_unit(compiler.parent / "compiler2.c", compiler_units_dir, chunks=chunk_count)
+        extra_compile = ["-DWYSNA_RUNTIME_LINKED", "-ffunction-sections", "-fdata-sections", "-I" + str(compiler_units_dir)]
+        if host.endswith("-linux"):
+            extra_compile += ["-pthread", "-DWYSNA_LINK_PTHREAD"]
+        extra_link = [str(release_archive)]
+        if host.endswith("-macos"):
+            extra_link.append("-Wl,-dead_strip")
+        elif host.endswith("-linux"):
+            extra_link.append("-Wl,--gc-sections")
+        print(f"Compiling SDK component: {compiler_target.name} ({len(unit_sources)} -O2 units)", file=sys.stderr, flush=True)
+
+        def compile_unit(c_source: Path) -> Path:
+            obj_file = c_source.with_suffix(".o")
+            res = subprocess.run(
+                base + ["-O2"] + extra_compile + ["-c", str(c_source), "-o", str(obj_file)],
+                capture_output=True, text=True, timeout=SDK_COMPONENT_BUILD_TIMEOUT_SECONDS, env=environment)
+            if res.returncode:
+                raise RuntimeError(f"Native SDK compilation failed for {c_source.name}:\n" + res.stderr)
+            return obj_file
+
+        with concurrent.futures.ThreadPoolExecutor(max_workers=len(unit_sources)) as pool:
+            unit_objects = list(pool.map(compile_unit, unit_sources))
+        linked_compiler = subprocess.run(
+            base + ["-O2"] + ([ "-pthread" ] if host.endswith("-linux") else []) + [str(obj) for obj in unit_objects]
+            + extra_link + ["-lc", "-lm", "-o", str(compiler_target)],
+            capture_output=True, text=True, timeout=SDK_COMPONENT_BUILD_TIMEOUT_SECONDS, env=environment)
+        if linked_compiler.returncode:
+            raise RuntimeError("Native SDK linking failed for compiler:\n" + linked_compiler.stderr)
         if os.name == "nt":
             (stage / "open-terminal.cmd").write_text(
                 '@echo off\nset "PATH=%~dp0bin;%PATH%"\ncd /d "%USERPROFILE%"\ncmd /k\n', encoding="utf-8")

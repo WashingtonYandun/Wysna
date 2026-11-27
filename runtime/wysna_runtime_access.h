@@ -521,6 +521,89 @@ static inline void wysna_dict_set_i64_at(WVal* dict_val, int64_t key, WVal owned
     wysna_dict_set_i64_slow_at(dict_val, key, owned_val, file, line, col);
 }
 
+static inline WVal wysna_dict_get_scalar_slow_at(WVal dict_val, int64_t key,
+                                                 const char* file, int32_t line, int32_t col) {
+    WVal boxed_key = wysna_int(key);
+    WVal result = wysna_index_get_at(dict_val, boxed_key, file, line, col);
+    wysna_release(boxed_key);
+    return result;
+}
+
+static inline int64_t wysna_dict_get_int_at(WVal dict_val, int64_t key,
+                                            const char* file, int32_t line, int32_t col) {
+    WDictBuf* d = wysna_as_dict(dict_val);
+    if (W_LIKELY(d && d->len > 0 && d->bucket_count > 0 && wysna_int_fits_48(key))) {
+        uint64_t full_hash = (UINT64_C(14695981039346656037) ^ (uint64_t)W_INT) ^ wysna_mix64((uint64_t)key);
+        uint8_t h2 = wysna_dict_ctrl_tag(full_hash);
+        const uint8_t* tags = wysna_dict_tags(d);
+        uint32_t mask = (uint32_t)d->bucket_count - 1;
+        uint32_t slot = (uint32_t)full_hash & mask;
+        WVal target = wysna_int_inline(key);
+        for (;;) {
+            uint8_t ctrl = tags[slot];
+            if (ctrl == 0) break;
+            if (W_LIKELY(ctrl == h2)) {
+                int32_t idx = d->buckets[slot];
+                WVal k = d->keys[idx];
+                if (W_LIKELY(k.bits == target.bits)) return wysna_as_int(d->vals[idx]);
+                if (W_UNLIKELY(wysna_hi(k) == WVAL_HI_EXT)) break;
+            }
+            slot = (slot + 1) & mask;
+        }
+    }
+    return wysna_as_int(wysna_dict_get_scalar_slow_at(dict_val, key, file, line, col));
+}
+
+static inline double wysna_dict_get_float_at(WVal dict_val, int64_t key,
+                                             const char* file, int32_t line, int32_t col) {
+    WDictBuf* d = wysna_as_dict(dict_val);
+    if (W_LIKELY(d && d->len > 0 && d->bucket_count > 0 && wysna_int_fits_48(key))) {
+        uint64_t full_hash = (UINT64_C(14695981039346656037) ^ (uint64_t)W_INT) ^ wysna_mix64((uint64_t)key);
+        uint8_t h2 = wysna_dict_ctrl_tag(full_hash);
+        const uint8_t* tags = wysna_dict_tags(d);
+        uint32_t mask = (uint32_t)d->bucket_count - 1;
+        uint32_t slot = (uint32_t)full_hash & mask;
+        WVal target = wysna_int_inline(key);
+        for (;;) {
+            uint8_t ctrl = tags[slot];
+            if (ctrl == 0) break;
+            if (W_LIKELY(ctrl == h2)) {
+                int32_t idx = d->buckets[slot];
+                WVal k = d->keys[idx];
+                if (W_LIKELY(k.bits == target.bits)) return wysna_as_float(d->vals[idx]);
+                if (W_UNLIKELY(wysna_hi(k) == WVAL_HI_EXT)) break;
+            }
+            slot = (slot + 1) & mask;
+        }
+    }
+    return wysna_as_float(wysna_dict_get_scalar_slow_at(dict_val, key, file, line, col));
+}
+
+static inline bool wysna_dict_get_bool_at(WVal dict_val, int64_t key,
+                                          const char* file, int32_t line, int32_t col) {
+    WDictBuf* d = wysna_as_dict(dict_val);
+    if (W_LIKELY(d && d->len > 0 && d->bucket_count > 0 && wysna_int_fits_48(key))) {
+        uint64_t full_hash = (UINT64_C(14695981039346656037) ^ (uint64_t)W_INT) ^ wysna_mix64((uint64_t)key);
+        uint8_t h2 = wysna_dict_ctrl_tag(full_hash);
+        const uint8_t* tags = wysna_dict_tags(d);
+        uint32_t mask = (uint32_t)d->bucket_count - 1;
+        uint32_t slot = (uint32_t)full_hash & mask;
+        WVal target = wysna_int_inline(key);
+        for (;;) {
+            uint8_t ctrl = tags[slot];
+            if (ctrl == 0) break;
+            if (W_LIKELY(ctrl == h2)) {
+                int32_t idx = d->buckets[slot];
+                WVal k = d->keys[idx];
+                if (W_LIKELY(k.bits == target.bits)) return wysna_as_bool(d->vals[idx]);
+                if (W_UNLIKELY(wysna_hi(k) == WVAL_HI_EXT)) break;
+            }
+            slot = (slot + 1) & mask;
+        }
+    }
+    return wysna_as_bool(wysna_dict_get_scalar_slow_at(dict_val, key, file, line, col));
+}
+
 WYSNA_RT_FN WVal wysna_dict_keys(WVal dict_val) {
     WDictBuf* d = wysna_as_dict(dict_val);
     if (!d) wysna_runtime_fail("W4003", "Dictionary intrinsic requires dict receiver");

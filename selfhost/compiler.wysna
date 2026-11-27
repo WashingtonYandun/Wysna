@@ -12119,8 +12119,14 @@ fn mir_c_operation_opt(module: MirModule, function: MirFunction, operation: MirO
             let recv_tid = function.slots[operation.args[0]].type_id
             let idx_tid = function.slots[operation.args[1]].type_id
             let res_tid = function.slots[result].type_id
-            if module.types[recv_tid].kind == "list" and idx_tid == 3 and (res_tid == 3 or res_tid == 4 or res_tid == 2) {
-                let helper = if res_tid == 3 { "wysna_list_get_int_at" } elif res_tid == 4 { "wysna_list_get_float_at" } else { "wysna_list_get_bool_at" }
+            let recv_type = module.types[recv_tid]
+            if (recv_type.kind == "list" or (recv_type.kind == "dict" and len(recv_type.args) >= 1 and recv_type.args[0] == 3)) and idx_tid == 3 and (res_tid == 3 or res_tid == 4 or res_tid == 2) {
+                let is_list = recv_type.kind == "list"
+                let helper = if is_list {
+                    if res_tid == 3 { "wysna_list_get_int_at" } elif res_tid == 4 { "wysna_list_get_float_at" } else { "wysna_list_get_bool_at" }
+                } else {
+                    if res_tid == 3 { "wysna_dict_get_int_at" } elif res_tid == 4 { "wysna_dict_get_float_at" } else { "wysna_dict_get_bool_at" }
+                }
                 let raw_idx = if not mir_value_storage(idx_tid) { mir_c_name(operation.args[1]) } else { "wysna_as_int(" + arguments[1] + ")" }
                 let call_expr = helper + "(" + arguments[0] + ", " + raw_idx + ", " + escape_c_str(operation.source.file) + ", " + str(operation.source.line) + ", " + str(operation.source.col) + ")"
                 return mir_c_write_consume_opt(function, result, call_expr, false, info.sync_mode)

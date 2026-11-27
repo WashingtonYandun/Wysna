@@ -115,15 +115,16 @@ WYSNA_RT_FN WVal wysna_make_dict(int32_t count, const WVal* keys, const WVal* va
     WDictBuf* d = (WDictBuf*)wysna_alloc_safe(sizeof(WDictBuf));
     d->refcount = 1;
     d->len = 0;
-    d->cap = count > 4 ? count * 2 : 4;
-    d->keys = (WVal*)wysna_alloc_safe(sizeof(WVal) * d->cap);
-    d->vals = (WVal*)wysna_alloc_safe(sizeof(WVal) * d->cap);
-    d->buckets = NULL;
+    int32_t min_items = count > 2 ? count : 2;
     int32_t buckets = 8;
-    while (buckets < d->cap) {
+    while ((int64_t)(min_items + 1) * 2 >= buckets) {
         if (buckets > INT32_MAX / 2) { wysna_runtime_fail_unlocated("W4003", "Dictionary too large"); }
         buckets *= 2;
     }
+    d->cap = buckets / 2;
+    d->keys = (WVal*)wysna_alloc_safe(sizeof(WVal) * d->cap);
+    d->vals = (WVal*)wysna_alloc_safe(sizeof(WVal) * d->cap);
+    d->buckets = NULL;
     wysna_dict_reindex(d, buckets);
     wysna_mem_on_alloc();
     WVal v = wysna_make_hi_ptr(WVAL_HI_DICT, d);

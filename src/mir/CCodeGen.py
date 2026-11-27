@@ -1023,15 +1023,18 @@ class CCodeGen:
                 elif (name in ('wysna_index_get_at', 'wysna_index_get_owned_at', 'wysna_index_get', 'wysna_index_get_owned')
                       and data.get('source')
                       and len(operation.args) == 2
-                      and self.slots[result].storage in ('integer', 'float', 'boolean')
-                      and self.interner.get_entry(self.slots[operation.args[0]].type_id).tag == 'list'):
-                    idx_expr = self.scalar(operation.args[1])
-                    helper = {
-                        'integer': 'wysna_list_get_int_at',
-                        'float': 'wysna_list_get_float_at',
-                        'boolean': 'wysna_list_get_bool_at',
-                    }[self.slots[result].storage]
-                    return [self.write(result, f'{helper}({args[0]}, {idx_expr}, {quote(source.file)}, {source.line}, {source.col})', boxed=False)]
+                      and self.slots[result].storage in ('integer', 'float', 'boolean')):
+                    recv_entry = self.interner.get_entry(self.slots[operation.args[0]].type_id)
+                    idx_slot_type = self.slots[operation.args[1]].type_id
+                    if recv_entry is not None and (recv_entry.tag == 'list' or (recv_entry.tag == 'dict' and recv_entry.data and recv_entry.data[0] == TYPE_INT)) and idx_slot_type == TYPE_INT:
+                        idx_expr = self.scalar(operation.args[1])
+                        prefix = 'wysna_list_get_' if recv_entry.tag == 'list' else 'wysna_dict_get_'
+                        suffix = {
+                            'integer': 'int_at',
+                            'float': 'float_at',
+                            'boolean': 'bool_at',
+                        }[self.slots[result].storage]
+                        return [self.write(result, f'{prefix}{suffix}({args[0]}, {idx_expr}, {quote(source.file)}, {source.line}, {source.col})', boxed=False)]
                 elif name == 'wysna_builtin_len' and len(operation.args) == 1 and self.slots[result].storage != 'value':
                     arg_tag = self.interner.get_entry(self.slots[operation.args[0]].type_id).tag
                     len_helper = {'list': 'wysna_list_len_i64', 'dict': 'wysna_dict_len_i64', 'tuple': 'wysna_tuple_len_i64'}.get(arg_tag)

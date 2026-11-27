@@ -961,8 +961,24 @@ WYSNA_RT_FN void wysna_dict_reindex(WDictBuf* dict, int32_t capacity) {
     free(dict->buckets);
     dict->bucket_count = capacity;
     dict->buckets = (int32_t*)wysna_alloc_safe(wysna_dict_bucket_bytes(capacity));
-    memset(wysna_dict_tags(dict), 0, (size_t)capacity);
-    for (int32_t i = 0; i < dict->len; i++) wysna_dict_index_entry(dict, i);
+    uint8_t* tags = wysna_dict_tags(dict);
+    memset(tags, 0, (size_t)capacity);
+    uint32_t mask = (uint32_t)capacity - 1;
+    for (int32_t i = 0; i < dict->len; i++) {
+        WVal k = dict->keys[i];
+        uint64_t full_hash;
+        if (W_LIKELY(wysna_hi(k) == WVAL_HI_INT)) {
+            uint64_t raw = wysna_payload(k);
+            int64_t sv = (int64_t)((raw ^ UINT64_C(0x0000800000000000)) - UINT64_C(0x0000800000000000));
+            full_hash = (UINT64_C(14695981039346656037) ^ (uint64_t)W_INT) ^ wysna_mix64((uint64_t)sv);
+        } else {
+            full_hash = wysna_key_hash_inline(k);
+        }
+        uint32_t slot = (uint32_t)full_hash & mask;
+        while (tags[slot] != 0) slot = (slot + 1) & mask;
+        dict->buckets[slot] = i;
+        tags[slot] = wysna_dict_ctrl_tag(full_hash);
+    }
 }
 WYSNA_RT_FN void wysna_dict_insert_owned(WDictBuf* d, WVal owned_key, WVal owned_val) {
     uint64_t full_hash = 0;
