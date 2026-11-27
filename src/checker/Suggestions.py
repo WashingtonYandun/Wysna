@@ -136,6 +136,8 @@ def _annotate_mismatch(error, expected: str, found: str):
                 f"'?' can return early and requires {requirement} on the enclosing function. "
                 "Use 'else' for a local fallback."
             )
+    elif expected == "u8" and found == "int" and not error.help:
+        error.help = "Use an integer literal in 0..255 with a u8 type context, or narrow checked with 'u8(x) ?? 0'."
     return error
 
 

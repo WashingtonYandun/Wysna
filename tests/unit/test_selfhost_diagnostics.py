@@ -173,3 +173,28 @@ def test_native_compiler_emits_demangled_actionable_diagnostics(tmp_path):
         for bad in forbidden:
             assert bad not in result.stderr, f"{filename}: unexpected {bad!r} in {result.stderr!r}"
         assert not output.exists()
+
+
+def test_native_fix_apply_wraps_bare_error_return_and_emits_u8_hint(tmp_path):
+    compiler = ensure_selfhost_compiler_binary(str(ROOT))
+
+    err_src = tmp_path / "wrap_err.wysna"
+    err_src.write_text('fn f() -> int ! IoError {\n  return IoError { message: "bad" }\n}\nfn main() -> unit {}\n', encoding="utf-8")
+    fixed = subprocess.run([compiler, "fix", "--apply", str(err_src)], cwd=ROOT, capture_output=True, text=True, timeout=60)
+    assert fixed.returncode == 0, fixed.stderr + fixed.stdout
+    rewritten = err_src.read_text(encoding="utf-8")
+    assert 'return Err(IoError { message: "bad" })' in rewritten
+
+    checked = subprocess.run([compiler, "check", str(err_src)], cwd=ROOT, capture_output=True, text=True, timeout=60)
+    assert checked.returncode == 0, checked.stderr
+
+    u8_src = tmp_path / "u8_hint.wysna"
+    u8_src.write_text('fn main() -> unit {\n  let n: int = 12\n  let _b: u8 = n\n}\n', encoding="utf-8")
+    u8_res = subprocess.run([compiler, str(u8_src), str(tmp_path / "u8_hint.c")], cwd=ROOT, capture_output=True, text=True, timeout=60)
+    assert u8_res.returncode != 0
+    assert "[W2001]" in u8_res.stderr
+    assert "u8(x) ?? 0" in u8_res.stderr
+
+    u8_json = subprocess.run([compiler, "check", "--output-format=json-v1", str(u8_src)], cwd=ROOT, capture_output=True, text=True, timeout=60)
+    assert u8_json.returncode != 0
+    assert "u8(x) ?? 0" in u8_json.stdout

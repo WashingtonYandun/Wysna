@@ -142,7 +142,7 @@ def assemble(output, cache, *, source_commit=None):
 
         compiler_target = stage / ("libexec/wysna-compiler" + suffix)
         compiler_units_dir = directory / "compiler-units"
-        chunk_count = min(8, max(4, os.cpu_count() or 4))
+        chunk_count = 8
         _, unit_sources = split_c_translation_unit(compiler.parent / "compiler2.c", compiler_units_dir, chunks=chunk_count)
         extra_compile = ["-DWYSNA_RUNTIME_LINKED", "-ffunction-sections", "-fdata-sections", "-I" + str(compiler_units_dir)]
         if host.endswith("-linux"):
@@ -163,7 +163,8 @@ def assemble(output, cache, *, source_commit=None):
                 raise RuntimeError(f"Native SDK compilation failed for {c_source.name}:\n" + res.stderr)
             return obj_file
 
-        with concurrent.futures.ThreadPoolExecutor(max_workers=len(unit_sources)) as pool:
+        max_workers = max(1, min(os.cpu_count() or 2, len(unit_sources)))
+        with concurrent.futures.ThreadPoolExecutor(max_workers=max_workers) as pool:
             unit_objects = list(pool.map(compile_unit, unit_sources))
         linked_compiler = subprocess.run(
             base + ["-O2"] + ([ "-pthread" ] if host.endswith("-linux") else []) + [str(obj) for obj in unit_objects]
