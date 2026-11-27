@@ -104,6 +104,7 @@ WYSNA_RT_FN WVal* wysna_index_ref(WVal* obj, WVal idx) {
             wysna_dict_index_entry_hashed(d, new_index, full_hash);
         } else {
             d->buckets[slot] = new_index;
+            wysna_dict_tags(d)[slot] = wysna_dict_ctrl_tag(full_hash);
         }
         return &d->vals[new_index];
     }
@@ -438,17 +439,22 @@ static inline bool wysna_dict_contains_i64(WVal dict_val, int64_t key) {
     if (W_UNLIKELY(!d || d->len == 0 || d->bucket_count == 0)) return false;
     if (W_LIKELY(wysna_int_fits_48(key))) {
         uint64_t full_hash = (UINT64_C(14695981039346656037) ^ (uint64_t)W_INT) ^ wysna_mix64((uint64_t)key);
+        uint8_t h2 = wysna_dict_ctrl_tag(full_hash);
+        const uint8_t* tags = wysna_dict_tags(d);
         uint32_t mask = (uint32_t)d->bucket_count - 1;
         uint32_t slot = (uint32_t)full_hash & mask;
         WVal target = wysna_int_inline(key);
-        while (d->buckets[slot] >= 0) {
-            int32_t idx = d->buckets[slot];
-            WVal k = d->keys[idx];
-            if (W_LIKELY(k.bits == target.bits)) return true;
-            if (W_UNLIKELY(wysna_hi(k) == WVAL_HI_EXT)) return wysna_dict_contains_i64_slow(d, key);
+        for (;;) {
+            uint8_t ctrl = tags[slot];
+            if (ctrl == 0) return false;
+            if (W_LIKELY(ctrl == h2)) {
+                int32_t idx = d->buckets[slot];
+                WVal k = d->keys[idx];
+                if (W_LIKELY(k.bits == target.bits)) return true;
+                if (W_UNLIKELY(wysna_hi(k) == WVAL_HI_EXT)) return wysna_dict_contains_i64_slow(d, key);
+            }
             slot = (slot + 1) & mask;
         }
-        return false;
     }
     return wysna_dict_contains_i64_slow(d, key);
 }
@@ -470,22 +476,28 @@ static inline void wysna_dict_set_i64_at(WVal* dict_val, int64_t key, WVal owned
     WDictBuf* d = wysna_as_dict(*dict_val);
     if (W_LIKELY(d && d->bucket_count > 0 && wysna_rc_load(&d->refcount) == 1 && wysna_int_fits_48(key))) {
         uint64_t full_hash = (UINT64_C(14695981039346656037) ^ (uint64_t)W_INT) ^ wysna_mix64((uint64_t)key);
+        uint8_t h2 = wysna_dict_ctrl_tag(full_hash);
+        uint8_t* tags = wysna_dict_tags(d);
         uint32_t mask = (uint32_t)d->bucket_count - 1;
         uint32_t slot = (uint32_t)full_hash & mask;
         WVal target = wysna_int_inline(key);
         bool fallback = false;
-        while (d->buckets[slot] >= 0) {
-            int32_t idx = d->buckets[slot];
-            WVal k = d->keys[idx];
-            if (W_LIKELY(k.bits == target.bits)) {
-                WVal old = d->vals[idx];
-                d->vals[idx] = owned_val;
-                if (W_UNLIKELY(!wysna_is_immediate(old))) wysna_release(old);
-                return;
-            }
-            if (W_UNLIKELY(wysna_hi(k) == WVAL_HI_EXT)) {
-                fallback = true;
-                break;
+        for (;;) {
+            uint8_t ctrl = tags[slot];
+            if (ctrl == 0) break;
+            if (W_LIKELY(ctrl == h2)) {
+                int32_t idx = d->buckets[slot];
+                WVal k = d->keys[idx];
+                if (W_LIKELY(k.bits == target.bits)) {
+                    WVal old = d->vals[idx];
+                    d->vals[idx] = owned_val;
+                    if (W_UNLIKELY(!wysna_is_immediate(old))) wysna_release(old);
+                    return;
+                }
+                if (W_UNLIKELY(wysna_hi(k) == WVAL_HI_EXT)) {
+                    fallback = true;
+                    break;
+                }
             }
             slot = (slot + 1) & mask;
         }
@@ -494,6 +506,7 @@ static inline void wysna_dict_set_i64_at(WVal* dict_val, int64_t key, WVal owned
             d->keys[idx] = target;
             d->vals[idx] = owned_val;
             d->buckets[slot] = idx;
+            tags[slot] = h2;
             return;
         }
     }
@@ -521,7 +534,7 @@ WYSNA_RT_FN WVal wysna_dict_clear(WVal* dict_val) {
         wysna_release(d->vals[i]);
     }
     d->len = 0;
-    memset(d->buckets, -1, sizeof(int32_t) * (size_t)d->bucket_count);
+    memset(wysna_dict_tags(d), 0, (size_t)d->bucket_count);
     return wysna_unit();
 }
 
@@ -543,7 +556,7 @@ WYSNA_RT_FN WVal wysna_dict_remove(WVal* dict_val, WVal key) {
         memmove(&d->vals[found], &d->vals[found + 1], sizeof(WVal) * (size_t)(last - found));
     }
     d->len = last;
-    memset(d->buckets, -1, sizeof(int32_t) * (size_t)d->bucket_count);
+    memset(wysna_dict_tags(d), 0, (size_t)d->bucket_count);
     for (int32_t i = 0; i < d->len; i++) wysna_dict_index_entry(d, i);
     wysna_release(removed_key);
     return wysna_enum_payload("Option", "Some", removed_val);

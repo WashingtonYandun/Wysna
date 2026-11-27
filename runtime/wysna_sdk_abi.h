@@ -58,6 +58,18 @@ typedef struct {
     int32_t bucket_count;
 } WDictBuf;
 
+static inline size_t wysna_dict_bucket_bytes(int32_t capacity) {
+    return (sizeof(int32_t) + sizeof(uint8_t)) * (size_t)capacity;
+}
+
+static inline uint8_t* wysna_dict_tags(const WDictBuf* d) {
+    return (uint8_t*)(d->buckets + d->bucket_count);
+}
+
+static inline uint8_t wysna_dict_ctrl_tag(uint64_t full_hash) {
+    return (uint8_t)(0x80u | ((uint32_t)(full_hash >> 57) & 0x7Fu));
+}
+
 typedef struct {
     int32_t refcount;
     int32_t len;
@@ -122,6 +134,12 @@ typedef struct WStringLiteral {
     struct WStringLiteral* next;
 } WStringLiteral;
 
+typedef struct WStructSlab {
+    struct WStructSlab* next;
+    int32_t used;
+    int32_t cap;
+} WStructSlab;
+
 typedef struct WysnaRuntimeContext {
     WStringLiteral* string_literals;
     int64_t alloc_count;
@@ -160,8 +178,8 @@ typedef struct WysnaRuntimeContext {
     int32_t box_pool_len;
     WEnumBuf* enum_pool[16];
     int32_t enum_pool_len;
-    WStructBuf* struct_pool[32];
-    int32_t struct_pool_len;
+    WStructSlab* struct_slabs;
+    WStructBuf* struct_freelist;
 } WysnaRuntimeContext;
 
 #if defined(__wasi__) && !defined(__wasm_threads__)
@@ -1140,17 +1158,22 @@ static inline bool wysna_dict_contains_i64(WVal dict_val, int64_t key) {
     if (W_UNLIKELY(!d || d->len == 0 || d->bucket_count == 0)) return false;
     if (W_LIKELY(wysna_int_fits_48(key))) {
         uint64_t full_hash = (UINT64_C(14695981039346656037) ^ (uint64_t)W_INT) ^ wysna_mix64((uint64_t)key);
+        uint8_t h2 = wysna_dict_ctrl_tag(full_hash);
+        const uint8_t* tags = wysna_dict_tags(d);
         uint32_t mask = (uint32_t)d->bucket_count - 1;
         uint32_t slot = (uint32_t)full_hash & mask;
         WVal target = wysna_int_inline(key);
-        while (d->buckets[slot] >= 0) {
-            int32_t idx = d->buckets[slot];
-            WVal k = d->keys[idx];
-            if (W_LIKELY(k.bits == target.bits)) return true;
-            if (W_UNLIKELY(wysna_hi(k) == WVAL_HI_EXT)) return wysna_dict_contains_i64_slow(d, key);
+        for (;;) {
+            uint8_t ctrl = tags[slot];
+            if (ctrl == 0) return false;
+            if (W_LIKELY(ctrl == h2)) {
+                int32_t idx = d->buckets[slot];
+                WVal k = d->keys[idx];
+                if (W_LIKELY(k.bits == target.bits)) return true;
+                if (W_UNLIKELY(wysna_hi(k) == WVAL_HI_EXT)) return wysna_dict_contains_i64_slow(d, key);
+            }
             slot = (slot + 1) & mask;
         }
-        return false;
     }
     return wysna_dict_contains_i64_slow(d, key);
 }
@@ -1160,22 +1183,28 @@ static inline void wysna_dict_set_i64_at(WVal* dict_val, int64_t key, WVal owned
     WDictBuf* d = wysna_as_dict(*dict_val);
     if (W_LIKELY(d && d->bucket_count > 0 && wysna_rc_load(&d->refcount) == 1 && wysna_int_fits_48(key))) {
         uint64_t full_hash = (UINT64_C(14695981039346656037) ^ (uint64_t)W_INT) ^ wysna_mix64((uint64_t)key);
+        uint8_t h2 = wysna_dict_ctrl_tag(full_hash);
+        uint8_t* tags = wysna_dict_tags(d);
         uint32_t mask = (uint32_t)d->bucket_count - 1;
         uint32_t slot = (uint32_t)full_hash & mask;
         WVal target = wysna_int_inline(key);
         bool fallback = false;
-        while (d->buckets[slot] >= 0) {
-            int32_t idx = d->buckets[slot];
-            WVal k = d->keys[idx];
-            if (W_LIKELY(k.bits == target.bits)) {
-                WVal old = d->vals[idx];
-                d->vals[idx] = owned_val;
-                if (W_UNLIKELY(!wysna_is_immediate(old))) wysna_release(old);
-                return;
-            }
-            if (W_UNLIKELY(wysna_hi(k) == WVAL_HI_EXT)) {
-                fallback = true;
-                break;
+        for (;;) {
+            uint8_t ctrl = tags[slot];
+            if (ctrl == 0) break;
+            if (W_LIKELY(ctrl == h2)) {
+                int32_t idx = d->buckets[slot];
+                WVal k = d->keys[idx];
+                if (W_LIKELY(k.bits == target.bits)) {
+                    WVal old = d->vals[idx];
+                    d->vals[idx] = owned_val;
+                    if (W_UNLIKELY(!wysna_is_immediate(old))) wysna_release(old);
+                    return;
+                }
+                if (W_UNLIKELY(wysna_hi(k) == WVAL_HI_EXT)) {
+                    fallback = true;
+                    break;
+                }
             }
             slot = (slot + 1) & mask;
         }
@@ -1184,6 +1213,7 @@ static inline void wysna_dict_set_i64_at(WVal* dict_val, int64_t key, WVal owned
             d->keys[idx] = target;
             d->vals[idx] = owned_val;
             d->buckets[slot] = idx;
+            tags[slot] = h2;
             return;
         }
     }

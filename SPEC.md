@@ -1,10 +1,10 @@
 # Wysna Language Specification
 
-> **Status:** This specification defines Wysna `0.9.0`. Sections 1–11 describe the normative grammar; sections 12–14 describe implementation contracts.
+> **Status:** This specification defines Wysna **1.0.0**. Sections 1–11 describe the normative grammar; sections 12–14 describe implementation contracts.
 >
-> **Implementations:** `Wysna Seed` is the reference implementation that determines whether a program is valid. `Wysna Compiler` is an independent self-hosted compiler; its supported subset is measured against the public release corpus. The parity matrix documents this boundary in [docs/ENGINE_PARITY_MATRIX.md](docs/ENGINE_PARITY_MATRIX.md).
+> **Implementations:** `Wysna Seed` is the reference implementation that determines whether a program is valid. `Wysna Compiler` is an independent self-hosted compiler (`native-core-v1`); its supported subset is measured against the public release corpus. The parity matrix documents this boundary in [docs/ENGINE_PARITY_MATRIX.md](docs/ENGINE_PARITY_MATRIX.md).
 >
-> **Thesis:** Wysna is a compact, statically typed language for small native tools, with deterministic diagnostics and inspectable C99 output. This document defines the language syntax and semantics.
+> **Thesis:** Wysna is a general-purpose, statically typed compiled programming language built for humans and AI agents, with deterministic ARC + Copy-on-Write value semantics, structured diagnostics, and inspectable ANSI C99 and WebAssembly output. For practical tutorials and reference guides, see the [official handbook](https://wysna.wysofia.com/).
 
 ---
 

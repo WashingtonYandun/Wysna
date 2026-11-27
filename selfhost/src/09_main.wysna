@@ -217,7 +217,7 @@ fn run_compiler() -> unit ! IoError {
         let in_file = positional[0]
         let source = read_file(in_file)?
         let checked = check_source(source, in_file)
-        let module = mir_build(checked)
+        let module = if mode_flag == "--check-mir" { mir_build(checked) } else { mir_build_optimized(checked) }
         if mode_flag == "--check-mir" {
             mir_verify(module)
             let warnings = lint_collect_warnings(checked, source, in_file)

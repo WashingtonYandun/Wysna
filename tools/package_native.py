@@ -105,6 +105,21 @@ def assemble(output, cache, *, source_commit=None):
                 capture_output=True, text=True, timeout=SDK_COMPONENT_BUILD_TIMEOUT_SECONDS, env=environment)
             if archived_rt.returncode:
                 raise RuntimeError("Native SDK runtime archive creation failed (" + profile_name + "):\n" + archived_rt.stderr)
+        wasi_obj = directory / "wysna_runtime_wasi.o"
+        wasi_archive = stage / "lib" / "libwysna_runtime_wasi.a"
+        print("Compiling SDK runtime archive: " + wasi_archive.name, file=sys.stderr, flush=True)
+        built_wasi = subprocess.run(
+            [str(zig), "cc", "-target", "wasm32-wasi", "-std=c99", "-Os",
+             "-fno-sanitize=undefined", "-ffunction-sections", "-fdata-sections",
+             "-I" + str(ROOT), "-c", str(runtime_lib_source), "-o", str(wasi_obj)],
+            capture_output=True, text=True, timeout=SDK_COMPONENT_BUILD_TIMEOUT_SECONDS, env=environment)
+        if built_wasi.returncode:
+            raise RuntimeError("Native SDK runtime archive compilation failed (wasi):\n" + built_wasi.stderr)
+        archived_wasi = subprocess.run(
+            [str(zig), "ar", "rcs", str(wasi_archive), str(wasi_obj)],
+            capture_output=True, text=True, timeout=SDK_COMPONENT_BUILD_TIMEOUT_SECONDS, env=environment)
+        if archived_wasi.returncode:
+            raise RuntimeError("Native SDK runtime archive creation failed (wasi):\n" + archived_wasi.stderr)
         base = [str(zig), "cc", "-target", component["target"], "-std=c99", "-fno-sanitize=undefined", "-mcpu=baseline", "-I" + str(ROOT)]
         stack_flags = native_stack_link_args(base)
         base += stack_flags

@@ -1,32 +1,32 @@
 # Wysna Language Support for VS Code / Cursor / Antigravity
 
-Provides syntax highlighting, comment toggling (`#`), and bracket auto-closing for `.wysna` source files according to `SPEC.md v0.1`. The compiler's stdio LSP also provides diagnostics, completion, definition, hover, and document formatting when connected through an LSP client.
+Syntax highlighting, comment toggling (`#`), bracket matching, LSP integration (`wysna lsp`), and **Wysna: Show Project Impact** support for **Wysna 1.0**.
 
-The extension currently contributes syntax support only. To use compiler language features, configure an LSP client to launch `wysna lsp` (or `python -m main lsp` from a source checkout) over stdio.
+## Prerequisites
 
-## Install in 1 Command
+Install the Wysna compiler CLI in one command:
 
-From the repository root:
+- **Windows (PowerShell):** `irm https://wysna.wysofia.com/install.ps1 | iex`
+- **macOS / Linux:** `curl -fsSL https://wysna.wysofia.com/install.sh | sh`
+
+## Package and Install as `.vsix`
+
+Build a deterministic `.vsix` package without external Node/npm tools:
 
 ```bash
-# VS Code
-ln -sfn "$(pwd)/editors/vscode-wysna" ~/.vscode/extensions/washingtonyandun.wysna-lang-0.1.0
-
-# Cursor
-ln -sfn "$(pwd)/editors/vscode-wysna" ~/.cursor/extensions/washingtonyandun.wysna-lang-0.1.0
-
-# Antigravity
-ln -sfn "$(pwd)/editors/vscode-wysna" ~/.antigravity/extensions/washingtonyandun.wysna-lang-0.1.0
+python3 tools/package_vscode.py --output dist/wysna-lang-1.0.0.vsix
+code --install-extension dist/wysna-lang-1.0.0.vsix
 ```
 
-Reload the window (`Cmd+Shift+P` -> `Developer: Reload Window`) to activate `.wysna` syntax highlighting.
+Or link directly from a repository checkout:
 
-## Consultar el impacto de un cambio
+```bash
+ln -sfn "$(pwd)/editors/vscode-wysna" ~/.vscode/extensions/washingtonyandun.wysna-lang-1.0.0
+```
 
-Abre un archivo Wysna dentro de un proyecto con `wysna.toml`. Coloca el
-cursor sobre un símbolo y ejecuta **Wysna: Show Project Impact** desde la
-paleta de comandos. El panel **Wysna Project Impact** muestra los destinos
-y las pruebas, con las relaciones que justifican cada resultado.
+Reload the window (`Developer: Reload Window`) to activate `.wysna` support.
 
-La extensión usa el comando `wysna` del PATH. Si tienes varias instalaciones,
-indica el ejecutable en `wysna.executablePath`.
+## Features
+
+- **LSP Diagnostics & Navigation:** Configure your LSP client to launch `wysna lsp` over stdio (or set `wysna.executablePath` if using a custom binary path).
+- **Project Impact Panel:** Open a file inside a `wysna.toml` project, place the cursor on a symbol, and run **Wysna: Show Project Impact** from the Command Palette.

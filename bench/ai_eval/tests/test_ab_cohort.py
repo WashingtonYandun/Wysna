@@ -15,6 +15,7 @@ from bench.ai_eval.ab_cohort import (
     ConditionHarness,
     TASK_FAMILIES,
     _build_default_cohort_tasks,
+    build_agent_first_v1_tasks,
     build_import_style_ab_tasks,
     evaluate_expansion_gate,
     run_ab_cohort,
@@ -380,3 +381,66 @@ def test_import_style_oracle_rejects_correct_output_without_assigned_import(tmp_
     source.write_text('import "std/parse" as parse\nprint("sum=9")\n', encoding="utf-8")
     passed, error = harness.run_oracle_tests(str(tmp_path), source.name, [])
     assert not passed and "selective" in error
+
+
+def test_agent_first_v1_suite_solutions_pass_real_compiler():
+    tasks = build_agent_first_v1_tasks()
+    assert [t.task.id for t in tasks] == [
+        "AF-V1-CLASS-PUBPRIV-01",
+        "AF-V1-MATCH-EXHAUSTIVE-02",
+        "AF-V1-STRUCT-SPREAD-03",
+    ]
+    answers = {
+        "AF-V1-CLASS-PUBPRIV-01": [(
+            "### accumulator.wysna\n"
+            "```wysna\n"
+            "pub class ByteAccumulator {\n"
+            "    priv running: int\n"
+            "    fn init(initial: int) { this.running = initial }\n"
+            "    pub fn add(value: u8) -> unit { this.running += int(value) }\n"
+            "    pub fn total() -> int { return this.running }\n"
+            "}\n"
+            "```"
+        )],
+        "AF-V1-MATCH-EXHAUSTIVE-02": [(
+            "### main.wysna\n"
+            "```wysna\n"
+            "import \"std/parse\" as parse\n\n"
+            "fn classify_port(raw: str) -> str ! parse.ParseError {\n"
+            "    let port = parse.parse_int(raw)?\n"
+            "    return match port {\n"
+            "        0..=1023 => \"system\",\n"
+            "        1024..=49151 => \"registered\",\n"
+            "        _ => \"ephemeral\",\n"
+            "    }\n"
+            "}\n\n"
+            "fn main() -> unit {\n"
+            "    let argv = args()\n"
+            "    let res = classify_port(argv[1]) else err {\n"
+            "        eprint(\"invalid\")\n"
+            "        exit(2)\n"
+            "        return\n"
+            "    }\n"
+            "    print(f\"band={res}\")\n"
+            "}\n"
+            "main()\n"
+            "```"
+        )],
+        "AF-V1-STRUCT-SPREAD-03": [(
+            "### config.wysna\n"
+            "```wysna\n"
+            "pub struct Config { host: str, port: int, timeout_ms: int, tls: bool }\n\n"
+            "pub fn with_timeout(base: Config, timeout_ms: int) -> Config {\n"
+            "    return Config { timeout_ms: timeout_ms, ..base }\n"
+            "}\n"
+            "```"
+        )],
+    }
+    report = run_ab_cohort(
+        tasks,
+        lambda _cond: MockProvider(answers),
+        repo_root=REPO_ROOT,
+        repetitions=1,
+        max_repair_cycles=0,
+    )
+    assert all(row["passed"] for row in report["runs"]), report["runs"]

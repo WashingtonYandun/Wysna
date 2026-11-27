@@ -757,6 +757,10 @@ fn mir_build(program: CheckedProgram) -> MirModule {
     return mir_optimize_local_read_clones(mir_optimize_parameter_reads(raw_module))
 }
 
+fn mir_build_optimized(program: CheckedProgram) -> MirModule {
+    return mir_optimize_module(mir_build(program))
+}
+
 fn mir_module_json(module: MirModule) -> str {
     mir_verify(module)
     let mut functions = "["

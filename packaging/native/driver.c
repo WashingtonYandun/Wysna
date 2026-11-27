@@ -41,7 +41,7 @@ typedef struct {
     const char *project_subcmd, *project_src_root, *unsupported_target;
     const char *allow_caps, *deny_caps, *diag_out;
     int arguments, include_count, link_count, library_count, library_dir_count, dep_count;
-    int profile_set, timeout_set, project_json_v1, test_diagnostics, sandbox, json_v1, target_set, wasi;
+    int profile_set, timeout_set, project_json_v1, test_diagnostics, sandbox, json_v1, target_set, wasi, web;
     const char *includes[SDK_LINK_LIMIT], *links[SDK_LINK_LIMIT], *libraries[SDK_LINK_LIMIT], *library_dirs[SDK_LINK_LIMIT];
     const char *dep_aliases[SDK_LINK_LIMIT], *dep_roots[SDK_LINK_LIMIT];
     int64_t timeout, test_deadline;
@@ -93,7 +93,7 @@ static void sdk_help(void) {
          "       wysna mcp [--root DIR] [--allow-exec]\n"
          "       wysna lsp\n"
          "Build and run accept --include-dir DIR, --link FILE, --library-dir DIR and --library NAME.\n"
-         "Build accepts --target=wasi for a standalone WASI preview 1 command.\n"
+         "Build accepts --target=wasi (WASI Preview 1 .wasm) or --target=web (.wasm + .mjs + .d.ts).\n"
          "This SDK compiles through verified MIR without Python. See native-sdk.json for its profile.");
 }
 static int sdk_has_json_v1(int argc, char** argv) {
@@ -106,7 +106,8 @@ static int sdk_has_json_v1(int argc, char** argv) {
 static int sdk_is_wasm_target(const char* target) {
     return strcmp(target, "wasi") == 0 || strcmp(target, "wasi-command") == 0 ||
            strcmp(target, "wasm32-wasi") == 0 || strcmp(target, "wasm32-wasip1") == 0 ||
-           strcmp(target, "web") == 0 || strcmp(target, "browser-library") == 0 ||
+           strcmp(target, "web") == 0 || strcmp(target, "wasm") == 0 || strcmp(target, "wasm32-web") == 0 ||
+           strcmp(target, "browser-library") == 0 ||
            strcmp(target, "wasm32-unknown-emscripten") == 0;
 }
 static int sdk_parse_target(SdkOptions* options, const char* target) {
@@ -117,6 +118,10 @@ static int sdk_parse_target(SdkOptions* options, const char* target) {
         (strcmp(target, "wasi") == 0 || strcmp(target, "wasi-command") == 0 ||
          strcmp(target, "wasm32-wasi") == 0 || strcmp(target, "wasm32-wasip1") == 0)) {
         options->wasi = 1;
+    } else if (strcmp(options->command, "build") == 0 &&
+               (strcmp(target, "web") == 0 || strcmp(target, "wasm") == 0 || strcmp(target, "wasm32-web") == 0)) {
+        options->wasi = 1;
+        options->web = 1;
     } else {
         options->unsupported_target = target;
     }
@@ -428,10 +433,11 @@ static int sdk_build(SdkInvocation* invocation, const SdkOptions* options) {
     if (!sdk_is_file(invocation->zig)) return sdk_error("W5001", "Missing bundled C toolchain; reinstall the SDK", invocation->zig);
     if (!sdk_prepare_cache(invocation)) return sdk_error("W5001", "Cannot configure a writable compiler cache", NULL);
     const char* archive_rel = "lib/libwysna_runtime_release.a";
-    if (strcmp(options->profile, "dev") == 0) archive_rel = "lib/libwysna_runtime_dev.a";
+    if (options->wasi) archive_rel = "lib/libwysna_runtime_wasi.a";
+    else if (strcmp(options->profile, "dev") == 0) archive_rel = "lib/libwysna_runtime_dev.a";
     else if (strcmp(options->profile, "size") == 0) archive_rel = "lib/libwysna_runtime_size.a";
     char archive_path[SDK_PATH_CAP];
-    int use_linked_runtime = !options->wasi && !options->sandbox && !options->allow_caps && !options->deny_caps &&
+    int use_linked_runtime = !options->sandbox && !options->allow_caps && !options->deny_caps &&
         !sdk_generated_needs_header_runtime(invocation->generated) &&
         sdk_join(archive_path, invocation->root, archive_rel) && sdk_is_file(archive_path);
     const char* arguments[SDK_ARGUMENT_LIMIT]; int count = 0;
@@ -470,11 +476,15 @@ static int sdk_build(SdkInvocation* invocation, const SdkOptions* options) {
     }
     if (use_linked_runtime) {
         arguments[count++] = sdk_owned(invocation, "", archive_path);
+        if (options->wasi) {
+            arguments[count++] = "-Wl,--gc-sections";
+        } else {
 #ifdef __APPLE__
-        arguments[count++] = "-Wl,-dead_strip";
+            arguments[count++] = "-Wl,-dead_strip";
 #elif !defined(_WIN32)
-        arguments[count++] = "-Wl,--gc-sections";
+            arguments[count++] = "-Wl,--gc-sections";
 #endif
+        }
     }
     for (int index = 0; index < options->library_dir_count; index++) {
         if (!sdk_absolute(invocation->scratch, options->library_dirs[index], 1) || !sdk_is_directory(invocation->scratch)) return sdk_error("W5002", "Invalid library directory", options->library_dirs[index]);
@@ -490,6 +500,166 @@ static int sdk_build(SdkInvocation* invocation, const SdkOptions* options) {
     int restored_global = sdk_environment("ZIG_GLOBAL_CACHE_DIR", invocation->previous_global_cache);
     if (!restored_local || !restored_global) return sdk_error("W5001", "Cannot restore the application environment", NULL);
     return status;
+}
+static void sdk_write_js_escaped(FILE* f, const char* s) {
+    fputc('"', f);
+    for (const unsigned char* p = (const unsigned char*)s; *p; p++) {
+        if (*p == '\\' || *p == '"') { fputc('\\', f); fputc(*p, f); }
+        else if (*p >= 0x20) fputc(*p, f);
+    }
+    fputc('"', f);
+}
+
+static int sdk_emit_web_wrapper(const char* wasm_path, char* js_path, char* dts_path) {
+    size_t len = strlen(wasm_path);
+    size_t stem_len = (len >= 5 && strcmp(wasm_path + len - 5, ".wasm") == 0) ? (len - 5) : len;
+    if (stem_len + 6 >= SDK_PATH_CAP) return 0;
+    memcpy(js_path, wasm_path, stem_len);
+    memcpy(js_path + stem_len, ".mjs", 5);
+    memcpy(dts_path, wasm_path, stem_len);
+    memcpy(dts_path + stem_len, ".d.ts", 6);
+
+    const char* base = strrchr(wasm_path, '/');
+#ifdef _WIN32
+    const char* bs = strrchr(wasm_path, '\\');
+    if (bs && (!base || bs > base)) base = bs;
+#endif
+    base = base ? base + 1 : wasm_path;
+
+    FILE* jf = fopen(js_path, "wb");
+    if (!jf) return 0;
+    fprintf(jf, "// Generated by Wysna %s Native SDK (--target=web)\nconst DEFAULT_WASM = ", WYSNA_NATIVE_VERSION);
+    sdk_write_js_escaped(jf, base);
+    fputs(
+        ";\n"
+        "class WasiExit extends Error { constructor(code) { super(`exit:${code}`); this.code = code; } }\n"
+        "async function loadWasmBytes(wasmUrl, wasmBytes) {\n"
+        "  if (wasmBytes) return wasmBytes instanceof Uint8Array ? wasmBytes : new Uint8Array(wasmBytes);\n"
+        "  const url = wasmUrl ? new URL(wasmUrl, import.meta.url) : new URL(`./${DEFAULT_WASM}`, import.meta.url);\n"
+        "  if (url.protocol === 'file:' && typeof window === 'undefined') {\n"
+        "    const fs = await import('node:fs/promises');\n"
+        "    return await fs.readFile(url);\n"
+        "  }\n"
+        "  const res = await fetch(url);\n"
+        "  if (!res.ok) throw new Error(`Failed to fetch ${url}: HTTP ${res.status}`);\n"
+        "  return new Uint8Array(await res.arrayBuffer());\n"
+        "}\n"
+        "export async function run(options = {}) {\n"
+        "  const bytes = await loadWasmBytes(options.wasmUrl, options.wasmBytes);\n"
+        "  const mod = await WebAssembly.compile(bytes);\n"
+        "  const encoder = new TextEncoder();\n"
+        "  const decoder = new TextDecoder();\n"
+        "  const argv = ['wysna', ...(options.args || []).map(String)];\n"
+        "  const envList = Object.entries(options.env || {}).map(([k, v]) => `${k}=${v}`);\n"
+        "  const stdoutChunks = [];\n"
+        "  const stderrChunks = [];\n"
+        "  let instance = null;\n"
+        "  const view = () => new DataView(instance.exports.memory.buffer);\n"
+        "  const u8 = () => new Uint8Array(instance.exports.memory.buffer);\n"
+        "  const writeStrList = (list, ptrTable, ptrBuf) => {\n"
+        "    const dv = view();\n"
+        "    const mem = u8();\n"
+        "    let cursor = ptrBuf;\n"
+        "    for (let i = 0; i < list.length; i++) {\n"
+        "      dv.setUint32(ptrTable + i * 4, cursor, true);\n"
+        "      const enc = encoder.encode(list[i]);\n"
+        "      mem.set(enc, cursor);\n"
+        "      mem[cursor + enc.length] = 0;\n"
+        "      cursor += enc.length + 1;\n"
+        "    }\n"
+        "    return 0;\n"
+        "  };\n"
+        "  const wasi = {\n"
+        "    args_sizes_get: (argcPtr, bufSizePtr) => {\n"
+        "      const dv = view();\n"
+        "      const total = argv.reduce((s, a) => s + encoder.encode(a).length + 1, 0);\n"
+        "      dv.setUint32(argcPtr, argv.length, true);\n"
+        "      dv.setUint32(bufSizePtr, total, true);\n"
+        "      return 0;\n"
+        "    },\n"
+        "    args_get: (argvPtr, bufPtr) => writeStrList(argv, argvPtr, bufPtr),\n"
+        "    environ_sizes_get: (countPtr, bufSizePtr) => {\n"
+        "      const dv = view();\n"
+        "      const total = envList.reduce((s, e) => s + encoder.encode(e).length + 1, 0);\n"
+        "      dv.setUint32(countPtr, envList.length, true);\n"
+        "      dv.setUint32(bufSizePtr, total, true);\n"
+        "      return 0;\n"
+        "    },\n"
+        "    environ_get: (envPtr, bufPtr) => writeStrList(envList, envPtr, bufPtr),\n"
+        "    fd_write: (fd, iovsPtr, iovsLen, nwrittenPtr) => {\n"
+        "      const dv = view();\n"
+        "      const mem = u8();\n"
+        "      let written = 0;\n"
+        "      for (let i = 0; i < iovsLen; i++) {\n"
+        "        const ptr = dv.getUint32(iovsPtr + i * 8, true);\n"
+        "        const len = dv.getUint32(iovsPtr + i * 8 + 4, true);\n"
+        "        const text = decoder.decode(mem.subarray(ptr, ptr + len));\n"
+        "        if (fd === 1) { stdoutChunks.push(text); options.onStdout?.(text); }\n"
+        "        else if (fd === 2) { stderrChunks.push(text); options.onStderr?.(text); }\n"
+        "        written += len;\n"
+        "      }\n"
+        "      dv.setUint32(nwrittenPtr, written, true);\n"
+        "      return 0;\n"
+        "    },\n"
+        "    fd_read: (_fd, _iovs, _len, nreadPtr) => { view().setUint32(nreadPtr, 0, true); return 0; },\n"
+        "    fd_close: () => 0,\n"
+        "    fd_seek: (_fd, _off, _w, outPtr) => { view().setBigUint64(outPtr, 0n, true); return 29; },\n"
+        "    fd_fdstat_get: (fd, statPtr) => {\n"
+        "      if (fd > 2) return 8;\n"
+        "      u8().fill(0, statPtr, statPtr + 24);\n"
+        "      view().setUint8(statPtr, 2);\n"
+        "      return 0;\n"
+        "    },\n"
+        "    fd_fdstat_set_flags: () => 0,\n"
+        "    fd_prestat_get: () => 8,\n"
+        "    fd_prestat_dir_name: () => 8,\n"
+        "    clock_time_get: (_id, _prec, outPtr) => { view().setBigUint64(outPtr, BigInt(Date.now()) * 1000000n, true); return 0; },\n"
+        "    clock_res_get: (_id, outPtr) => { view().setBigUint64(outPtr, 1000000n, true); return 0; },\n"
+        "    random_get: (bufPtr, bufLen) => {\n"
+        "      const target = u8().subarray(bufPtr, bufPtr + bufLen);\n"
+        "      for (let off = 0; off < target.length; off += 65536) {\n"
+        "        crypto.getRandomValues(target.subarray(off, Math.min(off + 65536, target.length)));\n"
+        "      }\n"
+        "      return 0;\n"
+        "    },\n"
+        "    proc_exit: (code) => { throw new WasiExit(code >>> 0); },\n"
+        "  };\n"
+        "  for (const imp of WebAssembly.Module.imports(mod)) {\n"
+        "    if (imp.module === 'wasi_snapshot_preview1' && !(imp.name in wasi)) {\n"
+        "      wasi[imp.name] = () => 52;\n"
+        "    }\n"
+        "  }\n"
+        "  instance = await WebAssembly.instantiate(mod, { wasi_snapshot_preview1: wasi });\n"
+        "  let exitCode = 0;\n"
+        "  try { instance.exports._start(); } catch (err) { if (err instanceof WasiExit) exitCode = err.code; else throw err; }\n"
+        "  return { exitCode, stdout: stdoutChunks.join(''), stderr: stderrChunks.join('') };\n"
+        "}\n",
+        jf);
+    int js_err = ferror(jf);
+    fclose(jf);
+    if (js_err) return 0;
+
+    FILE* df = fopen(dts_path, "wb");
+    if (!df) return 0;
+    fputs(
+        "export interface WysnaRunOptions {\n"
+        "  args?: string[];\n"
+        "  env?: Record<string, string>;\n"
+        "  wasmUrl?: string | URL;\n"
+        "  wasmBytes?: Uint8Array | ArrayBuffer;\n"
+        "  onStdout?: (chunk: string) => void;\n"
+        "  onStderr?: (chunk: string) => void;\n"
+        "}\n\n"
+        "export interface WysnaRunResult {\n"
+        "  exitCode: number;\n"
+        "  stdout: string;\n"
+        "  stderr: string;\n"
+        "}\n\n"
+        "export function run(options?: WysnaRunOptions): Promise<WysnaRunResult>;\n",
+        df);
+    int dts_err = ferror(df);
+    fclose(df);
+    return !dts_err;
 }
 #include "stdio_capture.h"
 
@@ -1023,9 +1193,15 @@ static int sdk_execute(SdkInvocation* invocation, const SdkOptions* options, int
     if (build || run) {
         status = sdk_build(invocation, options); if (status) return status;
     }
+    char web_js_path[SDK_PATH_CAP], web_dts_path[SDK_PATH_CAP];
+    web_js_path[0] = 0;
+    web_dts_path[0] = 0;
     if (invocation->output[0]) {
         if (sdk_same_file(invocation->source, invocation->output)) return sdk_error("W5002", "Output became a source alias during compilation", NULL);
         if (!sdk_publish(build ? invocation->product : invocation->generated, invocation->output)) return sdk_error("W5001", "Cannot publish the completed output", invocation->output);
+        if (options->web && !sdk_emit_web_wrapper(invocation->output, web_js_path, web_dts_path)) {
+            return sdk_error("W5001", "Cannot emit the WebAssembly JS/TS wrapper", invocation->output);
+        }
     }
     if (options->json_v1 && (build || strcmp(options->command, "emit-c") == 0)) {
         const char* kind = options->wasi ? "wasm_module" : build ? "native_executable" : "c99_source";
@@ -1033,7 +1209,7 @@ static int sdk_execute(SdkInvocation* invocation, const SdkOptions* options, int
         printf("{\"schema_version\":\"wysna.tool-result/1\",\"command\":");
         sdk_print_json_quoted(options->command);
         printf(",\"status\":\"ok\",\"invocation_id\":\"native\",\"tool_exit_code\":0,\"process_exit_code\":0,\"execution\":null,\"toolchain\":{\"compiler\":\"" WYSNA_NATIVE_VERSION "\"},\"target\":{\"profile\":\"%s\",\"triple\":%s},\"diagnostics\":[],\"artifacts\":",
-               options->wasi ? "wasi-command" : "native-cli", options->wasi ? "\"wasm32-wasip1\"" : "null");
+               options->web ? "web-wasm" : options->wasi ? "wasi-command" : "native-cli", options->wasi ? "\"wasm32-wasip1\"" : "null");
         if (invocation->output[0]) {
             printf("[{\"kind\":");
             sdk_print_json_quoted(kind);
@@ -1041,7 +1217,15 @@ static int sdk_execute(SdkInvocation* invocation, const SdkOptions* options, int
             sdk_print_json_quoted(media);
             printf(",\"path\":");
             sdk_print_json_quoted(invocation->output);
-            printf("}]");
+            printf("}");
+            if (options->web) {
+                printf(",{\"kind\":\"javascript_module\",\"media_type\":\"text/javascript\",\"path\":");
+                sdk_print_json_quoted(web_js_path);
+                printf("},{\"kind\":\"typescript_declarations\",\"media_type\":\"application/typescript\",\"path\":");
+                sdk_print_json_quoted(web_dts_path);
+                printf("}");
+            }
+            printf("]");
         } else {
             printf("[]");
         }

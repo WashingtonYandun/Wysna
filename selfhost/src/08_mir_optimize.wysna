@@ -1,0 +1,411 @@
+# Safe verifier-preserving MIR optimization passes for Wysna Compiler (native-core-v1).
+
+fn mir_opt_is_safe_fold_int(v: int) -> bool {
+    return v >= -2147483648 and v <= 2147483647
+}
+
+fn mir_opt_is_scalar_type(type_id: int) -> bool {
+    return type_id == 1 or type_id == 2 or type_id == 3 or type_id == 4 or type_id == 7
+}
+
+fn mir_opt_is_pure_scalar_runtime(name: str) -> bool {
+    return (
+        name == "wysna_add" or name == "wysna_sub" or name == "wysna_mul" or
+        name == "wysna_neg" or name == "wysna_not" or
+        name == "wysna_lt" or name == "wysna_le" or name == "wysna_gt" or name == "wysna_ge" or
+        name == "wysna_equal" or name == "wysna_not_equal"
+    )
+}
+
+fn mir_opt_fold_scalar_function(fn_: MirFunction) -> MirFunction {
+    if fn_.is_async { return fn_ }
+    let slot_count = len(fn_.slots)
+    if slot_count == 0 or len(fn_.blocks) == 0 { return fn_ }
+
+    let mut defs: list[int] = []
+    let mut mutated: list[bool] = []
+    let mut g_known: list[bool] = []
+    let mut g_kind: list[int] = []
+    let mut g_int: list[int] = []
+    let mut g_bool: list[bool] = []
+    for _i in 0..slot_count {
+        defs.append(0)
+        mutated.append(false)
+        g_known.append(false)
+        g_kind.append(0)
+        g_int.append(0)
+        g_bool.append(false)
+    }
+
+    for block in fn_.blocks {
+        for op in block.operations {
+            if op.result >= 0 and op.result < slot_count {
+                defs[op.result] = defs[op.result] + 1
+            }
+            if op.place.root >= 0 and op.place.root < slot_count {
+                mutated[op.place.root] = true
+            }
+            if op.opcode == "increment" {
+                for a in op.args {
+                    if a >= 0 and a < slot_count { mutated[a] = true }
+                }
+            }
+        }
+    }
+
+    for _round in 0..6 {
+        let mut added = false
+        for block in fn_.blocks {
+            for op in block.operations {
+                let r = op.result
+                if r < 0 or r >= slot_count { continue }
+                if defs[r] != 1 or mutated[r] { continue }
+                let slot = fn_.slots[r]
+                if slot.parameter or (slot.type_id != 2 and slot.type_id != 3) { continue }
+                if g_known[r] { continue }
+                if op.opcode == "const" {
+                    if slot.type_id == 3 and op.value.type_id == 3 {
+                        g_known[r] = true
+                        g_kind[r] = 3
+                        g_int[r] = op.value.integer
+                        added = true
+                    } elif slot.type_id == 2 and op.value.type_id == 2 {
+                        g_known[r] = true
+                        g_kind[r] = 2
+                        g_bool[r] = op.value.boolean
+                        added = true
+                    }
+                } elif (op.opcode == "clone" or op.opcode == "store") and len(op.args) == 1 {
+                    let src = op.args[0]
+                    if src >= 0 and src < slot_count and g_known[src] and not mutated[src] and g_kind[src] == slot.type_id {
+                        g_known[r] = true
+                        g_kind[r] = g_kind[src]
+                        g_int[r] = g_int[src]
+                        g_bool[r] = g_bool[src]
+                        added = true
+                    }
+                }
+            }
+        }
+        if not added { break }
+    }
+
+    let mut new_blocks: list[MirBlock] = []
+    for block in fn_.blocks {
+        let mut l_known: list[bool] = []
+        let mut l_kind: list[int] = []
+        let mut l_int: list[int] = []
+        let mut l_bool: list[bool] = []
+        for i in 0..slot_count {
+            l_known.append(g_known[i])
+            l_kind.append(g_kind[i])
+            l_int.append(g_int[i])
+            l_bool.append(g_bool[i])
+        }
+        let mut new_ops: list[MirOperation] = []
+        for op in block.operations {
+            if op.place.root >= 0 and op.place.root < slot_count {
+                l_known[op.place.root] = false
+            }
+            if op.opcode == "increment" {
+                for a in op.args {
+                    if a >= 0 and a < slot_count { l_known[a] = false }
+                }
+            }
+            let r = op.result
+            if r < 0 or r >= slot_count {
+                new_ops.append(op)
+                continue
+            }
+            let slot = fn_.slots[r]
+            if slot.parameter or (slot.type_id != 2 and slot.type_id != 3) {
+                l_known[r] = false
+                new_ops.append(op)
+                continue
+            }
+            if op.opcode == "const" {
+                if slot.type_id == 3 and op.value.type_id == 3 {
+                    l_known[r] = true
+                    l_kind[r] = 3
+                    l_int[r] = op.value.integer
+                } elif slot.type_id == 2 and op.value.type_id == 2 {
+                    l_known[r] = true
+                    l_kind[r] = 2
+                    l_bool[r] = op.value.boolean
+                } else {
+                    l_known[r] = false
+                }
+                new_ops.append(op)
+                continue
+            }
+            if (op.opcode == "clone" or op.opcode == "store") and len(op.args) == 1 {
+                let src = op.args[0]
+                if src >= 0 and src < slot_count and l_known[src] and l_kind[src] == slot.type_id {
+                    l_known[r] = true
+                    l_kind[r] = l_kind[src]
+                    l_int[r] = l_int[src]
+                    l_bool[r] = l_bool[src]
+                } else {
+                    l_known[r] = false
+                }
+                new_ops.append(op)
+                continue
+            }
+            if op.opcode == "runtime" and not mir_consumes(op) {
+                let mut folded = false
+                let mut out_lit = mir_literal_unit()
+                if op.name == "wysna_not" and len(op.args) == 1 and slot.type_id == 2 {
+                    let a0 = op.args[0]
+                    if a0 >= 0 and a0 < slot_count and l_known[a0] and l_kind[a0] == 2 {
+                        out_lit = mir_literal_bool(not l_bool[a0])
+                        folded = true
+                    }
+                } elif op.name == "wysna_neg" and len(op.args) == 1 and slot.type_id == 3 {
+                    let a0 = op.args[0]
+                    if a0 >= 0 and a0 < slot_count and l_known[a0] and l_kind[a0] == 3 and mir_opt_is_safe_fold_int(l_int[a0]) {
+                        out_lit = mir_literal_int(-l_int[a0])
+                        folded = true
+                    }
+                } elif len(op.args) == 2 {
+                    let a0 = op.args[0]
+                    let a1 = op.args[1]
+                    if a0 >= 0 and a0 < slot_count and a1 >= 0 and a1 < slot_count and l_known[a0] and l_known[a1] {
+                        if l_kind[a0] == 3 and l_kind[a1] == 3 {
+                            let v0 = l_int[a0]
+                            let v1 = l_int[a1]
+                            if slot.type_id == 3 and mir_opt_is_safe_fold_int(v0) and mir_opt_is_safe_fold_int(v1) {
+                                if op.name == "wysna_add" { out_lit = mir_literal_int(v0 + v1) folded = true }
+                                elif op.name == "wysna_sub" { out_lit = mir_literal_int(v0 - v1) folded = true }
+                                elif op.name == "wysna_mul" { out_lit = mir_literal_int(v0 * v1) folded = true }
+                            } elif slot.type_id == 2 {
+                                if op.name == "wysna_lt" { out_lit = mir_literal_bool(v0 < v1) folded = true }
+                                elif op.name == "wysna_le" { out_lit = mir_literal_bool(v0 <= v1) folded = true }
+                                elif op.name == "wysna_gt" { out_lit = mir_literal_bool(v0 > v1) folded = true }
+                                elif op.name == "wysna_ge" { out_lit = mir_literal_bool(v0 >= v1) folded = true }
+                                elif op.name == "wysna_equal" { out_lit = mir_literal_bool(v0 == v1) folded = true }
+                                elif op.name == "wysna_not_equal" { out_lit = mir_literal_bool(v0 != v1) folded = true }
+                            }
+                        } elif l_kind[a0] == 2 and l_kind[a1] == 2 and slot.type_id == 2 {
+                            let b0 = l_bool[a0]
+                            let b1 = l_bool[a1]
+                            if op.name == "wysna_equal" { out_lit = mir_literal_bool(b0 == b1) folded = true }
+                            elif op.name == "wysna_not_equal" { out_lit = mir_literal_bool(b0 != b1) folded = true }
+                        }
+                    }
+                }
+                if folded {
+                    let empty_args: list[int] = []
+                    new_ops.append(MirOperation {
+                        owner_type: 0,
+                        labels: mir_empty_labels(),
+                        place: mir_empty_place(),
+                        opcode: "const",
+                        result: r,
+                        args: empty_args,
+                        name: "",
+                        value: out_lit,
+                        source: op.source
+                    })
+                    l_known[r] = true
+                    l_kind[r] = slot.type_id
+                    if slot.type_id == 3 { l_int[r] = out_lit.integer } else { l_bool[r] = out_lit.boolean }
+                    if defs[r] == 1 and not mutated[r] {
+                        g_known[r] = true
+                        g_kind[r] = slot.type_id
+                        if slot.type_id == 3 { g_int[r] = out_lit.integer } else { g_bool[r] = out_lit.boolean }
+                    }
+                    continue
+                }
+            }
+            l_known[r] = false
+            new_ops.append(op)
+        }
+
+        let mut term = block.terminator
+        if term.kind == "branch" and len(term.targets) == 2 and term.value >= 0 and term.value < slot_count {
+            if l_known[term.value] and l_kind[term.value] == 2 {
+                let picked = if l_bool[term.value] { term.targets[0] } else { term.targets[1] }
+                term = MirTerminator { kind: "goto", targets: [picked], value: -1, source: term.source }
+            }
+        }
+        new_blocks.append(MirBlock { operations: new_ops, terminator: term })
+    }
+    return MirFunction {
+        declaration_name: fn_.declaration_name,
+        name: fn_.name,
+        return_type: fn_.return_type,
+        slots: fn_.slots,
+        blocks: new_blocks,
+        params: fn_.params,
+        source: fn_.source,
+        is_async: fn_.is_async,
+        async_return_type: fn_.async_return_type
+    }
+}
+
+fn mir_opt_prune_unreachable_blocks(fn_: MirFunction) -> MirFunction {
+    if fn_.is_async { return fn_ }
+    let count = len(fn_.blocks)
+    if count <= 1 { return fn_ }
+
+    let mut reachable: list[bool] = []
+    for _i in 0..count { reachable.append(false) }
+    reachable[0] = true
+    let mut work: list[int] = [0]
+    let mut cursor = 0
+    while cursor < len(work) {
+        let bid = work[cursor]
+        cursor = cursor + 1
+        for target in fn_.blocks[bid].terminator.targets {
+            if target >= 0 and target < count and not reachable[target] {
+                reachable[target] = true
+                work.append(target)
+            }
+        }
+    }
+    if len(work) == count { return fn_ }
+
+    let mut id_map: list[int] = []
+    let mut next_id = 0
+    for i in 0..count {
+        if reachable[i] {
+            id_map.append(next_id)
+            next_id = next_id + 1
+        } else {
+            id_map.append(-1)
+        }
+    }
+
+    let mut surviving: list[MirBlock] = []
+    for i in 0..count {
+        if not reachable[i] { continue }
+        let block = fn_.blocks[i]
+        let mut targets: list[int] = []
+        for t in block.terminator.targets { targets.append(id_map[t]) }
+        let term = MirTerminator {
+            kind: block.terminator.kind,
+            targets: targets,
+            value: block.terminator.value,
+            source: block.terminator.source
+        }
+        surviving.append(MirBlock { operations: block.operations, terminator: term })
+    }
+    return MirFunction {
+        declaration_name: fn_.declaration_name,
+        name: fn_.name,
+        return_type: fn_.return_type,
+        slots: fn_.slots,
+        blocks: surviving,
+        params: fn_.params,
+        source: fn_.source,
+        is_async: fn_.is_async,
+        async_return_type: fn_.async_return_type
+    }
+}
+
+fn mir_opt_is_eliminable_scalar_op(fn_: MirFunction, op: MirOperation) -> bool {
+    let r = op.result
+    if r < 0 or r >= len(fn_.slots) { return false }
+    let res_slot = fn_.slots[r]
+    if res_slot.parameter or not mir_opt_is_scalar_type(res_slot.type_id) { return false }
+    if op.opcode == "const" { return true }
+    if (op.opcode == "clone" or op.opcode == "store") and len(op.args) == 1 {
+        let a0 = op.args[0]
+        return a0 >= 0 and a0 < len(fn_.slots) and mir_opt_is_scalar_type(fn_.slots[a0].type_id)
+    }
+    if op.opcode == "runtime" and mir_opt_is_pure_scalar_runtime(op.name) and not mir_consumes(op) {
+        for a in op.args {
+            if a < 0 or a >= len(fn_.slots) or not mir_opt_is_scalar_type(fn_.slots[a].type_id) {
+                return false
+            }
+        }
+        return true
+    }
+    return false
+}
+
+fn mir_opt_eliminate_dead_pure_ops(fn_: MirFunction) -> MirFunction {
+    if fn_.is_async { return fn_ }
+    let slot_count = len(fn_.slots)
+    if slot_count == 0 or len(fn_.blocks) == 0 { return fn_ }
+
+    let mut cur = fn_
+    for _pass in 0..3 {
+        let mut reads: list[int] = []
+        for _i in 0..slot_count { reads.append(0) }
+        for block in cur.blocks {
+            if block.terminator.value >= 0 and block.terminator.value < slot_count {
+                reads[block.terminator.value] = reads[block.terminator.value] + 1
+            }
+            for op in block.operations {
+                if op.opcode == "release" { continue }
+                if op.place.root >= 0 and op.place.root < slot_count {
+                    reads[op.place.root] = reads[op.place.root] + 1
+                }
+                for proj in op.place.projections {
+                    if proj.kind == "index" and proj.index >= 0 and proj.index < slot_count {
+                        reads[proj.index] = reads[proj.index] + 1
+                    }
+                }
+                for a in op.args {
+                    if a >= 0 and a < slot_count { reads[a] = reads[a] + 1 }
+                }
+            }
+        }
+
+        let mut changed = false
+        let mut new_blocks: list[MirBlock] = []
+        for block in cur.blocks {
+            let mut new_ops: list[MirOperation] = []
+            for op in block.operations {
+                if op.result >= 0 and op.result < slot_count and reads[op.result] == 0 and mir_opt_is_eliminable_scalar_op(cur, op) {
+                    changed = true
+                    continue
+                }
+                new_ops.append(op)
+            }
+            new_blocks.append(MirBlock { operations: new_ops, terminator: block.terminator })
+        }
+        if not changed { break }
+        cur = MirFunction {
+            declaration_name: cur.declaration_name,
+            name: cur.name,
+            return_type: cur.return_type,
+            slots: cur.slots,
+            blocks: new_blocks,
+            params: cur.params,
+            source: cur.source,
+            is_async: cur.is_async,
+            async_return_type: cur.async_return_type
+        }
+    }
+    return cur
+}
+
+fn mir_optimize_function(fn_: MirFunction) -> MirFunction {
+    if fn_.is_async { return fn_ }
+    let mut cur = fn_
+    for _iter in 0..2 {
+        cur = mir_opt_fold_scalar_function(cur)
+        cur = mir_opt_prune_unreachable_blocks(cur)
+        cur = mir_opt_eliminate_dead_pure_ops(cur)
+    }
+    return cur
+}
+
+fn mir_optimize_module(module: MirModule) -> MirModule {
+    let mut optimized: list[MirFunction] = []
+    for fn_ in module.functions {
+        optimized.append(mir_optimize_function(fn_))
+    }
+    return MirModule {
+        file: module.file,
+        functions: optimized,
+        globals: module.globals,
+        records: module.records,
+        virtual_slots: module.virtual_slots,
+        externs: module.externs,
+        types: module.types,
+        source: module.source
+    }
+}

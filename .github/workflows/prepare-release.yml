@@ -1,8 +1,6 @@
 name: Prepare Release PR
 
 on:
-  push:
-    branches: [develop]
   workflow_dispatch:
     inputs:
       version_override:
@@ -26,7 +24,6 @@ concurrency:
 jobs:
   prepare-release:
     name: Compute SemVer and open Release PR
-    if: "!contains(github.event.head_commit.message, '[skip ci]') && !startsWith(github.event.head_commit.message, 'chore(release):')"
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:

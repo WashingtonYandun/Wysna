@@ -54,6 +54,20 @@ typedef struct {
     int32_t bucket_count;
 } WDictBuf;
 
+#define WYSNA_STRUCT_SLAB_CAP 512
+
+static inline size_t wysna_dict_bucket_bytes(int32_t capacity) {
+    return (sizeof(int32_t) + sizeof(uint8_t)) * (size_t)capacity;
+}
+
+static inline uint8_t* wysna_dict_tags(const WDictBuf* d) {
+    return (uint8_t*)(d->buckets + d->bucket_count);
+}
+
+static inline uint8_t wysna_dict_ctrl_tag(uint64_t full_hash) {
+    return (uint8_t)(0x80u | ((uint32_t)(full_hash >> 57) & 0x7Fu));
+}
+
 typedef struct {
     int32_t refcount;
     int32_t len;
@@ -182,6 +196,12 @@ typedef struct WStringLiteral {
  * for each runtime instance. The compatibility macros keep the runtime ABI and
  * the existing internal call sites stable while state moves behind the context.
  */
+typedef struct WStructSlab {
+    struct WStructSlab* next;
+    int32_t used;
+    int32_t cap;
+} WStructSlab;
+
 typedef struct WysnaRuntimeContext {
     WStringLiteral* string_literals;
 #ifdef W_STRING_METRICS
@@ -223,8 +243,8 @@ typedef struct WysnaRuntimeContext {
     int32_t box_pool_len;
     WEnumBuf* enum_pool[16];
     int32_t enum_pool_len;
-    WStructBuf* struct_pool[32];
-    int32_t struct_pool_len;
+    WStructSlab* struct_slabs;
+    WStructBuf* struct_freelist;
 } WysnaRuntimeContext;
 
 WYSNA_RT_FN int64_t wysna_collect_cycles(void);
@@ -741,11 +761,12 @@ WYSNA_RT_FN void wysna_runtime_cleanup_impl(bool verify_live_objects) {
         wysna_runtime_context.enum_pool[i] = NULL;
     }
     wysna_runtime_context.enum_pool_len = 0;
-    for (int32_t i = 0; i < wysna_runtime_context.struct_pool_len; i++) {
-        free(wysna_runtime_context.struct_pool[i]);
-        wysna_runtime_context.struct_pool[i] = NULL;
+    while (wysna_runtime_context.struct_slabs) {
+        WStructSlab* next_slab = wysna_runtime_context.struct_slabs->next;
+        free(wysna_runtime_context.struct_slabs);
+        wysna_runtime_context.struct_slabs = next_slab;
     }
-    wysna_runtime_context.struct_pool_len = 0;
+    wysna_runtime_context.struct_freelist = NULL;
     const char* stats_env = getenv("WYSNA_MEM_STATS");
     if (stats_env && strcmp(stats_env, "1") == 0) {
         fprintf(stderr, "[WYSNA_MEM_STATS] alloc=%" PRId64 " free=%" PRId64 " retain=%" PRId64 " release=%" PRId64 " live=%" PRId64 "\n",

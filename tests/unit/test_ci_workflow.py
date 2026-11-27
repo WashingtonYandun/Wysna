@@ -200,6 +200,8 @@ def test_ci_workflow_contracts():
     assert 'WYSNA_VERSION' in publish_release
     assert 'origin/main' in publish_release
     assert 'tools/prepare_release_assets.py' in publish_release
+    assert 'tools/package_vscode.py' in publish_release
+    assert 'tools/generate_package_managers.py' in publish_release
     assert '--verify-tag' in publish_release
     release_notes = ROOT / f'docs/release-notes/v{WYSNA_VERSION}.md'
     assert release_notes.is_file(), f'Missing release notes template for {WYSNA_VERSION}: {release_notes}'

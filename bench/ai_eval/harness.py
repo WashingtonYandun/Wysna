@@ -36,45 +36,43 @@ SYSTEM_PROMPT = (
     """
 
 Key Wysna Grammar and Rules:
-1. Entrypoint: `fn main() -> unit { ... }`
-2. Functions: `fn name(param: type) -> ret_type { ... }` (top-level exports use `pub fn`; class members use `public`/`private`, not `pub`)
-3. Variables:
-   - `let x = 10` (immutable)
-   - `let mut y = 20` (mutable)
-4. Types: `int`, `float`, `str`, `bool`, `unit`, `list[T]`, `dict[K, V]`, `tuple[T1, T2]`, `T?` (nullable), `T ! E` (error union)
-5. Control Flow & Boolean Operators:
-   - `if cond { ... } elif other { ... } else { ... }` (`else if` is also accepted)
-   - Logical operators: `and`, `or`, `not` (never `&&`, `||`, `!`)
-   - `for item in list_expr { ... }` (for dicts iterate with `for k, v in d.items()` or `for k in d.keys()`)
-   - `for i in 0..limit { ... }` (exclusive) or `1..=limit` (inclusive)
-   - `while cond { ... }`
+1. Entrypoint: `fn main() -> unit { ... }` (and invoke `main()` at module top level if running directly as a script).
+2. Functions & Visibility: `fn name(param: type) -> ret_type { ... }`. Use `pub` and `priv` both at module scope and inside classes (never `public`/`private`).
+3. Variables & Assignments:
+   - `let x = 10` (immutable), `let mut y = 20` (mutable), compound assignments `+=`, `-=`, `*=`.
+   - Literals: `0xFF`, `0b1010`, multiline triple-quoted strings, interpolated `f"value={x}"`, `None` (canonical empty optional).
+4. Types: `int` (64-bit signed), `u8` (0..255 byte), `float`, `str`, `bool`, `unit`, `list[T]`, `dict[K, V]`, `(T1, T2)` / `tuple[T1, T2]` (index with `.0`/`.1`, destructure with `let (a, b) = pair`), `T?` (optional), `T ! E` / `T ! E1 | E2` (error union), `Weak[C]`.
+5. Control Flow & Pattern Matching:
+   - `if cond { ... } elif other { ... } else { ... }` (`else if` is also accepted).
+   - Logical operators: `and`, `or`, `not` (never `&&`, `||`, `!`).
+   - `for item in list_expr { ... }`, `for k, v in d { ... }` or `for k, v in d.items() { ... }`, `for i in 0..limit { ... }` (exclusive), `1..=limit` (inclusive), `while cond { ... }`.
+   - `let label = match value { 1 | 2 => "low", 3..=10 => "mid", _ => "high" }` (arms take expressions or `{ ... }` blocks; always use `_ =>`, never `* =>` or `else =>`).
 6. Standard Prelude Functions:
-   - `print(...)`: space-separated print with newline
-   - `len(x)`: code-point count for `str` or element count for collections
-   - `dict_items(d)` / `d.items()`: returns `list[tuple[K, V]]` of `(key, value)` pairs
-   - `args()`: returns `list[str]` of CLI arguments (`args()[0]` is runner/script, flags/args start at `args()[1]`)
-   - `read_file(path) -> str ! IoError`, `write_file(path, content) -> unit ! IoError`
-   - `str(x)`, `int(x)`, `float(x)`, `chr(c)`, `ord(s)`, `slice(x, start, end)`, `join_strings(parts, sep)`, `bytes(s)`
-7. Collections & Strings:
-   - `str`: `.trim()`, `.split(sep)`, `.to_lower()`, `.to_upper()`, `.starts_with(p)`, `.ends_with(s)`, `.replace(old, new)`, `.contains(sub)`, `.is_empty()`
-   - `list[T]`: `.append(item)`, `.pop()`, `.clear()`, `.contains(item)`, `.is_empty()`
-   - `dict[K, V]`: `.get(key)` (returns `V?`), `.keys()`, `.values()`, `.items()`, `.contains(key)`, `.remove(key)`, `.clear()`, `.is_empty()`
-8. Error Handling:
-   - `let content = read_file(path)?` (postfix propagation)
-   - `let content = read_file(path) else err { return "fallback" }`
-   - `let host = env("HOST") ?? "localhost"` (coalescing)
-9. Structs & Classes:
-   - `struct Name { field: type }` initialized as `Name { field: value }`
-   - Classes instantiate without `new`: `MyClass(arg1)` (or module-qualified `mod.MyClass(arg1)`)
+   - `print(...)`, `eprint(...)`, `exit(code)`, `len(x)`, `args()`, `env(name) -> str?`, `unix_time() -> int`.
+   - `read_file(path) -> str ! IoError`, `write_file(path, content) -> unit ! IoError`.
+   - Conversions & helpers: `str(x)`, `int(x)`, `u8(x) -> u8?`, `float(x)`, `chr(c)`, `ord(s)`, `slice(x, start, end)`, `join_strings(parts, sep)`, `bytes(s)`, `dict_items(d)`.
+7. Collections & Strings (Copy-on-Write values):
+   - `str`: `.trim()`, `.split(sep)`, `.to_lower()`, `.to_upper()`, `.starts_with(p)`, `.ends_with(s)`, `.replace(old, new)`, `.contains(sub)`, `.is_empty()`.
+   - `list[T]`: `.append(item)`, `.pop()`, `.clear()`, `.contains(item)`, `.is_empty()`, `x in xs`.
+   - `dict[K, V]`: `.get(key)` (returns `V?`), `.keys()`, `.values()`, `.items()`, `.contains(key)`, `.remove(key)`, `.clear()`, `.is_empty()`, `k in d`.
+8. Error Handling & Closures:
+   - `let content = read_file(path)?` (postfix propagation), `expr else err { fallback }`, `opt ?? default`.
+   - Lambdas `|x: int| => x * 2` capture outer values as immutable snapshots (use a `class` or return updated values for mutable state).
+9. Structs, Enums & Classes:
+   - `struct Name { field: type }` initialized as `Name { field: value }` or `Name { field: new_val, ..base }`.
+   - `class Counter { priv n: int; fn init(start: int) { this.n = start } pub fn next() -> int { this.n += 1; return this.n } }`.
+   - Instantiate classes directly without `new`: `Counter(0)` (never `new Counter(0)`).
 10. Standard Library & Imports:
-   - `import "std/io" as io`: `read_line() -> Line ! IoError`, `read_all() -> str ! IoError`, `flush() -> unit ! IoError`
-   - `import "std/fs" as fs`: `exists`, `is_dir`, `is_file`, `list_dir`, `mkdir_all`, `copy`, `rename`, `remove_file`
-   - `import "std/path" as path`: `join`, `basename`, `dirname`, `ext`
-   - `import "std/csv" as csv`: `parse(text) -> list[list[str]] ! CsvError`, `parse_records(text) -> list[dict[str, str]] ! CsvError`, `stringify(rows)`
-   - `import "std/process" as proc`: `run(exe, argv, timeout_ms)`, `capture(exe, argv, timeout_ms, max_output_bytes) -> ProcessOutput ! ProcessError`
-   - `import "std/json" as json`, `import "std/http" as http`, `from "std/algorithms" use { map, filter, fold, any, all, sort }`
+   - `import "std/io" as io`: `read_line()`, `read_all()`, `read_text(path)`, `write_text(path, text)`, `flush()`.
+   - `import "std/fs" as fs`: `exists`, `is_dir`, `is_file`, `list_dir`, `mkdir_all`, `copy`, `rename`, `remove_file`.
+   - `import "std/path" as path`: `join`, `basename`, `dirname`, `ext`.
+   - `import "std/text" as text`, `import "std/parse" as parse`, `import "std/environment" as environment`.
+   - `import "std/json" as json`, `import "std/csv" as csv`, `import "std/crypto" as crypto`, `import "std/time" as time`.
+   - `import "std/process" as proc`: `run(...)`, `capture(...)`.
+   - `import "std/async" as async_rt` (`run_group`, `spawn`, `sleep_ms`, `all`, `race`), `import "std/http" as http` (`get`, `post_json`, `batch_get`, `batch_get_group`).
+   - `from "std/algorithms" use { map, filter, fold, any, all, sort, parallel_map }`.
 11. Comments:
-   - Line comments begin with `#` and documentation comments begin with `##`. Never use `//`.
+   - Line comments begin with `#` and doc comments with `##` (block comments `/* ... */` also supported). Never use `//`.
 
 Always output valid Wysna code enclosed in a ```wysna ... ``` code block.
 If multiple files are required, prefix each file with `### filename.wysna`.

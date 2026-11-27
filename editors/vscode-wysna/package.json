@@ -1,8 +1,8 @@
 {
   "name": "wysna-lang",
   "displayName": "Wysna Programming Language",
-  "description": "Syntax highlighting and language configuration for the Wysna Programming Language (v0.1)",
-  "version": "0.1.0",
+  "description": "Syntax highlighting, LSP integration, and project impact tooling for the Wysna 1.0 general-purpose programming language",
+  "version": "1.1.0",
   "publisher": "washingtonyandun",
   "engines": {
     "vscode": "^1.75.0"
@@ -11,7 +11,9 @@
     "Programming Languages"
   ],
   "main": "./extension.js",
-  "activationEvents": ["onCommand:wysna.projectImpact"],
+  "activationEvents": [
+    "onCommand:wysna.projectImpact"
+  ],
   "capabilities": {
     "untrustedWorkspaces": {
       "supported": "limited",
@@ -40,8 +42,13 @@
     "languages": [
       {
         "id": "wysna",
-        "aliases": ["Wysna", "wysna"],
-        "extensions": [".wysna"],
+        "aliases": [
+          "Wysna",
+          "wysna"
+        ],
+        "extensions": [
+          ".wysna"
+        ],
         "configuration": "./language-configuration.json"
       }
     ],
