@@ -206,6 +206,14 @@ def stage_native_sdks(root: Path, source: str, version: str, output: Path) -> di
     return staged
 
 
+def stage_vscode_vsix(vsix: Path, version: str, output: Path) -> dict:
+    if not vsix.is_file() or vsix.is_symlink():
+        raise ValueError(f"VS Code VSIX file does not exist: {vsix}")
+    name = f"wysna-{version}-vscode.vsix"
+    shutil.copyfile(vsix, output / name)
+    return {"name": name, "sha256": digest(vsix), "bytes": vsix.stat().st_size}
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--version", required=True)
@@ -215,6 +223,7 @@ def main() -> int:
     parser.add_argument("--macos-artifact", type=Path, required=True)
     parser.add_argument("--linux-artifact", type=Path, required=True)
     parser.add_argument("--native-artifacts", type=Path)
+    parser.add_argument("--vscode-vsix", type=Path)
     parser.add_argument("--release-notes", type=Path, required=True)
     parser.add_argument("--output", type=Path, required=True)
     args = parser.parse_args()
@@ -245,11 +254,20 @@ def main() -> int:
                                               args.ci_run_id, args.output)
         native = stage_native_sdks(args.native_artifacts, args.source_commit, args.version, args.output) \
             if args.native_artifacts else {}
+        vscode_ext = stage_vscode_vsix(args.vscode_vsix, args.version, args.output) if args.vscode_vsix else None
+        provenance_payload: dict[str, object] = {
+            "schema": "wysna.release-provenance/1",
+            "version": args.version,
+            "source_commit": args.source_commit,
+            "source_dirty": False,
+            "ci_workflow_run_id": int(args.ci_run_id),
+            "platforms": provenance,
+            "native_sdks": native,
+        }
+        if vscode_ext is not None:
+            provenance_payload["vscode_extension"] = vscode_ext
         (args.output / "release-provenance.json").write_text(
-            json.dumps({"schema": "wysna.release-provenance/1", "version": args.version,
-                        "source_commit": args.source_commit, "source_dirty": False,
-                        "ci_workflow_run_id": int(args.ci_run_id), "platforms": provenance, "native_sdks": native},
-                       indent=2, sort_keys=True) + "\n", encoding="utf-8")
+            json.dumps(provenance_payload, indent=2, sort_keys=True) + "\n", encoding="utf-8")
         checksums = []
         for asset in sorted(args.output.iterdir()):
             if asset.is_file() and asset.name != "SHA256SUMS":
