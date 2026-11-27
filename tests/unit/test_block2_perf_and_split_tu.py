@@ -167,3 +167,34 @@ fn main() {
     assert "[W4002]" in ran_miss.stderr
     assert "dict_miss_fast.wysna:3:12" in ran_miss.stderr
     assert "Dictionary key not found (use d.get(key) for optional lookup)" in ran_miss.stderr
+
+
+def test_package_native_build_layout_defaults_and_overrides(monkeypatch):
+    import pytest
+    from tools.package_native import (
+        DEFAULT_COMPILER_CHUNKS,
+        DEFAULT_MAX_WORKERS_CAP,
+        resolve_compiler_build_layout,
+    )
+
+    assert DEFAULT_COMPILER_CHUNKS == 16
+    assert DEFAULT_MAX_WORKERS_CAP == 4
+
+    monkeypatch.delenv("WYSNA_SDK_CHUNKS", raising=False)
+    monkeypatch.delenv("WYSNA_SDK_JOBS", raising=False)
+    assert resolve_compiler_build_layout(cpu_count=8) == (16, 4)
+    assert resolve_compiler_build_layout(cpu_count=2) == (16, 2)
+    assert resolve_compiler_build_layout(compiler_chunks=24, jobs=6, cpu_count=8) == (24, 6)
+    assert resolve_compiler_build_layout(compiler_chunks=2, jobs=6, cpu_count=8) == (2, 2)
+
+    monkeypatch.setenv("WYSNA_SDK_CHUNKS", "12")
+    monkeypatch.setenv("WYSNA_SDK_JOBS", "3")
+    assert resolve_compiler_build_layout(cpu_count=8) == (12, 3)
+
+    monkeypatch.setenv("WYSNA_SDK_CHUNKS", "0")
+    with pytest.raises(ValueError, match=">= 1"):
+        resolve_compiler_build_layout()
+
+    monkeypatch.setenv("WYSNA_SDK_CHUNKS", "not-an-int")
+    with pytest.raises(ValueError, match="WYSNA_SDK_CHUNKS"):
+        resolve_compiler_build_layout()

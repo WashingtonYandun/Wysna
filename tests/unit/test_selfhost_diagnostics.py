@@ -198,3 +198,89 @@ def test_native_fix_apply_wraps_bare_error_return_and_emits_u8_hint(tmp_path):
     u8_json = subprocess.run([compiler, "check", "--output-format=json-v1", str(u8_src)], cwd=ROOT, capture_output=True, text=True, timeout=60)
     assert u8_json.returncode != 0
     assert "u8(x) ?? 0" in u8_json.stdout
+
+
+def test_native_w2006_result_coalesce_and_w1001_module_type_qualification(tmp_path):
+    compiler = ensure_selfhost_compiler_binary(str(ROOT))
+
+    # 1. W2006 when using ?? on T ! E (e.g. json.get_str)
+    coal_src = tmp_path / "coalesce_result.wysna"
+    coal_src.write_text(
+        'import "std/json" as json\n'
+        'fn main() -> unit {\n'
+        '  let doc = json.parse("{\\"k\\":\\"v\\"}") else _ { return }\n'
+        '  let _s = json.get_str(doc, "k") ?? ""\n'
+        '}\n',
+        encoding="utf-8",
+    )
+    coal_human = subprocess.run(
+        [compiler, "--stdlib-root", str(ROOT / "stdlib"), str(coal_src), str(tmp_path / "coal.c")],
+        cwd=ROOT,
+        capture_output=True,
+        text=True,
+        timeout=60,
+    )
+    assert coal_human.returncode != 0
+    assert "[W2006]" in coal_human.stderr
+    assert "else err" in coal_human.stderr
+    assert "expr?" in coal_human.stderr
+
+    coal_json_res = subprocess.run(
+        [compiler, "--stdlib-root", str(ROOT / "stdlib"), "check", "--output-format=json-v1", str(coal_src)],
+        cwd=ROOT,
+        capture_output=True,
+        text=True,
+        timeout=60,
+    )
+    assert coal_json_res.returncode != 0
+    assert '"code":"W2006"' in coal_json_res.stdout
+    assert '"kind":"coalesce_result"' in coal_json_res.stdout
+    assert "else err" in coal_json_res.stdout
+
+    # 2. W1001 unqualified imported module type (JsonError -> json.JsonError) + fix --apply
+    import json as py_json
+
+    mod_src = tmp_path / "unqualified_json_err.wysna"
+    mod_src.write_text(
+        'import "std/json" as json\n'
+        'fn read_it(raw: str) -> str ! JsonError {\n'
+        '  let v = json.parse(raw)?\n'
+        '  return json.get_str(v, "k")\n'
+        '}\n'
+        'fn main() -> unit {}\n',
+        encoding="utf-8",
+    )
+    mod_json_res = subprocess.run(
+        [compiler, "--stdlib-root", str(ROOT / "stdlib"), "check", "--output-format=json-v1", str(mod_src)],
+        cwd=ROOT,
+        capture_output=True,
+        text=True,
+        timeout=60,
+    )
+    assert mod_json_res.returncode != 0
+    payload = py_json.loads(mod_json_res.stdout)
+    diag = payload["diagnostics"][0]
+    assert diag["code"] == "W1001"
+    assert diag["data"]["kind"] == "unqualified_module_type"
+    assert "json." in diag["data"]["help"] or "mod.JsonError" in diag["data"]["help"]
+    assert diag["fixes"] and diag["fixes"][0]["applicability"] == "machine"
+    assert diag["fixes"][0]["edits"][0]["replacement"] == "json.JsonError"
+
+    fixed = subprocess.run(
+        [compiler, "--stdlib-root", str(ROOT / "stdlib"), "fix", "--apply", str(mod_src)],
+        cwd=ROOT,
+        capture_output=True,
+        text=True,
+        timeout=60,
+    )
+    assert fixed.returncode == 0, fixed.stderr + fixed.stdout
+    assert "-> str ! json.JsonError" in mod_src.read_text(encoding="utf-8")
+
+    rechecked = subprocess.run(
+        [compiler, "--stdlib-root", str(ROOT / "stdlib"), "check", str(mod_src)],
+        cwd=ROOT,
+        capture_output=True,
+        text=True,
+        timeout=60,
+    )
+    assert rechecked.returncode == 0, rechecked.stderr

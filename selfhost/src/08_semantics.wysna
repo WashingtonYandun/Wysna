@@ -242,8 +242,25 @@ fn sem_intern_error_union(context: SemanticContext, alternatives: list[int]) -> 
     return sem_intern(context, "error_union", "", canonical)
 }
 fn sem_named(context: SemanticContext, name: str) -> int {
+    return sem_named_at(context, name, sem_at(context))
+}
+fn sem_named_at(context: SemanticContext, name: str, location: Token) -> int {
     for i in 0..len(context.types) { if context.types[i].name == name { return i } }
-    sem_error(context, "W1001", "unknown type: " + name)
+    let mut mod_match = false
+    for i in 0..len(context.types) {
+        if context.types[i].name != name and sem_demangle_name(context.types[i].name) == name {
+            mod_match = true
+            break
+        }
+    }
+    let msg = "unknown type: " + name
+    if mod_match {
+        let help = "Type '" + name + "' is defined in an imported module. Qualify it with the module alias (e.g. 'mod." + name + "') or import it directly with 'from \"...\" use { " + name + " }'."
+        let data = "{\"kind\":\"unqualified_module_type\",\"type\":" + diag_json_quote(name) + ",\"help\":" + diag_json_quote(help) + "}"
+        report_error_at_data("W1001", location, msg, data)
+    } else {
+        report_error_at("W1001", location, msg)
+    }
     return context.unit_type
 }
 fn sem_generic_type(context: SemanticContext, name: str) -> int {
@@ -677,7 +694,7 @@ fn sem_type(context: SemanticContext) -> int {
             }
             result = sem_intern(context, kind, "", args)
         } else {
-            let base = sem_named(context, name)
+            let base = sem_named_at(context, name, source)
             let generic = sem_generic_type(context, name)
             if sem_match(context, "LBRACKET") {
                 if generic < 0 { report_error_at("W2001", source, "type is not generic: " + name) }
@@ -2403,7 +2420,17 @@ fn sem_expression(context: SemanticContext, minimum: int, allow_struct: bool) ->
                     let inner = context.types[left.type_id].args[0]
                     sem_require_at(context, right.type_id, inner, "W2001", right_source)
                     left = sem_value(inner)
-                } else { report_error_at("W2006", source, "coalesce '??' requires an optional 'T?', found '" + sem_diagnostic_type(context, left.type_id, 0) + "'") }
+                } else {
+                    let found_t = sem_diagnostic_type(context, left.type_id, 0)
+                    let msg = "coalesce '??' requires an optional 'T?', found '" + found_t + "'"
+                    if sem_kind(context, left.type_id) == "result" {
+                        let help = "'??' only unwraps optionals ('T?'). For a Result ('" + found_t + "'), use 'expr else err { fallback }' for a default value or 'expr?' to propagate the error."
+                        let data = "{\"kind\":\"coalesce_result\",\"found\":" + diag_json_quote(found_t) + ",\"help\":" + diag_json_quote(help) + "}"
+                        report_error_at_data("W2006", source, msg, data)
+                    } else {
+                        report_error_at("W2006", source, msg)
+                    }
+                }
                 left = sem_expr(context, "binary", left, call_token, operator, [operand_node, right.node], -1, -1)
             } elif operator == "DOT_DOT" or operator == "DOT_DOT_EQ" {
                 sem_require_at(context, left.type_id, context.integer_type, "W2001", source)

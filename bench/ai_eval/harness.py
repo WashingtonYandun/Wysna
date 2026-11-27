@@ -67,7 +67,9 @@ Key Wysna Grammar and Rules:
    - `import "std/fs" as fs`: `exists`, `is_dir`, `is_file`, `list_dir`, `mkdir_all`, `copy`, `rename`, `remove_file`.
    - `import "std/path" as path`: `join`, `basename`, `dirname`, `ext`.
    - `import "std/text" as text`, `import "std/parse" as parse`, `import "std/environment" as environment`.
-   - `import "std/json" as json` (functional API over `json.Value` enum — never `.get()` on `Value`): `json.parse(s) -> Value ! JsonError`, `json.get(v, key) -> Value?`, `json.at(v, idx) -> Value?`, `json.as_string(v)`, `json.as_array(v)`, `json.as_object(v)`, `json.as_bool(v)`, `json.as_number(v)`, `json.get_str(v, key)`, `json.get_int(v, key)`, `json.get_float(v, key)`, `json.get_bool(v, key)`, `json.to_str(v)`, `json.to_int(v)`, `json.to_array(v)`, `json.to_object(v)`, `json.stringify(v)`.
+   - `import "std/json" as json`: functional API over `json.Value` (never `.get()` on `Value`; qualify imported module types like `json.Value`, `json.JsonError`, or import them directly with `from "std/json" use { Value, JsonError }`):
+     - Optional accessors (`-> T?`, unwrap with `??`): `json.get(v, key) -> json.Value?`, `json.at(v, idx) -> json.Value?`, `json.as_string(v) -> str?`, `json.as_array(v) -> list[json.Value]?`, `json.as_object(v) -> dict[str, json.Value]?`, `json.as_bool(v) -> bool?`, `json.as_number(v) -> str?`.
+     - Result functions (`-> T ! json.JsonError`, unwrap with `?` or `else err { ... }`, NEVER `??`): `json.parse(s) -> json.Value ! json.JsonError`, `json.get_str(v, key)`, `json.get_int(v, key)`, `json.get_float(v, key)`, `json.get_bool(v, key)`, `json.to_str(v)`, `json.to_int(v)`, `json.to_array(v)`, `json.to_object(v)`, `json.stringify(v)`.
    - `import "std/csv" as csv`, `import "std/crypto" as crypto`, `import "std/time" as time`.
    - `import "std/process" as proc`: `run(...)`, `capture(...)`.
    - `import "std/async" as async_rt` (`run_group`, `spawn`, `sleep_ms`, `all`, `race`), `import "std/http" as http` (`get`, `post_json`, `batch_get`, `batch_get_group`).

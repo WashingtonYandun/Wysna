@@ -427,11 +427,11 @@ fn diag_human_help(code: str, msg: str, data_json: str) -> str {
     let h = diag_help_field(data_json)
     if h != "" { return h }
     if code == "W0001" or code == "W0006" { return "Check for missing delimiters ('}', ')', ']') or unexpected tokens nearby." } elif code == "W1002" { return "Rename or remove the duplicate declaration in this scope." } elif code == "W1003" { return "Check the module path ('std/...' or local path) and ensure there are no circular imports." }
-    if code == "W1001" { if diag_has(msg, "ambiguous enum") { return "Qualify the enum variant with its enum name, e.g. MyEnum.Variant." } elif diag_has(msg, "unknown module") { return "Check the module path ('std/...' for stdlib or verify the local path)." } elif diag_has(msg, "unknown identifier") { return "Declare the binding with 'let'/'let mut', define the function, or import it." } }
+    if code == "W1001" { if diag_has(msg, "ambiguous enum") { return "Qualify the enum variant with its enum name, e.g. MyEnum.Variant." } elif diag_has(msg, "unknown module") { return "Check the module path ('std/...' for stdlib or verify the local path)." } elif diag_has(msg, "unknown type") { return "Declare the type, qualify imported module types with their alias (e.g. 'json.JsonError'), or import with 'from \"...\" use { Type }'." } elif diag_has(msg, "unknown identifier") { return "Declare the binding with 'let'/'let mut', define the function, or import it." } }
     if code == "W2001" { if diag_has(msg, "'int'") and diag_has(msg, "'float'") { return "Convert explicitly using int(...) or float(...) before mixing int and float." } elif diag_has(msg, "expected 'str'") { return "Convert the value to a string with str(...)." } elif diag_has(msg, "expected 'u8'") and diag_has(msg, "found 'int'") { return "Use an integer literal in 0..255 with a u8 type context, or narrow checked with 'u8(x) ?? 0'." } elif diag_has(msg, "binary operand types") { return "Operands must have matching types; convert explicitly with int(...), float(...), or str(...)." } }
     if (code == "W2003" or code == "W3001") and diag_has(msg, "immutable") { return "Declare the variable as 'let mut ...' if it needs to be reassigned." } elif code == "W2003" and (diag_has(msg, "exhaustive") or diag_has(msg, "Non-exhaustive")) { return "Handle every variant or add a fallback '_ =>' arm." }
     if code == "W3002" and diag_has(msg, "unknown member") { return "Verify the field or method name on the receiver type, or run 'wysna inspect'." } elif code == "W2004" and diag_has(msg, " ! ") { return "Wrap error values with Err(...) or propagate with '?'." }
-    if code == "W2006" { if diag_has(msg, "coalesce") { return "The '??' operator requires an optional 'T?' on the left-hand side." } return "Use '?' inside a function returning a compatible 'T?' or 'T ! E', or handle locally with 'else err { ... }'." } elif code == "W2002" { return "Check the function signature for expected argument count." } elif code == "W2005" { return "Provide the payload argument(s) expected by this enum variant." } elif code == "W2007" { return "Provide every required struct field in the literal." } elif code == "W2009" { return "Add an explicit type annotation so the compiler can resolve the type." }
+    if code == "W2006" { if diag_has(msg, "coalesce") { if diag_has(msg, " ! ") { return "'??' only unwraps optionals ('T?'). For a Result ('T ! E'), use 'expr else err { fallback }' for a default value or 'expr?' to propagate the error." } return "The '??' operator requires an optional 'T?' on the left-hand side." } return "Use '?' inside a function returning a compatible 'T?' or 'T ! E', or handle locally with 'else err { ... }'." } elif code == "W2002" { return "Check the function signature for expected argument count." } elif code == "W2005" { return "Provide the payload argument(s) expected by this enum variant." } elif code == "W2007" { return "Provide every required struct field in the literal." } elif code == "W2009" { return "Add an explicit type annotation so the compiler can resolve the type." }
     return ""
 }
 
@@ -3792,8 +3792,25 @@ fn sem_intern_error_union(context: SemanticContext, alternatives: list[int]) -> 
     return sem_intern(context, "error_union", "", canonical)
 }
 fn sem_named(context: SemanticContext, name: str) -> int {
+    return sem_named_at(context, name, sem_at(context))
+}
+fn sem_named_at(context: SemanticContext, name: str, location: Token) -> int {
     for i in 0..len(context.types) { if context.types[i].name == name { return i } }
-    sem_error(context, "W1001", "unknown type: " + name)
+    let mut mod_match = false
+    for i in 0..len(context.types) {
+        if context.types[i].name != name and sem_demangle_name(context.types[i].name) == name {
+            mod_match = true
+            break
+        }
+    }
+    let msg = "unknown type: " + name
+    if mod_match {
+        let help = "Type '" + name + "' is defined in an imported module. Qualify it with the module alias (e.g. 'mod." + name + "') or import it directly with 'from \"...\" use { " + name + " }'."
+        let data = "{\"kind\":\"unqualified_module_type\",\"type\":" + diag_json_quote(name) + ",\"help\":" + diag_json_quote(help) + "}"
+        report_error_at_data("W1001", location, msg, data)
+    } else {
+        report_error_at("W1001", location, msg)
+    }
     return context.unit_type
 }
 fn sem_generic_type(context: SemanticContext, name: str) -> int {
@@ -4227,7 +4244,7 @@ fn sem_type(context: SemanticContext) -> int {
             }
             result = sem_intern(context, kind, "", args)
         } else {
-            let base = sem_named(context, name)
+            let base = sem_named_at(context, name, source)
             let generic = sem_generic_type(context, name)
             if sem_match(context, "LBRACKET") {
                 if generic < 0 { report_error_at("W2001", source, "type is not generic: " + name) }
@@ -5953,7 +5970,17 @@ fn sem_expression(context: SemanticContext, minimum: int, allow_struct: bool) ->
                     let inner = context.types[left.type_id].args[0]
                     sem_require_at(context, right.type_id, inner, "W2001", right_source)
                     left = sem_value(inner)
-                } else { report_error_at("W2006", source, "coalesce '??' requires an optional 'T?', found '" + sem_diagnostic_type(context, left.type_id, 0) + "'") }
+                } else {
+                    let found_t = sem_diagnostic_type(context, left.type_id, 0)
+                    let msg = "coalesce '??' requires an optional 'T?', found '" + found_t + "'"
+                    if sem_kind(context, left.type_id) == "result" {
+                        let help = "'??' only unwraps optionals ('T?'). For a Result ('" + found_t + "'), use 'expr else err { fallback }' for a default value or 'expr?' to propagate the error."
+                        let data = "{\"kind\":\"coalesce_result\",\"found\":" + diag_json_quote(found_t) + ",\"help\":" + diag_json_quote(help) + "}"
+                        report_error_at_data("W2006", source, msg, data)
+                    } else {
+                        report_error_at("W2006", source, msg)
+                    }
+                }
                 left = sem_expr(context, "binary", left, call_token, operator, [operand_node, right.node], -1, -1)
             } elif operator == "DOT_DOT" or operator == "DOT_DOT_EQ" {
                 sem_require_at(context, left.type_id, context.integer_type, "W2001", source)
@@ -19591,6 +19618,57 @@ fn fix_collect_visible_names(tokens: list[Token], err_idx: int, types_only: bool
     return names
 }
 
+fn fix_stdlib_exports_type(mod_path: str, bad: str) -> bool {
+    let mut base = mod_path
+    if len(base) > 6 and slice(base, len(base) - 6, len(base)) == ".wysna" {
+        base = slice(base, 0, len(base) - 6)
+    }
+    if base == "std/json" { return bad == "Value" or bad == "JsonError" }
+    if base == "std/http" { return bad == "HttpError" or bad == "HttpErrorKind" or bad == "Header" or bad == "Response" or bad == "AsyncRequest" or bad == "BatchItemResult" }
+    if base == "std/csv" { return bad == "CsvError" }
+    if base == "std/parse" { return bad == "ParseError" }
+    if base == "std/crypto" { return bad == "CryptoError" }
+    if base == "std/process" { return bad == "ProcessError" or bad == "ProcessOutput" }
+    if base == "std/fs" { return bad == "FsError" }
+    if base == "std/time" { return bad == "TimeError" or bad == "DateTime" }
+    if base == "std/files" { return bad == "FileError" or bad == "File" }
+    if base == "std/buffer" { return bad == "BufferError" or bad == "Bytes" or bad == "DecodeErrorKind" or bad == "DecodeError" }
+    if base == "std/bytes" { return bad == "Utf8Error" }
+    if base == "std/environment" { return bad == "EnvironmentError" }
+    if base == "std/resources" { return bad == "ResourceError" or bad == "Resource" }
+    if base == "std/io" { return bad == "Line" }
+    if base == "std/async" { return bad == "Task" or bad == "TaskGroupError" or bad == "TaskOutcome" or bad == "FutureState" }
+    if base == "std/test" { return bad == "FixtureError" }
+    return false
+}
+
+fn fix_imported_type_qualified(tokens: list[Token], bad: str) -> str {
+    let mut match_alias = ""
+    let mut match_count = 0
+    let n = len(tokens)
+    let mut i = 0
+    while i + 1 < n {
+        if tokens[i].kind == "IMPORT" and tokens[i + 1].kind == "STR" {
+            let req = tokens[i + 1].val
+            let mut alias = extract_module_ns(req)
+            if i + 3 < n and tokens[i + 2].kind == "AS" and tokens[i + 3].kind == "IDENT" {
+                alias = tokens[i + 3].val
+                i = i + 4
+            } else {
+                i = i + 2
+            }
+            if fix_stdlib_exports_type(req, bad) {
+                match_alias = alias
+                match_count = match_count + 1
+            }
+        } else {
+            i = i + 1
+        }
+    }
+    if match_count == 1 and match_alias != "" { return match_alias + "." + bad }
+    return ""
+}
+
 fn fix_plan_w1001(src: str, tokens: list[Token], start_byte: int, end_byte: int, msg: str) -> list[FixEdit] {
     let mut out: list[FixEdit] = []
     let mut bad = ""
@@ -19608,6 +19686,13 @@ fn fix_plan_w1001(src: str, tokens: list[Token], start_byte: int, end_byte: int,
     let end_char = lsp_char_offset_from_utf8_byte(src, end_byte)
     if start_char < 0 or end_char <= start_char or end_char > len(src) { return out }
     if slice(src, start_char, end_char) != bad { return out }
+    if types_only {
+        let qualified = fix_imported_type_qualified(tokens, bad)
+        if qualified != "" {
+            out.append(FixEdit("W1001", "qualify imported type '" + bad + "' as '" + qualified + "'", "machine", start_byte, end_byte, qualified))
+            return out
+        }
+    }
     let lc = fix_line_col_from_char(src, start_char)
     let err_idx = fix_tok_index_at(tokens, lc[0], lc[1])
     let cands = fix_collect_visible_names(tokens, err_idx, types_only)

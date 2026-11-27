@@ -281,6 +281,8 @@ def test_seed_checker_diagnostic_parity(tmp_path):
         ("seed_enum.wysna", 'enum Mode { Fast, Safe }\nfn main() -> unit {\n  let m = Mode.Fast\n  m.get("k")\n}\n', "W3002", "Enum 'Mode' has no member or variant 'get'"),
         ("seed_err.wysna", 'fn f() -> int ! IoError {\n  return IoError { message: "bad" }\n}\n', "W2004", "Wrap the error value with Err(...)"),
         ("seed_u8.wysna", 'fn main() -> unit {\n  let n: int = 12\n  let _b: u8 = n\n}\n', "W2001", "u8(x) ?? 0"),
+        ("seed_coalesce_result.wysna", 'fn f() -> int ! IoError { return Ok(1) }\nfn main() -> unit {\n  let _x = f() ?? 0\n}\n', "W2006", "else err"),
+        ("seed_mod_type.wysna", 'import "std/json" as json\nfn f() -> json.Value ! JsonError {\n  return json.parse("{}")\n}\n', "W1001", "json.JsonError"),
     ]
     for name, src, exp_code, exp_needle in cases:
         path = tmp_path / name
