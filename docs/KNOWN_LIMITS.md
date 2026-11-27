@@ -1,10 +1,10 @@
-# Known Limits and Deferred Decisions
+# Known Limits and Deferred Decisions (v1.1.0)
 
-This file records what Wysna does **not** do, why, and what it would take to change it. It
+This file records what Wysna **v1.1.0** does **not** do, why, exact numeric/operational bounds, and what it would take to change it. It
 tracks deferred decisions separately from defects. Items marked *open decision* change
 the language surface and need an explicit decision before implementation.
 
-The interactive REPL rechecks the accepted session history on every input, so long
+The interactive REPL (Seed) rechecks the accepted session history on every input, so long
 sessions can become slower. Open delimiters continue onto subsequent lines; other
 incomplete expressions are reported immediately. A failed input removes bindings
 it introduced, but completed mutations and external effects
@@ -14,9 +14,25 @@ exist. Otherwise, use `:reset` and import again. Module initialization runs agai
 
 ---
 
+## Hard Language & Runtime Limits (v1.1.0)
+
+| Domain | Exact Supported Scope | Hard Limit / Absent Feature | Notes |
+| :--- | :--- | :--- | :--- |
+| **Integers (`int`) & `u8`** | 64-bit signed two's complement wrapping (`[-9_223_372_036_854_775_808, 9_223_372_036_854_775_807]`); `u8` in `[0, 255]` (`u8(x) -> u8?`). | No separate `i32`/`u32`/`u64`/`i128`/`f32`/`BigInt`; no `1e5` scientific or octal `0o` literals (`W0002`); `/` or `%` by `0` panics (`W4001`). | *Implementation detail (ABI v3):* signed 48-bit values (`[-2^47, 2^47 - 1]`) are inline in 8-byte `WVal`; larger 64-bit ints allocate an ARC `WIntBox`. |
+| **Floating-point (`float`)** | IEEE-754 `binary64`; requires digits on both sides of `.`. | `x / 0.0` and `x / -0.0` panic (`W4001`); rejected as `dict` keys (`W2010`), even inside tuples. | `+0.0 == -0.0` is `true`; `NaN == NaN` is `false`. |
+| **Operators** | `+`, `-`, `*`, `/`, `%`, `=`, `+=`, `-=`, `*=`, `and`/`or`/`not`, `??`, `?`, `..`/`..=`, `in`. | No bitwise operators (`&`, `\|`, `^`, `~`, `<<`, `>>`), no `++`/`--`, no `**`, no `/=`/`%=`, no ternary `?:`, no overloading. | Strict left-to-right evaluation order is guaranteed everywhere. |
+| **Loops & ranges** | `for x in list`, `for k, v in dict`, `for i in a..b` / `a..=b`, `while cond`. | `for` does **not** iterate `str`, tuples, or custom iterators (`W2001`). Ranges step `+1` ascending only and panic (`W4003`) above **`100_000_000` elements** or at `..=INT64_MAX`. No C-style `for (;;)`, `do..while`, `loop`, or labeled `break`/`continue`. | Direct `for i in a..b` avoids allocating a list in MIR; `let r = a..b` materializes `list[int]`. Use `while` for `>100M` iterations or custom steps. |
+| **Strings & collections** | Immutable UTF-8 `str` (Unicode scalar indexing via lazy offset cache); CoW `list[T]`, `dict[K, V]`, `tuple`. | Length/capacity fields use `int32_t`. Out-of-bounds reads, `pop()` on empty lists, and missing `d[k]` panic (`W4002`); use `d.get(k)` for `V?`. | *Implementation detail:* `str <= 6B` uses inline SSO in `WVal`; `dict` uses 5-byte/slot (`int32_t` + `uint8_t` ctrl tag) buckets. |
+| **Closures, OOP & ARC** | Immutable snapshot closures; `struct` (CoW value) + `class` (reference, single `extends`, multiple `implements`). | Closures cannot mutate captured value bindings (`W3001`). Strong `class` cycles leak unless broken with `Weak[C]` or `WYSNA_COLLECT_CYCLES=1`. No multiple class inheritance or traits on primitives. | `==` checks structural value on `struct`/collections and reference identity on `class`. |
+| **Errors & workers** | `T?`, `T ! E`, `T ! E1 \| E2`, `async fn`/`await`, `std/async.spawn`, `std/algorithms.parallel_*`. | No `try/catch`; error unions reject collections, tuples, `fn`, `Option`/`Result`, and unresolved generics (`W2001`). Workers deep-copy pure values up to depth **`256`** (`W4003`) and reject `class`/`interface`/`Weak`/handles/FFI/nested workers (`W2014`/`W2015`). | Public cancelable `TaskGroup` and async file I/O remain open beyond `v1.1.0`. |
+| **Host & stdlib quotas** | Native C99 / WASI / WebAssembly host primitives (`runtime/wysna_host.h`). | HTTP body **`1 MB`**, URL **`8 KB`**, headers **`32 KB` / `100` fields**; `std/process` **`256` args**; `std/json` `max_nodes` **`[1, 100_000]`**; WASI capture **`1 MB`**; syntax recovery **`100` diagnostics**. | `std/http` client requires `libcurl >= 8.3.0` on host (no HTTP server or streaming; unavailable in WASI/web). |
+| **Language surface omissions** | `@deprecated("...")`, `@must_use`, FFI via `extern` + `opaque`. | No macros, pointer arithmetic, `unsafe` blocks, or runtime reflection (use static `wysna schema`/`graph`/`api`). | Kept intentionally minimal and statically auditable. |
+
+---
+
 ## Concurrency and Contract Boundaries
 
-Parallel workers follow a closed isolation contract ([Worker Safety](WORKER_SAFETY.md)): value graphs are deep-copied across worker boundaries and unverified shared references or unknown-effect callbacks are rejected (`W5006`). Nested workers are disallowed, and public structured `TaskGroup` cancellation semantics remain deferred past `v1.0.0`.
+Parallel workers follow a closed isolation contract ([Worker Safety](WORKER_SAFETY.md)): value graphs are deep-copied across worker boundaries and unverified shared references or unknown-effect callbacks are rejected (`W5006`). Nested workers are disallowed, and public structured `TaskGroup` cancellation semantics remain deferred past `v1.1.0`.
 
 Field contracts, imported module contract scopes, and postconditions (`ensures`) on implicit native returns are enforced across both Seed and the self-hosted Native SDK compiler.
 
@@ -99,7 +115,7 @@ Wysna Compiler is a self-hosted compiler with a narrower supported profile than 
 Seed. Its measured coverage is maintained in the [engine parity matrix](ENGINE_PARITY_MATRIX.md); passing
 the listed fixtures does not guarantee equivalent behaviour for every Wysna program.
 
-Wysna Compiler has modular source files under `selfhost/src/`, bundled into
+Wysna Compiler has modular source files (`50` modules under `selfhost/src/`), bundled into
 `selfhost/compiler.wysna`. It parses and checks source using its own implementation and
 uses one checked-node → verified MIR → C99 pipeline under `native-core-v1`. Parameterized
 classes and interfaces with constrained generics, independently generic methods (`Box[T].transform[R]`), and
@@ -108,8 +124,10 @@ are supported in both Seed and Selfhost (`native-core-v1`). The native SDK drive
 (`packaging/native/driver.c`) supports `check` (including `--output-format=json-v1`),
 `fmt` (`--write`, `--output-format=json-v1`), `test`, `graph`, `inspect`, `patch` (`W5005`),
 `explain`, `schema` (`--emit-codecs`), `fix` (`--apply`, `--include-maybe`), `skills`, `capabilities`,
-`api` (`wysna.api-index/1`), `project new|lock|check|build|run|test` (`wysna.toml` v1 + `wysna.lock`), stdio MCP (`wysna mcp --root`, 11 static tools), and Stage-3 native LSP (`wysna lsp`, backed by `selfhost/src/09_lsp.wysna`)
-without Python. Unresolved generic nominal values, library-mode exports, and WASM targets remain outside `native-core-v1`; see [MIR design](MIR_DESIGN.md). Compiler does not share Seed's compilation session or type arena, though Seed compiles use an interface-digest incremental module cache. Deterministic bootstrap and corpus tests are evidence for their measured inputs, not universal semantic equivalence.
+`api` (`wysna.api-index/1`), `project new|lock|check|build|run|test` (`wysna.toml` v1 + `wysna.lock`),
+`build --target=wasi`, `build --target=web` (emitting `.wasm` + zero-dependency `.mjs` + `.d.ts` via precompiled `libwysna_runtime_wasi.a`),
+stdio MCP (`wysna mcp --root`, 11 static tools), and Stage-3 native LSP (`wysna lsp`, backed by `selfhost/src/09_lsp.wysna`)
+without Python. Unresolved generic nominal values, library-mode exports (`--target=browser-library`), interactive `repl`, and frozen `--backend=llvm-experimental` remain in Seed; see [MIR design](MIR_DESIGN.md). Compiler does not share Seed's compilation session or type arena, though Seed compiles use an interface-digest incremental module cache. Deterministic bootstrap and corpus tests are evidence for their measured inputs, not universal semantic equivalence.
 
 The [native SDK](NATIVE_SDK.md) packages the native engine, runtime, stdlib and pinned C toolchain. Its commands run without Python. The SDK is a portable development artifact; platform acceptance, signing and release publication are distinct gates. HTTP and other external C dependencies are not included in the offline core.
 
@@ -121,8 +139,7 @@ macOS arm64, Linux x64 and Windows x64; it needs no virtual environment or host 
 Its launcher verifies the required components before importing Seed, and
 `wysna doctor` verifies the complete installed file index. External FFI libraries are
 not included. CI validates the Windows, macOS and Linux installer lifecycles on their
-respective hosts, including installation and removal. The published 0.7.0 installers
-are unsigned; CI acceptance does not establish manual acceptance on every machine.
+respective hosts, including installation and removal. Wait-free smartscreen/Gatekeeper notarization is not yet enabled on Windows/macOS installers (they remain unsigned; CI acceptance does not establish manual acceptance on every machine).
 Missing Wysna Compiler sources produce `W2013` before any bootstrap-cache write. Wysna
 Seed native builds require a host C99 toolchain; an unavailable or invalid compiler command produces
 `W5001` with stage `toolchain`, rather than an internal compiler error. This checks
@@ -238,13 +255,13 @@ networking require the acceptance contracts in [Service foundations](SERVICE_FOU
 
 ---
 
-## 8. Audit Status and Open Scope in 0.8.0
+## 8. Architecture Status and Open Scope in v1.1.0
 
-Closed items through `0.8.0` vs remaining open architectural work:
+Closed items through `v1.1.0` vs remaining open architectural work:
 
 | Finding | Current State | Remaining work |
 | :--- | :--- | :--- |
-| W01 · Compiler architecture | Seed supports nested `/* ... */` comments, `0x`/`0b` ints, `"""..."""`, `f"..."` interpolation, `+=`/`-=`/`*=`, `Struct { ..base }`, shorthand `(T1, T2)` tuple types, `.0`/`.1` tuple indexing, `let (a, b) = pair` destructuring, `.contains()`/`.is_empty()`/`x in container`, `for k, v in dict` / `d.items()`, bidirectional empty container inference, independent generic class methods (`Box[T].transform[R]`), parameterized interfaces, class/generic error unions, tuple dict keys, `wysna fix` machine repairs (`W3001`, `W3004`, `W2001`, `W1001`), and incremental module/interface-digest caching; Selfhost (`native-core-v1`, 34 modular files under `selfhost/src/`) matches these language ergonomics and supports constrained generic classes and interfaces (`interface Foo[T]`), generic class methods, parameterized class inheritance, dot/relative/submodule `from ... use` imports, Agent-First CLI (`graph`, `inspect`, `patch`, `explain`, `schema`, `fix`, `skills`, `capabilities`, `api`, `project new\|lock\|check\|build\|run\|test`, `check/fmt --output-format=json-v1`), 11-tool stdio MCP server (`wysna mcp`), and Stage-3 native LSP (`wysna lsp`) via `driver.c` without Python. | Extend Selfhost (`selfhost/`) to library-mode exports and WASM targets if full Seed replacement is targeted. |
+| W01 · Compiler architecture | Seed supports nested `/* ... */` comments, `0x`/`0b` ints, `"""..."""`, `f"..."` interpolation, `+=`/`-=`/`*=`, `Struct { ..base }`, shorthand `(T1, T2)` tuple types, `.0`/`.1` tuple indexing, `let (a, b) = pair` destructuring, `.contains()`/`.is_empty()`/`x in container`, `for k, v in dict` / `d.items()`, bidirectional empty container inference, independent generic class methods (`Box[T].transform[R]`), parameterized interfaces, class/generic error unions, tuple dict keys, `wysna fix` machine repairs (`W3001`, `W3004`, `W2001`, `W1001`), and incremental module/interface-digest caching; Selfhost (`native-core-v1`, 50 modular files under `selfhost/src/`) matches these language ergonomics and adds constrained generic classes/interfaces (`interface Foo[T]`), generic class methods, parameterized class inheritance, dot/relative/submodule `from ... use` imports, MIR folding/pruning gated out of `wysna check`, Agent-First CLI (`graph`, `inspect`, `patch`, `explain`, `schema`, `fix`, `skills`, `capabilities`, `api`, `project new\|lock\|check\|build\|run\|test`, `check/fmt --output-format=json-v1`), 11-tool stdio MCP server (`wysna mcp`), Stage-3 native LSP (`wysna lsp`), and `--target=wasi` / `--target=web` WebAssembly builds via `driver.c` without Python or Emscripten. | Modularize Selfhost C emission to allow `-O1`/`-O2` compilation of the macOS compiler frontend under reasonable build times; add library-mode `--target=browser-library` to Selfhost if full Seed replacement is targeted. |
 | W03 · Value size | **Resolved in ABI v3 (`v0.7.0`):** `WVal` is natively unified with 8-byte NaN-boxed `WVal64` (`W_RUNTIME_ABI_VERSION = 3`, `ABI_VERSION = 3`, `RUNTIME_ABI_VERSION = 3`, `sizeof(WVal) == 8`) across runtime, AST/MIR C99 Seed, Selfhost, and `llvm-native-v1` (4× density, 8 slots/cache line, 0..6B inline SSO, inline 48-bit ints + `WIntBox` full-64-bit fallback, direct `WEnumBuf` payload). Scalar list buffers also use unboxed MIR access. | Expand cross-OS CI matrix verification (`x86_64-pc-windows-msvc` & `x86_64-unknown-linux-gnu`) for native LLVM ABI v3 `i64` callback adapters. |
 | W04 · CoW cost | `optimize_local_cow_uniqueness`, interprocedural `optimize_interprocedural_cow`, `fold_scalar_constants`, `coalesce_temporary_stores`, `eliminate_dead_pure_ops`, and unboxed `range_count_i64`/`div_i64_at`/`mod_i64_at` elide redundant clones, temporaries, and boxing across loops. | Cross-translation-unit link-time CoW summaries for separately compiled libraries. |
 | W05 · Generics | Generic templates, constrained parameterized classes and interfaces (`interface Foo[T]`), independent generic methods in classes, and cross-module generic inheritance are monomorphized uniformly across Seed, Selfhost, and LLVM. | Explicit opt-in trait/typeclass system for built-in types only if language scope changes (currently nominal class interfaces by design). |

@@ -1,6 +1,6 @@
 # Wysna Language Specification
 
-> **Status:** This specification defines Wysna **1.0.0**. Sections 1–11 describe the normative grammar; sections 12–14 describe implementation contracts.
+> **Status:** This specification defines Wysna **1.1.0**. Sections 1–11 describe the normative grammar; sections 12–14 describe implementation contracts.
 >
 > **Implementations:** `Wysna Seed` is the reference implementation that determines whether a program is valid. `Wysna Compiler` is an independent self-hosted compiler (`native-core-v1`); its supported subset is measured against the public release corpus. The parity matrix documents this boundary in [docs/ENGINE_PARITY_MATRIX.md](docs/ENGINE_PARITY_MATRIX.md).
 >
@@ -96,9 +96,10 @@ process(item)
 ## 4. Type System & Nullability
 
 ### 4.1 Primitive & Built-in Types
-* `int`: 64-bit signed integer.
-* `float`: 64-bit floating point.
+* `int`: 64-bit signed integer (`-9_223_372_036_854_775_808` to `9_223_372_036_854_775_807`).
+* `float`: 64-bit IEEE-754 floating point.
 * `u8`: Unsigned 8-bit integer with range `0..255`. A literal in a `u8` context is checked at compile time. Use `u8(value: int) -> u8?` for computed values and handle `None` when the value falls outside the range. Use `int(value)` for integer arithmetic and `float(value)` for floating-point arithmetic. C FFI uses `uint8_t`. The C99 runtime stores each element of a `list[u8]` in one byte, with a shared list header and copy-on-write semantics.
+* *FFI-only scalar aliases & absent numeric widths:* `int32` and `int64` resolve to `int`, and `double` resolves to `float` strictly for `extern` C FFI signatures; Wysna does not define separate user-facing `i32`, `u32`, `u64`, `i128`, `f32`, or arbitrary-precision `BigInt` numeric types.
 * `bool`: Boolean truth value.
 * `str`: Immutable UTF-8 text with code-point indexing.
 * `unit`: Type indicating the absence of a meaningful value for functions that return nothing.
@@ -255,6 +256,8 @@ Evaluation follows an explicit 14-level precedence hierarchy matching the Pratt 
 | **12** | `??` | Null-coalescing (`a ?? fallback`) | Right |
 | **13** | `=` `+=` `-=` `*=` | Assignment and compound assignments | Right |
 
+> **Intentionally omitted operators:** Wysna has no bitwise operators (`&`, `|`, `^`, `~`, `<<`, `>>`), no increment/decrement (`++`, `--`), no power operator (`**`), no `/=` or `%=` compound assignments, no C ternary (`cond ? a : b` — use `if ... { ... } else { ... }`), no operator overloading, and uses `and` / `or` / `not` instead of `&&` / `||` / `!`. (`|` is reserved exclusively for lambda parameter lists and error union alternatives.)
+
 ### 5.1 Deterministic Left-to-Right Evaluation Order
 Wysna guarantees **strict left-to-right ($L \rightarrow R$) evaluation order** across all composite expressions, independent of target C compiler argument ordering:
 * **Function and Method Calls:** In `foo(a(), b(), c())`, the receiver (if any) is evaluated first, followed by `a()`, `b()`, and `c()` in strict left-to-right order before invoking `foo`.
@@ -394,6 +397,11 @@ no afirman pureza ni cambian permisos. `api`, `inspect` y `schema` las exponen c
   ```
 
 Loop bindings accept identifiers, `_`, and recursively nested tuple patterns. These patterns must be irrefutable for the iterable's element type. Each identifier in one binding pattern must be unique. For example, `for (number, (text, flag)) in values { ... }` binds a nested tuple element without introducing a runtime match failure.
+
+**Loop & range boundaries:**
+* Only `list[T]` (including integer ranges `a..b` and `a..=b`) and `dict[K, V]` are iterable in `for` loops; `str` (`for c in text`), tuples, custom iterators, and `yield` generators are not supported (iterate strings via `0..len(s)` or `bytes(s)`). Loop binding variables are always immutable.
+* Integer ranges `a..b` and `a..=b` step strictly by `+1` ascending (`start >= end` executes 0 iterations) and enforce a hard runtime bound of **`100_000_000` elements** (`W4003`; `a..=9_223_372_036_854_775_807` also panics `W4003`). Use `while` for loops exceeding 100M iterations, countdowns, or custom step sizes.
+* C-style `for (init; cond; step)`, `do ... while`, infinite `loop`, and labeled `break` / `continue` are intentionally absent; `break` and `continue` always target the innermost enclosing loop.
 
 ### 6.3 Exhaustive `match`
 `match` must be exhaustive when switching on `enum` variants:
