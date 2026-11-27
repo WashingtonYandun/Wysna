@@ -217,7 +217,15 @@ class TypeChecker:
         elif isinstance(expected_type, ResultType) and isinstance(found_type, ResultType) and not self.type_relations.is_assignable(found_type, expected_type):
             error.with_data(kind="incompatible_error_channel", expected=str(expected_type), found=str(found_type), function=fn_label)
         else:
-            error.with_data(kind="return_type_mismatch", expected=str(expected_type), found=str(found_type), function=fn_label)
+            extra = {}
+            if (
+                isinstance(expected_type, ResultType)
+                and found_type is not None
+                and not isinstance(found_type, ResultType)
+                and self.type_relations.is_assignable(found_type, expected_type.err)
+            ):
+                extra["help"] = "Wrap the error value with Err(...), e.g. 'return Err(...)'."
+            error.with_data(kind="return_type_mismatch", expected=str(expected_type), found=str(found_type), function=fn_label, **extra)
         if isinstance(decl_line, int) and isinstance(decl_col, int):
             error.with_related(f"function '{fn_label}' return type declared here", line=decl_line, col=decl_col, file=self.file)
         return error

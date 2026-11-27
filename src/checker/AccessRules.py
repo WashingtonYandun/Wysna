@@ -470,6 +470,13 @@ def resolve_member_with_receiver_type(checker: "TypeChecker", expr: MemberExpr, 
             return FunctionType([obj_t.element], BoolType)
         if expr.property == "is_empty":
             return FunctionType([], BoolType)
+        raise TypeError(
+            message=f"List has no method '{expr.property}' (available: append, pop, clear, contains, is_empty)",
+            line=expr.line,
+            col=expr.col,
+            file=checker.file,
+            code="W3002",
+        )
 
     if isinstance(obj_t, DictType):
         if expr.property == "get":
@@ -488,6 +495,13 @@ def resolve_member_with_receiver_type(checker: "TypeChecker", expr: MemberExpr, 
             return FunctionType([obj_t.key], OptionalType(obj_t.value), is_mutating=True)
         if expr.property == "clear":
             return FunctionType([], UnitType, is_mutating=True)
+        raise TypeError(
+            message=f"Dict has no method '{expr.property}' (available: get, keys, values, items, contains, is_empty, remove, clear)",
+            line=expr.line,
+            col=expr.col,
+            file=checker.file,
+            code="W3002",
+        )
 
     if obj_t == StrType:
         if expr.property == "contains":
@@ -538,6 +552,18 @@ def resolve_member_with_receiver_type(checker: "TypeChecker", expr: MemberExpr, 
             col=expr.col,
             file=checker.file,
             code="W1001"
+        )
+
+    if isinstance(obj_t, EnumType):
+        raise TypeError(
+            message=(
+                f"Enum '{obj_t.name}' has no member or variant '{expr.property}' "
+                f"(variants: {', '.join(obj_t.variants)}; use module functions or match on enum values)"
+            ),
+            line=expr.line,
+            col=expr.col,
+            file=checker.file,
+            code="W3002",
         )
 
     if isinstance(obj_t, AnyType):

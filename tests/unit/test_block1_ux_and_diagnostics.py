@@ -118,7 +118,7 @@ def test_driver_help_repl_and_equals_flag_parsing(tmp_path):
     assert "[W5001]" in eq_flag.stderr
 
 
-def test_driver_run_cache_reuses_and_invalidates_compiled_binary(tmp_path):
+def _setup_test_sdk(tmp_path: Path) -> Path:
     zig = _find_cached_zig()
     if zig is None:
         pytest.skip("No cached or installed zig binary found locally")
@@ -134,16 +134,18 @@ def test_driver_run_cache_reuses_and_invalidates_compiled_binary(tmp_path):
             shutil.copy2(hdr, sdk_root / "runtime" / hdr.name)
 
     driver = sdk_root / "bin" / executable_name("wysna")
-    built_driver = _compile_driver(tmp_path)
-    shutil.copy2(built_driver, driver)
-
-    comp_dst = sdk_root / "libexec" / executable_name("wysna-compiler")
-    shutil.copy2(compiler, comp_dst)
+    shutil.copy2(_compile_driver(tmp_path), driver)
+    shutil.copy2(compiler, sdk_root / "libexec" / executable_name("wysna-compiler"))
     zig_dst = sdk_root / "toolchain/zig" / executable_name("zig")
     if os.name == "nt":
         shutil.copy2(zig, zig_dst)
     else:
         os.symlink(zig, zig_dst)
+    return driver
+
+
+def test_driver_run_cache_reuses_and_invalidates_compiled_binary(tmp_path):
+    driver = _setup_test_sdk(tmp_path)
 
     cache_home = tmp_path / "cache"
     env = dict(os.environ, WYSNA_CACHE_HOME=str(cache_home))
@@ -240,3 +242,51 @@ def test_runtime_panic_messages_include_context_and_os_errors(tmp_path):
     )
     assert io_err.returncode == 0, io_err.stderr
     assert "Failed to open file 'missing_block1_probe.txt':" in io_err.stdout
+
+
+def test_driver_run_cache_supports_local_imports_and_invalidates_on_dependency_edit(tmp_path):
+    driver = _setup_test_sdk(tmp_path)
+
+    cache_home = tmp_path / "cache"
+    env = dict(os.environ, WYSNA_CACHE_HOME=str(cache_home))
+    helper = tmp_path / "helper.wysna"
+    main_src = tmp_path / "app.wysna"
+    helper.write_text('pub fn label() -> str {\n  return "dep-v1"\n}\n', encoding="utf-8")
+    main_src.write_text('import "helper.wysna" as h\nfn main() {\n  print(h.label())\n}\n', encoding="utf-8")
+
+    first = subprocess.run([str(driver), "run", "--profile=dev", str(main_src)], env=env, capture_output=True, text=True, timeout=120)
+    assert first.returncode == 0, first.stderr
+    assert first.stdout.strip() == "dep-v1"
+    run_cache_dir = cache_home / "run-cache"
+    assert len([p for p in run_cache_dir.iterdir() if p.is_file()]) == 1
+
+    second = subprocess.run([str(driver), "run", "--profile=dev", str(main_src)], env=env, capture_output=True, text=True, timeout=30)
+    assert second.returncode == 0, second.stderr
+    assert second.stdout.strip() == "dep-v1"
+    assert len([p for p in run_cache_dir.iterdir() if p.is_file()]) == 1
+
+    helper.write_text('pub fn label() -> str {\n  return "dep-v2"\n}\n', encoding="utf-8")
+    third = subprocess.run([str(driver), "run", "--profile=dev", str(main_src)], env=env, capture_output=True, text=True, timeout=120)
+    assert third.returncode == 0, third.stderr
+    assert third.stdout.strip() == "dep-v2"
+    assert len([p for p in run_cache_dir.iterdir() if p.is_file()]) == 2
+
+
+def test_seed_checker_diagnostic_parity(tmp_path):
+    from tooling.FixCLI import collect_diagnostics
+
+    cases = [
+        ("seed_list.wysna", 'fn main() -> unit {\n  let mut xs = [1]\n  xs.push(2)\n}\n', "W3002", "List has no method 'push'"),
+        ("seed_dict.wysna", 'fn main() -> unit {\n  let d = {"a": 1}\n  d.missing()\n}\n', "W3002", "Dict has no method 'missing'"),
+        ("seed_enum.wysna", 'enum Mode { Fast, Safe }\nfn main() -> unit {\n  let m = Mode.Fast\n  m.get("k")\n}\n', "W3002", "Enum 'Mode' has no member or variant 'get'"),
+        ("seed_err.wysna", 'fn f() -> int ! IoError {\n  return IoError { message: "bad" }\n}\n', "W2004", "Wrap the error value with Err(...)"),
+        ("seed_u8.wysna", 'fn main() -> unit {\n  let n: int = 12\n  let _b: u8 = n\n}\n', "W2001", "u8(x) ?? 0"),
+    ]
+    for name, src, exp_code, exp_needle in cases:
+        path = tmp_path / name
+        diags = collect_diagnostics(str(path), src)
+        assert diags, name
+        first = diags[0]
+        assert first["code"] == exp_code, (name, first)
+        blob = first["message"] + " " + str(first.get("data", {}).get("help", ""))
+        assert exp_needle in blob, (name, first)

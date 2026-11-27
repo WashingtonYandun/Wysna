@@ -207,10 +207,99 @@ fn fix_mismatch_data_json(msg: str) -> str {
     let types = fix_extract_expected_found(msg)
     if len(types) != 2 { return "{}" }
     let base = "{\"kind\":\"type_mismatch\",\"expected\":" + diag_json_quote(types[0]) + ",\"found\":" + diag_json_quote(types[1])
+    if types[0] == "u8" and types[1] == "int" {
+        return base + ",\"help\":\"Use an integer literal in 0..255 with a u8 type context, or narrow checked with 'u8(x) ?? 0'.\"}"
+    }
     let requirement = fix_propagation_requirement(types[0], types[1])
     if requirement == "" { return base + "}" }
     let help = "'?' can return early and requires " + requirement + " on the enclosing function. Use 'else' for a local fallback."
     return base + ",\"unwrap_hint\":\"?\",\"help\":" + diag_json_quote(help) + "}"
+}
+
+fn fix_error_channel_matches(channel: str, found: str) -> bool {
+    if channel == found { return true }
+    let n = len(channel)
+    let mut start = 0
+    let mut i = 0
+    while i <= n {
+        if i == n or (i + 3 <= n and slice(channel, i, i + 3) == " | ") {
+            if slice(channel, start, i) == found { return true }
+            start = i + 3
+            i = i + 3
+        } else {
+            i = i + 1
+        }
+    }
+    return false
+}
+
+fn fix_plan_w2004_err_wrap(src: str, start_byte: int, msg: str) -> list[FixEdit] {
+    let mut out: list[FixEdit] = []
+    let ef = fix_extract_expected_found(msg)
+    if len(ef) != 2 { return out }
+    let exp = ef[0]
+    let fnd = ef[1]
+    let mut split_at = -1
+    let mut k = 0
+    while k + 3 <= len(exp) {
+        if slice(exp, k, k + 3) == " ! " {
+            split_at = k
+            break
+        }
+        k = k + 1
+    }
+    if split_at < 0 { return out }
+    let err_chan = slice(exp, split_at + 3, len(exp))
+    if not fix_error_channel_matches(err_chan, fnd) { return out }
+    let sc = lsp_char_offset_from_utf8_byte(src, start_byte)
+    let n = len(src)
+    if sc < 0 or sc >= n { return out }
+    if sc + 4 <= n and slice(src, sc, sc + 4) == "Err(" { return out }
+    let mut p = sc
+    let mut depth = 0
+    let mut in_str = false
+    while p < n {
+        let ch = ord(src[p])
+        if in_str {
+            if ch == 92 and p + 1 < n {
+                p = p + 2
+                continue
+            }
+            if ch == 34 { in_str = false }
+            p = p + 1
+            continue
+        }
+        if ch == 34 {
+            in_str = true
+            p = p + 1
+            continue
+        }
+        if ch == 40 or ch == 123 or ch == 91 {
+            depth = depth + 1
+            p = p + 1
+            continue
+        }
+        if ch == 41 or ch == 125 or ch == 93 {
+            if depth == 0 { break }
+            depth = depth - 1
+            p = p + 1
+            continue
+        }
+        if depth == 0 and (ch == 10 or ch == 13 or ch == 59 or ch == 35) {
+            break
+        }
+        p = p + 1
+    }
+    let mut end_c = p
+    while end_c > sc and (ord(src[end_c - 1]) == 32 or ord(src[end_c - 1]) == 9) {
+        end_c = end_c - 1
+    }
+    if end_c <= sc { return out }
+    let orig = slice(src, sc, end_c)
+    let b0 = diag_utf8_byte_at(src, sc)
+    let b1 = diag_utf8_byte_at(src, end_c)
+    out.append(FixEdit("W2004", "wrap error value in Err(...)", "machine", b0, b1, "Err(" + orig + ")"))
+    return out
 }
 
 fn fix_postfix_end_token(tokens: list[Token], start_idx: int) -> int {
@@ -700,8 +789,13 @@ fn fix_plan_syntax(code: str, src: str, start_byte: int, end_byte: int, msg: str
 }
 
 fn fix_plan_diagnostic(code: str, src: str, tokens: list[Token], start_byte: int, end_byte: int, msg: str) -> list[FixEdit] {
-    if code == "W0001" or code == "W0006" or code == "W2004" {
+    if code == "W0001" or code == "W0006" {
         return fix_plan_syntax(code, src, start_byte, end_byte, msg)
+    }
+    if code == "W2004" {
+        let syn = fix_plan_syntax(code, src, start_byte, end_byte, msg)
+        if len(syn) > 0 { return syn }
+        return fix_plan_w2004_err_wrap(src, start_byte, msg)
     }
     if code == "W2001" { return fix_plan_w2001(src, tokens, start_byte, msg) }
     if code == "W1001" { return fix_plan_w1001(src, tokens, start_byte, end_byte, msg) }
@@ -711,14 +805,19 @@ fn fix_plan_diagnostic(code: str, src: str, tokens: list[Token], start_byte: int
 }
 
 fn fix_diagnostic_edits_json(code: str, msg: str, file: str, src: str, line: int, col: int) -> str {
-    let is_syntax = code == "W0001" or code == "W0006" or code == "W2004"
-    if not is_syntax and code != "W2001" and code != "W1001" and code != "W3001" and code != "W3004" { return "[]" }
+    let is_syntax = code == "W0001" or code == "W0006"
+    if not is_syntax and code != "W2004" and code != "W2001" and code != "W1001" and code != "W3001" and code != "W3004" { return "[]" }
     let start_char = diag_char_offset_at(src, line, col)
     let end_char = diag_char_span_width(src, start_char)
     if start_char < 0 or end_char <= start_char { return "[]" }
     let mut fixes: list[FixEdit] = []
     if is_syntax {
         fixes = fix_plan_syntax(code, src, diag_utf8_byte_at(src, start_char), diag_utf8_byte_at(src, end_char), msg)
+    } elif code == "W2004" {
+        let sb = diag_utf8_byte_at(src, start_char)
+        let eb = diag_utf8_byte_at(src, end_char)
+        fixes = fix_plan_syntax(code, src, sb, eb, msg)
+        if len(fixes) == 0 { fixes = fix_plan_w2004_err_wrap(src, sb, msg) }
     } else {
         fixes = fix_plan_diagnostic(code, src, tokenize(src, file), diag_utf8_byte_at(src, start_char), diag_utf8_byte_at(src, end_char), msg)
     }

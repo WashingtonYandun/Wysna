@@ -1224,23 +1224,97 @@ static void sdk_hash_file_meta(uint64_t* h1, uint64_t* h2, const char* path) {
 #endif
 }
 
-static int sdk_source_has_local_imports(const char* buf, size_t len) {
-    size_t i = 0;
-    while (i < len) {
-        while (i < len && (buf[i] == ' ' || buf[i] == '\t')) i++;
-        size_t kw = 0;
-        if (i + 7 <= len && memcmp(buf + i, "import ", 7) == 0) kw = 7;
-        else if (i + 5 <= len && memcmp(buf + i, "from ", 5) == 0) kw = 5;
-        if (kw > 0) {
-            size_t j = i + kw;
-            while (j < len && (buf[j] == ' ' || buf[j] == '\t')) j++;
-            if (j < len && (buf[j] == '"' || buf[j] == '\'')) j++;
-            if (j + 4 > len || memcmp(buf + j, "std/", 4) != 0) return 1;
+#define SDK_CACHE_GRAPH_MAX_FILES 64
+#define SDK_CACHE_GRAPH_MAX_DEPTH 16
+
+static int sdk_resolve_local_import_path(const char* current_file, const SdkOptions* options,
+                                         const char* spec, size_t spec_len, char* resolved_out) {
+    if (spec_len == 0 || spec_len >= 512) return 0;
+    char rel[520];
+    memcpy(rel, spec, spec_len);
+    rel[spec_len] = 0;
+    int has_ext = sdk_has_wysna_suffix(rel);
+    char bases[2][SDK_PATH_CAP];
+    int base_count = 0;
+    if (sdk_parent(bases[0], current_file)) base_count = 1;
+    if (options && options->project_src_root && options->project_src_root[0] &&
+        sdk_copy(bases[base_count], options->project_src_root)) {
+        base_count++;
+    }
+    for (int b = 0; b < base_count; b++) {
+        char candidate[SDK_PATH_CAP];
+        if (sdk_join(candidate, bases[b], rel) && sdk_is_file(candidate) &&
+            sdk_absolute(resolved_out, candidate, 1)) {
+            return 1;
         }
-        while (i < len && buf[i] != '\n') i++;
-        if (i < len) i++;
+        if (!has_ext) {
+            char rel_ext[528];
+            int rn = snprintf(rel_ext, sizeof(rel_ext), "%s.wysna", rel);
+            if (rn > 0 && (size_t)rn < sizeof(rel_ext) &&
+                sdk_join(candidate, bases[b], rel_ext) && sdk_is_file(candidate) &&
+                sdk_absolute(resolved_out, candidate, 1)) {
+                return 1;
+            }
+        }
     }
     return 0;
+}
+
+static int sdk_hash_source_graph(const char* file_path, const SdkOptions* options,
+                                 uint64_t* h1, uint64_t* h2,
+                                 char visited[][SDK_PATH_CAP], int* visited_count, int depth) {
+    if (depth > SDK_CACHE_GRAPH_MAX_DEPTH || *visited_count >= SDK_CACHE_GRAPH_MAX_FILES) return 0;
+    char canon[SDK_PATH_CAP];
+    if (!sdk_absolute(canon, file_path, 1) || !sdk_is_file(canon)) return 0;
+    for (int i = 0; i < *visited_count; i++) {
+        if (strcmp(visited[i], canon) == 0) return 1;
+    }
+    if (!sdk_copy(visited[*visited_count], canon)) return 0;
+    (*visited_count)++;
+
+    char* src_buf = NULL;
+    size_t src_len = 0;
+    if (!sdk_read_file(canon, &src_buf, &src_len)) return 0;
+    sdk_hash_str(h1, h2, canon);
+    sdk_hash_bytes(h1, h2, src_buf, src_len);
+
+    size_t i = 0;
+    int ok = 1;
+    while (i < src_len && ok) {
+        while (i < src_len && (src_buf[i] == ' ' || src_buf[i] == '\t')) i++;
+        size_t kw = 0;
+        if (i + 7 <= src_len && memcmp(src_buf + i, "import ", 7) == 0) kw = 7;
+        else if (i + 5 <= src_len && memcmp(src_buf + i, "from ", 5) == 0) kw = 5;
+        if (kw > 0) {
+            size_t j = i + kw;
+            while (j < src_len && (src_buf[j] == ' ' || src_buf[j] == '\t')) j++;
+            if (j < src_len && (src_buf[j] == '"' || src_buf[j] == '\'')) {
+                char quote = src_buf[j++];
+                size_t start = j;
+                while (j < src_len && src_buf[j] != quote && src_buf[j] != '\n' && src_buf[j] != '\r') j++;
+                if (j >= src_len || src_buf[j] != quote) {
+                    ok = 0;
+                    break;
+                }
+                size_t spec_len = j - start;
+                if (!(spec_len >= 4 && memcmp(src_buf + start, "std/", 4) == 0)) {
+                    char dep_path[SDK_PATH_CAP];
+                    if (!sdk_resolve_local_import_path(canon, options, src_buf + start, spec_len, dep_path) ||
+                        !sdk_hash_source_graph(dep_path, options, h1, h2, visited, visited_count, depth + 1)) {
+                        ok = 0;
+                        break;
+                    }
+                }
+            } else {
+                ok = 0;
+                break;
+            }
+        }
+        while (i < src_len && src_buf[i] != '\n') i++;
+        if (i < src_len) i++;
+    }
+    free(src_buf);
+    return ok;
 }
 
 static int sdk_prepare_run_cache_path(const SdkInvocation* invocation, const SdkOptions* options,
@@ -1250,22 +1324,22 @@ static int sdk_prepare_run_cache_path(const SdkInvocation* invocation, const Sdk
     char cache_root[SDK_PATH_CAP];
     if (!sdk_resolve_global_cache(cache_root)) return 0;
     if (!sdk_join(cache_dir_out, cache_root, "run-cache")) return 0;
-    char* src_buf = NULL;
-    size_t src_len = 0;
-    if (!sdk_read_file(invocation->source, &src_buf, &src_len)) return 0;
-    if (sdk_source_has_local_imports(src_buf, src_len)) {
-        free(src_buf);
-        return 0;
-    }
+    char (*visited)[SDK_PATH_CAP] = calloc(SDK_CACHE_GRAPH_MAX_FILES, sizeof(*visited));
+    if (!visited) return 0;
     uint64_t h1 = 0xcbf29ce484222325ULL;
     uint64_t h2 = 0x9e3779b97f4a7c15ULL;
     sdk_hash_str(&h1, &h2, WYSNA_NATIVE_VERSION);
     sdk_hash_str(&h1, &h2, WYSNA_NATIVE_TARGET);
     sdk_hash_file_meta(&h1, &h2, invocation->engine);
     sdk_hash_str(&h1, &h2, invocation->stdlib);
-    sdk_hash_str(&h1, &h2, invocation->source);
-    sdk_hash_bytes(&h1, &h2, src_buf, src_len);
-    free(src_buf);
+    int visited_count = 0;
+    int graph_ok = sdk_hash_source_graph(invocation->source, options, &h1, &h2, visited, &visited_count, 0);
+    free(visited);
+    if (!graph_ok) {
+        cache_dir_out[0] = 0;
+        cache_bin_out[0] = 0;
+        return 0;
+    }
     sdk_hash_str(&h1, &h2, options->profile);
     int sandbox_flag = options->sandbox ? 1 : 0;
     sdk_hash_bytes(&h1, &h2, &sandbox_flag, sizeof(sandbox_flag));
