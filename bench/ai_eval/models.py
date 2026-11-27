@@ -112,6 +112,8 @@ class AttemptRecord:
     wall_time_ms: float = 0.0
     response: str = ""
     files: Dict[str, str] = field(default_factory=dict)
+    # Estimated split of provider-reported prompt tokens by source (see harness.attribute_prompt_tokens).
+    prompt_breakdown: Dict[str, int] = field(default_factory=dict)
 
     def to_dict(self) -> Dict[str, Any]:
         return {
@@ -134,6 +136,7 @@ class AttemptRecord:
             "completion_tokens": self.completion_tokens,
             "response": self.response,
             "files": self.files,
+            "prompt_breakdown": self.prompt_breakdown,
         }
 
     @classmethod
@@ -230,6 +233,7 @@ class EvaluationSummary:
     total_model_turns: int = 0
     token_counting_method: str = "unknown"
     denominators: Dict[str, int] = field(default_factory=dict)
+    prompt_token_attribution: Dict[str, Any] = field(default_factory=dict)
 
     def to_dict(self) -> Dict[str, Any]:
         return {
@@ -270,5 +274,6 @@ class EvaluationSummary:
             "avg_model_turns": round(self.avg_model_turns, 2),
             "total_model_turns": self.total_model_turns,
             "total_tokens": self.total_tokens,
+            "prompt_token_attribution": self.prompt_token_attribution,
             "results": [r.to_dict() for r in self.results],
         }
