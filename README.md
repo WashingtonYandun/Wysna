@@ -43,7 +43,7 @@ Or download standalone graphical installers (`.exe`, `.pkg`, `.deb`, `.rpm`) and
 
 Confirm installation in any new terminal with `wysna --version`.
 
-The examples in this README target **Wysna 1.0.0**.
+The examples in this README target **Wysna 1.1.0**.
 
 <a id="first-project"></a>
 
@@ -103,7 +103,7 @@ To enforce architectural boundaries, assign roles to classes via typed attribute
 
 ## Language status
 
-**Wysna 1.0.0** is stable. It includes pure value semantics (`struct`, `list`, `dict`), deterministic ARC + Copy-on-Write, contracts (`requires`/`ensures`), typed error unions (`T ! E`), pattern matching, generics, and stackless `async`/`await`. The Native SDK ships the self-hosted compiler written in Wysna (`native-core-v1`) alongside a bundled Zig C99/WASI toolchain, while Seed provides the reference interpreter, interactive REPL, and browser-library builds. Review platform scope and capability limits before selecting a deployment target: [Architecture](docs/COMPILER_ARCHITECTURE.md) · [Engine parity](docs/ENGINE_PARITY_MATRIX.md) · [Known limits](docs/KNOWN_LIMITS.md) · [Effects](docs/EFFECTS.md).
+**Wysna 1.1.0** is stable. It includes pure value semantics (`struct`, `list`, `dict`), deterministic ARC + Copy-on-Write, contracts (`requires`/`ensures`), typed error unions (`T ! E`), pattern matching, generics, and stackless `async`/`await`. The Native SDK ships the self-hosted compiler written in Wysna (`native-core-v1`) alongside a bundled Zig C99/WASI toolchain, while Seed provides the reference interpreter, interactive REPL, and browser-library builds. Review platform scope and capability limits before selecting a deployment target: [Architecture](docs/COMPILER_ARCHITECTURE.md) · [Engine parity](docs/ENGINE_PARITY_MATRIX.md) · [Known limits](docs/KNOWN_LIMITS.md) · [Effects](docs/EFFECTS.md).
 
 ## Documentation and contributing
 

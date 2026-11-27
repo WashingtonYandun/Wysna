@@ -1,5 +1,28 @@
 # Changelog
 
+## 1.1.0 — 2026-11-27
+
+### Features
+- feat(release): publish VS Code VSIX and Winget/Homebrew manifests in release workflow (#222)
+- feat(wasm): Native SDK zero-Emscripten --target=web ESM/TS emitter and precompiled WASI runtime (#221)
+- feat(dist): manual GitFlow prepare-release trigger and deterministic VS Code .vsix packager (#220)
+- feat(install): one-line web installers, Windows Native SDK GUI setup, and MIR check gating (#217)
+- feat(release): add branch-driven SemVer automation, GitFlow policy, and handbook notifications (#205)
+
+### Fixes & Performance
+- perf(runtime): 5-byte SwissTable dict tags, Winget/Homebrew generators & doc hygiene (#218)
+- perf(runtime): O(1) small-struct slab allocator and 64-bit hash-tagged dict buckets (#216)
+- perf(selfhost): add MIR scalar constant folding, CFG pruning, and dead pure-op elimination (#215)
+- fix(ai-eval): align v1.0 prompt, English skills contract, and agent-first-v1 suite (#213)
+- fix(release): update example manifests and lockfiles in compute_release [skip ci] (#210)
+- fix(release): keep compute_release --apply stdout pure JSON (#208)
+- fix(ci): aggregate paginated PR JSON in prepare-release (#207)
+- fix(ci): repair prepare-release workflow YAML and sync main into develop (#206)
+
+### Maintenance & Documentation
+- docs: reposition Wysna as general-purpose v1.0.0 language, update root docs, and unify manual (#219)
+- chore: sync main v1.0.0 back into develop [skip ci] (#212)
+
 ## 1.0.0 — 2026-11-26
 
 ### Stable 1.0.0 Milestone, CI Optimization & Automated Release Pipeline
