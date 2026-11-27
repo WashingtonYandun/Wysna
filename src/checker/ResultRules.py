@@ -22,13 +22,29 @@ def check_coalesce_expr(checker: "TypeChecker", expr: CoalesceExpr, is_statement
         rhs_t = checker._check_expr(expr.right)
         return rhs_t
     if opt_inner is None:
-        raise TypeError(
+        is_result = isinstance(lhs_t, ResultType) or (
+            isinstance(lhs_t, EnumType)
+            and getattr(lhs_t, "template_name", None) == "Result"
+        )
+        err = TypeError(
             message=f"Left operand of '??' must be an optional type (T?), found '{lhs_t}'",
             line=expr.line,
             col=expr.col,
             file=checker.file,
             code="W2006"
         )
+        if is_result:
+            help_text = (
+                f"'??' only unwraps optionals (T?). For a Result ({lhs_t}), "
+                "use 'expr else err { fallback }' for a default value or 'expr?' to propagate the error."
+            )
+            err.help = help_text
+            err.with_data(
+                kind="coalesce_result",
+                found=str(lhs_t),
+                help=help_text,
+            )
+        raise err
     rhs_t = checker._check_payload(expr.right, opt_inner)
     if not checker.type_relations.is_assignable(rhs_t, opt_inner):
         raise TypeError(

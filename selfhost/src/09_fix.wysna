@@ -543,6 +543,57 @@ fn fix_collect_visible_names(tokens: list[Token], err_idx: int, types_only: bool
     return names
 }
 
+fn fix_stdlib_exports_type(mod_path: str, bad: str) -> bool {
+    let mut base = mod_path
+    if len(base) > 6 and slice(base, len(base) - 6, len(base)) == ".wysna" {
+        base = slice(base, 0, len(base) - 6)
+    }
+    if base == "std/json" { return bad == "Value" or bad == "JsonError" }
+    if base == "std/http" { return bad == "HttpError" or bad == "HttpErrorKind" or bad == "Header" or bad == "Response" or bad == "AsyncRequest" or bad == "BatchItemResult" }
+    if base == "std/csv" { return bad == "CsvError" }
+    if base == "std/parse" { return bad == "ParseError" }
+    if base == "std/crypto" { return bad == "CryptoError" }
+    if base == "std/process" { return bad == "ProcessError" or bad == "ProcessOutput" }
+    if base == "std/fs" { return bad == "FsError" }
+    if base == "std/time" { return bad == "TimeError" or bad == "DateTime" }
+    if base == "std/files" { return bad == "FileError" or bad == "File" }
+    if base == "std/buffer" { return bad == "BufferError" or bad == "Bytes" or bad == "DecodeErrorKind" or bad == "DecodeError" }
+    if base == "std/bytes" { return bad == "Utf8Error" }
+    if base == "std/environment" { return bad == "EnvironmentError" }
+    if base == "std/resources" { return bad == "ResourceError" or bad == "Resource" }
+    if base == "std/io" { return bad == "Line" }
+    if base == "std/async" { return bad == "Task" or bad == "TaskGroupError" or bad == "TaskOutcome" or bad == "FutureState" }
+    if base == "std/test" { return bad == "FixtureError" }
+    return false
+}
+
+fn fix_imported_type_qualified(tokens: list[Token], bad: str) -> str {
+    let mut match_alias = ""
+    let mut match_count = 0
+    let n = len(tokens)
+    let mut i = 0
+    while i + 1 < n {
+        if tokens[i].kind == "IMPORT" and tokens[i + 1].kind == "STR" {
+            let req = tokens[i + 1].val
+            let mut alias = extract_module_ns(req)
+            if i + 3 < n and tokens[i + 2].kind == "AS" and tokens[i + 3].kind == "IDENT" {
+                alias = tokens[i + 3].val
+                i = i + 4
+            } else {
+                i = i + 2
+            }
+            if fix_stdlib_exports_type(req, bad) {
+                match_alias = alias
+                match_count = match_count + 1
+            }
+        } else {
+            i = i + 1
+        }
+    }
+    if match_count == 1 and match_alias != "" { return match_alias + "." + bad }
+    return ""
+}
+
 fn fix_plan_w1001(src: str, tokens: list[Token], start_byte: int, end_byte: int, msg: str) -> list[FixEdit] {
     let mut out: list[FixEdit] = []
     let mut bad = ""
@@ -560,6 +611,13 @@ fn fix_plan_w1001(src: str, tokens: list[Token], start_byte: int, end_byte: int,
     let end_char = lsp_char_offset_from_utf8_byte(src, end_byte)
     if start_char < 0 or end_char <= start_char or end_char > len(src) { return out }
     if slice(src, start_char, end_char) != bad { return out }
+    if types_only {
+        let qualified = fix_imported_type_qualified(tokens, bad)
+        if qualified != "" {
+            out.append(FixEdit("W1001", "qualify imported type '" + bad + "' as '" + qualified + "'", "machine", start_byte, end_byte, qualified))
+            return out
+        }
+    }
     let lc = fix_line_col_from_char(src, start_char)
     let err_idx = fix_tok_index_at(tokens, lc[0], lc[1])
     let cands = fix_collect_visible_names(tokens, err_idx, types_only)

@@ -366,7 +366,19 @@ def test_system_prompt_matches_v1_grammar():
 
     assert "use `public`/`private`" not in SYSTEM_PROMPT
     assert "`pub` and `priv`" in SYSTEM_PROMPT
-    for token in ("`u8`", "`None`", "`_ =>`", "`Name { field: new_val, ..base }`", "args()[1]", "Err(IoError", "json.get("):
+    for token in (
+        "`u8`",
+        "`None`",
+        "`_ =>`",
+        "`Name { field: new_val, ..base }`",
+        "args()[1]",
+        "Err(IoError",
+        "json.get(",
+        "json.Value",
+        "json.JsonError",
+        "json.get_str",
+        "NEVER `??`",
+    ):
         assert token in SYSTEM_PROMPT, token
 
 

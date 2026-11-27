@@ -6,6 +6,8 @@ This benchmark implements the canonical evaluation protocol defined in **[SPEC-0
 
 ## 1. Methodology & Evaluation Protocol
 
+For published cross-language runtime comparisons and live `claude-haiku-5-5` empirical snapshots on `1.1.0`, see [docs/BENCHMARKS.md](../../docs/BENCHMARKS.md).
+
 1. **Cohort-frozen 30 Tasks:** The evaluation corpus contains exactly 30 tasks spanning 4 core domains. Tasks testing capabilities not yet present in the current toolchain (e.g. native SQLite driver) are formally registered as `BLOCKED` with explicit rationale, rather than removed.
 2. **Hidden Test Oracles:** The model receives only task descriptions, constraints, and workspace skeleton fixtures. All functional validation runs against independent, hidden oracles.
 3. **Multi-Turn Repair Loop ($\le 3$ Repairs):**

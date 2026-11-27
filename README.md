@@ -108,7 +108,7 @@ To enforce architectural boundaries, assign roles to classes via typed attribute
 ## Documentation and contributing
 
 - [Official handbook (EN / ES)](https://wysna.wysofia.com/) · [Language specification](SPEC.md) · [Standard library](docs/STDLIB.md)
-- [AI agent guide](docs/AI_AGENT_GUIDE.md) · [Changelog](CHANGELOG.md)
+- [Benchmarks (6 languages & AI)](docs/BENCHMARKS.md) · [AI agent guide](docs/AI_AGENT_GUIDE.md) · [Changelog](CHANGELOG.md)
 - [Contributing](CONTRIBUTING.md) · [Security](SECURITY.md) · [Code of conduct](CODE_OF_CONDUCT.md)
 
 Wysna is distributed under the [Apache 2.0 license](LICENSE). See [NOTICE](NOTICE) for attributions.

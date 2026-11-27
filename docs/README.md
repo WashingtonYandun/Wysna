@@ -14,6 +14,7 @@ recommended installation, supported workflows, experiments and security limits.
 - [Ownership and lifetimes](OWNERSHIP_LIFETIME.md): ARC, CoW, weak references, and cleanup.
 - [Effect and capability reports](EFFECTS.md): read-only `wysna explain`, model, trust, schema, and limits.
 - [Engine support](ENGINE_PARITY_MATRIX.md): tested fixture coverage across Wysna Seed and Wysna Compiler.
+- [Benchmarks](BENCHMARKS.md): cross-language runtime/RSS/binary comparisons, `run-cache` timings, and AI evaluation results.
 - [Known limits](KNOWN_LIMITS.md): supported boundaries and deferred language decisions.
 
 ## Tooling and distribution

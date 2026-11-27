@@ -1848,6 +1848,22 @@ class TypeChecker:
             self._validate_pending_dictionary_keys()
         return resolved
 
+    def _find_imported_module_type_matches(self, type_name: str) -> List[str]:
+        matches: List[str] = []
+        seen = set()
+        scope = self.current_scope
+        while scope is not None:
+            for sym_name, sym in scope.symbols.items():
+                if sym_name in seen:
+                    continue
+                seen.add(sym_name)
+                mod = getattr(sym, "type", None)
+                mod_scope = getattr(mod, "scope", None) if isinstance(mod, ModuleType) else None
+                if mod_scope is not None and mod_scope.lookup_type(type_name) is not None:
+                    matches.append(sym_name)
+            scope = scope.parent
+        return sorted(matches)
+
     def _lookup_type_name(self, name):
         if '.' not in name:
             return self.current_scope.lookup_type(name)
@@ -1886,14 +1902,41 @@ class TypeChecker:
                         file=self.file,
                         code="W2001"
                     )
-                raise suggest(TypeError(
+                mod_matches = self._find_imported_module_type_matches(node.name)
+                err = TypeError(
                     message=f"Unknown type '{node.name}'",
                     line=node.line,
                     col=node.col,
                     file=self.file,
                     code="W1001"
-                ), node.name, [*visible_names(self.current_scope, "types"),
-                               *self.generic_struct_templates, *self.generic_enum_templates])
+                )
+                if mod_matches:
+                    qualified = f"{mod_matches[0]}.{node.name}"
+                    help_text = (
+                        f"Type '{node.name}' is defined in an imported module. "
+                        f"Qualify it as '{qualified}' or import it directly with 'from \"...\" use {{ {node.name} }}'."
+                    )
+                    err.help = help_text
+                    err.with_data(
+                        kind="unqualified_module_type",
+                        type=node.name,
+                        candidates=[f"{m}.{node.name}" for m in mod_matches],
+                        help=help_text,
+                    )
+                    if len(mod_matches) == 1:
+                        err.with_fix(
+                            f"Qualify '{node.name}' as '{qualified}'",
+                            old=node.name,
+                            new=qualified,
+                            applicability="machine",
+                        )
+                    raise err
+                raise suggest(
+                    err,
+                    node.name,
+                    [*visible_names(self.current_scope, "types"),
+                     *self.generic_struct_templates, *self.generic_enum_templates],
+                )
             if isinstance(resolved, (GenericStructTemplate, GenericEnumTemplate, GenericOopTemplate)):
                 raise TypeError(
                     message=f"Generic type '{node.name}' requires type arguments",

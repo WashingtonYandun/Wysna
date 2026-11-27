@@ -28,6 +28,35 @@ from tools.split_c_tu import split_c_translation_unit
 COMPONENTS = json.loads((ROOT / "packaging/native/components.json").read_text(encoding="utf-8"))
 COMMANDS = native_sdk_commands()
 SDK_COMPONENT_BUILD_TIMEOUT_SECONDS = 600
+DEFAULT_COMPILER_CHUNKS = 16
+DEFAULT_MAX_WORKERS_CAP = 4
+
+
+def _resolve_positive_int_setting(cli_value, env_name: str, default_value: int, label: str) -> int:
+    if cli_value is not None:
+        value = int(cli_value)
+    else:
+        raw = os.environ.get(env_name, "").strip()
+        if raw:
+            try:
+                value = int(raw)
+            except ValueError as exc:
+                raise ValueError(f"{env_name} must be a positive integer, got {raw!r}") from exc
+        else:
+            value = default_value
+    if value < 1:
+        raise ValueError(f"{label} must be >= 1, got {value}")
+    return value
+
+
+def resolve_compiler_build_layout(compiler_chunks=None, jobs=None, *, cpu_count=None):
+    chunks = _resolve_positive_int_setting(
+        compiler_chunks, "WYSNA_SDK_CHUNKS", DEFAULT_COMPILER_CHUNKS, "--compiler-chunks"
+    )
+    detected_cpus = cpu_count if cpu_count is not None else (os.cpu_count() or 2)
+    default_jobs = max(1, min(int(detected_cpus), DEFAULT_MAX_WORKERS_CAP))
+    worker_budget = _resolve_positive_int_setting(jobs, "WYSNA_SDK_JOBS", default_jobs, "--jobs")
+    return chunks, max(1, min(worker_budget, chunks))
 
 
 def host_platform():
@@ -39,8 +68,9 @@ def host_platform():
     return name
 
 
-def assemble(output, cache, *, source_commit=None):
+def assemble(output, cache, *, source_commit=None, compiler_chunks=None, jobs=None):
     output, cache = Path(output).resolve(), Path(cache).resolve()
+    chunk_count, max_workers = resolve_compiler_build_layout(compiler_chunks=compiler_chunks, jobs=jobs)
     if output.exists():
         raise ValueError("Choose a new SDK output directory; existing installations are never replaced")
     host = host_platform()
@@ -142,7 +172,6 @@ def assemble(output, cache, *, source_commit=None):
 
         compiler_target = stage / ("libexec/wysna-compiler" + suffix)
         compiler_units_dir = directory / "compiler-units"
-        chunk_count = 8
         _, unit_sources = split_c_translation_unit(compiler.parent / "compiler2.c", compiler_units_dir, chunks=chunk_count)
         extra_compile = ["-DWYSNA_RUNTIME_LINKED", "-ffunction-sections", "-fdata-sections", "-I" + str(compiler_units_dir)]
         if host.endswith("-linux"):
@@ -152,7 +181,8 @@ def assemble(output, cache, *, source_commit=None):
             extra_link.append("-Wl,-dead_strip")
         elif host.endswith("-linux"):
             extra_link.append("-Wl,--gc-sections")
-        print(f"Compiling SDK component: {compiler_target.name} ({len(unit_sources)} -O2 units)", file=sys.stderr, flush=True)
+        max_workers = max(1, min(max_workers, len(unit_sources)))
+        print(f"Compiling SDK component: {compiler_target.name} ({len(unit_sources)} -O2 units, {max_workers} workers)", file=sys.stderr, flush=True)
 
         def compile_unit(c_source: Path) -> Path:
             obj_file = c_source.with_suffix(".o")
@@ -163,7 +193,6 @@ def assemble(output, cache, *, source_commit=None):
                 raise RuntimeError(f"Native SDK compilation failed for {c_source.name}:\n" + res.stderr)
             return obj_file
 
-        max_workers = max(1, min(os.cpu_count() or 2, len(unit_sources)))
         with concurrent.futures.ThreadPoolExecutor(max_workers=max_workers) as pool:
             unit_objects = list(pool.map(compile_unit, unit_sources))
         linked_compiler = subprocess.run(
@@ -198,6 +227,7 @@ def assemble(output, cache, *, source_commit=None):
                     "profile": "native-core-v1", "target": component["target"], "commands": COMMANDS,
                     "stack_reserve_bytes": WINDOWS_NATIVE_STACK_BYTES if os.name == "nt" else None,
                     "component_build_timeout_seconds": SDK_COMPONENT_BUILD_TIMEOUT_SECONDS,
+                    "compiler_chunks": chunk_count,
                     "source_commit": actual_commit, "source_dirty": dirty,
                     "compiler_fingerprint": bootstrap["fingerprint"],
                     "compiler_source_sha256": bootstrap["provenance"]["inputs"]["selfhost/compiler.wysna"],
@@ -217,9 +247,19 @@ def main():
     parser.add_argument("--output", type=Path, required=True)
     parser.add_argument("--cache", type=Path, default=ROOT / ".wysna_cache/native-downloads")
     parser.add_argument("--source-commit")
+    parser.add_argument("--compiler-chunks", type=int, default=None,
+                        help="Number of C translation units to split the compiler into for -O2 builds (default: 16 or WYSNA_SDK_CHUNKS).")
+    parser.add_argument("--jobs", type=int, default=None,
+                        help="Maximum parallel C compiler workers for compiler -O2 units (default: min(cpu_count, 4) or WYSNA_SDK_JOBS).")
     parser.add_argument("--archive", action="store_true")
     options = parser.parse_args()
-    manifest = assemble(options.output, options.cache, source_commit=options.source_commit)
+    manifest = assemble(
+        options.output,
+        options.cache,
+        source_commit=options.source_commit,
+        compiler_chunks=options.compiler_chunks,
+        jobs=options.jobs,
+    )
     archive = None
     if options.archive:
         output = options.output.resolve()
