@@ -142,16 +142,20 @@ class EvaluationHarness:
     def classify_error(self, stderr: str, diagnostics: List[Dict[str, Any]]) -> str:
         """Classifies compiler or test failure into a standard failure taxonomy."""
         combined = stderr.lower() + " ".join(d.get("message", "").lower() for d in diagnostics)
+        codes = {str(d.get("code", "")).upper() for d in diagnostics}
 
-        if "syntaxerror" in combined or any(d.get("code", "").startswith("W0") for d in diagnostics):
+        if "syntaxerror" in combined or any(code.startswith("W0") for code in codes):
             return "syntax"
-        if "type mismatch" in combined or "typeerror" in combined or any(d.get("code", "").startswith("W2") for d in diagnostics):
+        if "type mismatch" in combined or "typeerror" in combined or any(code.startswith("W2") for code in codes):
             return "type"
-        if "circular import" in combined or any(d.get("code", "") == "W1003" for d in diagnostics):
+        if "circular import" in combined or "W1003" in codes:
             return "circular_dependency"
-        if any(tok in combined for tok in ["no module named", "undefined identifier", "unresolved", "not found in module"]):
+        if "W1001" in codes or any(
+            tok in combined for tok in ["no module named", "undefined identifier", "unknown identifier", "unresolved", "not found in module"]
+        ):
             return "api_hallucination"
-        if "traceback" in stderr.lower():
+        stderr_lower = stderr.lower()
+        if "traceback" in stderr_lower or any(tag in stderr_lower for tag in ("[w4001]", "[w4002]", "[w4003]", "[w4004]")):
             return "runtime_panic"
         return "oracle_mismatch"
 
@@ -197,7 +201,11 @@ class EvaluationHarness:
 
     def run_auto_fix(self, workspace_dir: str, files: Dict[str, str]) -> bool:
         """Applies deterministic compiler machine fixes (`wysna fix --apply`) in place."""
-        from tooling.FixCLI import fix_source
+        is_native_cli = bool(self.compiler_cmd) and not os.path.basename(self.compiler_cmd[0]).lower().startswith("python")
+        fix_source = None
+        if not is_native_cli:
+            from tooling.FixCLI import fix_source as _fix_source
+            fix_source = _fix_source
         changed_any = False
         for fname in list(files.keys()):
             try:
@@ -208,11 +216,24 @@ class EvaluationHarness:
                 continue
             try:
                 src = target_path.read_text(encoding="utf-8")
-                fixed = fix_source(str(target_path), src)
-                if fixed.get("changed"):
-                    target_path.write_text(fixed["fixed_source"], encoding="utf-8")
-                    files[fname] = fixed["fixed_source"]
-                    changed_any = True
+                if is_native_cli:
+                    subprocess.run(
+                        self.compiler_cmd + ["fix", str(target_path), "--apply"],
+                        cwd=workspace_dir,
+                        capture_output=True,
+                        text=True,
+                        timeout=self.timeout_seconds,
+                    )
+                    after = target_path.read_text(encoding="utf-8")
+                    if after != src:
+                        files[fname] = after
+                        changed_any = True
+                else:
+                    fixed = fix_source(str(target_path), src)
+                    if fixed.get("changed"):
+                        target_path.write_text(fixed["fixed_source"], encoding="utf-8")
+                        files[fname] = fixed["fixed_source"]
+                        changed_any = True
             except Exception:
                 continue
         return changed_any
@@ -223,7 +244,17 @@ class EvaluationHarness:
         code = diag.get("code", "ERR")
         msg = diag.get("message", "")
         data = diag.get("data") or {}
-        line_info = f"line {diag['line']}" if "line" in diag else ""
+        line = diag.get("line")
+        span = diag.get("primary_span")
+        if line is None and isinstance(span, dict):
+            line = span.get("start_line") or span.get("line")
+            if line is None and isinstance(span.get("source_id"), str) and isinstance(span.get("start_byte"), int):
+                try:
+                    raw = Path(span["source_id"]).read_bytes()
+                    line = raw[: max(0, span["start_byte"])].count(b"\n") + 1
+                except OSError:
+                    line = None
+        line_info = f"line {line}" if line is not None else ""
         details = []
         if "expected" in data and "found" in data:
             details.append(f"expected={data['expected']}, found={data['found']}")

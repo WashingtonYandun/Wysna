@@ -946,6 +946,7 @@ def run_ab_cohort(
     provider_factory: Callable[[str], LlmProvider],
     *,
     repo_root: str,
+    compiler_cmd: Optional[List[str]] = None,
     repetitions: int = 3,
     max_repair_cycles: int = 3,
     model_name: str = "mock-deterministic",
@@ -990,7 +991,8 @@ def run_ab_cohort(
                 if run_index <= completed_count:
                     continue
                 harness = ConditionHarness(
-                    condition, repo_root=repo_root, max_repair_cycles=max_repair_cycles, interactive=interactive,
+                    condition, repo_root=repo_root, compiler_cmd=compiler_cmd,
+                    max_repair_cycles=max_repair_cycles, interactive=interactive,
                     required_import_style=dict(cohort_item.condition_import_styles).get(condition),
                 )
                 provider = provider_factory(condition)
@@ -1093,7 +1095,17 @@ def main() -> int:
     parser.add_argument("--checkpoint", type=Path, default=None)
     parser.add_argument("--interactive-tools", action="store_true")
     parser.add_argument("--suite", choices=["default", "import-style", "agent-first-v1", "all"], default="default")
+    parser.add_argument("--wysna-bin", type=str, default=None,
+                        help="Path to a native wysna SDK binary to evaluate instead of Python Seed main.py")
     args = parser.parse_args()
+    compiler_cmd = None
+    resolved_bin = None
+    if args.wysna_bin:
+        bin_path = Path(args.wysna_bin).resolve()
+        if not bin_path.is_file():
+            parser.error(f"--wysna-bin not found: {args.wysna_bin}")
+        resolved_bin = str(bin_path)
+        compiler_cmd = [resolved_bin]
     if args.repetitions < 1 or args.max_repair_cycles < 0:
         parser.error("repetitions must be positive and repair cycles non-negative")
     if args.checkpoint and args.output and args.checkpoint.resolve() == Path(args.output).resolve():
@@ -1119,20 +1131,24 @@ def main() -> int:
         model_name = args.model or "local-model"
         factory = lambda _cond: OpenAICompatibleProvider(base_url=args.base_url, api_key=args.api_key, model=model_name)
 
+    params = {"suite": args.suite, "repetitions": args.repetitions,
+              "max_repair_cycles": args.max_repair_cycles, "interactive": args.interactive_tools,
+              "temperature": 0.2, "max_tokens": 8192 if args.provider == "openai" else 4096,
+              "oracle_revision": 3}
+    if resolved_bin:
+        params["wysna_bin"] = resolved_bin
     config = run_config(
         Path(repo_root), provider=args.provider, model=model_name, base_url=args.base_url,
         corpus=[{"task": item.task.to_dict(), "condition_instructions": item.condition_instructions,
                  "condition_import_styles": item.condition_import_styles} for item in tasks],
-        parameters={"suite": args.suite, "repetitions": args.repetitions,
-                    "max_repair_cycles": args.max_repair_cycles, "interactive": args.interactive_tools,
-                    "temperature": 0.2, "max_tokens": 8192 if args.provider == "openai" else 4096,
-                    "oracle_revision": 3},
+        parameters=params,
         output_paths=(args.checkpoint, args.output),
     )
     report = run_ab_cohort(
         tasks,
         factory,
         repo_root=repo_root,
+        compiler_cmd=compiler_cmd,
         repetitions=args.repetitions,
         max_repair_cycles=args.max_repair_cycles,
         model_name=model_name,
