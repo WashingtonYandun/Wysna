@@ -2,17 +2,18 @@
 
 The Wysna team takes security, memory safety, and compiler correctness seriously. This policy explains how to report vulnerabilities, how we respond, and which versions receive support.
 
-## Versiones y límites
+## Supported Versions
 
-La línea pre-1.0 publicada es v0.9.0. Los cambios R1 de seguridad de workers y
-contratos son un candidato posterior y no forman parte de sus artefactos.
-Se mantienen el tag y los checksums originales. Véanse [límites conocidos](docs/KNOWN_LIMITS.md)
-y [contrato de workers](docs/WORKER_SAFETY.md) para distinguir garantías comprobadas
-de trabajo pendiente.
+| Version | Supported | Security Updates |
+| :--- | :---: | :--- |
+| **`1.0.x`** | ✅ Yes | Active security fixes on `main` and official Native SDK / Seed installers |
+| **`< 1.0.0`** | ❌ No | Historical pre-1.0 milestones; upgrade to `1.0.0` or newer |
 
-ARC, cuotas, replay y capacidades de la CLI no sustituyen el aislamiento del
-sistema operativo para código no confiable. FFI y C manual requieren una frontera
-externa de confianza; no heredan una garantía universal de seguridad de memoria.
+## Security Boundaries
+
+- **Deterministic ARC + Copy-on-Write:** Pure value semantics (`struct`, `list`, `dict`), bounds checking, explicit error channels, and runtime quotas (`--max-steps`, `--max-heap-mb`) protect memory integrity within Wysna programs.
+- **Process Isolation vs. CLI Capabilities:** ARC, execution quotas, trace replay, and `--sandbox` capability filters do not replace OS-level container or VM sandboxing when executing untrusted third-party code. See [Known limits](docs/KNOWN_LIMITS.md) and [Worker safety](docs/WORKER_SAFETY.md).
+- **C FFI Boundary:** External C libraries linked via `--include-dir` / `--link` / `--library` operate outside Wysna's checked memory model and require a trusted FFI boundary.
 
 ## Reporting a Vulnerability
 

@@ -4,9 +4,9 @@
 
 # Wysna
 
-**A compiled programming language built for AI agents.**
+**A general-purpose compiled programming language built for humans and AI agents.**
 
-Wysna is statically typed and compiles to native executables through C99. It targets automation workflows, data processing, and logic shared between CLI apps, services, and the browser. Its compiler lets agents query code by symbol or byte span, read structured diagnostics, and verify edits before writing them to disk.
+Wysna is statically typed and compiles via ANSI C99 and WebAssembly into fast standalone binaries with deterministic ARC + Copy-on-Write memory safety and zero GC pauses. Built for everyday general-purpose software — CLI applications, backend services, automation workflows, data processing, and shared browser/WASM logic — its compiler also lets AI agents query code by symbol or byte span, read structured diagnostics, and verify multi-file edits before writing them to disk.
 
 [Official website](https://wysna.wysofia.com/) · [Releases](https://github.com/WashingtonYandun/Wysna/releases/latest) · [First project](#first-project) · [Documentation](docs/README.md)
 
@@ -103,11 +103,11 @@ To enforce architectural boundaries, assign roles to classes via typed attribute
 
 ## Language status
 
-Wysna is pre-1.0. It includes contracts, typed error unions, pattern matching, generics, and `async`/`await`. The native SDK ships the Selfhost compiler written in Wysna with C99 as its primary backend, while Seed maintains the reference interpreter. Review platform scope and capability limits before selecting a deployment target: [Architecture](docs/COMPILER_ARCHITECTURE.md) · [Engine support](docs/ENGINE_PARITY_MATRIX.md) · [Known limits](docs/KNOWN_LIMITS.md) · [Effects](docs/EFFECTS.md).
+**Wysna 1.0.0** is stable. It includes pure value semantics (`struct`, `list`, `dict`), deterministic ARC + Copy-on-Write, contracts (`requires`/`ensures`), typed error unions (`T ! E`), pattern matching, generics, and stackless `async`/`await`. The Native SDK ships the self-hosted compiler written in Wysna (`native-core-v1`) alongside a bundled Zig C99/WASI toolchain, while Seed provides the reference interpreter, interactive REPL, and browser-library builds. Review platform scope and capability limits before selecting a deployment target: [Architecture](docs/COMPILER_ARCHITECTURE.md) · [Engine parity](docs/ENGINE_PARITY_MATRIX.md) · [Known limits](docs/KNOWN_LIMITS.md) · [Effects](docs/EFFECTS.md).
 
 ## Documentation and contributing
 
-- [Web handbook](https://wysna.wysofia.com/) · [Syntax reference](WYSNA_SINTAXIS.md) · [Specification](SPEC.md) · [Standard library](docs/STDLIB.md)
+- [Official handbook (EN / ES)](https://wysna.wysofia.com/) · [Language specification](SPEC.md) · [Standard library](docs/STDLIB.md)
 - [AI agent guide](docs/AI_AGENT_GUIDE.md) · [Changelog](CHANGELOG.md)
 - [Contributing](CONTRIBUTING.md) · [Security](SECURITY.md) · [Code of conduct](CODE_OF_CONDUCT.md)
 

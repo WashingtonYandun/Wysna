@@ -27,8 +27,8 @@ All contributors and participants are expected to adhere to our [Code of Conduct
 
 > **Ownership Rule (ADR-05 / SIMP-R01):** Language semantics (syntax, types, HIR/MIR) are validated against Seed; tooling (`project`, `packages`, `mcp`, `lsp`, `schema`) lives in Selfhost.
 
-- **Compiler differential oracle:** Language changes must pass Seed (Interpreter, AST C99, MIR C99) and Selfhost (`native-core-v1`) until `v1.0` freezes the language surface.
-- **Native-owned tooling & delegation:** `./wysna project|packages|mcp|lsp|schema` delegates to the native dev SDK (`.wysna_cache/dev-sdk/bin/wysna`) when built. Pass `--engine=seed` (or `WYSNA_DELEGATE_NATIVE=0`) only when exercising Seed-specific oracles or WebAssembly/WASI targets. `wysna packages` is native-only.
+- **Compiler differential oracle:** Language changes must pass both Seed (Interpreter, AST C99, MIR C99) and Selfhost (`native-core-v1`) conformance suites (`217/217` across all 4 engines in `v1.0.0`).
+- **Native-owned tooling & delegation:** `./wysna project|packages|mcp|lsp|schema` delegates to the native dev SDK (`.wysna_cache/dev-sdk/bin/wysna`) when built. Pass `--engine=seed` (or `WYSNA_DELEGATE_NATIVE=0`) when exercising Seed-specific oracles. `wysna packages` is native-only.
 - **Fast dev rebuilds (`<5 s`):** Iterate on Selfhost tooling units without running a 3-stage bootstrap:
   ```bash
   python3 tools/build_selfhost_dev.py --unit project   # ~1.5–2.5 s (project + packages)
@@ -37,10 +37,7 @@ All contributors and participants are expected to adhere to our [Code of Conduct
   ```
   Run `python3 tools/bundle_selfhost.py` and full 3-stage bootstrap verification before opening a PR.
 
-- **Contrato para agentes:** edita `src/common/agent_contract.json` para cambiar
-  versión, comandos o guías. `python3 tools/bundle_selfhost.py` regenera constantes
-  nativas y `Version.py`; `--check` rechaza salidas obsoletas. Las anotaciones propias
-  son metadatos de esquemas `struct`, comprobados sin ejecutar código al compilar.
+- **Agent contract & metadata:** Edit `src/common/agent_contract.json` to update version metadata, commands, or embedded agent skills, then run `python3 tools/bundle_selfhost.py` (which regenerates `Version.py` and native Selfhost constants; `--check` rejects stale outputs). Custom struct/class `@annotations` are checked statically at compile time without executing code.
 
 The Wysna toolchain consists of two primary compiler engines and a unified C99 runtime.
 Seed's batch CLI and LSP share `compiler/CompilerService.py`, which returns a
@@ -199,21 +196,20 @@ When modifying compiler frontend, parser, or code generation logic that affects 
 
 ## Pull Request Workflow
 
-1. **Branching Model:**
-   - `main` is the repository's default integration branch.
-   - Create a short-lived working branch from the latest `main` and submit a pull request targeting `main`:
+1. **Branching Model (GitFlow):**
+   - `develop` is the integration branch for all active engineering work; `main` tracks verified stable releases (`v1.0.0+`).
+   - Create a short-lived working branch (`feat/`, `fix/`, `perf/`, `docs/`, `chore/`) from `origin/develop` and open a pull request targeting `develop`:
      ```bash
-     git checkout main
-     git pull origin main
-     git checkout -b feat/your-feature-name
+     git fetch origin
+     git checkout -b feat/your-feature-name origin/develop
      ```
 2. **Commit Your Changes:**
-   - Keep commits small, atomic, and well-described.
+   - Keep commits small, atomic, and aligned with [Conventional Commits](https://www.conventionalcommits.org/).
 3. **Verify Locally:**
    - Ensure `./wysna test` passes 100%.
    - Ensure `./wysna test --sanitize` passes without memory errors or leaks.
 4. **Submit Pull Request:**
-   - Open a PR from your branch to `main`.
+   - Open a PR from your working branch into `develop` (never commit directly to `develop` or `main`).
    - Fill out the [Pull Request Template](.github/pull_request_template.md).
    - Ensure all GitHub Actions CI checks pass.
 
@@ -229,4 +225,4 @@ When adding a feature or fixing a bug, include corresponding regression tests in
 - `tests/runtime/`: End-to-end execution tests (`.wysna` file and expected output in `.expected`).
 - `tests/differential/`: Cross-engine differential test programs.
 
-Thank you for helping make Wysna a robust, memory-safe, and performant systems language!
+Thank you for helping make Wysna a robust, memory-safe, and performant general-purpose programming language!
