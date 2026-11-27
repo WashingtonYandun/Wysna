@@ -185,8 +185,11 @@ def _render_release_notes(plan: dict) -> str:
         "## Distribution",
         "",
         f"- Windows x64 Native SDK: `wysna-{ver}-native-x86_64-windows.zip`",
+        f"- Windows x64 Native SDK Installer: `wysna-{ver}-native-x86_64-windows-setup.exe`",
         f"- macOS arm64 Native SDK: `wysna-{ver}-native-aarch64-macos.tar.gz`",
         f"- Linux x64 Native SDK: `wysna-{ver}-native-x86_64-linux.tar.gz`",
+        f"- VS Code Extension: `wysna-{ver}-vscode.vsix`",
+        "- Package manager manifests: `wysna.rb` (Homebrew) and `WySofia.Wysna*.yaml` (Winget)",
         "",
         "Seed installers bundle CPython and Zig in `.exe`, `.pkg`, `.deb`, and `.rpm` packages with manifests, provenance, and `SHA256SUMS`.",
         "",
@@ -279,6 +282,14 @@ def apply_release_plan(
         if updated != text:
             readme.write_text(updated, encoding="utf-8")
             touched.append("README.md")
+
+    vscode_pkg = root / "editors/vscode-wysna/package.json"
+    if vscode_pkg.is_file():
+        pkg_data = json.loads(vscode_pkg.read_text(encoding="utf-8"))
+        if pkg_data.get("version") != next_version:
+            pkg_data["version"] = next_version
+            vscode_pkg.write_text(json.dumps(pkg_data, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
+            touched.append("editors/vscode-wysna/package.json")
 
     changelog_path = root / "CHANGELOG.md"
     if changelog_path.is_file():

@@ -111,6 +111,11 @@ jobs:
           repository: ${{ github.repository }}
           run-id: ${{ steps.source-ci.outputs.run_id }}
 
+      - name: Package deterministic VS Code extension (.vsix)
+        run: |
+          python3 tools/package_vscode.py \
+            --output "dist/wysna-${{ steps.source-ci.outputs.version }}-vscode.vsix"
+
       - name: Validate source, installer manifests and checksums
         run: |
           python3 tools/prepare_release_assets.py \
@@ -121,8 +126,18 @@ jobs:
             --macos-artifact artifacts/macos \
             --linux-artifact artifacts/linux \
             --native-artifacts artifacts/native \
+            --vscode-vsix "dist/wysna-${{ steps.source-ci.outputs.version }}-vscode.vsix" \
             --release-notes "${{ steps.source-ci.outputs.release_notes }}" \
             --output dist/release-assets
+
+      - name: Generate Winget and Homebrew package manifests
+        run: |
+          python3 tools/generate_package_managers.py \
+            --version "${{ steps.source-ci.outputs.version }}" \
+            --checksums dist/release-assets/SHA256SUMS \
+            --output dist/package-managers
+          cp dist/package-managers/homebrew/wysna.rb dist/release-assets/wysna.rb
+          cp dist/package-managers/winget/WySofia.Wysna*.yaml dist/release-assets/
 
       - name: Publish and verify the stable GitHub release
         env:
@@ -151,6 +166,15 @@ jobs:
               ("aarch64-macos", "tar.gz"), ("x86_64-linux", "tar.gz"), ("x86_64-windows", "zip"),
           ]}
           assert native <= names, f"Missing native release assets: {native - names}"
+          extra_expected = {
+              f"wysna-{ver}-native-x86_64-windows-setup.exe",
+              f"wysna-{ver}-vscode.vsix",
+              "wysna.rb",
+              "WySofia.Wysna.yaml",
+              "WySofia.Wysna.installer.yaml",
+              "WySofia.Wysna.locale.en-US.yaml",
+          }
+          assert extra_expected <= names, f"Missing distribution assets: {extra_expected - names}"
           assert len(assets) >= 19, f"Expected >= 19 verified assets, got {len(assets)}"
           print(f"Published stable Wysna {ver} with {len(assets)} verified assets")
           '

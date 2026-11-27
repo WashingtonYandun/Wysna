@@ -50,6 +50,11 @@ def test_apply_release_plan_updates_contract_docs_and_notes(tmp_path):
     (tmp_path / "docs/PROJECTS.md").write_text('language = "0.9"\ncompiler = "0.9.5"\n', encoding="utf-8")
     (tmp_path / "README.md").write_text('Uses **Wysna 0.9.5** with `toolchain.compiler = "0.9.5"`.\n', encoding="utf-8")
     (tmp_path / "CHANGELOG.md").write_text("# Changelog\n\n## 0.9.5 — 2026-11-24\n- Previous\n", encoding="utf-8")
+    (tmp_path / "editors/vscode-wysna").mkdir(parents=True)
+    (tmp_path / "editors/vscode-wysna/package.json").write_text(
+        json.dumps({"name": "wysna", "version": "0.9.5"}) + "\n",
+        encoding="utf-8",
+    )
 
     plan = compute_release_plan(
         "0.9.5",
@@ -59,6 +64,9 @@ def test_apply_release_plan_updates_contract_docs_and_notes(tmp_path):
     touched = apply_release_plan(tmp_path, plan, released_on="2026-11-26", sync_bundle=False)
     assert "CHANGELOG.md" in touched
     assert "docs/release-notes/v1.0.0.md" in touched
+    assert "editors/vscode-wysna/package.json" in touched
+    vscode_pkg = json.loads((tmp_path / "editors/vscode-wysna/package.json").read_text(encoding="utf-8"))
+    assert vscode_pkg["version"] == "1.0.0"
 
     contract = json.loads((tmp_path / "src/common/agent_contract.json").read_text(encoding="utf-8"))
     assert contract["compiler_version"] == "1.0.0"

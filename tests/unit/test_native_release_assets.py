@@ -3,7 +3,20 @@ import json
 
 import pytest
 
-from tools.prepare_release_assets import digest, stage_native_sdks
+from tools.prepare_release_assets import digest, stage_native_sdks, stage_vscode_vsix
+
+
+def test_stage_vscode_vsix_copies_and_hashes(tmp_path):
+    output = tmp_path / "output"
+    output.mkdir()
+    vsix = tmp_path / "wysna.vsix"
+    vsix.write_bytes(b"PK\x03\x04vsix-content")
+    staged = stage_vscode_vsix(vsix, "1.1.0", output)
+    assert staged["name"] == "wysna-1.1.0-vscode.vsix"
+    assert staged["sha256"] == digest(vsix)
+    assert (output / "wysna-1.1.0-vscode.vsix").read_bytes() == b"PK\x03\x04vsix-content"
+    with pytest.raises(ValueError, match="VS Code VSIX"):
+        stage_vscode_vsix(tmp_path / "missing.vsix", "1.1.0", output)
 
 
 def test_native_release_requires_matching_archive_and_installed_checks(tmp_path):
