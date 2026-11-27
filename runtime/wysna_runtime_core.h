@@ -54,7 +54,7 @@ typedef struct {
     int32_t bucket_count;
 } WDictBuf;
 
-#define WYSNA_STRUCT_SLAB_CAP 512
+#define WYSNA_STRUCT_SLAB_CAP 2048
 
 static inline size_t wysna_dict_bucket_bytes(int32_t capacity) {
     return (sizeof(int32_t) + sizeof(uint8_t)) * (size_t)capacity;
