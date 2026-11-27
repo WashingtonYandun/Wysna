@@ -50,27 +50,22 @@ typedef struct {
     int32_t cap;
     WVal* keys;
     WVal* vals;
-    uint64_t* buckets;
+    int32_t* buckets;
     int32_t bucket_count;
 } WDictBuf;
 
-#define WYSNA_DICT_BUCKET_EMPTY UINT64_MAX
 #define WYSNA_STRUCT_SLAB_CAP 512
 
-static inline uint32_t wysna_dict_hash_tag(uint64_t full_hash) {
-    return (uint32_t)(full_hash >> 32);
+static inline size_t wysna_dict_bucket_bytes(int32_t capacity) {
+    return (sizeof(int32_t) + sizeof(uint8_t)) * (size_t)capacity;
 }
 
-static inline uint64_t wysna_dict_pack_bucket(int32_t idx, uint64_t full_hash) {
-    return ((uint64_t)wysna_dict_hash_tag(full_hash) << 32) | (uint32_t)idx;
+static inline uint8_t* wysna_dict_tags(const WDictBuf* d) {
+    return (uint8_t*)(d->buckets + d->bucket_count);
 }
 
-static inline int32_t wysna_dict_bucket_index(uint64_t entry) {
-    return (int32_t)(uint32_t)entry;
-}
-
-static inline uint32_t wysna_dict_bucket_tag(uint64_t entry) {
-    return (uint32_t)(entry >> 32);
+static inline uint8_t wysna_dict_ctrl_tag(uint64_t full_hash) {
+    return (uint8_t)(0x80u | ((uint32_t)(full_hash >> 57) & 0x7Fu));
 }
 
 typedef struct {

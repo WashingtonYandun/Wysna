@@ -54,26 +54,20 @@ typedef struct {
     int32_t cap;
     WVal* keys;
     WVal* vals;
-    uint64_t* buckets;
+    int32_t* buckets;
     int32_t bucket_count;
 } WDictBuf;
 
-#define WYSNA_DICT_BUCKET_EMPTY UINT64_MAX
-
-static inline uint32_t wysna_dict_hash_tag(uint64_t full_hash) {
-    return (uint32_t)(full_hash >> 32);
+static inline size_t wysna_dict_bucket_bytes(int32_t capacity) {
+    return (sizeof(int32_t) + sizeof(uint8_t)) * (size_t)capacity;
 }
 
-static inline uint64_t wysna_dict_pack_bucket(int32_t idx, uint64_t full_hash) {
-    return ((uint64_t)wysna_dict_hash_tag(full_hash) << 32) | (uint32_t)idx;
+static inline uint8_t* wysna_dict_tags(const WDictBuf* d) {
+    return (uint8_t*)(d->buckets + d->bucket_count);
 }
 
-static inline int32_t wysna_dict_bucket_index(uint64_t entry) {
-    return (int32_t)(uint32_t)entry;
-}
-
-static inline uint32_t wysna_dict_bucket_tag(uint64_t entry) {
-    return (uint32_t)(entry >> 32);
+static inline uint8_t wysna_dict_ctrl_tag(uint64_t full_hash) {
+    return (uint8_t)(0x80u | ((uint32_t)(full_hash >> 57) & 0x7Fu));
 }
 
 typedef struct {
@@ -1164,21 +1158,22 @@ static inline bool wysna_dict_contains_i64(WVal dict_val, int64_t key) {
     if (W_UNLIKELY(!d || d->len == 0 || d->bucket_count == 0)) return false;
     if (W_LIKELY(wysna_int_fits_48(key))) {
         uint64_t full_hash = (UINT64_C(14695981039346656037) ^ (uint64_t)W_INT) ^ wysna_mix64((uint64_t)key);
-        uint32_t tag = wysna_dict_hash_tag(full_hash);
+        uint8_t h2 = wysna_dict_ctrl_tag(full_hash);
+        const uint8_t* tags = wysna_dict_tags(d);
         uint32_t mask = (uint32_t)d->bucket_count - 1;
         uint32_t slot = (uint32_t)full_hash & mask;
         WVal target = wysna_int_inline(key);
-        while (d->buckets[slot] != WYSNA_DICT_BUCKET_EMPTY) {
-            uint64_t entry = d->buckets[slot];
-            if (W_LIKELY(wysna_dict_bucket_tag(entry) == tag)) {
-                int32_t idx = wysna_dict_bucket_index(entry);
+        for (;;) {
+            uint8_t ctrl = tags[slot];
+            if (ctrl == 0) return false;
+            if (W_LIKELY(ctrl == h2)) {
+                int32_t idx = d->buckets[slot];
                 WVal k = d->keys[idx];
                 if (W_LIKELY(k.bits == target.bits)) return true;
                 if (W_UNLIKELY(wysna_hi(k) == WVAL_HI_EXT)) return wysna_dict_contains_i64_slow(d, key);
             }
             slot = (slot + 1) & mask;
         }
-        return false;
     }
     return wysna_dict_contains_i64_slow(d, key);
 }
@@ -1188,15 +1183,17 @@ static inline void wysna_dict_set_i64_at(WVal* dict_val, int64_t key, WVal owned
     WDictBuf* d = wysna_as_dict(*dict_val);
     if (W_LIKELY(d && d->bucket_count > 0 && wysna_rc_load(&d->refcount) == 1 && wysna_int_fits_48(key))) {
         uint64_t full_hash = (UINT64_C(14695981039346656037) ^ (uint64_t)W_INT) ^ wysna_mix64((uint64_t)key);
-        uint32_t tag = wysna_dict_hash_tag(full_hash);
+        uint8_t h2 = wysna_dict_ctrl_tag(full_hash);
+        uint8_t* tags = wysna_dict_tags(d);
         uint32_t mask = (uint32_t)d->bucket_count - 1;
         uint32_t slot = (uint32_t)full_hash & mask;
         WVal target = wysna_int_inline(key);
         bool fallback = false;
-        while (d->buckets[slot] != WYSNA_DICT_BUCKET_EMPTY) {
-            uint64_t entry = d->buckets[slot];
-            if (W_LIKELY(wysna_dict_bucket_tag(entry) == tag)) {
-                int32_t idx = wysna_dict_bucket_index(entry);
+        for (;;) {
+            uint8_t ctrl = tags[slot];
+            if (ctrl == 0) break;
+            if (W_LIKELY(ctrl == h2)) {
+                int32_t idx = d->buckets[slot];
                 WVal k = d->keys[idx];
                 if (W_LIKELY(k.bits == target.bits)) {
                     WVal old = d->vals[idx];
@@ -1215,7 +1212,8 @@ static inline void wysna_dict_set_i64_at(WVal* dict_val, int64_t key, WVal owned
             int32_t idx = d->len++;
             d->keys[idx] = target;
             d->vals[idx] = owned_val;
-            d->buckets[slot] = wysna_dict_pack_bucket(idx, full_hash);
+            d->buckets[slot] = idx;
+            tags[slot] = h2;
             return;
         }
     }

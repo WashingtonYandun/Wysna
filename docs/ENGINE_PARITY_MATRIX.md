@@ -52,7 +52,7 @@ nominal error identity, exhaustive handlers and managed payload cleanup. Concret
 struct/enum/class alternatives, specialization identity, and generic union rejection
 have an additional targeted gate in `tests/unit/test_native_generic_error_unions.py`,
 using `tests/fixtures/generic_error_union_members.wysna`. These targeted cases do not
-change the measured 212-fixture table above.
+change the measured 217-fixture table above.
 
 ## Expansion boundaries
 

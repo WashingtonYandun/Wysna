@@ -6,7 +6,19 @@ This is the native compiler profile for development on `develop`. The [standalon
 
 ## Installation and commands
 
-Extract the archive into a new directory. On Windows, `open-terminal.cmd` opens a terminal with this SDK on its temporary PATH. On macOS and Linux, invoke `bin/wysna` or add that directory to PATH. The SDK locates its engine and toolchain from the executable's physical location, including invocation through a symlink.
+**One-line install (recommended):**
+
+```powershell
+# Windows (PowerShell)
+irm https://wysna.wysofia.com/install.ps1 | iex
+```
+
+```sh
+# macOS (arm64) & Linux (x64)
+curl -fsSL https://wysna.wysofia.com/install.sh | sh
+```
+
+Or use Scoop (`scoop install https://wysna.wysofia.com/scoop/wysna.json`), the Windows GUI installer (`wysna-<version>-native-x86_64-windows-setup.exe`), or extract the archive into a new directory (`open-terminal.cmd` on Windows, or add `bin/` to `PATH` on macOS/Linux). The SDK locates its engine and toolchain from the executable's physical location, including invocation through a symlink.
 
 ```sh
 wysna --version

@@ -14,17 +14,11 @@ exist. Otherwise, use `:reset` and import again. Module initialization runs agai
 
 ---
 
-## Seguridad posterior a v0.9.0
+## Concurrency and Contract Boundaries
 
-El candidato R1 tiene un [contrato cerrado de workers](WORKER_SAFETY.md): copia
-los grafos de valores y rechaza efectos y referencias compartidas no verificables.
-Los wrappers de callbacks con efectos desconocidos y workers anidados se rechazan.
-TaskGroup y cancelación pública siguen pendientes.
+Parallel workers follow a closed isolation contract ([Worker Safety](WORKER_SAFETY.md)): value graphs are deep-copied across worker boundaries and unverified shared references or unknown-effect callbacks are rejected (`W5006`). Nested workers are disallowed, and public structured `TaskGroup` cancellation semantics remain deferred past `v1.0.0`.
 
-v0.9.0 publicada omite contratos de campos en Selfhost y el oráculo AST; este
-candidato los ejecuta y añade pruebas negativas. Hasta publicar la corrección,
-no se debe atribuir esa garantía al SDK v0.9.0. El candidato también corrige el
-alcance de contratos importados y `ensures` sobre retornos implícitos nativos.
+Field contracts, imported module contract scopes, and postconditions (`ensures`) on implicit native returns are enforced across both Seed and the self-hosted Native SDK compiler.
 
 ## 1. Closures capture immutable snapshots
 

@@ -38,8 +38,8 @@ int main(void) {
     wysna_cow_reset_stats();
     wysna_dict_detach(&dict);
     assert(wysna_g_cow_copied_slots == 10 && wysna_g_cow_detach_dict == 1);
-    assert(wysna_g_cow_copied_bytes == 10 * sizeof(WVal) + wysna_as_dict(dict)->bucket_count * sizeof(uint64_t));
-    assert(wysna_g_cow_allocated_bytes == sizeof(WDictBuf) + 16 * sizeof(WVal) + wysna_as_dict(dict)->bucket_count * sizeof(uint64_t));
+    assert(wysna_g_cow_copied_bytes == 10 * sizeof(WVal) + wysna_as_dict(dict)->bucket_count * (sizeof(int32_t) + sizeof(uint8_t)));
+    assert(wysna_g_cow_allocated_bytes == sizeof(WDictBuf) + 16 * sizeof(WVal) + wysna_as_dict(dict)->bucket_count * (sizeof(int32_t) + sizeof(uint8_t)));
     assert(wysna_g_cow_alloc_count == 4);
     wysna_release(alias); wysna_release(dict);
     WVal record = wysna_make_struct("Empty", 0, NULL, NULL);
