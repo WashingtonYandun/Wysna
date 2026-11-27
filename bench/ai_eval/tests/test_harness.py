@@ -15,7 +15,7 @@ REPO_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..", 
 if REPO_ROOT not in sys.path:
     sys.path.insert(0, REPO_ROOT)
 
-from bench.ai_eval.harness import EvaluationHarness
+from bench.ai_eval.harness import EvaluationHarness, attribute_prompt_tokens, prompt_char_shares
 from bench.ai_eval.models import Task, TaskTestCase
 from bench.ai_eval.providers import MockProvider
 from bench.ai_eval.token_audit import (
@@ -377,3 +377,82 @@ def test_task18_oracle_matches_ascii_sum_mod_256():
     expected = f"CHECKSUM: {sum(b'Wysna') % 256}\n"
     assert task18["test_cases"][0]["expected_stdout"] == expected
 
+
+def _hello_task(task_id="TEST-ENTRY", fixtures=None):
+    return Task(
+        id=task_id,
+        domain="cli_scripting",
+        title="Hello",
+        status="supported",
+        instruction="Print Hello World",
+        fixtures=fixtures or {},
+        test_cases=[TaskTestCase(name="basic", expected_stdout="Hello World\n", expected_exit=0)],
+    )
+
+
+HELLO_BODY = "fn main() -> unit {\n    print(\"Hello World\")\n}\n"
+
+
+def test_single_misnamed_file_is_treated_as_entrypoint():
+    harness = EvaluationHarness(repo_root=REPO_ROOT)
+    response = "### hello_world.wysna\n\n```wysna\n" + HELLO_BODY + "```"
+    res = harness.evaluate_task(_hello_task(), MockProvider({"TEST-ENTRY": [response]}))
+    assert res.status == "pass"
+    assert res.pass_at_attempt == 1
+    assert list(res.attempts[0].files) == ["main.wysna"]
+    assert not any(d.get("code") == "W5003" for d in res.attempts[0].check_diagnostics)
+
+
+def test_normalize_entrypoint_keeps_fixture_modules_and_multi_file_output():
+    harness = EvaluationHarness(repo_root=REPO_ROOT)
+    task = _hello_task("T", fixtures={"helper.wysna": "pub fn one() -> int { return 1 }\n"})
+    edited_fixture = {"helper.wysna": "pub fn one() -> int { return 2 }\n"}
+    assert harness.normalize_entrypoint(dict(edited_fixture), task) == edited_fixture
+    two_files = {"a.wysna": "x", "b.wysna": "y"}
+    assert harness.normalize_entrypoint(dict(two_files), task) == two_files
+    already_main = {"main.wysna": "x"}
+    assert harness.normalize_entrypoint(dict(already_main), task) == already_main
+    assert harness.normalize_entrypoint({"tool.wysna": "x"}, task) == {"main.wysna": "x"}
+
+
+def test_attribute_prompt_tokens_sums_exactly_and_is_proportional():
+    parts = attribute_prompt_tokens(1000, {"system": 300, "task": 100, "fixtures": 0, "repair_feedback": 200, "prior_assistant": 400})
+    assert sum(parts.values()) == 1000
+    assert parts == {"system": 300, "task": 100, "fixtures": 0, "repair_feedback": 200, "prior_assistant": 400}
+    odd = attribute_prompt_tokens(10, {"a": 1, "b": 1, "c": 1})
+    assert sum(odd.values()) == 10 and sorted(odd.values()) == [3, 3, 4]
+    assert attribute_prompt_tokens(0, {"a": 5}) == {"a": 0}
+    assert attribute_prompt_tokens(50, {"a": 0, "b": 0}) == {"a": 0, "b": 0}
+
+
+def test_prompt_char_shares_separates_feedback_and_prior_output():
+    history = [
+        {"role": "user", "content": "T" * 40},
+        {"role": "assistant", "content": "A" * 25},
+        {"role": "user", "content": "F" * 7},
+        {"role": "assistant", "content": "B" * 5},
+    ]
+    shares = prompt_char_shares(100, 30, 10, history, cycle=2, current_prompt="C" * 9)
+    assert shares == {"system": 100, "task": 30, "fixtures": 10, "repair_feedback": 16, "prior_assistant": 30}
+    first = prompt_char_shares(100, 30, 10, [], cycle=0, current_prompt="x" * 40)
+    assert first["repair_feedback"] == 0 and first["prior_assistant"] == 0
+
+
+def test_attempts_and_summary_report_prompt_token_attribution():
+    harness = EvaluationHarness(repo_root=REPO_ROOT)
+    bad = "```wysna\nfn main() -> unit {\n    print(1 + \"x\")\n}\n```"
+    good = "```wysna\n" + HELLO_BODY + "```"
+    task = _hello_task("TEST-ATTR")
+    summary = harness.run_benchmark([task], MockProvider({"TEST-ATTR": [bad, good]}),
+                                    provider_name="mock", model_name="mock")
+    attempts = summary.results[0].attempts
+    assert len(attempts) == 2
+    for attempt in attempts:
+        assert sum(attempt.prompt_breakdown.values()) == attempt.prompt_tokens
+    assert attempts[0].prompt_breakdown["repair_feedback"] == 0
+    assert attempts[1].prompt_breakdown["repair_feedback"] > 0
+    assert attempts[1].prompt_breakdown["prior_assistant"] > 0
+    attribution = summary.to_dict()["prompt_token_attribution"]
+    assert attribution["prompt_tokens"] == sum(a.prompt_tokens for a in attempts)
+    assert sum(attribution["prompt_by_source"].values()) == attribution["prompt_tokens"]
+    assert "estimate" in attribution["method"]

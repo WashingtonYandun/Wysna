@@ -81,6 +81,39 @@ If multiple files are required, place `### filename.wysna` outside (immediately 
 )
 
 
+PROMPT_ATTRIBUTION_METHOD = "estimate: character share per prompt source, scaled to provider-reported prompt_tokens"
+PROMPT_ATTRIBUTION_SOURCES = ("system", "task", "fixtures", "repair_feedback", "prior_assistant")
+
+
+def attribute_prompt_tokens(prompt_tokens: int, chars: Dict[str, int]) -> Dict[str, int]:
+    """Split provider-reported prompt tokens across sources by character share (largest remainder).
+
+    This is an estimate: providers report one prompt total, so the split assumes a uniform
+    tokens-per-character ratio across sources. The parts always sum to ``prompt_tokens``.
+    """
+    total_chars = sum(max(0, value) for value in chars.values())
+    if prompt_tokens <= 0 or total_chars <= 0:
+        return {name: 0 for name in chars}
+    exact = {name: prompt_tokens * max(0, value) / total_chars for name, value in chars.items()}
+    parts = {name: int(value) for name, value in exact.items()}
+    leftover = prompt_tokens - sum(parts.values())
+    for name in sorted(exact, key=lambda key: (exact[key] - parts[key], key), reverse=True)[:leftover]:
+        parts[name] += 1
+    return parts
+
+
+def prompt_char_shares(system_chars: int, task_chars: int, fixture_chars: int,
+                       history: List[Dict[str, str]], cycle: int, current_prompt: str) -> Dict[str, int]:
+    """Character counts per prompt source for the request about to be sent."""
+    feedback = sum(len(item["content"]) for index, item in enumerate(history)
+                   if item["role"] == "user" and index > 0)
+    if cycle > 0:
+        feedback += len(current_prompt)
+    prior_assistant = sum(len(item["content"]) for item in history if item["role"] == "assistant")
+    return {"system": system_chars, "task": task_chars, "fixtures": fixture_chars,
+            "repair_feedback": feedback, "prior_assistant": prior_assistant}
+
+
 class EvaluationHarness:
     """Executes the AI evaluation benchmark against a compiler instance."""
 
@@ -115,6 +148,20 @@ class EvaluationHarness:
         if candidate == root_resolved or not candidate.is_relative_to(root_resolved):
             raise ValueError(f"Resolved path escapes workspace: {relative_path!r}")
         return candidate
+
+    def normalize_entrypoint(self, files: Dict[str, str], task: Task) -> Dict[str, str]:
+        """Treat a single newly named file as the task entrypoint.
+
+        Models often label their only file after the program (``### grep_lite.wysna``). Nothing can
+        import a brand-new single file, so it is the entrypoint. Files that match a fixture are
+        deliberate edits to an existing module and stay untouched.
+        """
+        if len(files) != 1 or task.entrypoint in files:
+            return files
+        (name, content), = files.items()
+        if name in task.fixtures:
+            return files
+        return {task.entrypoint: content}
 
     def extract_code_blocks(self, text: str) -> Dict[str, str]:
         """Extracts file contents from markdown code blocks or file markers."""
@@ -431,6 +478,9 @@ class EvaluationHarness:
             if task.fixtures:
                 user_prompt += "\nExisting Workspace Files:\n"
                 user_prompt += self.workspace_context(task.fixtures)
+            fixture_chars = len(self.workspace_context(task.fixtures)) if task.fixtures else 0
+            task_chars = len(user_prompt) - fixture_chars
+            system_chars = len(SYSTEM_PROMPT)
 
             for cycle in range(self.max_repair_cycles + 1):
                 attempt_wall_start = time.perf_counter()
@@ -438,11 +488,14 @@ class EvaluationHarness:
                 total_provider_latency_ms += lat_ms
                 prompt_tok = tokens.get("prompt_tokens", 0)
                 comp_tok = tokens.get("completion_tokens", 0)
+                prompt_breakdown = attribute_prompt_tokens(prompt_tok, prompt_char_shares(
+                    system_chars, task_chars, fixture_chars, conversation_history, cycle, user_prompt))
                 total_tokens += prompt_tok + comp_tok
 
                 extracted_files = self.extract_code_blocks(completion)
                 if not extracted_files:
                     extracted_files = {task.entrypoint: completion}
+                extracted_files = self.normalize_entrypoint(extracted_files, task)
 
                 entrypoint_code = extracted_files.get(task.entrypoint, completion)
                 try:
@@ -469,6 +522,7 @@ class EvaluationHarness:
                         wall_time_ms=(time.perf_counter() - attempt_wall_start) * 1000.0,
                         prompt_tokens=prompt_tok,
                         completion_tokens=comp_tok,
+                        prompt_breakdown=prompt_breakdown,
                     )
                     final_error = "unsafe_path"
                     attempts.append(record)
@@ -518,6 +572,7 @@ class EvaluationHarness:
                     provider_latency_ms=lat_ms,
                     prompt_tokens=prompt_tok,
                     completion_tokens=comp_tok,
+                    prompt_breakdown=prompt_breakdown,
                 )
 
                 is_multifile = (
@@ -668,6 +723,9 @@ class EvaluationHarness:
             if on_task_complete is not None:
                 on_task_complete(res, results)
 
+        attribution_by_source: Dict[str, int] = {}
+        attribution_prompt = 0
+        attribution_completion = 0
         for res in results:
             if res.status == "blocked":
                 blocked_count += 1
@@ -677,6 +735,11 @@ class EvaluationHarness:
                 total_wall_ms += res.wall_time_ms
                 total_turns += res.model_turns
                 total_tok += res.total_tokens
+                for attempt in res.attempts:
+                    attribution_prompt += attempt.prompt_tokens
+                    attribution_completion += attempt.completion_tokens
+                    for source, value in attempt.prompt_breakdown.items():
+                        attribution_by_source[source] = attribution_by_source.get(source, 0) + value
 
                 if res.raw_first_check_passed:
                     raw_first_check_pass_count += 1
@@ -743,5 +806,11 @@ class EvaluationHarness:
             avg_model_turns=total_turns / denom,
             total_model_turns=total_turns,
             total_tokens=total_tok,
+            prompt_token_attribution={
+                "method": PROMPT_ATTRIBUTION_METHOD,
+                "prompt_tokens": attribution_prompt,
+                "completion_tokens": attribution_completion,
+                "prompt_by_source": attribution_by_source,
+            },
             results=results,
         )
