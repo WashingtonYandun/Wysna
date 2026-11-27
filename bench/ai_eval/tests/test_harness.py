@@ -58,6 +58,33 @@ def test_code_block_extraction():
     assert "main.wysna" in files2
     assert "pub fn inc" in files2["helper.wysna"]
 
+    # 3. Multi-file section headers placed inside a single ```wysna block
+    text3 = (
+        "```wysna\n"
+        "### validator.wysna\npub fn ok() -> bool { return true }\n\n"
+        "### main.wysna\nfrom \"validator\" use { ok }\nfn main() -> unit { print(ok()) }\n"
+        "```"
+    )
+    files3 = harness.extract_code_blocks(text3)
+    assert set(files3.keys()) == {"validator.wysna", "main.wysna"}
+    assert "pub fn ok" in files3["validator.wysna"]
+    assert "fn main" in files3["main.wysna"]
+
+    # 4. Backticked headings and named fence headers
+    text4 = (
+        "### `validator.wysna`\n```wysna\npub fn check() -> int { return 1 }\n```\n"
+        "### `main.wysna`\n```wysna\nfn main() -> unit {}\n```"
+    )
+    files4 = harness.extract_code_blocks(text4)
+    assert set(files4.keys()) == {"validator.wysna", "main.wysna"}
+
+    text5 = (
+        "```wysna:validator.wysna\npub fn check() -> int { return 1 }\n```\n"
+        "```wysna:main.wysna\nfn main() -> unit {}\n```"
+    )
+    files5 = harness.extract_code_blocks(text5)
+    assert set(files5.keys()) == {"validator.wysna", "main.wysna"}
+
 
 def test_error_classification():
     harness = EvaluationHarness(repo_root=REPO_ROOT)
@@ -66,6 +93,7 @@ def test_error_classification():
     assert harness.classify_error("TypeError: cannot assign str to int", [{"code": "W2001"}]) == "type"
     assert harness.classify_error("Circular import detected", [{"code": "W1003"}]) == "circular_dependency"
     assert harness.classify_error("Undefined identifier 'foo'", []) == "api_hallucination"
+    assert harness.classify_error("", [{"code": "W3002", "message": "unknown member: get"}]) == "api_hallucination"
     assert harness.classify_error("Traceback (most recent call last):", []) == "runtime_panic"
     assert harness.classify_error("", []) == "oracle_mismatch"
 
@@ -338,6 +366,14 @@ def test_system_prompt_matches_v1_grammar():
 
     assert "use `public`/`private`" not in SYSTEM_PROMPT
     assert "`pub` and `priv`" in SYSTEM_PROMPT
-    for token in ("`u8`", "`None`", "`_ =>`", "`Name { field: new_val, ..base }`"):
+    for token in ("`u8`", "`None`", "`_ =>`", "`Name { field: new_val, ..base }`", "args()[1]", "Err(IoError", "json.get("):
         assert token in SYSTEM_PROMPT, token
+
+
+def test_task18_oracle_matches_ascii_sum_mod_256():
+    tasks_path = Path(REPO_ROOT) / "bench" / "ai_eval" / "tasks.json"
+    tasks = json.loads(tasks_path.read_text(encoding="utf-8"))["tasks"]
+    task18 = next(t for t in tasks if t["id"] == "TASK-18")
+    expected = f"CHECKSUM: {sum(b'Wysna') % 256}\n"
+    assert task18["test_cases"][0]["expected_stdout"] == expected
 

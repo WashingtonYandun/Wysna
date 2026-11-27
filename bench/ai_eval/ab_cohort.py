@@ -21,7 +21,13 @@ if __name__ == "__main__" and (__package__ is None or __package__ == ""):
 
 from bench.ai_eval.harness import EvaluationHarness, SYSTEM_PROMPT
 from bench.ai_eval.models import SCHEMA_VERSION, Task, TaskEvaluationResult, TaskTestCase
-from bench.ai_eval.providers import GeminiProvider, LlmProvider, MockProvider, OpenAICompatibleProvider
+from bench.ai_eval.providers import (
+    AnthropicProvider,
+    GeminiProvider,
+    LlmProvider,
+    MockProvider,
+    OpenAICompatibleProvider,
+)
 from bench.ai_eval.checkpoint import COHORT_CHECKPOINT_SCHEMA, load_rows, save_rows, run_config
 
 TASK_FAMILIES = ("authoring", "syntax_type_repair", "refactor", "add_capability", "diagnosis")
@@ -1085,7 +1091,7 @@ def run_ab_cohort(
 
 def main() -> int:
     parser = argparse.ArgumentParser(description="Wysna Hito 2 Paired A/B Agent-First Cohort Runner")
-    parser.add_argument("--provider", choices=["mock", "gemini", "openai"], default="mock")
+    parser.add_argument("--provider", choices=["mock", "gemini", "anthropic", "openai"], default="mock")
     parser.add_argument("--model", type=str, default=None)
     parser.add_argument("--base-url", type=str, default="http://localhost:1234/v1")
     parser.add_argument("--api-key", type=str, default=None)
@@ -1127,13 +1133,17 @@ def main() -> int:
     elif args.provider == "gemini":
         model_name = args.model or "gemini-flash-lite-latest"
         factory = lambda _cond: GeminiProvider(api_key=args.api_key, model=model_name)
+    elif args.provider == "anthropic":
+        model_name = args.model or "claude-haiku-5-5"
+        factory = lambda _cond: AnthropicProvider(api_key=args.api_key, model=model_name)
     else:
         model_name = args.model or "local-model"
         factory = lambda _cond: OpenAICompatibleProvider(base_url=args.base_url, api_key=args.api_key, model=model_name)
 
     params = {"suite": args.suite, "repetitions": args.repetitions,
               "max_repair_cycles": args.max_repair_cycles, "interactive": args.interactive_tools,
-              "temperature": 0.2, "max_tokens": 8192 if args.provider == "openai" else 4096,
+              "temperature": None if args.provider == "anthropic" else 0.2,
+              "max_tokens": 8192 if args.provider == "openai" else 4096,
               "oracle_revision": 3}
     if resolved_bin:
         params["wysna_bin"] = resolved_bin

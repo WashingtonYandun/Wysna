@@ -361,3 +361,115 @@ class OpenAICompatibleProvider(LlmProvider):
             "completion_tokens": usage.get("completion_tokens", 0),
         }
         return completion, tokens, latency_ms
+
+
+class AnthropicProvider(LlmProvider):
+    """Anthropic Messages API provider using urllib with SSL support and backoff."""
+
+    token_counting_method: str = "provider_usage"
+
+    def __init__(
+        self,
+        api_key: Optional[str] = None,
+        model: str = "claude-haiku-5-5",
+        temperature: Optional[float] = None,
+        max_tokens: int = 4096,
+        min_interval_sec: float = 0.2,
+    ):
+        self.api_key = api_key or os.getenv("ANTHROPIC_API_KEY")
+        if not self.api_key:
+            raise ValueError(
+                "AnthropicProvider requires ANTHROPIC_API_KEY environment variable."
+            )
+        self.model = model
+        self.temperature = temperature
+        self.max_tokens = max_tokens
+        self.min_interval_sec = min_interval_sec
+        self.last_call_time = 0.0
+        self.endpoint = "https://api.anthropic.com/v1/messages"
+        self.ssl_context = _build_ssl_context()
+
+    def generate(
+        self,
+        system_prompt: str,
+        user_prompt: str,
+        conversation_history: Optional[List[Dict[str, str]]] = None,
+    ) -> Tuple[str, Dict[str, int], float]:
+        start = time.perf_counter()
+
+        messages: List[Dict[str, str]] = []
+        if conversation_history:
+            for msg in conversation_history:
+                role = "user" if msg.get("role") == "user" else "assistant"
+                messages.append({
+                    "role": role,
+                    "content": msg.get("content", ""),
+                })
+        messages.append({"role": "user", "content": user_prompt})
+
+        payload: Dict[str, Any] = {
+            "model": self.model,
+            "max_tokens": self.max_tokens,
+            "system": system_prompt,
+            "messages": messages,
+        }
+        if self.temperature is not None:
+            payload["temperature"] = self.temperature
+        req_data = json.dumps(payload).encode("utf-8")
+        headers = {
+            "Content-Type": "application/json",
+            "x-api-key": self.api_key,
+            "anthropic-version": "2023-06-01",
+        }
+
+        max_retries = 5
+        data = None
+        for attempt in range(max_retries):
+            if self.min_interval_sec > 0.0:
+                elapsed = time.monotonic() - self.last_call_time
+                if self.last_call_time > 0.0 and elapsed < self.min_interval_sec:
+                    time.sleep(self.min_interval_sec - elapsed)
+                self.last_call_time = time.monotonic()
+
+            req = urllib.request.Request(self.endpoint, data=req_data, headers=headers, method="POST")
+            try:
+                with urllib.request.urlopen(req, context=self.ssl_context, timeout=90) as response:
+                    res_body = response.read().decode("utf-8")
+                    data = json.loads(res_body)
+                    break
+            except urllib.error.HTTPError as e:
+                err_msg = e.read().decode("utf-8", errors="replace")
+                if e.code in (429, 503, 529) and attempt < max_retries - 1:
+                    delay = min(60.0, 2.0 * (2 ** attempt))
+                    retry_after = e.headers.get("Retry-After") if e.headers else None
+                    if retry_after:
+                        try:
+                            delay = max(float(retry_after) + 0.5, 0.5)
+                        except ValueError:
+                            pass
+                    time.sleep(delay)
+                    continue
+                raise RuntimeError(f"Anthropic API HTTP {e.code}: {err_msg}") from e
+            except (urllib.error.URLError, TimeoutError, OSError) as e:
+                if attempt < max_retries - 1:
+                    time.sleep(2.0)
+                    continue
+                raise RuntimeError(f"Anthropic API connection error: {e}") from e
+
+        latency_ms = (time.perf_counter() - start) * 1000.0
+        content = data.get("content") or []
+        if not content:
+            raise RuntimeError("Anthropic API returned empty content.")
+
+        text_parts = [
+            block.get("text", "")
+            for block in content
+            if isinstance(block, dict) and block.get("type") == "text"
+        ]
+        completion = "".join(text_parts)
+        usage = data.get("usage") or {}
+        tokens = {
+            "prompt_tokens": usage.get("input_tokens", 0),
+            "completion_tokens": usage.get("output_tokens", 0),
+        }
+        return completion, tokens, latency_ms

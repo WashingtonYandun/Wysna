@@ -71,7 +71,7 @@ fn sem_specialize_arguments(context: SemanticContext, template_id: int, argument
                 if not sem_type_contains(context, arguments[i], ancestor.arguments[i]) { contains = false }
                 if arguments[i] != ancestor.arguments[i] { grows = true }
             }
-            if grows and contains { report_error_at("W2011", source, "structural generic expansion cycle detected: " + template.name) }
+            if grows and contains { report_error_at("W2011", source, "structural generic expansion cycle detected: " + sem_demangle_name(template.name)) }
         }
     }
     if len(context.specializations) >= 1024 or len(context.specialization_ancestry) >= 64 { report_error_at("W2011", source, "generic specialization budget exceeded") }

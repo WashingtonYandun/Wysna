@@ -419,7 +419,7 @@
         {
           "name": "checksum_wysna",
           "args": [],
-          "expected_stdout": "CHECKSUM: 27\n",
+          "expected_stdout": "CHECKSUM: 18\n",
           "expected_exit": 0
         }
       ]

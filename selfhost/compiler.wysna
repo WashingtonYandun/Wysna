@@ -426,12 +426,12 @@ fn diag_help_field(d: str) -> str {
 fn diag_human_help(code: str, msg: str, data_json: str) -> str {
     let h = diag_help_field(data_json)
     if h != "" { return h }
+    if code == "W0001" or code == "W0006" { return "Check for missing delimiters ('}', ')', ']') or unexpected tokens nearby." } elif code == "W1002" { return "Rename or remove the duplicate declaration in this scope." } elif code == "W1003" { return "Check the module path ('std/...' or local path) and ensure there are no circular imports." }
     if code == "W1001" { if diag_has(msg, "ambiguous enum") { return "Qualify the enum variant with its enum name, e.g. MyEnum.Variant." } elif diag_has(msg, "unknown module") { return "Check the module path ('std/...' for stdlib or verify the local path)." } elif diag_has(msg, "unknown identifier") { return "Declare the binding with 'let'/'let mut', define the function, or import it." } }
     if code == "W2001" { if diag_has(msg, "'int'") and diag_has(msg, "'float'") { return "Convert explicitly using int(...) or float(...) before mixing int and float." } elif diag_has(msg, "expected 'str'") { return "Convert the value to a string with str(...)." } elif diag_has(msg, "binary operand types") { return "Operands must have matching types; convert explicitly with int(...), float(...), or str(...)." } }
-    if (code == "W2003" or code == "W3001") and diag_has(msg, "immutable") { return "Declare the variable as 'let mut ...' if it needs to be reassigned." }
-    if code == "W3002" and diag_has(msg, "unknown member") { return "Verify the field or method name on the receiver type, or run 'wysna inspect'." }
-    if (code == "W2004" or code == "W2006") and diag_has(msg, "propagation operand") { return "The '?' operator requires Result[T, E] or Option[T] in a compatible function." }
-    if code == "W1002" or code == "W1003" { return "Check for missing delimiters ('}', ')', ']') or unexpected tokens nearby." } elif code == "W2002" { return "Check the function signature for expected argument count." } elif code == "W2005" { return "Handle every variant or add a fallback '_' arm." } elif code == "W2007" { return "Provide every required struct field in the literal." } elif code == "W2009" { return "Add an explicit type annotation so the compiler can resolve the type." }
+    if (code == "W2003" or code == "W3001") and diag_has(msg, "immutable") { return "Declare the variable as 'let mut ...' if it needs to be reassigned." } elif code == "W2003" and (diag_has(msg, "exhaustive") or diag_has(msg, "Non-exhaustive")) { return "Handle every variant or add a fallback '_ =>' arm." }
+    if code == "W3002" and diag_has(msg, "unknown member") { return "Verify the field or method name on the receiver type, or run 'wysna inspect'." } elif code == "W2004" and diag_has(msg, " ! ") { return "Wrap error values with Err(...) or propagate with '?'." }
+    if code == "W2006" { if diag_has(msg, "coalesce") { return "The '??' operator requires an optional 'T?' on the left-hand side." } return "Use '?' inside a function returning a compatible 'T?' or 'T ! E', or handle locally with 'else err { ... }'." } elif code == "W2002" { return "Check the function signature for expected argument count." } elif code == "W2005" { return "Provide the payload argument(s) expected by this enum variant." } elif code == "W2007" { return "Provide every required struct field in the literal." } elif code == "W2009" { return "Add an explicit type annotation so the compiler can resolve the type." }
     return ""
 }
 
@@ -3687,8 +3687,42 @@ fn sem_record_error(context: SemanticContext, code: str, location: Token, msg: s
         related_json: rel,
     })
 }
+fn sem_token_label(kind: str) -> str {
+    if kind == "RBRACE" { return "'}'" }
+    if kind == "LBRACE" { return "'{'" }
+    if kind == "RPAREN" { return "')'" }
+    if kind == "LPAREN" { return "'('" }
+    if kind == "RBRACKET" { return "']'" }
+    if kind == "LBRACKET" { return "'['" }
+    if kind == "COLON" { return "':'" }
+    if kind == "COMMA" { return "','" }
+    if kind == "DOT" { return "'.'" }
+    if kind == "ARROW" { return "'->'" }
+    if kind == "FAT_ARROW" { return "'=>'" }
+    if kind == "ASSIGN" { return "'='" }
+    if kind == "PLUS" { return "'+'" }
+    if kind == "MINUS" { return "'-'" }
+    if kind == "STAR" { return "'*'" }
+    if kind == "SLASH" { return "'/'" }
+    if kind == "PERCENT" { return "'%'" }
+    if kind == "IDENT" { return "identifier" }
+    if kind == "STR" { return "string literal" }
+    if kind == "INT" { return "integer literal" }
+    if kind == "FLOAT" { return "float literal" }
+    if kind == "NEWLINE" { return "newline" }
+    if kind == "EOF" { return "end of file" }
+    return kind
+}
 fn sem_expect(context: SemanticContext, kind: str) -> Token {
-    if not sem_is(context, kind) { sem_error(context, "W0006", "expected " + kind) }
+    if not sem_is(context, kind) {
+        let actual = sem_at(context)
+        let actual_label = if actual.kind == "EOF" or actual.kind == "NEWLINE" or actual.val == "" {
+            sem_token_label(actual.kind)
+        } else {
+            "'" + actual.val + "'"
+        }
+        sem_error(context, "W0006", "expected " + sem_token_label(kind) + ", found " + actual_label)
+    }
     return sem_take(context)
 }
 fn sem_intern(context: SemanticContext, kind: str, name: str, args: list[int]) -> int {
@@ -4056,10 +4090,15 @@ fn sem_return_mismatch_data(context: SemanticContext, expected: int, found: int,
     }
     let found_str = sem_diagnostic_type(context, found, 0)
     let mut kind = "return_type_mismatch"
-    if expected >= 0 and found >= 0 and sem_kind(context, expected) == "result" and sem_kind(context, found) == "result" and not sem_error_channel_assignable(context, context.types[found].args[1], context.types[expected].args[1]) {
-        kind = "incompatible_error_channel"
+    let mut help_suffix = ""
+    if expected >= 0 and found >= 0 and sem_kind(context, expected) == "result" {
+        if sem_kind(context, found) == "result" and not sem_error_channel_assignable(context, context.types[found].args[1], context.types[expected].args[1]) {
+            kind = "incompatible_error_channel"
+        } elif sem_kind(context, found) != "result" and sem_error_channel_assignable(context, found, context.types[expected].args[1]) {
+            help_suffix = ",\"help\":\"Wrap the error value with Err(...), e.g. 'return Err(...)'.\""
+        }
     }
-    return "{\"kind\":" + diag_json_quote(kind) + ",\"expected\":" + diag_json_quote(exp_str) + ",\"found\":" + diag_json_quote(found_str) + ",\"function\":" + diag_json_quote(fn_clean) + "}"
+    return "{\"kind\":" + diag_json_quote(kind) + ",\"expected\":" + diag_json_quote(exp_str) + ",\"found\":" + diag_json_quote(found_str) + ",\"function\":" + diag_json_quote(fn_clean) + help_suffix + "}"
 }
 fn sem_require_at(context: SemanticContext, source: int, target: int, code: str, location: Token) {
     if source < 0 or target < 0 { return }
@@ -4368,7 +4407,7 @@ fn sem_collect_function(context: SemanticContext, owner: str, visible: bool, is_
     }
     context.type_params = type_params
     let name = owner + local
-    if sem_function(context, name) >= 0 { sem_error(context, "W1002", "duplicate function: " + name) }
+    if sem_function(context, name) >= 0 { sem_error(context, "W1002", "duplicate function: " + sem_demangle_name(name)) }
     sem_expect(context, "LPAREN")
     let mut params: list[str] = []
     let mut abi_params: list[str] = []
@@ -4946,7 +4985,13 @@ fn sem_member(context: SemanticContext, receiver: SemValue, name: str, location:
                 return sem_value(sem_intern(context, "enum_ctor", type_.name + "." + name, arguments))
             }
         }
-        report_error_at("W1001", location, "unknown enum variant")
+        let mut available: list[str] = []
+        for i in 0..len(context.variants) {
+            if context.types[context.variant_types[i]].name == type_.name {
+                available.append(context.variants[i])
+            }
+        }
+        report_error_at("W1001", location, "enum '" + sem_demangle_name(type_.name) + "' has no member or variant '" + name + "' (variants: " + join_strings(available, ", ") + "; use module functions or match on enum values)")
     }
     if type_.kind == "optional" and (name == "Some" or name == "None") {
         if name == "None" { return sem_value(context.none_type) }
@@ -4984,7 +5029,14 @@ fn sem_member(context: SemanticContext, receiver: SemValue, name: str, location:
         } elif name == "clear" and type_.kind == "dict" {
             sem_mutable_at(context, receiver.root, location)
             args = [context.unit_type]
-        } else { report_error_at("W3002", location, "unknown collection method") }
+        } else {
+            let avail = if type_.kind == "list" {
+                "unknown list method '" + name + "' (available: append, pop, clear, contains, is_empty)"
+            } else {
+                "unknown dict method '" + name + "' (available: get, keys, values, items, contains, is_empty, remove, clear)"
+            }
+            report_error_at("W3002", location, avail)
+        }
         return SemValue { type_id: sem_intern(context, "function", "", args), root: "#collection", writable: -1, terminates: false, node: -1 }
     }
     if receiver.type_id == context.string_type {
@@ -5001,7 +5053,7 @@ fn sem_member(context: SemanticContext, receiver: SemValue, name: str, location:
     let field_index = sem_field(context, type_.name, name)
     if field_index >= 0 {
         let field = context.fields[field_index]
-        if not field.visible and context.owner != field.owner { report_error_at("W3002", location, "private field") }
+        if not field.visible and context.owner != field.owner { report_error_at("W3002", location, "cannot access private field '" + name + "' on '" + sem_demangle_name(field.owner) + "'") }
         if context.initializing and receiver.root == "this" and field.owner == context.owner {
             let mut found = false
             for initialized in context.initialized { if initialized == name { found = true } }
@@ -5024,9 +5076,9 @@ fn sem_member(context: SemanticContext, receiver: SemValue, name: str, location:
     let method_index = sem_method(context, type_.name, name)
     if method_index >= 0 {
         let method = context.functions[method_index]
-        if not method.visible and method.owner != context.owner + "." { report_error_at("W3002", location, "private method access") }
-        let mut method_type = method.type_id
         let method_owner_name = if len(method.owner) > 0 { slice(method.owner, 0, len(method.owner) - 1) } else { type_.name }
+        if not method.visible and method.owner != context.owner + "." { report_error_at("W3002", location, "cannot access private method '" + name + "' on '" + sem_demangle_name(method_owner_name) + "'") }
+        let mut method_type = method.type_id
         let method_owner_type_id = sem_resolve_member_owner(context, receiver.type_id, method_owner_name)
         let method_owner_type = context.types[method_owner_type_id]
         let generic = sem_generic_type(context, method_owner_type.name)
@@ -5038,7 +5090,7 @@ fn sem_member(context: SemanticContext, receiver: SemValue, name: str, location:
         }
         return SemValue { type_id: method_type, root: "#method", writable: -1, terminates: false, node: -1 }
     }
-    report_error_at("W3002", location, "unknown member: " + name)
+    report_error_at("W3002", location, "unknown member: " + name + " (on type '" + sem_diagnostic_type(context, receiver.type_id, 0) + "')")
     return sem_value(context.unit_type)
 }
 fn sem_group_is_tuple(context: SemanticContext) -> bool {
@@ -5413,7 +5465,7 @@ fn sem_prefix(context: SemanticContext, allow_struct: bool, statement: bool) -> 
                 let field_token = sem_at(context)
                 let field_name = sem_expect(context, "IDENT").val
                 let field = sem_field(context, name, field_name)
-                if field < 0 { report_error_at("W3002", field_token, "unknown struct field") }
+                if field < 0 { report_error_at("W3002", field_token, "unknown struct field '" + field_name + "' on struct '" + sem_demangle_name(name) + "'") }
                 for previous in initialized { if previous == field_name { report_error_at("W2007", field_token, "duplicate initializer") } }
                 initialized.append(field_name)
                 sem_expect(context, "COLON")
@@ -5808,9 +5860,9 @@ fn sem_expression(context: SemanticContext, minimum: int, allow_struct: bool) ->
             let operand_node = left.node
             let type_ = context.types[left.type_id]
             let returned = context.types[context.return_type]
-            if type_.kind != "optional" and type_.kind != "result" { report_error_at("W2006", call_token, "propagation operand") }
-            if returned.kind != type_.kind { report_error_at("W2006", call_token, "propagation return channel") }
-            if type_.kind == "result" and not sem_error_channel_assignable(context, type_.args[1], returned.args[1]) { report_error_at("W2006", call_token, "propagation error channel") }
+            if type_.kind != "optional" and type_.kind != "result" { report_error_at("W2006", call_token, "invalid propagation operand '" + sem_diagnostic_type(context, left.type_id, 0) + "' (expected optional 'T?' or error union 'T ! E')") }
+            if returned.kind != type_.kind { report_error_at("W2006", call_token, "cannot propagate '" + sem_diagnostic_type(context, left.type_id, 0) + "' with '?' in function returning '" + sem_diagnostic_type(context, context.return_type, 0) + "' (use 'else' for local fallback)") }
+            if type_.kind == "result" and not sem_error_channel_assignable(context, type_.args[1], returned.args[1]) { report_error_at("W2006", call_token, "incompatible propagation error channel: cannot propagate '" + sem_diagnostic_type(context, type_.args[1], 0) + "' into '" + sem_diagnostic_type(context, returned.args[1], 0) + "'") }
             left = sem_expr(context, "propagate", sem_value(type_.args[0]), call_token, "", [operand_node], -1, -1)
         } elif minimum < 10 and sem_match(context, "ELSE") {
             let operand_node = left.node
@@ -5884,7 +5936,7 @@ fn sem_expression(context: SemanticContext, minimum: int, allow_struct: bool) ->
                     sem_record_error(context, "W2001", right_source, "binary operand types: expected '" + sem_diagnostic_type(context, left.type_id, 0) + "', found '" + sem_diagnostic_type(context, right.type_id, 0) + "'", "", "[]")
                 }
                 if not deferred and left.type_id != context.integer_type and left.type_id != context.float_type and (bin_op != "PLUS" or left.type_id != context.string_type) {
-                    sem_record_error(context, "W2001", source, "invalid binary operation", "", "[]")
+                    sem_record_error(context, "W2001", source, "invalid binary operation " + sem_token_label(bin_op) + " for type '" + sem_diagnostic_type(context, left.type_id, 0) + "'", "", "[]")
                 }
                 if left.writable >= 0 { sem_require_at(context, left.type_id, left.writable, "W2001", right_source) }
                 let res_t = if left.writable >= 0 { left.writable } else { context.error_type }
@@ -5901,7 +5953,7 @@ fn sem_expression(context: SemanticContext, minimum: int, allow_struct: bool) ->
                     let inner = context.types[left.type_id].args[0]
                     sem_require_at(context, right.type_id, inner, "W2001", right_source)
                     left = sem_value(inner)
-                } else { report_error_at("W2006", source, "coalesce requires optional") }
+                } else { report_error_at("W2006", source, "coalesce '??' requires an optional 'T?', found '" + sem_diagnostic_type(context, left.type_id, 0) + "'") }
                 left = sem_expr(context, "binary", left, call_token, operator, [operand_node, right.node], -1, -1)
             } elif operator == "DOT_DOT" or operator == "DOT_DOT_EQ" {
                 sem_require_at(context, left.type_id, context.integer_type, "W2001", source)
@@ -5954,7 +6006,7 @@ fn sem_expression(context: SemanticContext, minimum: int, allow_struct: bool) ->
                     sem_record_error(context, "W2001", right_source, "binary operand types: expected '" + sem_diagnostic_type(context, left.type_id, 0) + "', found '" + sem_diagnostic_type(context, right.type_id, 0) + "'", "", "[]")
                 }
                 if not deferred and left.type_id != context.integer_type and left.type_id != context.float_type and (operator != "PLUS" or left.type_id != context.string_type) {
-                    sem_record_error(context, "W2001", source, "invalid binary operation", "", "[]")
+                    sem_record_error(context, "W2001", source, "invalid binary operation " + sem_token_label(operator) + " for type '" + sem_diagnostic_type(context, left.type_id, 0) + "'", "", "[]")
                 }
                 if not deferred and operator == "PERCENT" and left.type_id != context.integer_type {
                     sem_record_error(context, "W2001", source, "modulo requires integers", "", "[]")
@@ -6902,7 +6954,7 @@ fn sem_validate_layout_cycles(context: SemanticContext) {
         let empty_seen: list[str] = []
         context.layout_seen = empty_seen
         if sem_kind(context, field.type_id) == "struct" and sem_struct_reaches(context, context.types[field.type_id].name, field.owner) {
-            sem_error(context, "W2011", "recursive inline struct layout detected: " + field.owner + " -> " + context.types[field.type_id].name)
+            sem_error(context, "W2011", "recursive inline struct layout detected: " + sem_demangle_name(field.owner) + " -> " + sem_demangle_name(context.types[field.type_id].name))
         }
     }
 }
@@ -6931,7 +6983,7 @@ fn sem_initialize(context: SemanticContext, tokens: list[Token]) {
             if kind == "CLASS" { tag = "class" }
             if kind == "INTERFACE" { tag = "interface" }
             if kind == "ENUM" { tag = "enum" }
-            for type_ in context.types { if type_.name == name { report_error_at("W1002", tokens[i + 1], "duplicate type") } }
+            for type_ in context.types { if type_.name == name { report_error_at("W1002", tokens[i + 1], "duplicate type: " + sem_demangle_name(name)) } }
             sem_intern(context, tag, name, empty)
             if tokens[i + 2].kind == "LBRACKET" {
                 let mut params: list[str] = []
@@ -7239,15 +7291,15 @@ fn sem_validate_inheritance(context: SemanticContext) {
         let mut current = class_.parent
         let mut visited: list[str] = [class_.name]
         while current != "" {
-            if module_contains(visited, current) { sem_error(context, "W3003", "inheritance cycle") }
+            if module_contains(visited, current) { sem_error(context, "W3003", "inheritance cycle involving class '" + sem_demangle_name(class_.name) + "' and '" + sem_demangle_name(current) + "'") }
             visited.append(current)
-            if sem_kind(context, sem_named(context, current)) != "class" { sem_error(context, "W3003", "base must be a class") }
+            if sem_kind(context, sem_named(context, current)) != "class" { sem_error(context, "W3003", "base '" + sem_demangle_name(current) + "' of class '" + sem_demangle_name(class_.name) + "' must be a class") }
             let mut next = ""
             for parent in context.classes { if parent.name == current { next = parent.parent } }
             current = next
         }
         for field in context.fields {
-            if field.owner == class_.name and sem_field(context, class_.parent, field.name) >= 0 { sem_error(context, "W3003", "inherited field cannot be redeclared") }
+            if field.owner == class_.name and sem_field(context, class_.parent, field.name) >= 0 { sem_error(context, "W3003", "inherited field '" + field.name + "' cannot be redeclared on class '" + sem_demangle_name(class_.name) + "'") }
         }
         for method in context.functions {
             if method.owner == class_.name + "." and method.name != class_.name + ".init" {
@@ -7255,14 +7307,14 @@ fn sem_validate_inheritance(context: SemanticContext) {
                 let inherited = sem_method(context, class_.parent, name)
                 if inherited >= 0 {
                     let parent = context.functions[inherited]
-                    if not parent.visible or not method.visible { sem_error(context, "W3002", "invalid override visibility") }
+                    if not parent.visible or not method.visible { sem_error(context, "W3002", "invalid override visibility for method '" + name + "' on class '" + sem_demangle_name(class_.name) + "'") }
                     let mut parent_sig = parent.type_id
                     let parent_owner = if len(parent.owner) > 0 { slice(parent.owner, 0, len(parent.owner) - 1) } else { "" }
                     if parent_owner == class_.parent and len(class_.parent_args) > 0 {
                         let p_gen = sem_generic_type(context, parent_owner)
                         if p_gen >= 0 { parent_sig = sem_substitute_type(context, parent_sig, context.generic_types[p_gen].params, class_.parent_args) }
                     }
-                    if not sem_compatible_override(context, method.type_id, parent_sig) { sem_error(context, "W3003", "incompatible override") }
+                    if not sem_compatible_override(context, method.type_id, parent_sig) { sem_error(context, "W3003", "incompatible override for method '" + name + "' on class '" + sem_demangle_name(class_.name) + "'") }
                 }
             }
         }
@@ -7276,7 +7328,7 @@ fn sem_validate_inheritance(context: SemanticContext) {
         }
         let class_self_type = sem_intern(context, "class", class_.name, class_self_args)
         for iface_ref in class_.interfaces {
-            if sem_kind(context, sem_named(context, iface_ref.name)) != "interface" { sem_error(context, "W3003", "implements requires interface") }
+            if sem_kind(context, sem_named(context, iface_ref.name)) != "interface" { sem_error(context, "W3003", "implements target '" + sem_demangle_name(iface_ref.name) + "' on class '" + sem_demangle_name(class_.name) + "' requires an interface") }
             let i_gen = sem_generic_type(context, iface_ref.name)
             for requirement in context.functions {
                 if requirement.owner == iface_ref.name + "." {
@@ -7286,7 +7338,7 @@ fn sem_validate_inheritance(context: SemanticContext) {
                         req_sig = sem_substitute_type(context, req_sig, context.generic_types[i_gen].params, iface_ref.args)
                     }
                     let implementation = sem_method(context, class_.name, name)
-                    if implementation < 0 { sem_error(context, "W3003", "missing interface method") }
+                    if implementation < 0 { sem_error(context, "W3003", "class '" + sem_demangle_name(class_.name) + "' is missing interface method '" + name + "' from '" + sem_demangle_name(iface_ref.name) + "'") }
                     let method = context.functions[implementation]
                     let mut impl_sig = method.type_id
                     if method.owner != class_.name + "." and len(method.owner) > 0 {
@@ -7298,7 +7350,7 @@ fn sem_validate_inheritance(context: SemanticContext) {
                             impl_sig = sem_substitute_type(context, impl_sig, context.generic_types[o_gen].params, owner_type.args)
                         }
                     }
-                    if not method.visible or not sem_compatible_override(context, impl_sig, req_sig) { sem_error(context, "W3003", "incompatible interface implementation") }
+                    if not method.visible or not sem_compatible_override(context, impl_sig, req_sig) { sem_error(context, "W3003", "incompatible implementation of interface method '" + name + "' from '" + sem_demangle_name(iface_ref.name) + "' on class '" + sem_demangle_name(class_.name) + "'") }
                 }
             }
         }
@@ -8104,7 +8156,7 @@ fn sem_specialize_arguments(context: SemanticContext, template_id: int, argument
                 if not sem_type_contains(context, arguments[i], ancestor.arguments[i]) { contains = false }
                 if arguments[i] != ancestor.arguments[i] { grows = true }
             }
-            if grows and contains { report_error_at("W2011", source, "structural generic expansion cycle detected: " + template.name) }
+            if grows and contains { report_error_at("W2011", source, "structural generic expansion cycle detected: " + sem_demangle_name(template.name)) }
         }
     }
     if len(context.specializations) >= 1024 or len(context.specialization_ancestry) >= 64 { report_error_at("W2011", source, "generic specialization budget exceeded") }
