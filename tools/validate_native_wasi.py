@@ -57,7 +57,25 @@ def main() -> None:
                                 text=True, encoding='utf-8', timeout=30)
         require(denied.returncode != 0 and 'W5006' in denied.stdout + denied.stderr, denied)
         require(target.read_bytes() == prior, 'rejected build replaced the valid WASI artifact')
-    print('Native WASI: built and executed WASI Preview 1 with worker fallback and capability rejection')
+
+        web_source = root / 'web_app.wysna'
+        web_source.write_text(
+            'import "std/environment" as env\n'
+            'let argv = env.arguments()\n'
+            'let who = if len(argv) > 1 { argv[1] } else { "world" }\n'
+            'let greeting = env.get("WYSNA_GREETING") ?? "Hello"\n'
+            'print(f"{greeting}, {who}")\n',
+            encoding='utf-8',
+        )
+        web_out = root / 'web_bundle'
+        web_cmd = [str(driver), 'build', '--target=web', str(web_source), '-o', str(web_out), '--output-format=json-v1']
+        web_built = subprocess.run(web_cmd, cwd=root, env=environment, capture_output=True, text=True, encoding='utf-8', timeout=180)
+        require(web_built.returncode == 0, (web_built.stdout, web_built.stderr))
+        web_report = json.loads(web_built.stdout)
+        require(web_report['target'] == {'profile': 'web-wasm', 'triple': 'wasm32-wasip1'}, web_report)
+        require([a['kind'] for a in web_report['artifacts']] == ['wasm_module', 'javascript_module', 'typescript_declarations'], web_report)
+        require((root / 'web_bundle.wasm').is_file() and (root / 'web_bundle.mjs').is_file() and (root / 'web_bundle.d.ts').is_file(), 'missing web artifacts')
+    print('Native WASI: built and executed WASI Preview 1 + --target=web bundle')
 
 
 if __name__ == '__main__':
