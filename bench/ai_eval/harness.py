@@ -48,7 +48,7 @@ Key Wysna Grammar and Rules:
    - `for item in list_expr { ... }`, `for k, v in d { ... }` or `for k, v in d.items() { ... }`, `for i in 0..limit { ... }` (exclusive), `1..=limit` (inclusive), `while cond { ... }`.
    - `let label = match value { 1 | 2 => "low", 3..=10 => "mid", _ => "high" }` (arms take expressions or `{ ... }` blocks; always use `_ =>`, never `* =>` or `else =>`).
 6. Standard Prelude Functions:
-   - `print(...)`, `eprint(...)`, `exit(code)`, `len(x)`, `args()`, `env(name) -> str?`, `unix_time() -> int`.
+   - `print(...)`, `eprint(...)`, `exit(code)`, `len(x)`, `args()` (`args()[0]` is the executable path; CLI arguments start at `args()[1]`), `env(name) -> str?`, `unix_time() -> int`.
    - `read_file(path) -> str ! IoError`, `write_file(path, content) -> unit ! IoError`.
    - Conversions & helpers: `str(x)`, `int(x)`, `u8(x) -> u8?`, `float(x)`, `chr(c)`, `ord(s)`, `slice(x, start, end)`, `join_strings(parts, sep)`, `bytes(s)`, `dict_items(d)`.
 7. Collections & Strings (Copy-on-Write values):
@@ -56,7 +56,7 @@ Key Wysna Grammar and Rules:
    - `list[T]`: `.append(item)`, `.pop()`, `.clear()`, `.contains(item)`, `.is_empty()`, `x in xs`.
    - `dict[K, V]`: `.get(key)` (returns `V?`), `.keys()`, `.values()`, `.items()`, `.contains(key)`, `.remove(key)`, `.clear()`, `.is_empty()`, `k in d`.
 8. Error Handling & Closures:
-   - `let content = read_file(path)?` (postfix propagation), `expr else err { fallback }`, `opt ?? default`.
+   - `let content = read_file(path)?` (postfix propagation), `expr else err { fallback }`, `opt ?? default`, explicit error union returns `return Ok(value)` and `return Err(IoError { message: "..." })` (or your error struct).
    - Lambdas `|x: int| => x * 2` capture outer values as immutable snapshots (use a `class` or return updated values for mutable state).
 9. Structs, Enums & Classes:
    - `struct Name { field: type }` initialized as `Name { field: value }` or `Name { field: new_val, ..base }`.
@@ -67,7 +67,8 @@ Key Wysna Grammar and Rules:
    - `import "std/fs" as fs`: `exists`, `is_dir`, `is_file`, `list_dir`, `mkdir_all`, `copy`, `rename`, `remove_file`.
    - `import "std/path" as path`: `join`, `basename`, `dirname`, `ext`.
    - `import "std/text" as text`, `import "std/parse" as parse`, `import "std/environment" as environment`.
-   - `import "std/json" as json`, `import "std/csv" as csv`, `import "std/crypto" as crypto`, `import "std/time" as time`.
+   - `import "std/json" as json` (functional API over `json.Value` enum — never `.get()` on `Value`): `json.parse(s) -> Value ! JsonError`, `json.get(v, key) -> Value?`, `json.at(v, idx) -> Value?`, `json.as_string(v)`, `json.as_array(v)`, `json.as_object(v)`, `json.as_bool(v)`, `json.as_number(v)`, `json.get_str(v, key)`, `json.get_int(v, key)`, `json.get_float(v, key)`, `json.get_bool(v, key)`, `json.to_str(v)`, `json.to_int(v)`, `json.to_array(v)`, `json.to_object(v)`, `json.stringify(v)`.
+   - `import "std/csv" as csv`, `import "std/crypto" as crypto`, `import "std/time" as time`.
    - `import "std/process" as proc`: `run(...)`, `capture(...)`.
    - `import "std/async" as async_rt` (`run_group`, `spawn`, `sleep_ms`, `all`, `race`), `import "std/http" as http` (`get`, `post_json`, `batch_get`, `batch_get_group`).
    - `from "std/algorithms" use { map, filter, fold, any, all, sort, parallel_map }`.
@@ -75,7 +76,7 @@ Key Wysna Grammar and Rules:
    - Line comments begin with `#` and doc comments with `##` (block comments `/* ... */` also supported). Never use `//`.
 
 Always output valid Wysna code enclosed in a ```wysna ... ``` code block.
-If multiple files are required, prefix each file with `### filename.wysna`.
+If multiple files are required, place `### filename.wysna` outside (immediately before) each ```wysna ... ``` block and include every modified/required file on revisions.
 """
 )
 
@@ -120,17 +121,35 @@ class EvaluationHarness:
         files: Dict[str, str] = {}
 
         # Check for multi-file header markers: `### filename.wysna\n```wysna ... ```
-        pattern = re.compile(r"###\s+([\w\.\-_/]+\.wysna)\s*```(?:wysna|w)?\n(.*?)```", re.DOTALL)
+        pattern = re.compile(r"###\s+`?([\w.\-_/]+\.wysna)`?\s*```(?:wysna|w)?\n(.*?)```", re.DOTALL)
         matches = pattern.findall(text)
         if matches:
             for filename, content in matches:
                 files[filename.strip()] = content
             return files
 
-        # Fallback: extract single ```wysna code block
+        # Check for named fence headers: ```wysna:filename.wysna or ```wysna filename.wysna
+        fence_named_pattern = re.compile(
+            r"```(?:wysna|w)?[:\s]+([\w.\-_/]+\.wysna)\n(.*?)```",
+            re.DOTALL,
+        )
+        fence_named_matches = fence_named_pattern.findall(text)
+        if fence_named_matches:
+            for filename, content in fence_named_matches:
+                files[filename.strip()] = content
+            return files
+
+        # Fallback: extract single ```wysna code block (splitting internal ### filename.wysna markers if present)
         single_pattern = re.compile(r"```(?:wysna|w)?\n(.*?)```", re.DOTALL)
         single_matches = single_pattern.findall(text)
         if single_matches:
+            inner_header = re.compile(r"(?m)^###\s+`?([\w.\-_/]+\.wysna)`?\s*$")
+            parts = inner_header.split(single_matches[0])
+            if len(parts) >= 3:
+                for idx in range(1, len(parts), 2):
+                    files[parts[idx].strip()] = parts[idx + 1].lstrip("\r\n")
+                if files:
+                    return files
             return {"main.wysna": single_matches[0]}
 
         # If no markdown fences found, treat raw text as main.wysna if it contains fn main
@@ -150,8 +169,15 @@ class EvaluationHarness:
             return "type"
         if "circular import" in combined or "W1003" in codes:
             return "circular_dependency"
-        if "W1001" in codes or any(
-            tok in combined for tok in ["no module named", "undefined identifier", "unknown identifier", "unresolved", "not found in module"]
+        if "W1001" in codes or "W3002" in codes or any(
+            tok in combined for tok in [
+                "no module named",
+                "undefined identifier",
+                "unknown identifier",
+                "unknown member",
+                "unresolved",
+                "not found in module",
+            ]
         ):
             return "api_hallucination"
         stderr_lower = stderr.lower()
@@ -494,6 +520,17 @@ class EvaluationHarness:
                     completion_tokens=comp_tok,
                 )
 
+                is_multifile = (
+                    len(extracted_files) > 1
+                    or len(task.fixtures) > 1
+                    or (".wysna" in task.instruction and "main.wysna" in task.instruction)
+                )
+                output_instruction = (
+                    "Output every required file with a `### filename.wysna` heading immediately before its ```wysna code block."
+                    if is_multifile
+                    else "Output the complete revised Wysna code in a ```wysna code block."
+                )
+
                 if not check_passed:
                     err_cat = self.classify_error(raw_stderr, diagnostics)
                     record.error_category = err_cat
@@ -514,7 +551,7 @@ class EvaluationHarness:
                         user_prompt = (
                             f"[Task: {task.id}] The Wysna compiler rejected your program with the following diagnostics:\n"
                             f"{diag_summary}\n\n"
-                            f"Please correct the error and output the complete revised Wysna code in a ```wysna code block."
+                            f"Please correct the error. {output_instruction}"
                         )
                     continue
 
@@ -545,7 +582,7 @@ class EvaluationHarness:
                         user_prompt = (
                             f"[Task: {task.id}] Your code compiled, but failed functional oracle tests:\n"
                             f"{oracle_failure}\n\n"
-                            f"Please fix the logic and output the revised code in a ```wysna code block."
+                            f"Please fix the logic. {output_instruction}"
                         )
 
             task_wall_ms = (time.perf_counter() - task_wall_start) * 1000.0

@@ -114,3 +114,62 @@ def test_native_compiler_points_to_unknown_names(tmp_path):
         assert result.returncode != 0
         assert expected in result.stderr and location in result.stderr, result.stderr
         assert not output.exists()
+
+
+def test_native_compiler_emits_demangled_actionable_diagnostics(tmp_path):
+    compiler = ensure_selfhost_compiler_binary(str(ROOT))
+    cases = [
+        (
+            "enum-member.wysna",
+            'import "std/json" as json\nfn main() -> unit {\n  let d = json.parse("{}") else err { return }\n  let _x = d.get("k")\n}\n',
+            ["[W1001]", "enum 'Value' has no member or variant 'get'"],
+            ["__wysna_module_"],
+        ),
+        (
+            "expected-brace.wysna",
+            'fn main() -> unit {\n  if true print(1)\n}\n',
+            ["[W0006]", "expected '{'", "found 'print'"],
+            ["expected LBRACE"],
+        ),
+        (
+            "list-method.wysna",
+            'fn main() -> unit {\n  let mut xs = [1]\n  xs.push(2)\n}\n',
+            ["[W3002]", "unknown list method 'push'", "append"],
+            [],
+        ),
+        (
+            "err-wrap-hint.wysna",
+            'fn f() -> int ! IoError {\n  return IoError { message: "bad" }\n}\n',
+            ["[W2004]", "Wrap the error value with Err(...)"],
+            [],
+        ),
+        (
+            "dup-struct.wysna",
+            'struct Dup { a: int }\nstruct Dup { b: int }\n',
+            ["[W1002]", "duplicate type: Dup", "Rename or remove the duplicate declaration"],
+            ["Check for missing delimiters"],
+        ),
+        (
+            "coalesce-hint.wysna",
+            'fn main() -> unit {\n  let _x = 1 ?? 2\n}\n',
+            ["[W2006]", "found 'int'"],
+            [],
+        ),
+    ]
+    for filename, text, required, forbidden in cases:
+        source = tmp_path / filename
+        output = tmp_path / f"{filename}.c"
+        source.write_text(text, encoding="utf-8")
+        result = subprocess.run(
+            [compiler, "--stdlib-root", str(ROOT / "stdlib"), str(source), str(output)],
+            cwd=ROOT,
+            capture_output=True,
+            text=True,
+            timeout=60,
+        )
+        assert result.returncode != 0, filename
+        for needle in required:
+            assert needle in result.stderr, f"{filename}: expected {needle!r} in {result.stderr!r}"
+        for bad in forbidden:
+            assert bad not in result.stderr, f"{filename}: unexpected {bad!r} in {result.stderr!r}"
+        assert not output.exists()
