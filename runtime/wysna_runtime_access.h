@@ -12,14 +12,15 @@ WYSNA_RT_FN WVal wysna_index_get(WVal obj, WVal idx) {
         WListBuf* b = wysna_as_list(obj);
         int64_t i = wysna_as_int(idx);
         if (!b || i < 0 || i >= b->len) {
-            wysna_runtime_fail("W4002", "List index out of bounds");
+            wysna_runtime_fail("W4002", "List index out of bounds (index %" PRId64 ", length %" PRId32 ")", i, b ? b->len : 0);
         }
         return wysna_list_load(b, (int32_t)i);
     }
     if (wysna_tag(obj) == W_STR) {
+        int64_t sidx = wysna_as_int(idx);
         size_t off = 0, blen = 0;
-        if (!wysna_string_offset(obj, wysna_as_int(idx), &off, &blen) || blen == 0) {
-            wysna_runtime_fail("W4002", "String index out of bounds");
+        if (!wysna_string_offset(obj, sidx, &off, &blen) || blen == 0) {
+            wysna_runtime_fail("W4002", "String index out of bounds (index %" PRId64 ")", sidx);
         }
         char scratch[7];
         size_t total_len = 0;
@@ -38,7 +39,7 @@ WYSNA_RT_FN WVal wysna_index_get(WVal obj, WVal idx) {
         int32_t index = wysna_dict_find(d, idx);
         if (index < 0) {
             /* SPEC 10.2: a missing key is W4002. `d.get(k)` is the optional form. */
-            wysna_runtime_fail("W4002", "Dictionary key not found");
+            wysna_runtime_fail("W4002", "Dictionary key not found (use d.get(key) for optional lookup)");
         }
         return d->vals[index];
     }
@@ -67,7 +68,7 @@ WYSNA_RT_FN WVal* wysna_index_ref(WVal* obj, WVal idx) {
         WListBuf* b = wysna_as_list(*obj);
         int64_t i = wysna_as_int(idx);
         if (!b || i < 0 || i >= b->len) {
-            wysna_runtime_fail("W4002", "List index out of bounds");
+            wysna_runtime_fail("W4002", "List index out of bounds (index %" PRId64 ", length %" PRId32 ")", i, b ? b->len : 0);
         }
         if (wysna_list_is_u8(b)) wysna_runtime_fail("W4003", "Packed list elements require a value store");
         WTag existing_tag = wysna_tag(b->data[i]);
@@ -122,7 +123,9 @@ WYSNA_RT_FN WVal wysna_index_store_at(WVal* object, WVal index, WVal value,
     WListBuf* list = wysna_as_list(*object);
     if (list && wysna_list_is_u8(list)) {
         int64_t offset = wysna_as_int(index);
-        if (offset < 0 || offset >= list->len) wysna_runtime_fail("W4002", "List index out of bounds");
+        if (offset < 0 || offset >= list->len) {
+            wysna_runtime_fail("W4002", "List index out of bounds (index %" PRId64 ", length %" PRId32 ")", offset, list->len);
+        }
         uint8_t byte = wysna_as_u8(value);
         wysna_release(value);
         wysna_list_detach(object);
@@ -222,8 +225,10 @@ static inline WVal wysna_list_iteration_get_at(WVal value, int32_t index,
                                                const char* file, int32_t line, int32_t col) {
     WListBuf* b = wysna_as_list(value);
     if (W_UNLIKELY(!b)) wysna_list_iteration_fail_at("W4003", "For loop requires a list value", file, line, col);
-    if (W_UNLIKELY(index < 0 || index >= b->len))
-        wysna_list_iteration_fail_at("W4002", "List index out of bounds", file, line, col);
+    if (W_UNLIKELY(index < 0 || index >= b->len)) {
+        wysna_runtime_set_position(file, line, col);
+        wysna_runtime_fail("W4002", "List index out of bounds (index %" PRId32 ", length %" PRId32 ")", index, b->len);
+    }
     return wysna_list_load(b, index);
 }
 static inline WVal wysna_list_iteration_get_owned_at(WVal value, int32_t index,
@@ -236,7 +241,8 @@ static inline int64_t wysna_list_get_int_at(WVal obj, int64_t idx,
                                             const char* file, int32_t line, int32_t col) {
     WListBuf* b = wysna_as_list(obj);
     if (W_UNLIKELY(!b || idx < 0 || idx >= b->len)) {
-        wysna_list_iteration_fail_at("W4002", "List index out of bounds", file, line, col);
+        wysna_runtime_set_position(file, line, col);
+        wysna_runtime_fail("W4002", "List index out of bounds (index %" PRId64 ", length %" PRId32 ")", idx, b ? b->len : 0);
     }
     return wysna_as_int(wysna_list_load(b, (int32_t)idx));
 }
@@ -245,7 +251,8 @@ static inline double wysna_list_get_float_at(WVal obj, int64_t idx,
                                              const char* file, int32_t line, int32_t col) {
     WListBuf* b = wysna_as_list(obj);
     if (W_UNLIKELY(!b || idx < 0 || idx >= b->len)) {
-        wysna_list_iteration_fail_at("W4002", "List index out of bounds", file, line, col);
+        wysna_runtime_set_position(file, line, col);
+        wysna_runtime_fail("W4002", "List index out of bounds (index %" PRId64 ", length %" PRId32 ")", idx, b ? b->len : 0);
     }
     return wysna_as_float(wysna_list_load(b, (int32_t)idx));
 }
@@ -254,7 +261,8 @@ static inline bool wysna_list_get_bool_at(WVal obj, int64_t idx,
                                           const char* file, int32_t line, int32_t col) {
     WListBuf* b = wysna_as_list(obj);
     if (W_UNLIKELY(!b || idx < 0 || idx >= b->len)) {
-        wysna_list_iteration_fail_at("W4002", "List index out of bounds", file, line, col);
+        wysna_runtime_set_position(file, line, col);
+        wysna_runtime_fail("W4002", "List index out of bounds (index %" PRId64 ", length %" PRId32 ")", idx, b ? b->len : 0);
     }
     return wysna_as_bool(wysna_list_load(b, (int32_t)idx));
 }
@@ -350,7 +358,7 @@ WYSNA_RT_FN void wysna_list_set_slow_at(WVal* list_val, int64_t idx, WVal owned_
     if (W_UNLIKELY(!probe || idx < 0 || idx >= probe->len)) {
         wysna_release(owned_val);
         wysna_runtime_set_position(file, line, col);
-        wysna_runtime_fail("W4002", "List index out of bounds");
+        wysna_runtime_fail("W4002", "List index out of bounds (index %" PRId64 ", length %" PRId32 ")", idx, probe ? probe->len : 0);
     }
     wysna_list_detach(list_val);
     WListBuf* b = wysna_as_list(*list_val);

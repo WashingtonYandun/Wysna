@@ -426,8 +426,11 @@ WYSNA_RT_FN WVal wysna_builtin_dict_items(WVal dict_val) {
 
 static inline WVal wysna_io_error(const char* message) {
     const char* keys[1] = { "message" };
-    WVal values[1] = { wysna_str(message) };
-    return wysna_err(wysna_make_struct("IoError", 1, keys, values));
+    WVal msg_val = wysna_copy_str(message);
+    WVal values[1] = { msg_val };
+    WVal err_struct = wysna_make_struct("IoError", 1, keys, values);
+    wysna_release(msg_val);
+    return wysna_err(err_struct);
 }
 
 static inline FILE* wysna_builtin_fopen(const char* path, const char* mode) {
@@ -462,8 +465,14 @@ WYSNA_RT_FN WVal wysna_builtin_read_file(WVal path) {
     size_t path_len = 0;
     const char* path_data = wysna_str_bytes(path, path_buf, &path_len);
     if (memchr(path_data, 0, path_len)) return wysna_io_error("Invalid path");
+    errno = 0;
     FILE* file = wysna_builtin_fopen(path_data, "rb");
-    if (!file) return wysna_io_error("Failed to open file");
+    if (!file) {
+        char errbuf[512];
+        const char* sys_err = errno ? strerror(errno) : "open failed";
+        snprintf(errbuf, sizeof(errbuf), "Failed to open file '%s': %s", path_data, sys_err);
+        return wysna_io_error(errbuf);
+    }
     size_t length = 0, capacity = 4096;
     char* data = (char*)wysna_alloc_safe(capacity + 1);
     while (1) {
@@ -511,12 +520,28 @@ WYSNA_RT_FN WVal wysna_builtin_write_file(WVal path, WVal content) {
     const char* content_data = wysna_str_bytes(content, content_buf, &content_len);
     if (memchr(path_data, 0, path_len))
         return wysna_io_error("Invalid arguments");
+    errno = 0;
     FILE* file = wysna_builtin_fopen(path_data, "wb");
-    if (!file) return wysna_io_error("Failed to write file");
+    if (!file) {
+        char errbuf[512];
+        const char* sys_err = errno ? strerror(errno) : "open failed";
+        snprintf(errbuf, sizeof(errbuf), "Failed to write file '%s': %s", path_data, sys_err);
+        return wysna_io_error(errbuf);
+    }
     size_t written = fwrite(content_data, 1, content_len, file);
     bool failed = written != content_len || ferror(file);
-    if (fclose(file) != 0) failed = true;
-    return failed ? wysna_io_error("Failed to write file") : wysna_ok(wysna_unit());
+    int saved_errno = errno;
+    if (fclose(file) != 0) {
+        if (!saved_errno) saved_errno = errno;
+        failed = true;
+    }
+    if (failed) {
+        char errbuf[512];
+        const char* sys_err = saved_errno ? strerror(saved_errno) : "write failed";
+        snprintf(errbuf, sizeof(errbuf), "Failed to write file '%s': %s", path_data, sys_err);
+        return wysna_io_error(errbuf);
+    }
+    return wysna_ok(wysna_unit());
 }
 
 /*

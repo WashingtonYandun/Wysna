@@ -1,3 +1,92 @@
+fn sem_ascii_lower(code: int) -> int {
+    if code >= 65 and code <= 90 { return code + 32 }
+    return code
+}
+
+fn sem_abs_diff(a: int, b: int) -> int {
+    if a >= b { return a - b }
+    return b - a
+}
+
+fn sem_min2(a: int, b: int) -> int {
+    if a <= b { return a }
+    return b
+}
+
+fn sem_edit_distance(a: str, b: str) -> int {
+    let n = len(a)
+    let m = len(b)
+    if sem_abs_diff(n, m) > 2 { return 99 }
+    if n > 48 or m > 48 { return 99 }
+    if n == 0 { return m }
+    if m == 0 { return n }
+    let mut prev: list[int] = []
+    for j in 0..(m + 1) { prev.append(j) }
+    for i in 1..(n + 1) {
+        let mut curr: list[int] = [i]
+        let ac = sem_ascii_lower(ord(a[i - 1]))
+        let mut row_min = i
+        for j in 1..(m + 1) {
+            let bc = sem_ascii_lower(ord(b[j - 1]))
+            let cost = if ac == bc { 0 } else { 1 }
+            let d_del = prev[j] + 1
+            let d_ins = curr[j - 1] + 1
+            let d_sub = prev[j - 1] + cost
+            let best = sem_min2(d_del, sem_min2(d_ins, d_sub))
+            curr.append(best)
+            if best < row_min { row_min = best }
+        }
+        if row_min > 2 { return 99 }
+        prev = curr
+    }
+    return prev[m]
+}
+
+fn sem_starts_with_dunder(s: str) -> bool {
+    return len(s) >= 2 and s[0] == "_" and s[1] == "_"
+}
+
+fn sem_suggest_identifier(context: SemanticContext, name: str) -> str {
+    if len(name) < 2 { return "" }
+    let max_dist = if len(name) <= 3 { 1 } else { 2 }
+    let mut best = ""
+    let mut best_dist = max_dist + 1
+    for v in context.variables {
+        let cand = v.name
+        if cand != "" and cand != name and not sem_starts_with_dunder(cand) {
+            let d = sem_edit_distance(name, cand)
+            if d < best_dist {
+                best_dist = d
+                best = cand
+            }
+        }
+    }
+    for f in context.functions {
+        let cand = f.name
+        if cand != "" and cand != name and not sem_starts_with_dunder(cand) {
+            let d = sem_edit_distance(name, cand)
+            if d < best_dist {
+                best_dist = d
+                best = cand
+            }
+        }
+    }
+    let builtins: list[str] = [
+        "print", "eprint", "str", "int", "float", "bool", "len", "slice", "range",
+        "ord", "chr", "bytes", "read_file", "write_file", "panic", "exit", "None", "Some", "Ok", "Err"
+    ]
+    for cand in builtins {
+        if cand != name {
+            let d = sem_edit_distance(name, cand)
+            if d < best_dist {
+                best_dist = d
+                best = cand
+            }
+        }
+    }
+    return best
+}
+
 fn sem_at(context: SemanticContext) -> Token {
     let token = context.tokens[context.pos]
     return token
@@ -1710,7 +1799,12 @@ fn sem_prefix(context: SemanticContext, allow_struct: bool, statement: bool) -> 
             sem_record_error(context, "W1001", name_token, "unknown identifier: none (lowercase 'none' has been removed; use canonical 'None')", "", "[]")
             return sem_value(context.error_type)
         }
-        sem_record_error(context, "W1001", name_token, "unknown identifier: " + name, "", "[]")
+        let suggestion = sem_suggest_identifier(context, name)
+        let mut data_json = ""
+        if suggestion != "" {
+            data_json = "{\"help\":" + diag_json_quote("Did you mean '" + suggestion + "'?") + "}"
+        }
+        sem_record_error(context, "W1001", name_token, "unknown identifier: " + name, data_json, "[]")
         return sem_value(context.error_type)
     }
     if sem_kind(context, named_type) == "class" { return sem_expr(context, "new_callee", sem_value(sem_wrap(context, "constructor", named_type)), source, name, [], -1, -1) }
