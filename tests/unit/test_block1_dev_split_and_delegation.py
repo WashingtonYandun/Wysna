@@ -86,7 +86,7 @@ def test_per_unit_emission_is_bounded_and_selectively_cached(dev_sdk):
     ("run", ["--target", "wasi"]),
     ("run", ["--target=wasi-command"]),
     ("run", ["--target=wasm32-wasip1"]),
-    ("build", ["--target=web"]),
+    ("run", ["--target=web"]),
     ("build", ["--target=browser-library"]),
 ])
 def test_driver_unsupported_commands_emit_actionable_w2013(dev_sdk, tmp_path, command, target_args):
