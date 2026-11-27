@@ -64,13 +64,13 @@ WYSNA_RT_FN WVal wysna_list_slice(const WListBuf* input, int32_t start, int32_t 
 static inline int32_t wysna_range_count_i64(int64_t s, int64_t e, bool inclusive) {
     if (inclusive) {
         if (W_UNLIKELY(e == INT64_MAX)) {
-            wysna_runtime_fail_unlocated("W4003", "Range bound overflow at INT64_MAX");
+            wysna_runtime_fail("W4003", "Range bound overflow at INT64_MAX");
         }
         e++;
     }
     uint64_t diff = e > s ? (uint64_t)e - (uint64_t)s : 0;
     if (W_UNLIKELY(diff > 100000000ULL)) {
-        wysna_runtime_fail_unlocated("W4003", "Range length %" PRIu64 " exceeds maximum list capacity", diff);
+        wysna_runtime_fail("W4003", "Range length %" PRIu64 " exceeds maximum list capacity", diff);
     }
     return (int32_t)diff;
 }

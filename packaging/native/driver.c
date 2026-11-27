@@ -39,9 +39,10 @@
 typedef struct {
     const char *command, *source, *output, *profile;
     const char *project_subcmd, *project_src_root, *unsupported_target;
-    const char *allow_caps, *deny_caps, *diag_out;
+    const char *allow_caps, *deny_caps, *diag_out, *parse_error;
     int arguments, include_count, link_count, library_count, library_dir_count, dep_count;
     int profile_set, timeout_set, project_json_v1, test_diagnostics, sandbox, json_v1, target_set, wasi, web;
+    int show_help, repl_requested;
     const char *includes[SDK_LINK_LIMIT], *links[SDK_LINK_LIMIT], *libraries[SDK_LINK_LIMIT], *library_dirs[SDK_LINK_LIMIT];
     const char *dep_aliases[SDK_LINK_LIMIT], *dep_roots[SDK_LINK_LIMIT];
     int64_t timeout, test_deadline;
@@ -147,7 +148,23 @@ static int sdk_valid_library_name(const char* argument) {
         if (!isalnum((unsigned char)*current) && *current != '_' && *current != '-' && *current != '.') return 0;
     return 1;
 }
+static int sdk_parse_fail(SdkOptions* options, const char* message) {
+    if (options && !options->parse_error) options->parse_error = message;
+    return 0;
+}
 static int sdk_parse(SdkOptions* options, int argc, char** argv) {
+    for (int i = 1; i < argc; i++) {
+        if (strcmp(argv[i], "--") == 0) break;
+        if (strcmp(argv[i], "--help") == 0 || strcmp(argv[i], "-h") == 0) {
+            options->show_help = 1;
+            return 1;
+        }
+    }
+    if (argc >= 2 && strcmp(argv[1], "repl") == 0) {
+        options->command = "repl";
+        options->repl_requested = 1;
+        return 1;
+    }
     if (argc >= 2 && argc <= SDK_ARGUMENT_LIMIT &&
         (strcmp(argv[1], "lsp") == 0 || strcmp(argv[1], "mcp") == 0 ||
          strcmp(argv[1], "skills") == 0 || strcmp(argv[1], "capabilities") == 0 ||
@@ -183,54 +200,98 @@ static int sdk_parse(SdkOptions* options, int argc, char** argv) {
             }
             if (strcmp(value, "--sandbox") == 0) { options->sandbox = 1; continue; }
             if (strncmp(value, "--allow=", 8) == 0) {
-                if (options->allow_caps) return 0;
+                if (options->allow_caps) return sdk_parse_fail(options, "Duplicate --allow option");
                 options->allow_caps = value + 8;
                 continue;
             }
             if (strncmp(value, "--deny=", 7) == 0) {
-                if (options->deny_caps) return 0;
+                if (options->deny_caps) return sdk_parse_fail(options, "Duplicate --deny option");
                 options->deny_caps = value + 7;
                 continue;
             }
+            if (strncmp(value, "--profile=", 10) == 0) {
+                if (options->profile_set++) return sdk_parse_fail(options, "Duplicate --profile option");
+                options->profile = value + 10;
+                continue;
+            }
+            if (strncmp(value, "--timeout-ms=", 13) == 0) {
+                if (options->timeout_set++) return sdk_parse_fail(options, "Duplicate --timeout-ms option");
+                if (!sdk_parse_timeout_ms(value + 13, &options->timeout)) return sdk_parse_fail(options, "Invalid --timeout-ms value (expected 1..600000)");
+                continue;
+            }
+            if (strncmp(value, "--diag-out=", 11) == 0 && strcmp(options->project_subcmd, "test") == 0) {
+                if (options->diag_out) return sdk_parse_fail(options, "Duplicate --diag-out option");
+                options->diag_out = value + 11;
+                continue;
+            }
+            if (strncmp(value, "--include-dir=", 14) == 0) {
+                if (options->include_count >= SDK_LINK_LIMIT) return sdk_parse_fail(options, "Too many --include-dir options");
+                options->includes[options->include_count++] = value + 14;
+                continue;
+            }
+            if (strncmp(value, "--link=", 7) == 0) {
+                if (options->link_count >= SDK_LINK_LIMIT) return sdk_parse_fail(options, "Too many --link options");
+                options->links[options->link_count++] = value + 7;
+                continue;
+            }
+            if (strncmp(value, "--library-dir=", 14) == 0) {
+                if (options->library_dir_count >= SDK_LINK_LIMIT) return sdk_parse_fail(options, "Too many --library-dir options");
+                options->library_dirs[options->library_dir_count++] = value + 14;
+                continue;
+            }
+            if (strncmp(value, "--library=", 10) == 0) {
+                if (options->library_count >= SDK_LINK_LIMIT) return sdk_parse_fail(options, "Too many --library options");
+                if (!sdk_valid_library_name(value + 10)) return sdk_parse_fail(options, "Invalid --library name");
+                options->libraries[options->library_count++] = value + 10;
+                continue;
+            }
             if (strcmp(value, "--allow") == 0) {
-                if (++index >= argc || options->allow_caps) return 0;
+                if (++index >= argc || options->allow_caps) return sdk_parse_fail(options, "Invalid or duplicate --allow option");
                 options->allow_caps = argv[index];
             } else if (strcmp(value, "--deny") == 0) {
-                if (++index >= argc || options->deny_caps) return 0;
+                if (++index >= argc || options->deny_caps) return sdk_parse_fail(options, "Invalid or duplicate --deny option");
                 options->deny_caps = argv[index];
             } else if (strcmp(value, "--profile") == 0) {
-                if (++index >= argc || options->profile_set++) return 0;
+                if (++index >= argc || options->profile_set++) return sdk_parse_fail(options, "Invalid or duplicate --profile option");
                 options->profile = argv[index];
             } else if (strcmp(value, "--timeout-ms") == 0) {
-                if (++index >= argc || options->timeout_set++) return 0;
-                if (!sdk_parse_timeout_ms(argv[index], &options->timeout)) return 0;
+                if (++index >= argc || options->timeout_set++) return sdk_parse_fail(options, "Invalid or duplicate --timeout-ms option");
+                if (!sdk_parse_timeout_ms(argv[index], &options->timeout)) return sdk_parse_fail(options, "Invalid --timeout-ms value (expected 1..600000)");
             } else if (strcmp(value, "--diag-out") == 0 && strcmp(options->project_subcmd, "test") == 0) {
-                if (++index >= argc || options->diag_out) return 0;
+                if (++index >= argc || options->diag_out) return sdk_parse_fail(options, "Invalid or duplicate --diag-out option");
                 options->diag_out = argv[index];
             } else if (strcmp(value, "--include-dir") == 0) {
-                if (++index >= argc || options->include_count >= SDK_LINK_LIMIT) return 0;
+                if (++index >= argc || options->include_count >= SDK_LINK_LIMIT) return sdk_parse_fail(options, "Invalid or excessive --include-dir option");
                 options->includes[options->include_count++] = argv[index];
             } else if (strcmp(value, "--link") == 0) {
-                if (++index >= argc || options->link_count >= SDK_LINK_LIMIT) return 0;
+                if (++index >= argc || options->link_count >= SDK_LINK_LIMIT) return sdk_parse_fail(options, "Invalid or excessive --link option");
                 options->links[options->link_count++] = argv[index];
             } else if (strcmp(value, "--library-dir") == 0) {
-                if (++index >= argc || options->library_dir_count >= SDK_LINK_LIMIT) return 0;
+                if (++index >= argc || options->library_dir_count >= SDK_LINK_LIMIT) return sdk_parse_fail(options, "Invalid or excessive --library-dir option");
                 options->library_dirs[options->library_dir_count++] = argv[index];
             } else if (strcmp(value, "--library") == 0) {
-                if (++index >= argc || options->library_count >= SDK_LINK_LIMIT) return 0;
-                if (!sdk_valid_library_name(argv[index])) return 0;
+                if (++index >= argc || options->library_count >= SDK_LINK_LIMIT) return sdk_parse_fail(options, "Invalid or excessive --library option");
+                if (!sdk_valid_library_name(argv[index])) return sdk_parse_fail(options, "Invalid --library name");
                 options->libraries[options->library_count++] = argv[index];
             }
         }
-        if (strcmp(options->profile, "dev") && strcmp(options->profile, "release") && strcmp(options->profile, "size")) return 0;
-        if (options->timeout_set && strcmp(options->project_subcmd, "build") == 0) return 0;
-        if (options->allow_caps && options->deny_caps) return 0;
+        if (strcmp(options->profile, "dev") && strcmp(options->profile, "release") && strcmp(options->profile, "size")) {
+            return sdk_parse_fail(options, "Invalid --profile (expected dev, release, or size)");
+        }
+        if (options->timeout_set && strcmp(options->project_subcmd, "build") == 0) {
+            return sdk_parse_fail(options, "--timeout-ms is not valid with wysna project build");
+        }
+        if (options->allow_caps && options->deny_caps) {
+            return sdk_parse_fail(options, "--allow and --deny cannot be combined");
+        }
         if ((options->sandbox || options->allow_caps || options->deny_caps) &&
             (strcmp(options->project_subcmd, "test") == 0 ||
-             options->include_count || options->link_count || options->library_count || options->library_dir_count)) return 0;
+             options->include_count || options->link_count || options->library_count || options->library_dir_count)) {
+            return sdk_parse_fail(options, "--sandbox/--allow/--deny cannot be combined with native link options or project test");
+        }
         return 1;
     }
-    if (argc < 3 || argc > SDK_ARGUMENT_LIMIT) return 0;
+    if (argc < 3 || argc > SDK_ARGUMENT_LIMIT) return sdk_parse_fail(options, "Missing command arguments; run wysna --help");
     options->command = argv[1]; options->profile = "dev"; options->timeout = 600000;
     if (sdk_is_agent_passthrough(options->command)) {
         options->source = argv[2];
@@ -239,11 +300,15 @@ static int sdk_parse(SdkOptions* options, int argc, char** argv) {
     if (strcmp(options->command, "check") && strcmp(options->command, "emit-c") &&
         strcmp(options->command, "emit-mir") && strcmp(options->command, "build") &&
         strcmp(options->command, "run") && strcmp(options->command, "test") &&
-        strcmp(options->command, "fmt")) return 0;
+        strcmp(options->command, "fmt")) return sdk_parse_fail(options, "Unknown command; run wysna --help");
     for (int index = 2; index < argc; index++) {
         const char* value = argv[index];
         if (strcmp(value, "--") == 0 && (strcmp(options->command, "run") == 0 || strcmp(options->command, "test") == 0)) { options->arguments = index + 1; break; }
-        if (value[0] != '-') { if (options->source) return 0; options->source = value; continue; }
+        if (value[0] != '-') {
+            if (options->source) return sdk_parse_fail(options, "Unexpected extra positional argument (pass program args after '--')");
+            options->source = value;
+            continue;
+        }
         if (strcmp(value, "--output-format=json-v1") == 0 &&
             (strcmp(options->command, "check") == 0 || strcmp(options->command, "fmt") == 0 ||
              strcmp(options->command, "build") == 0 || strcmp(options->command, "emit-c") == 0)) {
@@ -252,65 +317,125 @@ static int sdk_parse(SdkOptions* options, int argc, char** argv) {
         }
         if (strcmp(value, "--sandbox") == 0) { options->sandbox = 1; continue; }
         if (strncmp(value, "--allow=", 8) == 0) {
-            if (options->allow_caps) return 0;
+            if (options->allow_caps) return sdk_parse_fail(options, "Duplicate --allow option");
             options->allow_caps = value + 8;
             continue;
         }
         if (strncmp(value, "--deny=", 7) == 0) {
-            if (options->deny_caps) return 0;
+            if (options->deny_caps) return sdk_parse_fail(options, "Duplicate --deny option");
             options->deny_caps = value + 7;
             continue;
         }
         if (strncmp(value, "--target=", 9) == 0) {
-            if (!sdk_parse_target(options, value + 9)) return 0;
+            if (!sdk_parse_target(options, value + 9)) return sdk_parse_fail(options, "Invalid or duplicate --target option");
             if (options->unsupported_target) return 1;
             continue;
         }
+        if (strncmp(value, "-o=", 3) == 0) {
+            if (options->output) return sdk_parse_fail(options, "Duplicate -o option");
+            options->output = value + 3;
+            continue;
+        }
+        if (strncmp(value, "--profile=", 10) == 0) {
+            if (options->profile_set++) return sdk_parse_fail(options, "Duplicate --profile option");
+            options->profile = value + 10;
+            continue;
+        }
+        if (strncmp(value, "--timeout-ms=", 13) == 0) {
+            if (options->timeout_set++ || !sdk_parse_timeout_ms(value + 13, &options->timeout)) {
+                return sdk_parse_fail(options, "Invalid or duplicate --timeout-ms value (expected 1..600000)");
+            }
+            continue;
+        }
+        if (strncmp(value, "--include-dir=", 14) == 0) {
+            if (options->include_count >= SDK_LINK_LIMIT) return sdk_parse_fail(options, "Too many --include-dir options");
+            options->includes[options->include_count++] = value + 14;
+            continue;
+        }
+        if (strncmp(value, "--link=", 7) == 0) {
+            if (options->link_count >= SDK_LINK_LIMIT) return sdk_parse_fail(options, "Too many --link options");
+            options->links[options->link_count++] = value + 7;
+            continue;
+        }
+        if (strncmp(value, "--library-dir=", 14) == 0) {
+            if (options->library_dir_count >= SDK_LINK_LIMIT) return sdk_parse_fail(options, "Too many --library-dir options");
+            options->library_dirs[options->library_dir_count++] = value + 14;
+            continue;
+        }
+        if (strncmp(value, "--library=", 10) == 0) {
+            if (options->library_count >= SDK_LINK_LIMIT || !sdk_valid_library_name(value + 10)) {
+                return sdk_parse_fail(options, "Invalid or excessive --library option");
+            }
+            options->libraries[options->library_count++] = value + 10;
+            continue;
+        }
         if ((strcmp(value, "--write") == 0 || strcmp(value, "-w") == 0) && strcmp(options->command, "fmt") == 0) continue;
-        if (++index == argc) return 0;
+        int takes_value = strcmp(value, "-o") == 0 || strcmp(value, "--allow") == 0 || strcmp(value, "--deny") == 0 ||
+            strcmp(value, "--target") == 0 || strcmp(value, "--profile") == 0 || strcmp(value, "--timeout-ms") == 0 ||
+            strcmp(value, "--include-dir") == 0 || strcmp(value, "--link") == 0 ||
+            strcmp(value, "--library-dir") == 0 || strcmp(value, "--library") == 0 ||
+            (strcmp(value, "--output-format") == 0 &&
+             (strcmp(options->command, "check") == 0 || strcmp(options->command, "fmt") == 0 ||
+              strcmp(options->command, "build") == 0 || strcmp(options->command, "emit-c") == 0));
+        if (!takes_value) return sdk_parse_fail(options, "Unknown or invalid option; run wysna --help");
+        if (++index == argc) return sdk_parse_fail(options, "Missing value for command-line option; run wysna --help");
         const char* argument = argv[index];
-        if (strcmp(value, "-o") == 0) { if (options->output) return 0; options->output = argument; }
-        else if (strcmp(value, "--allow") == 0) { if (options->allow_caps) return 0; options->allow_caps = argument; }
-        else if (strcmp(value, "--deny") == 0) { if (options->deny_caps) return 0; options->deny_caps = argument; }
+        if (strcmp(value, "-o") == 0) { if (options->output) return sdk_parse_fail(options, "Duplicate -o option"); options->output = argument; }
+        else if (strcmp(value, "--allow") == 0) { if (options->allow_caps) return sdk_parse_fail(options, "Duplicate --allow option"); options->allow_caps = argument; }
+        else if (strcmp(value, "--deny") == 0) { if (options->deny_caps) return sdk_parse_fail(options, "Duplicate --deny option"); options->deny_caps = argument; }
         else if (strcmp(value, "--target") == 0) {
-            if (!sdk_parse_target(options, argument)) return 0;
+            if (!sdk_parse_target(options, argument)) return sdk_parse_fail(options, "Invalid or duplicate --target option");
             if (options->unsupported_target) return 1;
         }
         else if (strcmp(value, "--output-format") == 0 &&
                  (strcmp(options->command, "check") == 0 || strcmp(options->command, "fmt") == 0 ||
                   strcmp(options->command, "build") == 0 || strcmp(options->command, "emit-c") == 0)) {
-            if (strcmp(argument, "json-v1") != 0) return 0;
+            if (strcmp(argument, "json-v1") != 0) return sdk_parse_fail(options, "Unsupported --output-format (expected json-v1)");
             options->json_v1 = 1;
         }
-        else if (strcmp(value, "--profile") == 0) { if (options->profile_set++) return 0; options->profile = argument; }
+        else if (strcmp(value, "--profile") == 0) { if (options->profile_set++) return sdk_parse_fail(options, "Duplicate --profile option"); options->profile = argument; }
         else if (strcmp(value, "--timeout-ms") == 0) {
-            if (options->timeout_set++ || !sdk_parse_timeout_ms(argument, &options->timeout)) return 0;
+            if (options->timeout_set++ || !sdk_parse_timeout_ms(argument, &options->timeout)) {
+                return sdk_parse_fail(options, "Invalid or duplicate --timeout-ms value (expected 1..600000)");
+            }
         } else if (strcmp(value, "--include-dir") == 0 && options->include_count < SDK_LINK_LIMIT) options->includes[options->include_count++] = argument;
         else if (strcmp(value, "--link") == 0 && options->link_count < SDK_LINK_LIMIT) options->links[options->link_count++] = argument;
         else if (strcmp(value, "--library-dir") == 0 && options->library_dir_count < SDK_LINK_LIMIT) options->library_dirs[options->library_dir_count++] = argument;
         else if (strcmp(value, "--library") == 0 && options->library_count < SDK_LINK_LIMIT) {
-            if (!sdk_valid_library_name(argument)) return 0;
+            if (!sdk_valid_library_name(argument)) return sdk_parse_fail(options, "Invalid --library name");
             options->libraries[options->library_count++] = argument;
-        } else return 0;
+        } else return sdk_parse_fail(options, "Unknown or invalid option; run wysna --help");
     }
-    if (!options->source) return 0;
-    if (strcmp(options->profile, "dev") && strcmp(options->profile, "release") && strcmp(options->profile, "size")) return 0;
+    if (!options->source) return sdk_parse_fail(options, "Missing source file path; run wysna --help");
+    if (strcmp(options->profile, "dev") && strcmp(options->profile, "release") && strcmp(options->profile, "size")) {
+        return sdk_parse_fail(options, "Invalid --profile (expected dev, release, or size)");
+    }
     int compiles = strcmp(options->command, "build") == 0 || strcmp(options->command, "run") == 0 || strcmp(options->command, "test") == 0;
     int allows_sandbox = strcmp(options->command, "build") == 0 || strcmp(options->command, "run") == 0 || strcmp(options->command, "emit-c") == 0;
-    if (!compiles && (options->include_count || options->link_count || options->library_count || options->library_dir_count || options->profile_set)) return 0;
-    if (options->allow_caps && options->deny_caps) return 0;
+    if (!compiles && (options->include_count || options->link_count || options->library_count || options->library_dir_count || options->profile_set)) {
+        return sdk_parse_fail(options, "--profile and native link flags require build, run, or test");
+    }
+    if (options->allow_caps && options->deny_caps) return sdk_parse_fail(options, "--allow and --deny cannot be combined");
     if (options->wasi) {
         if (options->allow_caps || options->deny_caps || options->include_count || options->link_count ||
-            options->library_count || options->library_dir_count) return 0;
+            options->library_count || options->library_dir_count) {
+            return sdk_parse_fail(options, "--target=wasi/--target=web cannot be combined with --allow, --deny, or native link options");
+        }
         options->sandbox = 1;
         options->deny_caps = "network,processes,process-control,native-ffi";
     }
     if (options->sandbox || options->allow_caps || options->deny_caps) {
-        if (!allows_sandbox) return 0;
-        if (options->include_count || options->link_count || options->library_count || options->library_dir_count) return 0;
+        if (!allows_sandbox) return sdk_parse_fail(options, "--sandbox/--allow/--deny requires build, run, or emit-c");
+        if (options->include_count || options->link_count || options->library_count || options->library_dir_count) {
+            return sdk_parse_fail(options, "--sandbox/--allow/--deny cannot be combined with native link options");
+        }
     }
-    if (options->timeout_set && strcmp(options->command, "run") != 0 && strcmp(options->command, "test") != 0) return 0;
-    if (options->output && (strcmp(options->command, "check") == 0 || strcmp(options->command, "run") == 0 || strcmp(options->command, "test") == 0 || strcmp(options->command, "fmt") == 0)) return 0;
+    if (options->timeout_set && strcmp(options->command, "run") != 0 && strcmp(options->command, "test") != 0) {
+        return sdk_parse_fail(options, "--timeout-ms requires run or test");
+    }
+    if (options->output && (strcmp(options->command, "check") == 0 || strcmp(options->command, "run") == 0 || strcmp(options->command, "test") == 0 || strcmp(options->command, "fmt") == 0)) {
+        return sdk_parse_fail(options, "-o is only valid for build, emit-c, or emit-mir");
+    }
     return 1;
 }
 static int sdk_component_paths(SdkInvocation* invocation) {
@@ -1057,6 +1182,153 @@ static int sdk_spawn_stdio_win32(const char* executable, int argc, const char* c
 }
 #endif
 
+static void sdk_hash_bytes(uint64_t* h1, uint64_t* h2, const void* data, size_t len) {
+    const unsigned char* p = (const unsigned char*)data;
+    for (size_t i = 0; i < len; i++) {
+        *h1 ^= (uint64_t)p[i];
+        *h1 *= 1099511628211ULL;
+        *h2 ^= (uint64_t)(p[i] ^ 0x5Au);
+        *h2 *= 1099511628211ULL;
+    }
+    *h1 ^= (uint64_t)len;
+    *h1 *= 1099511628211ULL;
+}
+
+static void sdk_hash_str(uint64_t* h1, uint64_t* h2, const char* s) {
+    if (!s) {
+        sdk_hash_bytes(h1, h2, "", 0);
+        return;
+    }
+    sdk_hash_bytes(h1, h2, s, strlen(s));
+}
+
+static void sdk_hash_file_meta(uint64_t* h1, uint64_t* h2, const char* path) {
+    if (!path || !path[0]) return;
+#ifdef _WIN32
+    wchar_t* wide = wysna_host_process_wide(path);
+    WIN32_FILE_ATTRIBUTE_DATA fad;
+    if (wide && GetFileAttributesExW(wide, GetFileExInfoStandard, &fad)) {
+        uint64_t meta[4] = {
+            fad.nFileSizeHigh, fad.nFileSizeLow,
+            fad.ftLastWriteTime.dwHighDateTime, fad.ftLastWriteTime.dwLowDateTime
+        };
+        sdk_hash_bytes(h1, h2, meta, sizeof(meta));
+    }
+    free(wide);
+#else
+    struct stat st;
+    if (stat(path, &st) == 0) {
+        int64_t meta[2] = { (int64_t)st.st_size, (int64_t)st.st_mtime };
+        sdk_hash_bytes(h1, h2, meta, sizeof(meta));
+    }
+#endif
+}
+
+static int sdk_source_has_local_imports(const char* buf, size_t len) {
+    size_t i = 0;
+    while (i < len) {
+        while (i < len && (buf[i] == ' ' || buf[i] == '\t')) i++;
+        size_t kw = 0;
+        if (i + 7 <= len && memcmp(buf + i, "import ", 7) == 0) kw = 7;
+        else if (i + 5 <= len && memcmp(buf + i, "from ", 5) == 0) kw = 5;
+        if (kw > 0) {
+            size_t j = i + kw;
+            while (j < len && (buf[j] == ' ' || buf[j] == '\t')) j++;
+            if (j < len && (buf[j] == '"' || buf[j] == '\'')) j++;
+            if (j + 4 > len || memcmp(buf + j, "std/", 4) != 0) return 1;
+        }
+        while (i < len && buf[i] != '\n') i++;
+        if (i < len) i++;
+    }
+    return 0;
+}
+
+static int sdk_prepare_run_cache_path(const SdkInvocation* invocation, const SdkOptions* options,
+                                      char* cache_dir_out, char* cache_bin_out) {
+    cache_dir_out[0] = 0;
+    cache_bin_out[0] = 0;
+    char cache_root[SDK_PATH_CAP];
+    if (!sdk_resolve_global_cache(cache_root)) return 0;
+    if (!sdk_join(cache_dir_out, cache_root, "run-cache")) return 0;
+    char* src_buf = NULL;
+    size_t src_len = 0;
+    if (!sdk_read_file(invocation->source, &src_buf, &src_len)) return 0;
+    if (sdk_source_has_local_imports(src_buf, src_len)) {
+        free(src_buf);
+        return 0;
+    }
+    uint64_t h1 = 0xcbf29ce484222325ULL;
+    uint64_t h2 = 0x9e3779b97f4a7c15ULL;
+    sdk_hash_str(&h1, &h2, WYSNA_NATIVE_VERSION);
+    sdk_hash_str(&h1, &h2, WYSNA_NATIVE_TARGET);
+    sdk_hash_file_meta(&h1, &h2, invocation->engine);
+    sdk_hash_str(&h1, &h2, invocation->stdlib);
+    sdk_hash_str(&h1, &h2, invocation->source);
+    sdk_hash_bytes(&h1, &h2, src_buf, src_len);
+    free(src_buf);
+    sdk_hash_str(&h1, &h2, options->profile);
+    int sandbox_flag = options->sandbox ? 1 : 0;
+    sdk_hash_bytes(&h1, &h2, &sandbox_flag, sizeof(sandbox_flag));
+    sdk_hash_str(&h1, &h2, options->allow_caps);
+    sdk_hash_str(&h1, &h2, options->deny_caps);
+    for (int i = 0; i < options->include_count; i++) sdk_hash_str(&h1, &h2, options->includes[i]);
+    for (int i = 0; i < options->link_count; i++) {
+        sdk_hash_str(&h1, &h2, options->links[i]);
+        sdk_hash_file_meta(&h1, &h2, options->links[i]);
+    }
+    for (int i = 0; i < options->library_dir_count; i++) sdk_hash_str(&h1, &h2, options->library_dirs[i]);
+    for (int i = 0; i < options->library_count; i++) sdk_hash_str(&h1, &h2, options->libraries[i]);
+    char* max_steps = sdk_environment_value("WYSNA_SANDBOX_MAX_STEPS");
+    char* max_heap = sdk_environment_value("WYSNA_SANDBOX_MAX_HEAP_BYTES");
+    sdk_hash_str(&h1, &h2, max_steps);
+    sdk_hash_str(&h1, &h2, max_heap);
+    free(max_steps);
+    free(max_heap);
+    char name[48];
+#ifdef _WIN32
+    snprintf(name, sizeof(name), "%016llx%016llx.exe", (unsigned long long)h1, (unsigned long long)h2);
+#else
+    snprintf(name, sizeof(name), "%016llx%016llx", (unsigned long long)h1, (unsigned long long)h2);
+#endif
+    if (!sdk_join(cache_bin_out, cache_dir_out, name)) {
+        cache_dir_out[0] = 0;
+        cache_bin_out[0] = 0;
+        return 0;
+    }
+    return 1;
+}
+
+static void sdk_store_run_cache(const char* cache_dir, const char* cache_bin, const char* product) {
+    if (!cache_dir[0] || !cache_bin[0] || !product[0]) return;
+    if (!sdk_mkdir_p(cache_dir)) return;
+    char tmp_path[SDK_PATH_CAP];
+#ifdef _WIN32
+    unsigned long pid = (unsigned long)_getpid();
+#else
+    unsigned long pid = (unsigned long)getpid();
+#endif
+    int n = snprintf(tmp_path, sizeof(tmp_path), "%s.tmp.%lu", cache_bin, pid);
+    if (n <= 0 || (size_t)n >= sizeof(tmp_path)) return;
+    FILE* in = fopen(product, "rb");
+    if (!in) return;
+    FILE* out = fopen(tmp_path, "wb");
+    if (!out) { fclose(in); return; }
+    char buf[16384];
+    size_t read_n = 0;
+    int copy_ok = 1;
+    while ((read_n = fread(buf, 1, sizeof(buf), in)) > 0) {
+        if (fwrite(buf, 1, read_n, out) != read_n) { copy_ok = 0; break; }
+    }
+    if (ferror(in) || ferror(out)) copy_ok = 0;
+    fclose(in);
+    if (fclose(out) != 0) copy_ok = 0;
+    if (!copy_ok) { remove(tmp_path); return; }
+#ifndef _WIN32
+    if (chmod(tmp_path, 0755) != 0) { remove(tmp_path); return; }
+#endif
+    if (!sdk_publish(tmp_path, cache_bin)) remove(tmp_path);
+}
+
 static int sdk_execute(SdkInvocation* invocation, const SdkOptions* options, int argc, char** argv) {
     if (!sdk_component_paths(invocation)) return sdk_error("W5001", "Cannot locate the native compiler beside this SDK", NULL);
     if (strcmp(options->command, "project") == 0) {
@@ -1146,7 +1418,17 @@ static int sdk_execute(SdkInvocation* invocation, const SdkOptions* options, int
     }
     if (!sdk_is_file(invocation->source)) return sdk_error("W5001", "Source is not an accessible regular file", options->source);
     if (test) {
-        return sdk_run_test_case(invocation, options, invocation->source, options->source, argc, argv);
+        return sdk_run_test_case(invocation, options, invocation->source, invocation->source, argc, argv);
+    }
+    char run_cache_dir[SDK_PATH_CAP], run_cache_bin[SDK_PATH_CAP];
+    run_cache_dir[0] = 0;
+    run_cache_bin[0] = 0;
+    if (run && !options->output && !options->wasi &&
+        sdk_prepare_run_cache_path(invocation, options, run_cache_dir, run_cache_bin) &&
+        sdk_is_file(run_cache_bin)) {
+        int count = options->arguments ? argc - options->arguments : 0;
+        return sdk_child(run_cache_bin, count,
+                         options->arguments ? (const char**)(argv + options->arguments) : NULL, options->timeout);
     }
     if (build || options->output) {
         const char* target = options->output;
@@ -1192,6 +1474,9 @@ static int sdk_execute(SdkInvocation* invocation, const SdkOptions* options, int
     if (status) return status;
     if (build || run) {
         status = sdk_build(invocation, options); if (status) return status;
+        if (run && run_cache_bin[0]) {
+            sdk_store_run_cache(run_cache_dir, run_cache_bin, invocation->product);
+        }
     }
     char web_js_path[SDK_PATH_CAP], web_dts_path[SDK_PATH_CAP];
     web_js_path[0] = 0;
@@ -1240,10 +1525,27 @@ static int sdk_execute(SdkInvocation* invocation, const SdkOptions* options, int
 }
 int main(int argc, char** argv) {
     wysna_init_args(argc, argv); argc = wysna_g_argc; argv = wysna_g_argv;
+    if (argc == 1) { sdk_help(); wysna_runtime_cleanup(); return 2; }
     if (argc == 2 && strcmp(argv[1], "--version") == 0) { puts("Wysna " WYSNA_NATIVE_VERSION " native SDK"); wysna_runtime_cleanup(); return 0; }
-    if (argc == 2 && (strcmp(argv[1], "--help") == 0 || strcmp(argv[1], "-h") == 0)) { sdk_help(); wysna_runtime_cleanup(); return 0; }
     SdkOptions options = {0};
-    if (!sdk_parse(&options, argc, argv)) { int status = sdk_error("W5002", "Invalid command; run wysna --help", NULL); wysna_runtime_cleanup(); return status; }
+    if (!sdk_parse(&options, argc, argv)) {
+        int status = sdk_error("W5002", options.parse_error ? options.parse_error : "Invalid command; run wysna --help", NULL);
+        wysna_runtime_cleanup();
+        return status;
+    }
+    if (options.show_help) { sdk_help(); wysna_runtime_cleanup(); return 0; }
+    if (options.repl_requested) {
+        const char* message = "Interactive REPL is not available in the native CLI; run a file with 'wysna run <file.wysna>' or inspect code with 'wysna check <file.wysna>'.";
+        if (sdk_has_json_v1(argc, argv)) {
+            printf("{\"schema_version\":\"wysna.tool-result/1\",\"command\":\"repl\",\"status\":\"usage_error\",\"invocation_id\":\"native\",\"tool_exit_code\":2,\"process_exit_code\":2,\"execution\":null,\"toolchain\":{\"compiler\":\"" WYSNA_NATIVE_VERSION "\"},\"target\":{\"profile\":\"native-cli\",\"triple\":null},\"diagnostics\":[{\"code\":\"W2013\",\"stage\":\"target\",\"severity\":\"error\",\"message\":");
+            sdk_print_json_quoted(message);
+            puts(",\"primary_span\":null,\"related\":[],\"data\":{},\"fixes\":[]}],\"artifacts\":[],\"telemetry\":null}");
+        } else {
+            fprintf(stderr, "[W2013] %s\n", message);
+        }
+        wysna_runtime_cleanup();
+        return 2;
+    }
     if (options.unsupported_target) {
         char message[512];
         snprintf(message, sizeof(message),

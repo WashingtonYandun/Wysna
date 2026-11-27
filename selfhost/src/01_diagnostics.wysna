@@ -377,6 +377,34 @@ fn diag_emit_and_exit_full(file: str, code: str, line: int, col: int, msg: str, 
     }])
 }
 
+fn diag_has(h: str, needle: str) -> bool {
+    let m = len(needle)
+    for i in 0..(len(h) - m + 1) { if slice(h, i, i + m) == needle { return true } }
+    return m == 0
+}
+fn diag_help_field(d: str) -> str {
+    for i in 0..(len(d) - 8) { if slice(d, i, i + 8) == "\"help\":\"" {
+        let mut k = i + 8
+        let mut out: list[str] = []
+        while k < len(d) and ord(d[k]) != 34 {
+            if ord(d[k]) == 92 and k + 1 < len(d) { out.append(d[k + 1]) k = k + 2 } else { out.append(d[k]) k = k + 1 }
+        }
+        return join_strings(out, "")
+    } }
+    return ""
+}
+fn diag_human_help(code: str, msg: str, data_json: str) -> str {
+    let h = diag_help_field(data_json)
+    if h != "" { return h }
+    if code == "W1001" { if diag_has(msg, "ambiguous enum") { return "Qualify the enum variant with its enum name, e.g. MyEnum.Variant." } elif diag_has(msg, "unknown module") { return "Check the module path ('std/...' for stdlib or verify the local path)." } elif diag_has(msg, "unknown identifier") { return "Declare the binding with 'let'/'let mut', define the function, or import it." } }
+    if code == "W2001" { if diag_has(msg, "'int'") and diag_has(msg, "'float'") { return "Convert explicitly using int(...) or float(...) before mixing int and float." } elif diag_has(msg, "expected 'str'") { return "Convert the value to a string with str(...)." } elif diag_has(msg, "binary operand types") { return "Operands must have matching types; convert explicitly with int(...), float(...), or str(...)." } }
+    if (code == "W2003" or code == "W3001") and diag_has(msg, "immutable") { return "Declare the variable as 'let mut ...' if it needs to be reassigned." }
+    if code == "W3002" and diag_has(msg, "unknown member") { return "Verify the field or method name on the receiver type, or run 'wysna inspect'." }
+    if (code == "W2004" or code == "W2006") and diag_has(msg, "propagation operand") { return "The '?' operator requires Result[T, E] or Option[T] in a compatible function." }
+    if code == "W1002" or code == "W1003" { return "Check for missing delimiters ('}', ')', ']') or unexpected tokens nearby." } elif code == "W2002" { return "Check the function signature for expected argument count." } elif code == "W2005" { return "Handle every variant or add a fallback '_' arm." } elif code == "W2007" { return "Provide every required struct field in the literal." } elif code == "W2009" { return "Add an explicit type annotation so the compiler can resolve the type." }
+    return ""
+}
+
 fn diag_emit_all_and_exit(diags: list[CollectedDiag]) -> unit {
     if len(diags) == 0 { exit(1) }
     let mode = diag_cli_json_mode()
@@ -389,6 +417,8 @@ fn diag_emit_all_and_exit(diags: list[CollectedDiag]) -> unit {
             eprint("[" + d.code + "] " + d.file + ":" + str(d.line) + ":" + str(d.col) + " - " + d.msg)
             let excerpt = diag_render_source_excerpt(src, d.line, d.col)
             if excerpt != "" { eprint(excerpt) }
+            let help_text = diag_human_help(d.code, d.msg, d.data)
+            if help_text != "" { eprint("  help: " + help_text) }
         }
         exit(1)
     }
